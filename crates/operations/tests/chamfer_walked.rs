@@ -164,25 +164,13 @@ fn on_faces(topo: &Topology, solid: SolidId, edge: EdgeId, (d1, d2): (f64, f64))
 /// Valid, watertight, and `removed` less than `before`, to `1e-6` of what
 /// it took off.
 fn assert_removed(topo: &Topology, result: SolidId, before: f64, removed: f64, what: &str) {
-    assert_removed_measured(topo, result, before, removed, what, 0.001);
-}
-
-/// [`assert_removed`], with the result measured at `deflection`.
-fn assert_removed_measured(
-    topo: &Topology,
-    result: SolidId,
-    before: f64,
-    removed: f64,
-    what: &str,
-    deflection: f64,
-) {
     let report = validate_solid(topo, result).unwrap();
     assert!(report.is_valid(), "{what}: {:?}", report.issues);
     assert!(
         is_watertight(&tessellate_solid(topo, result, 0.01).unwrap()),
         "{what}: its mesh is open"
     );
-    let took = before - solid_volume(topo, result, deflection).unwrap();
+    let took = before - solid_volume(topo, result, 0.001).unwrap();
     assert!(
         (took - removed).abs() < 1e-6 * removed,
         "{what}: took off {took}, expected {removed}"
@@ -812,23 +800,20 @@ fn a_rim_on_a_closed_b_spline_wall_chamfers_exactly() {
             let rise = if frustum { slope } else { 0.5 * PI };
             let area = 0.5 * cap * wall * rise.sin();
             let removed = TAU * (3.0 - (cap + wall * rise.cos()) / 3.0) * area;
-            // The measure of a B-spline cone trimmed along a circle is
-            // 2.2e-5 high at 0.001 and comes down to 2.3e-8 at 1e-6.
-            let deflection = if frustum { 1e-5 } else { 0.001 };
-            let before = solid_volume(&topo, solid, deflection).unwrap();
+            let before = solid_volume(&topo, solid, 0.001).unwrap();
             let side = wall_of(&topo, solid, rim);
             let mut builder = ChamferBuilder::new(&mut topo, solid);
             builder.add_edges_asymmetric(&[rim], d1, d2);
             let built = builder.build().unwrap();
             assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
-            assert_removed_measured(&topo, built.solid, before, removed, &what, deflection);
+            assert_removed(&topo, built.solid, before, removed, &what);
             assert_eq!(wall_contacts(&topo, &side, built.solid, &what).len(), 1);
             if name != "upright" {
                 continue;
             }
             let built = chamfer_v2(&mut topo, solid, &[rim], d1, d2).unwrap();
             assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
-            assert_removed_measured(&topo, built.solid, before, removed, &what, deflection);
+            assert_removed(&topo, built.solid, before, removed, &what);
             assert_eq!(wall_contacts(&topo, &side, built.solid, &what).len(), 1);
         }
     }

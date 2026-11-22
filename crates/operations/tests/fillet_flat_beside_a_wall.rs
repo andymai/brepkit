@@ -147,9 +147,7 @@ mod tests {
     }
 
     /// Rounds `edges` of `solid` placed by `pose`: the volume the round
-    /// adds, read with the result turned back upright (a long part's volume
-    /// read in a turned pose moves by about 2e-5 of the whole), and the
-    /// result as it then stands.
+    /// adds, read in the pose, and the result turned back upright.
     fn round(
         topo: &mut Topology,
         solid: SolidId,
@@ -157,8 +155,8 @@ mod tests {
         pose: &Mat4,
         what: &str,
     ) -> (f64, SolidId) {
-        let before = solid_volume(topo, solid, 1e-3).unwrap();
         transform_solid(topo, solid, pose).unwrap();
+        let before = solid_volume(topo, solid, 1e-3).unwrap();
         let mut builder = FilletBuilder::new(topo, solid);
         builder.add_edges(edges, R);
         let built = builder.build().unwrap();
@@ -169,11 +167,9 @@ mod tests {
         assert!(off < 1e-5, "{what}: an edge stands {off} off its face");
         let mesh = tessellate_solid(topo, built.solid, 0.05).unwrap();
         assert!(is_watertight(&mesh), "{what}: open mesh");
+        let filled = solid_volume(topo, built.solid, 1e-3).unwrap() - before;
         transform_solid(topo, built.solid, &pose.inverse().unwrap()).unwrap();
-        (
-            solid_volume(topo, built.solid, 1e-3).unwrap() - before,
-            built.solid,
-        )
+        (filled, built.solid)
     }
 
     /// The flat `y = 5 - tilt z` and the side of it toward the axis, as a
