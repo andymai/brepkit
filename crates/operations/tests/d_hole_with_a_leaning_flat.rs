@@ -137,17 +137,20 @@ mod tests {
         }
     }
 
-    /// Turned obliquely, `Ellipse3D::project` takes the angle of a point's
-    /// image on the ellipse's major circle, not the angle of its nearest
-    /// point. With the rounding of the centre 1e8 away, the crossings of
-    /// the flat's edges with the wall then read up to 0.09 off the curve,
-    /// they are dropped, and the flat is not split.
+    /// Turned obliquely and 200 long, the hole's corner where the flat meets
+    /// the bore at an end lies 1.5e-7 from the arc's first sample. The end
+    /// caps' meshes start with a sliver between the two, which must not set
+    /// the way the caps' triangles wind.
     #[test]
-    #[ignore = "Ellipse3D::project reads a turned long thin ellipse's crossings off the curve"]
     fn a_short_d_hole_cuts_exactly_turned_obliquely() {
-        let pose = Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1) * Mat4::rotation_z(0.3);
+        let turned = Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1) * Mat4::rotation_z(0.3);
         for length in [100.0, 200.0] {
-            check(length, "turned", &pose);
+            check(length, "turned", &turned);
+            check(
+                length,
+                "turned and mirrored",
+                &(Mat4::scale(1.0, -1.0, 1.0) * turned),
+            );
         }
     }
 }
