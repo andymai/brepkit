@@ -759,6 +759,33 @@ fn nurbs_endpoint(
     }
     let t0_raw = knots[0];
     let tn_raw = knots[knots.len() - 1];
+    // A closed half that goes round its surface's period has its ends a
+    // period apart, and its pcurve can lie a period from them, which no
+    // tangent depends on. It is read in the order whose span runs the way
+    // its stored span runs: read from the end nearer its start, a whole rim
+    // run against its curve read as stale, and its chord, folded by a
+    // period, gave it its twin's heading.
+    let stored = edge.end_uv - edge.start_uv;
+    if (edge.start_3d - edge.end_3d).length() < 1e-10 && stored.length() > 1e-9 {
+        let spans = nurbs.evaluate(tn_raw) - nurbs.evaluate(t0_raw);
+        let along = spans.dot(stored) > 0.0;
+        let off = if along {
+            spans - stored
+        } else {
+            spans + stored
+        };
+        if off.length() > 1e-9 {
+            return None;
+        }
+        let (t_start, t_end) = if along {
+            (t0_raw, tn_raw)
+        } else {
+            (tn_raw, t0_raw)
+        };
+        let inward = (t_end - t_start).signum() * if at_start { 1.0 } else { -1.0 };
+        let t_anchor = if at_start { t_start } else { t_end };
+        return Some((nurbs, t_anchor, inward, (t_end - t_start).abs()));
+    }
     let off_start = |t: f64| {
         let p = nurbs.evaluate(t);
         (p.x() - edge.start_uv.x()).powi(2) + (p.y() - edge.start_uv.y()).powi(2)
@@ -1529,6 +1556,38 @@ mod tests {
         let loops = build_wire_loops_dcel(&edges, 1e-7, true, false);
         assert_eq!(loops.len(), 1, "the band is the one region");
         assert_eq!(loops[0].len(), 6);
+    }
+
+    #[test]
+    fn a_whole_rim_a_period_from_its_pcurve_heads_the_way_it_runs() {
+        // A top rim in one closed edge, run against its curve: its ends sit
+        // a period up from its pcurve, which bows up to v = 3.1 between
+        // them. Each half leaves its start along its pcurve, whichever copy
+        // the pcurve lies on. Read as stale, the rim took its chord, which a
+        // period folds to nothing, and headed +u like its twin.
+        use std::f64::consts::PI;
+        let a = 4.712_388_980_384_691;
+        let v = 2.963;
+        let mut rim = make_bezier_edge([
+            Point2::new(a, v),
+            Point2::new(a + PI, 3.1),
+            Point2::new(a + TAU, v),
+        ]);
+        rim.start_uv = Point2::new(a + 2.0 * TAU, v);
+        rim.end_uv = Point2::new(a + TAU, v);
+        rim.end_3d = rim.start_3d;
+        rim.forward = false;
+        // The heading is read on a chord a hundredth of the curve long,
+        // which turns it by about 5e-4 from the curve's tangent.
+        let bow = (2.0 * (3.1 - v) / TAU).atan();
+        let angle = edge_angle_at_vertex_periodic(&rim, true, Some(TAU), None);
+        assert!((angle - (PI - bow)).abs() < 1e-3, "rim leaves at {angle}");
+
+        let mut twin = rim;
+        std::mem::swap(&mut twin.start_uv, &mut twin.end_uv);
+        twin.forward = true;
+        let angle = edge_angle_at_vertex_periodic(&twin, true, Some(TAU), None);
+        assert!((angle - bow).abs() < 1e-3, "twin leaves at {angle}");
     }
 
     #[test]
