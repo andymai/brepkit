@@ -799,10 +799,13 @@ impl Ellipse3D {
     /// Project a point onto the ellipse, returning the angle parameter of
     /// its nearest point, in `(-π, π]`.
     ///
-    /// The point is taken into the ellipse's plane and reflected into the
-    /// quadrant of its positive semi-axes, where its nearest point lies too.
-    /// There the nearest point is the root of a monotone function of one
-    /// variable, found by Newton kept inside a closing bracket. Where more
+    /// The point is taken into the ellipse's plane, in units of about the
+    /// longer semi-axis, and reflected into the quadrant of its positive
+    /// semi-axes, where its nearest point lies too. There the nearest point
+    /// is the root of a monotone function of one variable, found by Newton
+    /// kept inside a closing bracket. A point more than `1e100` semi-axes off
+    /// reads its nearest point from its direction alone, where the normal
+    /// runs along it, which is exact to the last digit there. Where more
     /// than one point of the ellipse is nearest, the one with no negative
     /// coordinate along either axis is taken: the centre of a circle gives
     /// `0`, the centre of a longer ellipse the end of its shorter semi-axis,
@@ -816,16 +819,29 @@ impl Ellipse3D {
         if !(x.is_finite() && y.is_finite()) {
             return (y / b).atan2(x / a);
         }
-        let (nx, ny) = if a >= b {
-            nearest_in_quadrant((a, b), (x.abs(), y.abs()))
+        // In units of about the longer semi-axis no square of the steps
+        // below leaves the range of a double. The unit is a power of two,
+        // which scales without rounding.
+        let unit = a.max(b);
+        let exponent = (unit.to_bits() >> 52) & 0x7ff;
+        let per_unit = f64::from_bits(2046_u64.saturating_sub(exponent).max(1) << 52);
+        let (a, b) = (a * per_unit, b * per_unit);
+        let reach = x.abs().max(y.abs());
+        let t = if reach > 1e100 * unit {
+            (b * (y / reach)).atan2(a * (x / reach))
         } else {
-            let (ny, nx) = nearest_in_quadrant((b, a), (y.abs(), x.abs()));
-            (nx, ny)
+            let (x, y) = (x * per_unit, y * per_unit);
+            let (nx, ny) = if a >= b {
+                nearest_in_quadrant((a, b), (x.abs(), y.abs()))
+            } else {
+                let (ny, nx) = nearest_in_quadrant((b, a), (y.abs(), x.abs()));
+                (nx, ny)
+            };
+            let nx = if x < 0.0 { -nx } else { nx };
+            let ny = if y < 0.0 { -ny } else { ny };
+            (ny / b).atan2(nx / a)
         };
-        let nx = if x < 0.0 { -nx } else { nx };
-        let ny = if y < 0.0 { -ny } else { ny };
         // `atan2` reads a point a hair below the negative axis as `-π`.
-        let t = (ny / b).atan2(nx / a);
         if t <= -PI { t + 2.0 * PI } else { t }
     }
 
@@ -933,10 +949,11 @@ fn nearest_in_quadrant((e0, e1): (f64, f64), (y0, y1): (f64, f64)) -> (f64, f64)
 /// within the evolute) keeps its digits. The root lies between `z1` (where
 /// the second term alone is one) and `1` for a point inside the ellipse,
 /// and between `1` and `|(n0, z1)|` (where the two terms together are at
-/// most one) for a point outside. Newton starts at `1`, where a point on
-/// the curve has its root, and each step that would leave the bracket
-/// halves it instead; the bracket closes round the root at every step, so
-/// the search ends on it.
+/// most one) for a point outside; both ends are positive. Newton starts at
+/// `1`, where a point on the curve has its root, and each step that would
+/// leave the bracket halves it instead; the bracket closes round the root
+/// at every step, so the search ends on it. A square that underflows is
+/// below the rounding of the sum it joins.
 fn lagrange_root(n0: f64, d: f64, z1: f64) -> f64 {
     let at = |sigma: f64| {
         let (near, far) = (1.0 / (sigma + d), 1.0 / sigma);
@@ -962,8 +979,12 @@ fn lagrange_root(n0: f64, d: f64, z1: f64) -> f64 {
             return sigma;
         }
         let newton = sigma - f / slope;
+        // A bracket across orders of magnitude (a point near the centre or
+        // far off) is halved in its exponent.
         let next = if newton > lo && newton < hi {
             newton
+        } else if hi > 4.0 * lo {
+            lo.sqrt() * hi.sqrt()
         } else {
             f64::midpoint(lo, hi)
         };

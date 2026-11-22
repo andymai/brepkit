@@ -364,6 +364,70 @@ fn ellipse_project_finds_the_nearest_point() {
     assert!((ellipses[3].project(centre)).abs() < 1e-15);
 }
 
+/// The same ellipse and point, scaled from `1e-200` to `1e200`, where the
+/// squares of the semi-axes leave the range of a double, read the same angle
+/// to a few units in the last place, and points `1e-300` and `1e300`
+/// semi-axes from the centre read a number at every scale.
+#[test]
+fn ellipse_project_reads_alike_at_every_scale() {
+    let normal = Vec3::new(0.3, -0.2, 1.0).normalize().unwrap();
+    let at_scale = |k: f64| {
+        Ellipse3D::new(Point3::new(0.5 * k, k, -2.0 * k), normal, 3.0 * k, 2.0 * k).unwrap()
+    };
+    let points = [
+        (1.7, 0.4),
+        (-0.3, 0.2),
+        (0.0, 0.5),
+        (2.5, 0.0),
+        (0.5, 0.0),
+        (-4.0, -3.0),
+        (1e3, -7e2),
+        (1e-3, 2e-3),
+    ];
+    for (x, y) in points {
+        let read = |k: f64| {
+            let ellipse = at_scale(k);
+            let p = ellipse.center() + ellipse.u_axis() * (x * k) + ellipse.v_axis() * (y * k);
+            ellipse.project(p)
+        };
+        // On the longer axis within the evolute two points are nearest, and
+        // the rounding of the scaled point picks the side.
+        let side = |t: f64| if y == 0.0 { t.abs() } else { t };
+        let one = side(read(1.0));
+        for k in [1e-200, 1e-150, 1e150, 1e200] {
+            let t = side(read(k));
+            assert!(
+                (t - one).abs() <= 8.0 * f64::EPSILON * one.abs().max(1.0),
+                "({x}, {y}) at {k}: {t}, at 1: {one}"
+            );
+        }
+    }
+    // Far off and near the centre, the centre at the origin so the point's
+    // own digits survive the subtraction.
+    for k in [1e-200, 1e-150, 1.0, 1e150, 1e200] {
+        let ellipse = Ellipse3D::new(Point3::new(0.0, 0.0, 0.0), normal, 3.0 * k, 2.0 * k).unwrap();
+        let (u, v) = (ellipse.u_axis(), ellipse.v_axis());
+        for (reach, expected) in [
+            (1e300, 2.0_f64.atan2(3.0)),
+            (1e150, 2.0_f64.atan2(3.0)),
+            (1e-150, FRAC_PI_2),
+            (1e-300, FRAC_PI_2),
+        ] {
+            let scale = reach * k;
+            if !scale.is_normal() {
+                continue;
+            }
+            let p = Point3::new(0.0, 0.0, 0.0) + u * scale + v * scale;
+            let t = ellipse.project(p);
+            assert!(t.is_finite(), "{reach} at {k}: {t}");
+            assert!(
+                (t - expected).abs() <= 8.0 * f64::EPSILON,
+                "{reach} at {k}: {t}, expected {expected}"
+            );
+        }
+    }
+}
+
 /// A long arc of an ellipse 2e8 across and 10 wide, centred 1e8 away, as a
 /// plane leaning 5e-8 off a wall's axis cuts the wall, turned: its centre
 /// rounds by 1e-8 in the turn, and each point of the arc still projects
