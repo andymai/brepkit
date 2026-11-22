@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use brepkit_blend::BlendResult;
 use brepkit_blend::chamfer_builder::ChamferBuilder;
 use brepkit_blend::fillet_builder::FilletBuilder;
+use brepkit_math::madd::Madd;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
@@ -58,12 +59,21 @@ fn own_cavities(
 /// A walking-engine chamfer's result as a solid of its own, refused where
 /// it is not a valid solid: the builder does not read what else lies in the
 /// regions its chamfers cut, such as a hole in the triangle an end takes
-/// from its end face, which it would leave outside that face.
+/// from its end face, which it would leave outside that face. A pcurve the
+/// chamfer gave an edge must also follow that edge on its face, which the
+/// solid's checks do not read.
 fn valid_chamfer(
     topo: &mut Topology,
     solid: SolidId,
     built: BlendResult,
 ) -> Result<BlendResult, OperationsError> {
+    if built.solid != solid
+        && let Some(issue) = pcurve_off_its_edge(topo, solid, built.solid)?
+    {
+        return Err(OperationsError::InvalidInput {
+            reason: format!("the chamfer leaves an invalid solid: {issue}"),
+        });
+    }
     let result = own_cavities(topo, solid, built, "chamfer")?;
     if result.solid != solid {
         let report = crate::validate::validate_solid(topo, result.solid)?;
@@ -78,6 +88,51 @@ fn valid_chamfer(
         }
     }
     Ok(result)
+}
+
+/// The first edge of `result` that `source` does not have, whose pcurve on
+/// a curved face of `result`, read through that face's surface, strays from
+/// the edge: by more than a hundred times the fit the blend engine builds a
+/// pcurve to, and not less than the solid checks' own `1e-4`.
+fn pcurve_off_its_edge(
+    topo: &Topology,
+    source: SolidId,
+    result: SolidId,
+) -> Result<Option<String>, OperationsError> {
+    let old: HashSet<EdgeId> = brepkit_topology::explorer::solid_edges(topo, source)?
+        .into_iter()
+        .collect();
+    let size = crate::measure::solid_bounding_box(topo, result)
+        .map_or(0.0, |aabb| (aabb.max - aabb.min).length());
+    let tolerance = 1e-5_f64.madd(size, 1e-5).max(1e-4);
+    for face in solid_faces(topo, result)? {
+        let data = topo.face(face)?;
+        for wire in std::iter::once(data.outer_wire()).chain(data.inner_wires().iter().copied()) {
+            for oe in topo.wire(wire)?.edges() {
+                if old.contains(&oe.edge()) {
+                    continue;
+                }
+                let found = brepkit_check::validate::check_edge_same_parameter(
+                    topo,
+                    oe.edge(),
+                    face,
+                    tolerance,
+                )
+                .map_err(|e| OperationsError::InvalidInput {
+                    reason: e.to_string(),
+                })?;
+                if let Some(issue) = found.first() {
+                    return Ok(Some(format!(
+                        "the pcurve of edge {} on face {}: {}",
+                        oe.edge().index(),
+                        face.index(),
+                        issue.description
+                    )));
+                }
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Fillet edges with constant radius — the production engine.
@@ -1465,5 +1520,111 @@ mod tests {
         let beside = Ellipse3D::new(p(0.0, 14.0, 5.0), Vec3::new(0.0, 0.0, 1.0), 3.0, 1.0).unwrap();
         let at = beside.evaluate(0.0);
         assert!(!cutter.may_meet(&EdgeCurve::Ellipse(beside), at, at));
+    }
+
+    /// A cylinder of radius 3 and height 4 with its wall in its B-spline
+    /// form, and its bottom rim chamfered 0.4 and 0.25 by the builder.
+    fn chamfered_b_spline_rim(topo: &mut Topology) -> (super::SolidId, super::BlendResult) {
+        let solid = crate::primitives::make_cylinder(topo, 3.0, 4.0).unwrap();
+        let rim = brepkit_topology::explorer::solid_edges(topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                matches!(topo.edge(e).unwrap().curve(),
+                    EdgeCurve::Circle(c) if c.center().z().abs() < 1e-9)
+            })
+            .unwrap();
+        for face in super::solid_faces(topo, solid).unwrap() {
+            if topo.face(face).unwrap().surface().is_planar() {
+                continue;
+            }
+            let wall = brepkit_heal::custom::convert_to_bspline::face_bspline_surface(topo, face)
+                .unwrap()
+                .unwrap();
+            topo.face_mut(face)
+                .unwrap()
+                .set_surface(brepkit_topology::face::FaceSurface::Nurbs(wall));
+        }
+        let mut builder = super::ChamferBuilder::new(topo, solid);
+        builder.add_edges_asymmetric(&[rim], 0.4, 0.25);
+        let built = builder.build().unwrap();
+        assert!(built.failed.is_empty(), "{:?}", built.failed);
+        (solid, built)
+    }
+
+    /// A chamfer's contact whose pcurve on the B-spline wall runs from u = 1
+    /// to 2 on the knot domain 0 to 1, a whole turn off: read through the
+    /// wall, it strays far from its edge. The solid checks pass the result,
+    /// and the chamfer's gate refuses it. The result as built passes both.
+    #[test]
+    fn a_chamfer_whose_pcurve_leaves_its_edge_is_refused() {
+        use brepkit_math::curves2d::{Curve2D, Line2D, NurbsCurve2D};
+        use brepkit_math::vec::Vec2;
+        use brepkit_topology::face::FaceSurface;
+        use brepkit_topology::pcurve::PCurve;
+
+        let mut topo = Topology::new();
+        let (solid, built) = chamfered_b_spline_rim(&mut topo);
+        super::valid_chamfer(&mut topo, solid, built).unwrap();
+
+        let (solid, built) = chamfered_b_spline_rim(&mut topo);
+        let old: std::collections::HashSet<EdgeId> =
+            brepkit_topology::explorer::solid_edges(&topo, solid)
+                .unwrap()
+                .into_iter()
+                .collect();
+        let mut moved = None;
+        'faces: for face in super::solid_faces(&topo, built.solid).unwrap() {
+            let f = topo.face(face).unwrap();
+            let FaceSurface::Nurbs(wall) = f.surface() else {
+                continue;
+            };
+            if !wall.is_periodic_u() || wall.degree_v() != 1 {
+                continue;
+            }
+            let (u0, u1) = wall.domain_u();
+            let turn = Vec2::new(u1 - u0, 0.0);
+            for oe in topo.wire(f.outer_wire()).unwrap().edges() {
+                let Some(pcurve) = topo.pcurves().get(oe.edge(), face) else {
+                    continue;
+                };
+                if old.contains(&oe.edge()) {
+                    continue;
+                }
+                let curve = match pcurve.curve() {
+                    Curve2D::Line(line) => {
+                        Curve2D::Line(Line2D::new(line.origin() + turn, line.direction()).unwrap())
+                    }
+                    Curve2D::Nurbs(nurbs) => Curve2D::Nurbs(
+                        NurbsCurve2D::new(
+                            nurbs.degree(),
+                            nurbs.knots().to_vec(),
+                            nurbs.control_points().iter().map(|&q| q + turn).collect(),
+                            nurbs.weights().to_vec(),
+                        )
+                        .unwrap(),
+                    ),
+                    Curve2D::Circle(_) | Curve2D::Ellipse(_) => continue,
+                };
+                moved = Some((
+                    oe.edge(),
+                    face,
+                    PCurve::new(curve, pcurve.t_start(), pcurve.t_end()),
+                ));
+                break 'faces;
+            }
+        }
+        let (edge, face, pcurve) = moved.expect("a contact's pcurve on the wall");
+        topo.pcurves_mut().set(edge, face, pcurve);
+        assert!(
+            crate::validate::validate_solid(&topo, built.solid)
+                .unwrap()
+                .is_valid()
+        );
+        let error = super::valid_chamfer(&mut topo, solid, built)
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(error.contains("pcurve"), "the gate gave {error:?}");
     }
 }

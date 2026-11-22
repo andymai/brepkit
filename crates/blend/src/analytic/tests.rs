@@ -4572,9 +4572,11 @@ fn cylinder_cylinder_chamfer_convex_emits_plane() {
     let eid = topo.add_edge(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(line)));
     let spine = Spine::from_single_edge(&topo, eid).unwrap();
 
-    let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], false).unwrap());
+    // Each face keeps the side of the ridge its wire runs it with: cyl1
+    // runs it down to keep +θ, cyl2 up to keep -θ.
+    let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], false).unwrap());
     let face1 = topo.add_face(Face::new(w1, vec![], FaceSurface::Cylinder(cyl1.clone())));
-    let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], false).unwrap());
+    let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], false).unwrap());
     let face2 = topo.add_face(Face::new(w2, vec![], FaceSurface::Cylinder(cyl2.clone())));
 
     let result = cylinder_cylinder_chamfer(&cyl1, &cyl2, &spine, &topo, d, d, face1, face2)
@@ -4690,13 +4692,15 @@ fn cylinder_cylinder_chamfer_both_concave_negative_y_emits_plane() {
     let spine = Spine::from_single_edge(&topo, eid).unwrap();
 
     // Both faces REVERSED.
-    let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], false).unwrap());
+    // Each face keeps the side of the ridge its wire runs it with: cyl1
+    // runs it down to keep +θ, cyl2 up to keep -θ.
+    let w1 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], false).unwrap());
     let face1 = topo.add_face(Face::new_reversed(
         w1,
         vec![],
         FaceSurface::Cylinder(cyl1.clone()),
     ));
-    let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, false)], false).unwrap());
+    let w2 = topo.add_wire(Wire::new(vec![OrientedEdge::new(eid, true)], false).unwrap());
     let face2 = topo.add_face(Face::new_reversed(
         w2,
         vec![],
