@@ -269,7 +269,9 @@ fn honeycomb_cut_residual_documented() {
 
 /// The raw engine refuses pcut1 rather than keep the body's inner wall whole
 /// across the tool's wall, and the boolean the tool calls still builds the cut
-/// exactly: valid, with its cones and cylinders, no mesh.
+/// exactly: valid, with its cones and cylinders, no mesh. The cut and the
+/// common part, built apart, make up the body, and the common part is no
+/// sliver, so the cut takes material off.
 #[test]
 fn honeycomb_pcut1_holds_in_the_boolean() {
     use brepkit_operations::boolean::{BooleanOptions, boolean_with_options};
@@ -296,4 +298,24 @@ fn honeycomb_pcut1_holds_in_the_boolean() {
     let report = brepkit_operations::validate::validate_solid(&topo, r).unwrap();
     assert!(report.is_valid(), "{:?}", report.issues);
     assert!(curved_count(&topo, r) > 0);
+
+    let common = boolean_with_options(
+        &mut topo,
+        brepkit_operations::boolean::BooleanOp::Intersect,
+        body,
+        p,
+        options,
+    )
+    .unwrap();
+    let volume = |s: SolidId| brepkit_operations::measure::solid_volume(&topo, s, 0.01).unwrap();
+    let (whole, cut, taken) = (volume(body), volume(r), volume(common));
+    assert!(
+        taken > 1e-3 * whole,
+        "the common part is {taken} of a body of {whole}"
+    );
+    assert!(
+        (cut + taken - whole).abs() <= 1e-6 * whole,
+        "the cut {cut} and the common part {taken} make {} of a body of {whole}",
+        cut + taken
+    );
 }
