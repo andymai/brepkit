@@ -10,6 +10,7 @@ mod tests {
 
     use std::f64::consts::{FRAC_PI_3, PI, TAU};
 
+    use brepkit_geometry::convert::circle_to_nurbs;
     use brepkit_math::curves::Circle3D;
     use brepkit_math::vec::{Point3, Vec3};
     use brepkit_operations::OperationsError;
@@ -121,6 +122,62 @@ mod tests {
                 assert!(
                     matches!(result, Err(OperationsError::InvalidInput { .. })),
                     "{name}, turn {turn}: {result:?}"
+                );
+            }
+        }
+    }
+
+    /// A half circle of radius `R` about the point `centre` out from the
+    /// axis, from the angle `from` (read from `out` towards the axis's
+    /// direction) half a turn on, closed by its chord, as a circle or as its
+    /// rational B-spline.
+    fn half_disc(topo: &mut Topology, f: &Frame, centre: f64, from: f64, spline: bool) -> FaceId {
+        let circle = Circle3D::new_with_ref(f.at(centre, 0.0), -f.side, R, f.out).unwrap();
+        let (a, b) = (circle.evaluate(from), circle.evaluate(from + PI));
+        let [va, vb] = [a, b].map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+        let arc = if spline {
+            EdgeCurve::NurbsCurve(circle_to_nurbs(&circle, from, from + PI).unwrap())
+        } else {
+            EdgeCurve::Circle(circle)
+        };
+        let edges = [Edge::new(va, vb, arc), Edge::new(vb, va, EdgeCurve::Line)]
+            .map(|e| OrientedEdge::new(topo.add_edge(e), true));
+        let wire = topo.add_wire(Wire::new(edges.to_vec(), true).unwrap());
+        let d = f
+            .side
+            .dot(Vec3::new(f.origin.x(), f.origin.y(), f.origin.z()));
+        topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal: f.side, d },
+        ))
+    }
+
+    /// A half circle whose middle reaches just across the axis, between
+    /// where samples of it evenly spaced along its parameter would read it:
+    /// refused, drawn as a circle or as a B-spline.
+    #[test]
+    fn an_arc_across_the_axis_between_samples_is_refused() {
+        for (name, f) in frames() {
+            for (centre, spline) in [(R - 0.01, false), (R - 0.001, true)] {
+                let mut topo = Topology::new();
+                let face = half_disc(&mut topo, &f, centre, 0.5 * PI + PI / 128.0, spline);
+                let result = revolve(&mut topo, face, f.origin, f.axis, TAU);
+                assert!(
+                    matches!(result, Err(OperationsError::InvalidInput { .. })),
+                    "{name}, spline {spline}: {result:?}"
+                );
+            }
+            // Kept clear of the axis by as much, it revolves.
+            for (centre, spline) in [(R + 0.01, false), (R + 0.001, true)] {
+                let mut topo = Topology::new();
+                let face = half_disc(&mut topo, &f, centre, 0.5 * PI + PI / 128.0, spline);
+                let solid = revolve(&mut topo, face, f.origin, f.axis, TAU).unwrap();
+                let report = validate_solid(&topo, solid).unwrap();
+                assert!(
+                    report.is_valid(),
+                    "{name}, spline {spline}: {:?}",
+                    report.issues
                 );
             }
         }

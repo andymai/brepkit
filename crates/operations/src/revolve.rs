@@ -2277,7 +2277,8 @@ pub fn revolve(
 /// boundary holds the result: a full turn of an arc over both poles covers
 /// its sphere twice. A point on the axis, or off it by a millionth of the
 /// profile's size (an arc drawn about a point a hair off the axis), lies on
-/// neither side.
+/// neither side. Each edge is read at its extremes across the axis, not at
+/// samples, which an arc can pass the axis between.
 fn profile_reaches_across_axis(
     topo: &Topology,
     oriented: &[OrientedEdge],
@@ -2291,9 +2292,9 @@ fn profile_reaches_across_axis(
         return Ok(false);
     }
     let across = normal.cross(axis).normalize()?;
-    let mut sides = Vec::with_capacity(oriented.len() * (SAMPLES as usize + 1));
     let mut lo = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
     let mut hi = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    let mut edges = Vec::with_capacity(oriented.len());
     for oe in oriented {
         let edge = topo.edge(oe.edge())?;
         let (a, b) = (
@@ -2302,6 +2303,8 @@ fn profile_reaches_across_axis(
         );
         let curve = edge.curve();
         let (t0, t1) = curve.domain_with_endpoints(a, b);
+        // The samples give the profile's size, which only scales the
+        // allowance.
         for k in 0..=SAMPLES {
             let p = curve.evaluate_with_endpoints(
                 (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0),
@@ -2310,11 +2313,116 @@ fn profile_reaches_across_axis(
             );
             lo = Point3::new(lo.x().min(p.x()), lo.y().min(p.y()), lo.z().min(p.z()));
             hi = Point3::new(hi.x().max(p.x()), hi.y().max(p.y()), hi.z().max(p.z()));
-            sides.push((p - axis_origin).dot(across));
         }
+        edges.push((curve.clone(), a, b, (t0, t1)));
     }
     let reach = 1e-6f64.madd((hi - lo).length(), Tolerance::new().linear);
-    Ok(sides.iter().any(|&s| s > reach) && sides.iter().any(|&s| s < -reach))
+    // Whether some point of the outline lies farther than `reach` on the
+    // side of the axis that `sign` picks.
+    let past = |sign: f64| -> Result<bool, crate::OperationsError> {
+        let depth = |p: Point3| -sign * (p - axis_origin).dot(across);
+        for (curve, a, b, (t0, t1)) in &edges {
+            let below = match curve {
+                EdgeCurve::Line => depth(*a).min(depth(*b)) < -reach,
+                EdgeCurve::Circle(circle) => {
+                    conic_least(|t| circle.evaluate(t), &depth, (*t0, *t1)) < -reach
+                }
+                EdgeCurve::Ellipse(ellipse) => {
+                    conic_least(|t| ellipse.evaluate(t), &depth, (*t0, *t1)) < -reach
+                }
+                // An edge stored against its spline's direction reads its
+                // span backward.
+                EdgeCurve::NurbsCurve(nurbs) => spline_dips_below(
+                    &nurbs_span(nurbs, t0.min(*t1), t0.max(*t1))?,
+                    &depth,
+                    -reach,
+                )?,
+            };
+            if below {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    };
+    Ok(past(1.0)? && past(-1.0)?)
+}
+
+/// The least that `f`, an affine function of the point, takes on the conic
+/// `at(t) = c + p cos t + q sin t` between `t0` and `t1 >= t0`.
+///
+/// On the conic `f` reads `f(c) + alpha cos t + beta sin t`, least at the
+/// angle opposite `atan2(beta, alpha)`. It counts where the span holds that
+/// angle, a whole turn on or back.
+fn conic_least(
+    at: impl Fn(f64) -> Point3,
+    f: &impl Fn(Point3) -> f64,
+    (t0, t1): (f64, f64),
+) -> f64 {
+    let (start, quarter, half) = (at(0.0), at(FRAC_PI_2), at(PI));
+    let centre = Point3::new(
+        0.5 * (start.x() + half.x()),
+        0.5 * (start.y() + half.y()),
+        0.5 * (start.z() + half.z()),
+    );
+    let at_centre = f(centre);
+    let (alpha, beta) = (f(start) - at_centre, f(quarter) - at_centre);
+    let ends = f(at(t0)).min(f(at(t1)));
+    let turn = 2.0 * PI;
+    let least = beta.atan2(alpha) + PI;
+    let first = least + ((t0 - least) / turn).ceil() * turn;
+    if first <= t1 {
+        ends.min(at_centre - alpha.hypot(beta))
+    } else {
+        ends
+    }
+}
+
+/// Whether `f`, an affine function of the point, falls below `floor`
+/// somewhere on `curve`.
+///
+/// A spline with positive weights lies in the hull of its control points,
+/// where `f` is least at a control point: a piece whose control points all
+/// read `floor` or more stays there, and a piece read below `floor` at a
+/// point of the curve is past it. A piece between is halved. Past the cap on
+/// halvings, a piece left between straddles `floor` by less than its hull's
+/// slack and reads as not past. A spline with a weight that is not positive
+/// has no such hull and is read at samples.
+fn spline_dips_below(
+    curve: &NurbsCurve,
+    f: &impl Fn(Point3) -> f64,
+    floor: f64,
+) -> Result<bool, crate::OperationsError> {
+    const MAX_HALVINGS: usize = 4096;
+    const SAMPLES: u32 = 4096;
+    if curve.weights().iter().any(|&w| w <= 0.0) {
+        let (d0, d1) = curve.domain();
+        return Ok((0..=SAMPLES).any(|k| {
+            f(curve.evaluate((d1 - d0).madd(f64::from(k) / f64::from(SAMPLES), d0))) < floor
+        }));
+    }
+    let mut pieces = vec![curve.clone()];
+    let mut halvings = 0;
+    while let Some(piece) = pieces.pop() {
+        if piece.control_points().iter().all(|&p| f(p) >= floor) {
+            continue;
+        }
+        let (d0, d1) = piece.domain();
+        let middle = 0.5 * (d0 + d1);
+        if [d0, middle, d1]
+            .iter()
+            .any(|&t| f(piece.evaluate(t)) < floor)
+        {
+            return Ok(true);
+        }
+        if halvings >= MAX_HALVINGS {
+            continue;
+        }
+        halvings += 1;
+        let (left, right) = brepkit_math::nurbs::knot_ops::curve_split(&piece, middle)?;
+        pieces.push(left);
+        pieces.push(right);
+    }
+    Ok(false)
 }
 
 /// How near 1 a cap's normal may read along the axis before its plane could
