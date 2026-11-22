@@ -2709,7 +2709,6 @@ fn build_section_edges(
     for source in sources {
         match source {
             SectionSource::Curve(curve_idx) => {
-                use brepkit_math::vec::Point2;
                 // Use the COMPLETE intersection curve, not individual PBs.
                 // The face splitter needs whole curves to form proper loops.
                 let curve_ds = match arena.curves.get(*curve_idx) {
@@ -2879,52 +2878,17 @@ fn build_section_edges(
                         None,
                     );
 
-                    // For closed curves on periodic surfaces (e.g. circle on cylinder),
-                    // the pcurve wraps around and evaluate(0) ≈ evaluate(1). We need
-                    // UV endpoints that span the full period so the face splitter
-                    // sees the section edge as a full-width cut.
+                    // A closed section's pcurve ends where it starts, so a loop
+                    // round the axis of a periodic face takes its end UV from its
+                    // run in u, which makes the face splitter see a full-width cut.
                     let is_closed = (start - end).length() < tol * 100.0;
                     let (u_per, _v_per) = super::pcurve_compute::surface_periods(face.surface());
-                    let (start_uv_pt, end_uv_pt) = if is_closed && u_per.is_some() {
-                        let period = u_per.unwrap_or(std::f64::consts::TAU);
-                        // Project the start 3D point to UV.
-                        let start_uv = face.surface().project_point(start);
-                        if let Some((su, sv)) = start_uv {
-                            // Sample the curve a quarter turn on from its start to
-                            // determine winding direction. A closed circle's domain
-                            // starts at its own angle origin, which need not be the
-                            // start: a quarter of the way on from there can be the
-                            // start's antipode, which reads either way round.
-                            let (t0, t1) = curve_3d.domain_with_endpoints(start, end);
-                            let t_start = match &curve_3d {
-                                EdgeCurve::Circle(c) => c.project(start),
-                                _ => t0,
-                            };
-                            let mid_3d = curve_3d.evaluate_with_endpoints(
-                                (t1 - t0).madd(0.25, t_start),
-                                start,
-                                end,
-                            );
-                            let mid_uv = face.surface().project_point(mid_3d);
-                            if let Some((mu, _mv)) = mid_uv {
-                                // Determine winding: does the curve go in +u or -u
-                                // direction from start?
-                                let du = mu - su;
-                                // Normalize du to [-period/2, period/2].
-                                let du_norm = du - (du / period).round() * period;
-                                let end_u = if du_norm < 0.0 {
-                                    su - period
-                                } else {
-                                    su + period
-                                };
-                                (Some(Point2::new(su, sv)), Some(Point2::new(end_u, sv)))
-                            } else {
-                                let s = pcurve.evaluate(0.0);
-                                (Some(s), Some(Point2::new(s.x() - period, s.y())))
-                            }
-                        } else {
-                            // Plane surface — project via pcurve.
-                            (Some(pcurve.evaluate(0.0)), Some(pcurve.evaluate(1.0)))
+                    let (start_uv_pt, end_uv_pt) = if let Some(period) = u_per.filter(|_| is_closed)
+                    {
+                        match closed_section_end_uvs(&curve_3d, start, end, face.surface(), period)
+                        {
+                            Some((s, e)) => (Some(s), Some(e)),
+                            None => (Some(pcurve.evaluate(0.0)), Some(pcurve.evaluate(1.0))),
                         }
                     } else if matches!(pcurve, brepkit_math::curves2d::Curve2D::Line(_)) {
                         // Line2D pcurves use arc-length parameterization, so
@@ -3272,6 +3236,46 @@ fn build_section_edges(
     dedup_collinear_sections(&mut sections, tol);
 
     sections
+}
+
+/// The UVs at the ends of a closed section on a face periodic in `u`. The
+/// end lies past the start by the section's run in `u`, read along the
+/// curve: one period for a loop round the axis, none for a loop on one side
+/// of it.
+fn closed_section_end_uvs(
+    curve_3d: &EdgeCurve,
+    start: Point3,
+    end: Point3,
+    surface: &FaceSurface,
+    period: f64,
+) -> Option<(brepkit_math::vec::Point2, brepkit_math::vec::Point2)> {
+    use brepkit_math::vec::Point2;
+    const SAMPLES: u32 = 64;
+    let (su, sv) = surface.project_point(start)?;
+    // The whole closed curve, whatever the start: its run is a whole number
+    // of periods from any point on it.
+    let (t0, t1) = match curve_3d {
+        EdgeCurve::Line => return None,
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => (0.0, std::f64::consts::TAU),
+        EdgeCurve::NurbsCurve(n) => n.domain(),
+    };
+    let us = (0..=SAMPLES)
+        .map(|k| {
+            let t = (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0);
+            surface
+                .project_point(curve_3d.evaluate_with_endpoints(t, start, end))
+                .map(|(u, _)| u)
+        })
+        .collect::<Option<Vec<f64>>>()?;
+    let run: f64 = us
+        .windows(2)
+        .map(|w| {
+            let du = w[1] - w[0];
+            period.madd(-(du / period).round(), du)
+        })
+        .sum();
+    let end_u = period.madd((run / period).round(), su);
+    Some((Point2::new(su, sv), Point2::new(end_u, sv)))
 }
 
 /// Whether the closed `curve` (a circle/ellipse) is contained within
@@ -7654,6 +7658,62 @@ mod tests {
                 "forward={forward}: {hits:?}"
             );
         }
+    }
+
+    /// On a cylinder of radius 2 about `z`, a closed section's end UVs lie a
+    /// turn apart in `u` for a circle round the axis, either way round and
+    /// from any start, and coincide for a loop on one side of the axis,
+    /// across the seam or clear of it.
+    #[test]
+    fn a_closed_sections_end_uvs_differ_by_its_run_in_u() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, TAU};
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z, 2.0).unwrap(),
+        );
+        let on_wall = |u: f64, v: f64| surface.evaluate(u, v).unwrap();
+        let check = |curve: EdgeCurve, start: Point3, turns: f64| {
+            let (s, e) = closed_section_end_uvs(&curve, start, start, &surface, TAU).unwrap();
+            let (su, sv) = surface.project_point(start).unwrap();
+            assert!(
+                (s.x() - su).abs() < 1e-9 && (s.y() - sv).abs() < 1e-9,
+                "{s:?}"
+            );
+            assert!((e.x() - s.x() - turns * TAU).abs() < 1e-9, "{s:?} {e:?}");
+            assert!((e.y() - s.y()).abs() < 1e-9, "{s:?} {e:?}");
+        };
+
+        for (normal, turns) in [(z, 1.0), (-z, -1.0)] {
+            let rim = Circle3D::new(Point3::new(0.0, 0.0, 1.0), normal, 2.0).unwrap();
+            for from in [0.0, 1.0, 4.0] {
+                check(EdgeCurve::Circle(rim.clone()), on_wall(from, 1.0), turns);
+            }
+        }
+
+        for centre_u in [0.0, FRAC_PI_2] {
+            let lobe =
+                Circle3D::new(on_wall(centre_u, 1.0), surface.normal(centre_u, 1.0), 0.5).unwrap();
+            let start = lobe.evaluate(0.3);
+            check(EdgeCurve::Circle(lobe), start, 0.0);
+        }
+
+        let corners: Vec<Point3> = (0..=8)
+            .map(|k| {
+                let a = FRAC_PI_4 * f64::from(k % 8);
+                on_wall(
+                    0.3_f64.madd(a.sin(), 3.0 * FRAC_PI_2),
+                    0.3_f64.madd(a.cos(), 4.7),
+                )
+            })
+            .collect();
+        let knots: Vec<f64> = std::iter::once(0.0)
+            .chain((0..=8).map(f64::from))
+            .chain(std::iter::once(8.0))
+            .collect();
+        let spline = NurbsCurve::new(1, knots, corners.clone(), vec![1.0; 9]).unwrap();
+        check(EdgeCurve::NurbsCurve(spline), corners[0], 0.0);
     }
 
     /// A run 0.001 inside the top of a closed ellipse seamed a 64th of a
