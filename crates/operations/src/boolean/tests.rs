@@ -8042,6 +8042,382 @@ fn nested_pieces_are_not_disjoint() {
     );
 }
 
+/// A ball's cavity off the ball's centre nests in the ball, though the box of
+/// its vertices does not lie in the ball's: each ball's vertices all lie on
+/// its own equator, so each box of vertices is a flat slice through its own
+/// centre. Read by its faces' extremes, the ball's box holds the cavity's
+/// vertices, and the ray probe finds the cavity inside the ball.
+#[test]
+fn a_ball_cavity_off_the_balls_centre_is_nested() {
+    use brepkit_math::mat::Mat4;
+    let vertex_box = |topo: &Topology, faces: &[FaceId]| {
+        let points = faces.iter().flat_map(|&f| {
+            let face = topo.face(f).unwrap();
+            std::iter::once(face.outer_wire())
+                .chain(face.inner_wires().iter().copied())
+                .flat_map(|w| topo.wire(w).unwrap().edges().to_vec())
+                .flat_map(|oe| {
+                    let e = topo.edge(oe.edge()).unwrap();
+                    [e.start(), e.end()]
+                })
+                .map(|v| topo.vertex(v).unwrap().point())
+                .collect::<Vec<_>>()
+        });
+        brepkit_math::aabb::Aabb3::try_from_points(points).unwrap()
+    };
+    // Poses that keep the equators level: a tilted equator spans enough
+    // height that the boxes of the vertices nest anyway.
+    for (name, pose) in [
+        ("upright", Mat4::identity()),
+        ("mirrored", Mat4::scale(1.0, -1.0, 1.0)),
+        ("rolled about z", Mat4::rotation_z(2.0)),
+    ] {
+        let mut topo = Topology::new();
+        let ball = crate::primitives::make_sphere(&mut topo, 10.0, 32).unwrap();
+        let small = crate::primitives::make_sphere(&mut topo, 2.0, 32).unwrap();
+        crate::transform::transform_solid(&mut topo, small, &Mat4::translation(0.0, 0.0, 5.0))
+            .unwrap();
+        for s in [ball, small] {
+            crate::transform::transform_solid(&mut topo, s, &pose).unwrap();
+        }
+        let hollow = boolean(&mut topo, BooleanOp::Cut, ball, small).unwrap();
+        assert_eq!(
+            topo.solid(hollow).unwrap().inner_shells().len(),
+            1,
+            "{name}"
+        );
+        let faces = brepkit_topology::explorer::solid_faces(&topo, hollow).unwrap();
+        let comps = super::assembly::edge_connected_faces(&topo, &faces);
+        assert_eq!(comps.len(), 2, "{name}: the ball and its cavity");
+
+        let boxes: Vec<_> = comps.iter().map(|c| vertex_box(&topo, c)).collect();
+        let holds = |o: &brepkit_math::aabb::Aabb3, i: &brepkit_math::aabb::Aabb3| {
+            o.min.x() <= i.min.x()
+                && o.min.y() <= i.min.y()
+                && o.min.z() <= i.min.z()
+                && o.max.x() >= i.max.x()
+                && o.max.y() >= i.max.y()
+                && o.max.z() >= i.max.z()
+        };
+        assert!(
+            !holds(&boxes[0], &boxes[1]) && !holds(&boxes[1], &boxes[0]),
+            "{name}: the boxes of the vertices must miss the nesting for this test to mean anything"
+        );
+        assert!(
+            !super::components_are_disjoint_pieces(&topo, &comps),
+            "{name}: the cavity nests in the ball"
+        );
+    }
+}
+
+/// The box `face_set_bounding_box` gives a component, and the box that also
+/// holds its NURBS faces' control nets.
+fn face_and_net_boxes(
+    topo: &Topology,
+    comp: &[FaceId],
+) -> (brepkit_math::aabb::Aabb3, brepkit_math::aabb::Aabb3) {
+    let faces = crate::measure::face_set_bounding_box(topo, comp).unwrap();
+    let nets = crate::measure::hold_nurbs_faces(topo, comp, faces).unwrap();
+    (faces, nets)
+}
+
+fn box_holds(o: brepkit_math::aabb::Aabb3, i: brepkit_math::aabb::Aabb3) -> bool {
+    o.min.x() <= i.min.x()
+        && o.min.y() <= i.min.y()
+        && o.min.z() <= i.min.z()
+        && o.max.x() >= i.max.x()
+        && o.max.y() >= i.max.y()
+        && o.max.z() >= i.max.z()
+}
+
+/// A ball in B-spline form, off the centre of a slightly larger ball, nests
+/// in it whichever order the two come in. The cavity's control net reaches
+/// past the outer ball's faces, so each box held the other: the check
+/// probed only one way round, and with the cavity listed first it probed the
+/// outer ball's vertex against the cavity, found it outside, and read the
+/// pair as disjoint.
+#[test]
+fn a_spline_ball_cavity_nests_whichever_order_it_comes_in() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::explorer::solid_faces;
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1);
+    for (name, pose) in [
+        ("upright", Mat4::identity()),
+        ("turned", turn),
+        ("mirrored", Mat4::scale(1.0, -1.0, 1.0)),
+    ] {
+        let mut topo = Topology::new();
+        let ball = crate::primitives::make_sphere(&mut topo, 3.5, 32).unwrap();
+        crate::transform::transform_solid(&mut topo, ball, &Mat4::translation(0.0, 0.0, 7.7))
+            .unwrap();
+        let cavity = crate::primitives::make_sphere(&mut topo, 3.0, 32).unwrap();
+        let place =
+            Mat4::translation(0.0, 0.0, 8.0) * Mat4::rotation_x(0.9) * Mat4::rotation_y(0.4);
+        crate::transform::transform_solid(&mut topo, cavity, &place).unwrap();
+        assert!(crate::heal::convert_to_bspline(&mut topo, cavity).unwrap() > 0);
+        for s in [ball, cavity] {
+            crate::transform::transform_solid(&mut topo, s, &pose).unwrap();
+        }
+        let (ball_faces, cavity_faces) = (
+            solid_faces(&topo, ball).unwrap(),
+            solid_faces(&topo, cavity).unwrap(),
+        );
+        assert!(
+            cavity_faces
+                .iter()
+                .all(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Nurbs(_))),
+            "{name}: the cavity's walls are B-splines"
+        );
+        if name == "upright" {
+            let (ball_box, ball_whole) = face_and_net_boxes(&topo, &ball_faces);
+            let (cavity_box, cavity_whole) = face_and_net_boxes(&topo, &cavity_faces);
+            assert!(
+                box_holds(ball_whole, cavity_box) && box_holds(cavity_whole, ball_box),
+                "each box must hold the other for this test to mean anything"
+            );
+        }
+        for comps in [
+            vec![cavity_faces.clone(), ball_faces.clone()],
+            vec![ball_faces.clone(), cavity_faces.clone()],
+        ] {
+            assert!(
+                !super::components_are_disjoint_pieces(&topo, &comps),
+                "{name}: the cavity nests in the ball, listed {}",
+                if comps[0] == cavity_faces {
+                    "first"
+                } else {
+                    "second"
+                }
+            );
+        }
+    }
+}
+
+/// A cavity cut from a ball and put in B-spline form, nested off the
+/// centre of a ball. Its faces are sampled over their untrimmed surfaces, so
+/// the box they give reaches above the cut and past the outer ball's own
+/// box, though every point of the cavity lies inside the ball. The check
+/// read that box against the ball's and found no nesting to probe.
+#[test]
+fn a_cavity_whose_face_box_reaches_past_its_ball_is_nested() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::explorer::solid_faces;
+    let mut topo = Topology::new();
+    let ball = crate::primitives::make_sphere(&mut topo, 9.0, 32).unwrap();
+    let small = crate::primitives::make_sphere(&mut topo, 3.0, 32).unwrap();
+    let place = Mat4::translation(0.0, 0.0, 8.0) * Mat4::rotation_x(0.9) * Mat4::rotation_y(0.4);
+    crate::transform::transform_solid(&mut topo, small, &place).unwrap();
+    let lid = crate::primitives::make_box(&mut topo, 20.0, 20.0, 10.0).unwrap();
+    crate::transform::transform_solid(&mut topo, lid, &Mat4::translation(-10.0, -10.0, 8.0))
+        .unwrap();
+    // The ball of radius 3 below z = 8: its farthest point from the origin
+    // is on the rim, sqrt(8^2 + 3^2) = 8.54, inside the ball of radius 9.
+    let cavity = boolean(&mut topo, BooleanOp::Cut, small, lid).unwrap();
+    assert!(crate::heal::convert_to_bspline(&mut topo, cavity).unwrap() > 0);
+    let (ball_faces, cavity_faces) = (
+        solid_faces(&topo, ball).unwrap(),
+        solid_faces(&topo, cavity).unwrap(),
+    );
+    let (ball_box, _) = face_and_net_boxes(&topo, &ball_faces);
+    let (cavity_box, _) = face_and_net_boxes(&topo, &cavity_faces);
+    assert!(
+        cavity_box.max.z() > ball_box.max.z(),
+        "the cavity's face box must reach past the ball's for this test to mean anything: {} against {}",
+        cavity_box.max.z(),
+        ball_box.max.z()
+    );
+    for comps in [
+        vec![cavity_faces.clone(), ball_faces.clone()],
+        vec![ball_faces, cavity_faces],
+    ] {
+        assert!(
+            !super::components_are_disjoint_pieces(&topo, &comps),
+            "the cavity nests in the ball"
+        );
+    }
+}
+
+/// A ball 0.07 inside the wall of a ball round it, turned about the axis so
+/// that its vertices sit between the outer ball's, nests in it whichever
+/// order the two come in, and so does one 0.001 inside. Read against a mesh
+/// of the outer ball, whose chords pass inside its surface by up to the
+/// deflection, the count of crossings read the inner ball's vertex as
+/// outside; which wall gaps passed hung on the mesh's sample count.
+#[test]
+fn a_ball_just_inside_its_balls_wall_nests_whichever_order_it_comes_in() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::explorer::solid_faces;
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1);
+    for ((name, pose), radius) in [
+        ("upright", Mat4::identity()),
+        ("turned", turn),
+        ("mirrored", Mat4::scale(1.0, -1.0, 1.0)),
+    ]
+    .into_iter()
+    .flat_map(|p| [9.93, 9.999].map(|r| (p, r)))
+    {
+        let mut topo = Topology::new();
+        let ball = crate::primitives::make_sphere(&mut topo, 10.0, 32).unwrap();
+        let inner = crate::primitives::make_sphere(&mut topo, radius, 32).unwrap();
+        crate::transform::transform_solid(
+            &mut topo,
+            inner,
+            &Mat4::rotation_z(std::f64::consts::PI / 27.0),
+        )
+        .unwrap();
+        for s in [ball, inner] {
+            crate::transform::transform_solid(&mut topo, s, &pose).unwrap();
+        }
+        let (ball_faces, inner_faces) = (
+            solid_faces(&topo, ball).unwrap(),
+            solid_faces(&topo, inner).unwrap(),
+        );
+        for (order, comps) in [
+            ("first", vec![inner_faces.clone(), ball_faces.clone()]),
+            ("second", vec![ball_faces, inner_faces]),
+        ] {
+            assert!(
+                !super::components_are_disjoint_pieces(&topo, &comps),
+                "{name}: the inner ball of radius {radius} nests in the ball, listed {order}"
+            );
+        }
+    }
+}
+
+/// A ball 5e-7 clear of the inside of a ring's hole is a separate piece,
+/// whichever order the two come in. All the ball's vertices lie on its
+/// equator, each 5e-7 from the ring, and the probe read them as on the ring
+/// at the classifier's default tolerance of 1e-6; with no point of the ball
+/// to read, the check gave its conservative answer and refused the pair.
+#[test]
+fn a_ball_just_clear_of_a_rings_hole_is_a_separate_piece() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::explorer::solid_faces;
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1);
+    for (name, pose) in [
+        ("upright", Mat4::identity()),
+        ("turned", turn),
+        ("mirrored", Mat4::scale(1.0, -1.0, 1.0)),
+    ] {
+        let mut topo = Topology::new();
+        let ring = crate::primitives::make_torus(&mut topo, 10.0, 2.0, 48).unwrap();
+        let ball = crate::primitives::make_sphere(&mut topo, 7.999_999_5, 32).unwrap();
+        for s in [ring, ball] {
+            crate::transform::transform_solid(&mut topo, s, &pose).unwrap();
+        }
+        let (ring_faces, ball_faces) = (
+            solid_faces(&topo, ring).unwrap(),
+            solid_faces(&topo, ball).unwrap(),
+        );
+        for (order, comps) in [
+            ("first", vec![ball_faces.clone(), ring_faces.clone()]),
+            ("second", vec![ring_faces, ball_faces]),
+        ] {
+            assert!(
+                super::components_are_disjoint_pieces(&topo, &comps),
+                "{name}: the ball in the ring's hole is a separate piece, listed {order}"
+            );
+        }
+    }
+}
+
+/// A piece that meets the piece round it at its vertices, or along its
+/// edges too, is read at a point off that piece's surface. A ball whose
+/// equator lies on a ring's hole is read at the middle of an equator chord;
+/// a plug that fills a tube's hole, its rims on the tube's inner rims and
+/// its wall on the tube's wall, at a point inside its flat end. Both are
+/// separate pieces: with no point of them to read, the check gave its
+/// conservative answer and refused them.
+#[test]
+fn a_piece_that_meets_its_rings_hole_is_read_off_the_ring() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::explorer::solid_faces;
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1);
+    for (name, pose) in [
+        ("upright", Mat4::identity()),
+        ("turned", turn),
+        ("mirrored", Mat4::scale(1.0, -1.0, 1.0)),
+    ] {
+        let mut topo = Topology::new();
+        let ring = crate::primitives::make_torus(&mut topo, 10.0, 2.0, 48).unwrap();
+        let ball = crate::primitives::make_sphere(&mut topo, 8.0, 32).unwrap();
+        let drum = crate::primitives::make_cylinder(&mut topo, 10.0, 1.0).unwrap();
+        let bore = crate::primitives::make_cylinder(&mut topo, 8.0, 1.0).unwrap();
+        let tube = boolean(&mut topo, BooleanOp::Cut, drum, bore).unwrap();
+        let plug = crate::primitives::make_cylinder(&mut topo, 8.0, 1.0).unwrap();
+        for s in [ring, ball, tube, plug] {
+            crate::transform::transform_solid(&mut topo, s, &pose).unwrap();
+        }
+        let faces = |s| solid_faces(&topo, s).unwrap();
+        for (what, outer, inner) in [
+            ("ball in the ring", faces(ring), faces(ball)),
+            ("plug in the tube", faces(tube), faces(plug)),
+        ] {
+            for (order, comps) in [
+                ("first", vec![inner.clone(), outer.clone()]),
+                ("second", vec![outer, inner]),
+            ] {
+                assert!(
+                    super::components_are_disjoint_pieces(&topo, &comps),
+                    "{name}: {what}, listed {order}, is a separate piece"
+                );
+            }
+        }
+    }
+}
+
+/// A ball touching a ring's outside, and a ball's cap resting on a block,
+/// are separate pieces whichever order they come in. The ring's wire is
+/// four seam edges of no length at one vertex, the point the ball touches;
+/// the cap's wire is the one circle it rests on. Each face's points were
+/// read over the box of its wire's points in `(u, v)`, which shrank to the
+/// contact, so every point read lay on the other piece and the check
+/// refused the pair. A face's whole period, or a ball's whole span of
+/// latitude, is read where the wire's box spans next to none of it.
+#[test]
+fn a_ball_on_a_ring_and_a_cap_on_a_block_are_separate_pieces() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::explorer::solid_faces;
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1);
+    for (name, pose) in [
+        ("upright", Mat4::identity()),
+        ("turned", turn),
+        ("mirrored", Mat4::scale(1.0, -1.0, 1.0)),
+    ] {
+        let mut topo = Topology::new();
+        let ring = crate::primitives::make_torus(&mut topo, 10.0, 2.0, 48).unwrap();
+        let ball = crate::primitives::make_sphere(&mut topo, 1.0, 32).unwrap();
+        crate::transform::transform_solid(&mut topo, ball, &Mat4::translation(13.0, 0.0, 0.0))
+            .unwrap();
+        let dome = crate::primitives::make_sphere(&mut topo, 2.0, 32).unwrap();
+        let top = crate::primitives::make_box(&mut topo, 6.0, 6.0, 2.0).unwrap();
+        crate::transform::transform_solid(&mut topo, top, &Mat4::translation(-3.0, -3.0, 1.0))
+            .unwrap();
+        let cap = boolean(&mut topo, BooleanOp::Intersect, dome, top).unwrap();
+        let block = crate::primitives::make_box(&mut topo, 10.0, 10.0, 4.0).unwrap();
+        crate::transform::transform_solid(&mut topo, block, &Mat4::translation(-5.0, -5.0, -3.0))
+            .unwrap();
+        for s in [ring, ball, cap, block] {
+            crate::transform::transform_solid(&mut topo, s, &pose).unwrap();
+        }
+        let faces = |s| solid_faces(&topo, s).unwrap();
+        for (what, a, b) in [
+            ("ball on the ring", faces(ring), faces(ball)),
+            ("cap on the block", faces(block), faces(cap)),
+        ] {
+            for (order, comps) in [
+                ("first", vec![a.clone(), b.clone()]),
+                ("second", vec![b, a]),
+            ] {
+                assert!(
+                    super::components_are_disjoint_pieces(&topo, &comps),
+                    "{name}: {what}, listed {order}, is a separate piece"
+                );
+            }
+        }
+    }
+}
+
 /// Multi-region Euler acceptance must tolerate genus per piece.
 ///
 /// `euler_balanced` used to compare against a fixed bound of 2, i.e. it assumed

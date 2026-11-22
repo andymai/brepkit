@@ -88,6 +88,19 @@ impl<'a> SolidClassifier<'a> {
         })
     }
 
+    /// Collect `faces`, which together bound a closed region (one piece of
+    /// a solid's shell), with their bounds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a face contains invalid topology references.
+    pub fn of_faces(topo: &'a Topology, faces: &[FaceId]) -> Result<Self, CheckError> {
+        Ok(Self {
+            topo,
+            faces: FaceBvh::of_faces(topo, faces.to_vec())?,
+        })
+    }
+
     /// Classify `point` as [`classify_point`] does.
     ///
     /// # Errors
@@ -338,7 +351,10 @@ impl FaceBvh {
     /// Every shell's faces: a cavity's faces bound the solid too, and ray
     /// parity across them puts a point inside a cavity outside the solid.
     fn of(topo: &Topology, solid: SolidId) -> Result<Self, CheckError> {
-        let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
+        Self::of_faces(topo, brepkit_topology::explorer::solid_faces(topo, solid)?)
+    }
+
+    fn of_faces(topo: &Topology, faces: Vec<FaceId>) -> Result<Self, CheckError> {
         let aabbs = faces
             .iter()
             .map(|&fid| crate::util::face_aabb(topo, fid))
