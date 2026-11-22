@@ -2380,27 +2380,52 @@ fn conic_least(
 /// Whether `f`, an affine function of the point, falls below `floor`
 /// somewhere on `curve`.
 ///
-/// A spline with positive weights lies in the hull of its control points,
-/// where `f` is least at a control point: a piece whose control points all
-/// read `floor` or more stays there, and a piece read below `floor` at a
-/// point of the curve is past it. A piece between is halved. Past the cap on
-/// halvings, a piece left between straddles `floor` by less than its hull's
-/// slack and reads as not past. A spline with a weight that is not positive
-/// has no such hull and is read at samples.
+/// Each Bezier piece of the spline is read on its own. A piece whose
+/// weights are all positive lies in the hull of its control points, where
+/// `f` is least at a control point; one whose weights are all negative is
+/// the same curve with every weight turned positive. A piece whose control
+/// points all read `floor` or more stays there, and a piece read below
+/// `floor` at a point of the curve is past it. A piece between is halved,
+/// which keeps its weights positive. Past the cap on halvings, a piece left
+/// between straddles `floor` by less than its hull's slack and reads as not
+/// past.
+///
+/// # Errors
+///
+/// A piece with a zero weight, or weights of both signs, has no such hull,
+/// and samples of it prove nothing: the revolve is refused.
 fn spline_dips_below(
     curve: &NurbsCurve,
     f: &impl Fn(Point3) -> f64,
     floor: f64,
 ) -> Result<bool, crate::OperationsError> {
     const MAX_HALVINGS: usize = 4096;
-    const SAMPLES: u32 = 4096;
-    if curve.weights().iter().any(|&w| w <= 0.0) {
-        let (d0, d1) = curve.domain();
-        return Ok((0..=SAMPLES).any(|k| {
-            f(curve.evaluate((d1 - d0).madd(f64::from(k) / f64::from(SAMPLES), d0))) < floor
-        }));
+    let unbounded = || crate::OperationsError::InvalidInput {
+        reason: "the revolve profile has a rational span with a zero weight or weights of \
+                 both signs, which the test against the axis cannot bound"
+            .into(),
+    };
+    let segments =
+        brepkit_math::nurbs::decompose::curve_to_bezier_segments(curve).map_err(|e| match e {
+            brepkit_math::MathError::PoleAtInfinity { .. } => unbounded(),
+            other => other.into(),
+        })?;
+    let mut pieces = Vec::with_capacity(segments.len());
+    for segment in segments {
+        let weights = segment.weights();
+        if weights.iter().all(|&w| w > 0.0) {
+            pieces.push(segment);
+        } else if weights.iter().all(|&w| w < 0.0) {
+            pieces.push(NurbsCurve::new(
+                segment.degree(),
+                segment.knots().to_vec(),
+                segment.control_points().to_vec(),
+                weights.iter().map(|w| -w).collect(),
+            )?);
+        } else {
+            return Err(unbounded());
+        }
     }
-    let mut pieces = vec![curve.clone()];
     let mut halvings = 0;
     while let Some(piece) = pieces.pop() {
         if piece.control_points().iter().all(|&p| f(p) >= floor) {

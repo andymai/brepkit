@@ -12,6 +12,7 @@ mod tests {
 
     use brepkit_geometry::convert::circle_to_nurbs;
     use brepkit_math::curves::Circle3D;
+    use brepkit_math::nurbs::curve::NurbsCurve;
     use brepkit_math::vec::{Point3, Vec3};
     use brepkit_operations::OperationsError;
     use brepkit_operations::measure::solid_volume;
@@ -127,22 +128,30 @@ mod tests {
         }
     }
 
-    /// A half circle of radius `R` about the point `centre` out from the
-    /// axis, from the angle `from` (read from `out` towards the axis's
-    /// direction) half a turn on, closed by its chord, as a circle or as its
-    /// rational B-spline.
-    fn half_disc(topo: &mut Topology, f: &Frame, centre: f64, from: f64, spline: bool) -> FaceId {
-        let circle = Circle3D::new_with_ref(f.at(centre, 0.0), -f.side, R, f.out).unwrap();
-        let (a, b) = (circle.evaluate(from), circle.evaluate(from + PI));
-        let [va, vb] = [a, b].map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
-        let arc = if spline {
-            EdgeCurve::NurbsCurve(circle_to_nurbs(&circle, from, from + PI).unwrap())
-        } else {
-            EdgeCurve::Circle(circle)
-        };
-        let edges = [Edge::new(va, vb, arc), Edge::new(vb, va, EdgeCurve::Line)]
-            .map(|e| OrientedEdge::new(topo.add_edge(e), true));
-        let wire = topo.add_wire(Wire::new(edges.to_vec(), true).unwrap());
+    /// A face in the profile's plane bounded by `curve` from `a` to `b` and
+    /// lines through `corners` back to `a`.
+    fn profile(
+        topo: &mut Topology,
+        f: &Frame,
+        (a, b): (Point3, Point3),
+        curve: EdgeCurve,
+        corners: &[Point3],
+    ) -> FaceId {
+        let points: Vec<Point3> = [a, b].into_iter().chain(corners.iter().copied()).collect();
+        let vertices: Vec<_> = points
+            .iter()
+            .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+            .collect();
+        let n = vertices.len();
+        let mut edges = vec![OrientedEdge::new(
+            topo.add_edge(Edge::new(vertices[0], vertices[1], curve)),
+            true,
+        )];
+        for i in 1..n {
+            let line = Edge::new(vertices[i], vertices[(i + 1) % n], EdgeCurve::Line);
+            edges.push(OrientedEdge::new(topo.add_edge(line), true));
+        }
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
         let d = f
             .side
             .dot(Vec3::new(f.origin.x(), f.origin.y(), f.origin.z()));
@@ -151,6 +160,55 @@ mod tests {
             vec![],
             FaceSurface::Plane { normal: f.side, d },
         ))
+    }
+
+    /// A half circle of radius `R` about the point `centre` out from the
+    /// axis, from the angle `from` (read from `out` towards the axis's
+    /// direction) half a turn on, closed by its chord, as a circle or as its
+    /// rational B-spline.
+    fn half_disc(topo: &mut Topology, f: &Frame, centre: f64, from: f64, spline: bool) -> FaceId {
+        let weigh = |_: usize, w: f64| w;
+        if spline {
+            spline_half_disc(topo, f, centre, from, weigh)
+        } else {
+            let circle = Circle3D::new_with_ref(f.at(centre, 0.0), -f.side, R, f.out).unwrap();
+            let ends = (circle.evaluate(from), circle.evaluate(from + PI));
+            profile(topo, f, ends, EdgeCurve::Circle(circle), &[])
+        }
+    }
+
+    /// [`half_disc`] as a rational B-spline whose `k`-th weight `w` is made
+    /// `weigh(k, w)`.
+    fn spline_half_disc(
+        topo: &mut Topology,
+        f: &Frame,
+        centre: f64,
+        from: f64,
+        weigh: impl Fn(usize, f64) -> f64,
+    ) -> FaceId {
+        let circle = Circle3D::new_with_ref(f.at(centre, 0.0), -f.side, R, f.out).unwrap();
+        let arc = circle_to_nurbs(&circle, from, from + PI).unwrap();
+        let weights = arc
+            .weights()
+            .iter()
+            .enumerate()
+            .map(|(k, &w)| weigh(k, w))
+            .collect();
+        let arc = NurbsCurve::new(
+            arc.degree(),
+            arc.knots().to_vec(),
+            arc.control_points().to_vec(),
+            weights,
+        )
+        .unwrap();
+        let ends = (circle.evaluate(from), circle.evaluate(from + PI));
+        profile(topo, f, ends, EdgeCurve::NurbsCurve(arc), &[])
+    }
+
+    /// Whether `result` is revolve's refusal of a profile it reads against
+    /// its axis.
+    fn refused_at_the_axis<T: std::fmt::Debug>(result: &Result<T, OperationsError>) -> bool {
+        matches!(result, Err(OperationsError::InvalidInput { reason }) if reason.contains("axis"))
     }
 
     /// A half circle whose middle reaches just across the axis, between
@@ -180,6 +238,78 @@ mod tests {
                     report.issues
                 );
             }
+        }
+    }
+
+    /// A quadratic B-spline whose first span has a zero weight, and whose
+    /// span of width 1e-5 dips from `x = 1` to `x = -0.5`, across the axis:
+    /// samples evenly spaced along it all read `x = 1`. No hull bounds the
+    /// span with the zero weight, so the profile is refused.
+    #[test]
+    fn a_spline_with_a_zero_weight_and_a_narrow_dip_across_the_axis_is_refused() {
+        let (a, b) = (0.500_117_070_312_5, 0.500_127_070_312_5);
+        for (name, f) in frames() {
+            let mut topo = Topology::new();
+            let points: Vec<Point3> = [1.0, 1.0, 1.0, -2.0, 1.0, 1.0, 1.0]
+                .into_iter()
+                .zip(0..)
+                .map(|(x, z)| f.at(x, f64::from(z)))
+                .collect();
+            let spline = NurbsCurve::new(
+                2,
+                vec![0.0, 0.0, 0.0, a, a, b, b, 1.0, 1.0, 1.0],
+                points.clone(),
+                vec![1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            )
+            .unwrap();
+            let face = profile(
+                &mut topo,
+                &f,
+                (points[0], points[6]),
+                EdgeCurve::NurbsCurve(spline),
+                &[f.at(3.0, 6.0), f.at(3.0, 0.0)],
+            );
+            let result = revolve(&mut topo, face, f.origin, f.axis, TAU);
+            assert!(refused_at_the_axis(&result), "{name}: {result:?}");
+        }
+    }
+
+    /// The half circle as a B-spline with every weight negative, the same
+    /// curve: its hull bounds it. Across the axis between samples, it is
+    /// refused for reaching across; clear of the axis, the test passes it.
+    /// With one weight of the other sign, no hull bounds it, and it is
+    /// refused.
+    #[test]
+    fn a_spline_with_negative_weights_is_read_by_its_hull() {
+        let from = 0.5 * PI + PI / 128.0;
+        for (name, f) in frames() {
+            let mut topo = Topology::new();
+            let face = spline_half_disc(&mut topo, &f, R - 0.001, from, |_, w| -w);
+            let result = revolve(&mut topo, face, f.origin, f.axis, TAU);
+            assert!(
+                matches!(&result, Err(OperationsError::InvalidInput { reason }) if reason.contains("reaches across")),
+                "{name}: {result:?}"
+            );
+            let mut topo = Topology::new();
+            let face = spline_half_disc(&mut topo, &f, R + 0.001, from, |_, w| -w);
+            let result = revolve(&mut topo, face, f.origin, f.axis, TAU);
+            assert!(!refused_at_the_axis(&result), "{name}: {result:?}");
+            let mut topo = Topology::new();
+            let face =
+                spline_half_disc(
+                    &mut topo,
+                    &f,
+                    R + 0.001,
+                    from,
+                    |k, w| {
+                        if k == 1 { -w } else { w }
+                    },
+                );
+            let result = revolve(&mut topo, face, f.origin, f.axis, TAU);
+            assert!(
+                matches!(&result, Err(OperationsError::InvalidInput { reason }) if reason.contains("rational span")),
+                "{name}: {result:?}"
+            );
         }
     }
 
