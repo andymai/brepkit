@@ -765,6 +765,32 @@ fn check_edge_face_pairs(
                 crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
             }
 
+            // A line or conic that runs within the tolerance of a quadric
+            // over several samples only touches it, at the one contact the
+            // scan keeps. Exact geometry on an exact surface, it lies in the
+            // face only where it stays within the tolerance: its pieces
+            // reaching past that band (a ball's equator 3e-7 inside a rod's
+            // wall) touch the face and do not split it.
+            let bands: Vec<Option<(f64, f64)>> = crossings
+                .iter()
+                .map(|&(t, _)| {
+                    if matches!(
+                        curve,
+                        EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)
+                    ) && matches!(
+                        surface,
+                        FaceSurface::Cylinder(_)
+                            | FaceSurface::Cone(_)
+                            | FaceSurface::Sphere(_)
+                            | FaceSurface::Torus(_)
+                    ) {
+                        tangent_band(&curve, start_pos, end_pos, (t0, t1), t, surface, tol)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
             // Endpoint-drop windows, one per crossing and per endpoint,
             // computed while the face's surface borrow is still live (the
             // loop below mutates `topo`). A TANGENTIAL (grazing) contact's
@@ -878,8 +904,11 @@ fn check_edge_face_pairs(
                 })
                 .collect();
 
-            for (((t, pt), (start_window, end_window, _)), snap) in
-                crossings.into_iter().zip(endpoint_windows).zip(snaps)
+            for ((((t, pt), (start_window, end_window, _)), snap), band) in crossings
+                .into_iter()
+                .zip(endpoint_windows)
+                .zip(snaps)
+                .zip(bands)
             {
                 if !containments[face_idx].accepts(pt) {
                     log::debug!(
@@ -965,7 +994,7 @@ fn check_edge_face_pairs(
                     face: fid,
                     new_vertex: Some(vertex_id),
                     parameter: Some(t),
-                    run: None,
+                    run: band,
                 });
 
                 arena.face_info_mut(fid).vertices_in.insert(vertex_id);
@@ -1431,15 +1460,62 @@ fn find_edge_surface_crossings(
         })
         .collect();
 
-    for (i, (&(t, _), &(dist, _))) in samples.iter().zip(&probed).enumerate() {
-        if i > 0 && dist < tol.linear {
-            let is_dup = crossings.iter().any(|&(ct, _): &(f64, Point3)| {
-                (t - ct).abs() < ((t1 - t0) / (n as f64) * 2.0).abs()
-            });
-            if !is_dup {
-                let refined = refine_crossing(curve, start_pos, end_pos, prev_t, t, surface, tol);
-                crossings.push(refined);
+    // A run of samples within the tolerance of the surface is one contact,
+    // where the edge comes nearest to it. An edge nearly tangent to the
+    // surface stays within the tolerance over a long stretch (a ball's
+    // equator 3e-7 inside a rod's wall for a third of a turn), and a
+    // crossing at each of its samples would cut it into pieces that all lie
+    // on the surface.
+    let mut run: Option<(usize, usize)> = None;
+    let near_a_crossing = |t: f64, crossings: &[(f64, Point3)]| {
+        crossings
+            .iter()
+            .any(|&(ct, _)| (t - ct).abs() < ((t1 - t0) / (n as f64) * 2.0).abs())
+    };
+    let close_run = |first: usize, last: usize, best: usize, crossings: &mut Vec<_>| {
+        if first == last {
+            let t = samples[first].0;
+            if first > 0 && !near_a_crossing(t, crossings) {
+                crossings.push(refine_crossing(
+                    curve,
+                    start_pos,
+                    end_pos,
+                    samples[first - 1].0,
+                    t,
+                    surface,
+                    tol,
+                ));
             }
+        } else {
+            let around: Vec<f64> = (first.saturating_sub(1)..=(last + 1).min(n))
+                .map(|k| samples[k].0)
+                .collect();
+            let found = tangent_contact(curve, start_pos, end_pos, &around, surface, tol)
+                .unwrap_or_else(|| {
+                    refine_crossing(
+                        curve,
+                        start_pos,
+                        end_pos,
+                        samples[best.saturating_sub(1)].0,
+                        samples[(best + 1).min(n)].0,
+                        surface,
+                        tol,
+                    )
+                });
+            if !near_a_crossing(found.0, crossings) {
+                crossings.push(found);
+            }
+        }
+    };
+    for (i, (&(t, _), &(dist, _))) in samples.iter().zip(&probed).enumerate() {
+        if dist < tol.linear {
+            run = Some(match run {
+                Some((first, best)) if probed[best].0 <= dist => (first, best),
+                Some((first, _)) => (first, i),
+                None => (i, i),
+            });
+        } else if let Some((first, best)) = run.take() {
+            close_run(first, i - 1, best, &mut crossings);
         } else if i > 0 && prev_dist > tol.linear && dist > tol.linear {
             let mid_t = f64::midpoint(prev_t, t);
             let mid_pt = curve.evaluate_with_endpoints(mid_t, start_pos, end_pos);
@@ -1490,6 +1566,9 @@ fn find_edge_surface_crossings(
 
         prev_dist = dist;
         prev_t = t;
+    }
+    if let Some((first, best)) = run {
+        close_run(first, n, best, &mut crossings);
     }
 
     // The samples find a crossing only where one lands within a few
@@ -1564,6 +1643,99 @@ fn line_crossings(
         .into_iter()
         .map(|p| ((t1 - t0).madd((p - start_pos).dot(d) / len_sq, t0), p))
         .collect()
+}
+
+/// Where a curve nearly tangent to a surface comes nearest to it between
+/// the first and last of the parameters `ts`: a root of its tangent's part
+/// along the surface's normal that lies within the tolerance of the
+/// surface, the nearest such root where there are several. The distance is
+/// flat to second order there, so a search on it stops anywhere within the
+/// square root of its rounding error (3e-5 along a ball's equator 3e-7
+/// inside a rod's wall), but the tangent's normal part changes sign at a
+/// rate that pins the point.
+fn tangent_contact(
+    curve: &EdgeCurve,
+    start_pos: Point3,
+    end_pos: Point3,
+    ts: &[f64],
+    surface: &FaceSurface,
+    tol: Tolerance,
+) -> Option<(f64, Point3)> {
+    let across = |t: f64| -> Option<f64> {
+        let p = curve.evaluate_with_endpoints(t, start_pos, end_pos);
+        let (u, v) = surface.project_point(p)?;
+        Some(
+            curve
+                .tangent_with_endpoints(t, start_pos, end_pos)
+                .dot(surface.normal(u, v)),
+        )
+    };
+    let mut best: Option<(f64, f64, Point3)> = None;
+    let mut prev: Option<(f64, f64)> = None;
+    for &t in ts {
+        let Some(g) = across(t) else {
+            prev = None;
+            continue;
+        };
+        if let Some((t_prev, g_prev)) = prev
+            && (g_prev > 0.0) != (g > 0.0)
+        {
+            let (mut lo, mut hi, mut g_lo) = (t_prev, t, g_prev);
+            for _ in 0..60 {
+                let mid = f64::midpoint(lo, hi);
+                let Some(g_mid) = across(mid) else { break };
+                if (g_mid > 0.0) == (g_lo > 0.0) {
+                    lo = mid;
+                    g_lo = g_mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let tc = f64::midpoint(lo, hi);
+            let pc = curve.evaluate_with_endpoints(tc, start_pos, end_pos);
+            let d = distance_to_surface(pc, surface);
+            if d < tol.linear && best.is_none_or(|(bd, _, _)| d < bd) {
+                best = Some((d, tc, pc));
+            }
+        }
+        prev = Some((t, g));
+    }
+    best.map(|(_, t, p)| (t, p))
+}
+
+/// The span of the samples that the crossing scan reads, lying within the
+/// tolerance of `surface` next to each other around a contact at `t`, where
+/// at least two do: the stretch along which the curve runs within the
+/// tolerance of the surface.
+fn tangent_band(
+    curve: &EdgeCurve,
+    start_pos: Point3,
+    end_pos: Point3,
+    (t0, t1): (f64, f64),
+    t: f64,
+    surface: &FaceSurface,
+    tol: Tolerance,
+) -> Option<(f64, f64)> {
+    let n = N_SAMPLES;
+    let at = |i: usize| t0 + (t1 - t0) * (i as f64 / n as f64);
+    let within = |i: usize| {
+        distance_to_surface(
+            curve.evaluate_with_endpoints(at(i), start_pos, end_pos),
+            surface,
+        ) < tol.linear
+    };
+    let along = ((t - t0) / (t1 - t0) * n as f64).clamp(0.0, n as f64);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let (below, above) = (along.floor() as usize, along.ceil() as usize);
+    let start = [below, above].into_iter().find(|&i| within(i))?;
+    let (mut lo, mut hi) = (start, start);
+    while lo > 0 && within(lo - 1) {
+        lo -= 1;
+    }
+    while hi < n && within(hi + 1) {
+        hi += 1;
+    }
+    (hi > lo).then(|| (at(lo).min(at(hi)), at(lo).max(at(hi))))
 }
 
 /// Points where a curve passes from one side of a surface to the other,
