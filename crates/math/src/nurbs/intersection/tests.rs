@@ -950,6 +950,40 @@ fn curve_surface_line_through_flat_plane() {
     );
 }
 
+/// A tall arch crossing a flat patch twice: its middle stands 3 off the
+/// patch, more than its derivatives there reach over the span, yet its ends
+/// cross the patch at t = (1 -+ sqrt(1/2)) / 2.
+#[test]
+fn curve_surface_tall_arch_through_flat_plane() {
+    use crate::nurbs::curve::NurbsCurve;
+
+    let surf = flat_surface();
+    let curve = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.5, -3.0),
+            Point3::new(0.5, 0.5, 9.0),
+            Point3::new(1.0, 0.5, -3.0),
+        ],
+        vec![1.0, 1.0, 1.0],
+    )
+    .unwrap();
+
+    let hits = intersect_curve_surface(&curve, &surf, 1e-7).unwrap();
+    let ts: Vec<f64> = hits.iter().map(|h| h.t).collect();
+    let root = 0.5_f64.sqrt();
+    assert_eq!(ts.len(), 2, "hits at {ts:?}");
+    assert!((ts[0] - (1.0 - root) / 2.0).abs() < 1e-6, "hits at {ts:?}");
+    assert!(
+        (ts[1] - f64::midpoint(1.0, root)).abs() < 1e-6,
+        "hits at {ts:?}"
+    );
+    for hit in &hits {
+        assert!(hit.point.z().abs() < 1e-6, "hit {:?}", hit.point);
+    }
+}
+
 /// A degree-2 curve (parabola) intersecting a flat plane -- should find 2 points.
 #[test]
 fn curve_surface_parabola_through_flat_plane() {
