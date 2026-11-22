@@ -2473,15 +2473,32 @@ fn segment_meets_both_boxes(p0: Point3, p1: Point3, a: Aabb3, b: Aabb3) -> bool 
 /// 256 chords widened by their own sagitta (a closed rim's chords run up to
 /// `7.5e-5 R` inside it).
 pub(super) fn point_on_face_edges(topo: &Topology, face: FaceId, p: Point3, near: f64) -> bool {
-    let Ok(f) = topo.face(face) else {
-        return false;
-    };
-    std::iter::once(f.outer_wire())
-        .chain(f.inner_wires().iter().copied())
+    face_edges_near(topo, face, p, near).next().is_some()
+}
+
+/// The edges of a face that `p` lies within `near` of, as
+/// [`point_on_face_edges`] reads them.
+fn face_edges_near(
+    topo: &Topology,
+    face: FaceId,
+    p: Point3,
+    near: f64,
+) -> impl Iterator<Item = brepkit_topology::edge::EdgeId> + '_ {
+    let wires: Vec<_> = topo.face(face).map_or_else(
+        |_| Vec::new(),
+        |f| {
+            std::iter::once(f.outer_wire())
+                .chain(f.inner_wires().iter().copied())
+                .collect()
+        },
+    );
+    wires
+        .into_iter()
         .filter_map(|wid| topo.wire(wid).ok())
         .flat_map(|w| w.edges().to_vec())
-        .any(|oe| {
-            let Ok(edge) = topo.edge(oe.edge()) else {
+        .map(|oe| oe.edge())
+        .filter(move |&edge_id| {
+            let Ok(edge) = topo.edge(edge_id) else {
                 return false;
             };
             let (Ok(sv), Ok(ev)) = (topo.vertex(edge.start()), topo.vertex(edge.end())) else {
@@ -2507,6 +2524,36 @@ pub(super) fn point_on_face_edges(topo: &Topology, face: FaceId, p: Point3, near
                 (p - (q0 + d * f)).length() <= near + sag
             })
         })
+}
+
+/// Whether an edge of `face` through `p` also bounds a face lying on
+/// `other`'s surface. Two coaxial wedges' floors meet the cylinder they
+/// share along their own rims: each rim is already the edge of a wall
+/// coincident with the other wedge's, whose same-domain faces split there.
+fn edge_beside_same_domain(
+    topo: &Topology,
+    face: FaceId,
+    other: FaceId,
+    p: Point3,
+    near: f64,
+    tol: Tolerance,
+) -> bool {
+    let Ok(other_surface) = topo.face(other).map(|f| f.surface().clone()) else {
+        return false;
+    };
+    face_edges_near(topo, face, p, near).any(|edge| {
+        topo.faces_of_edge(edge).into_iter().any(|beside| {
+            beside != face
+                && topo.face(beside).is_ok_and(|f| {
+                    crate::builder::same_domain::surfaces_same_domain(
+                        f.surface(),
+                        &other_surface,
+                        tol,
+                    )
+                    .is_some()
+                })
+        })
+    })
 }
 
 /// Restrict surface-surface intersection curves to the region inside BOTH
@@ -2659,9 +2706,12 @@ fn restrict_curves_to_faces(
                     .map(|(t, _)| t)
                     .collect();
                 ts.sort_by(f64::total_cmp);
-                // An arc along a face's own edge (a strut's floor meeting a
-                // coaxial strut's cylinder, already one of its boundary
-                // arcs) splits nothing.
+                // An arc along both faces' edges splits nothing, nor does one
+                // along a face's edge that a face on the partner's surface
+                // also bounds (a strut's floor meeting a coaxial strut's
+                // cylinder, already one of its boundary arcs). An arc along
+                // one face's edge alone splits the other (a rod's cap rim
+                // across a ball's face, the rod ending at the ball's centre).
                 let near = 1e-5 * (1.0 + circle.radius());
                 let on_both = ts.len() >= 2
                     && (0..ts.len()).any(|i| {
@@ -2670,10 +2720,13 @@ fn restrict_curves_to_faces(
                             .copied()
                             .unwrap_or(ts[0] + std::f64::consts::TAU);
                         let p = circle.evaluate(0.5 * (ts[i] + next));
+                        let edge_a = point_on_face_edges(topo, fa, p, near);
+                        let edge_b = point_on_face_edges(topo, fb, p, near);
                         ext_a.contains(p)
                             && ext_b.contains(p)
-                            && !point_on_face_edges(topo, fa, p, near)
-                            && !point_on_face_edges(topo, fb, p, near)
+                            && !(edge_a && edge_b)
+                            && !(edge_a && edge_beside_same_domain(topo, fa, fb, p, near, tol))
+                            && !(edge_b && edge_beside_same_domain(topo, fb, fa, p, near, tol))
                     });
                 if on_both {
                     out.push(raw);
