@@ -972,6 +972,71 @@ impl ToroidalSurface {
         }
     }
 
+    /// Axis-aligned bounding box of the patch over the ring angles from `u0`
+    /// up to `u1` and the tube angles from `v0` up to `v1`; a range of a
+    /// whole turn or more takes all of it. The box holds the ring sector
+    /// that the patch's distances from the axis sweep, moved along the axis
+    /// through the heights that its tube angles reach.
+    #[must_use]
+    pub fn patch_aabb(&self, (u0, u1): (f64, f64), (v0, v1): (f64, f64)) -> Aabb3 {
+        use std::f64::consts::{FRAC_PI_2, PI, TAU};
+        let holds = |at: f64| v1 - v0 >= TAU || (at - v0).rem_euclid(TAU) <= v1 - v0;
+        // The extreme of `f` on the tube angles, `sign` picking the largest
+        // or the least: `sign` itself where the range holds `f`'s own peak
+        // there, otherwise the value at one of the range's ends.
+        let most = |f: fn(f64) -> f64, peak: f64, sign: f64| {
+            if holds(peak) {
+                sign
+            } else if sign > 0.0 {
+                f(v0).max(f(v1))
+            } else {
+                f(v0).min(f(v1))
+            }
+        };
+        let (cos_lo, cos_hi) = (most(f64::cos, PI, -1.0), most(f64::cos, 0.0, 1.0));
+        let (sin_lo, sin_hi) = (
+            most(f64::sin, -FRAC_PI_2, -1.0),
+            most(f64::sin, FRAC_PI_2, 1.0),
+        );
+        // A tube point past the axis lies on the far side of it, half a turn
+        // round from its ring angle.
+        let ring = |rho: f64| {
+            let turn = if rho < 0.0 { PI } else { 0.0 };
+            crate::curves::Circle3D::with_axes(
+                self.center,
+                self.z_axis,
+                rho.abs(),
+                self.x_axis,
+                self.y_axis,
+            )
+            .map_or(
+                Aabb3 {
+                    min: self.center,
+                    max: self.center,
+                },
+                |c| c.arc_aabb(u0 + turn, u1 + turn),
+            )
+        };
+        let r = self.minor_radius;
+        let flat =
+            ring(r.madd(cos_lo, self.major_radius)).union(ring(r.madd(cos_hi, self.major_radius)));
+        let (low, high) = (self.z_axis * (r * sin_lo), self.z_axis * (r * sin_hi));
+        Aabb3 {
+            min: flat.min
+                + Vec3::new(
+                    low.x().min(high.x()),
+                    low.y().min(high.y()),
+                    low.z().min(high.z()),
+                ),
+            max: flat.max
+                + Vec3::new(
+                    low.x().max(high.x()),
+                    low.y().max(high.y()),
+                    low.z().max(high.z()),
+                ),
+        }
+    }
+
     /// Returns the major radius (distance from center to tube center).
     #[must_use]
     pub const fn major_radius(&self) -> f64 {

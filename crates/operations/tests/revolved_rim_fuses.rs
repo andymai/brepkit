@@ -22,7 +22,7 @@ use brepkit_operations::boolean::{BooleanOp, BooleanOptions, boolean_with_option
 use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::mirror::mirror;
-use brepkit_operations::primitives::make_torus;
+use brepkit_operations::primitives::{make_box, make_torus};
 use brepkit_operations::revolve::revolve;
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
@@ -256,6 +256,103 @@ fn a_torus_lip_fuses_onto_a_funnels_rim() {
             &[("cone", 4), ("cylinder", 4), ("plane", 1), ("torus", 1)],
             truth,
             ([77.0, -4.0, 67.0], [85.0, 4.0, 73.0], 14),
+        );
+    }
+}
+
+/// `∫ f` over `[lo, hi]` by four-point Gauss rules on `steps` equal pieces.
+fn integrate(f: impl Fn(f64) -> f64, (lo, hi): (f64, f64), steps: usize) -> f64 {
+    let gauss = gauss_legendre_points(4);
+    #[allow(clippy::cast_precision_loss)]
+    let step = (hi - lo) / steps as f64;
+    let mut total = 0.0;
+    for i in 0..steps {
+        #[allow(clippy::cast_precision_loss)]
+        let a = step.mul_add(i as f64, lo);
+        for g in gauss {
+            total += 0.5 * step * g.w * f(step.mul_add(0.5 * (g.x + 1.0), a));
+        }
+    }
+    total
+}
+
+/// The volume that the hang tab's plate, `x` from -108 to -80, `y` from -11
+/// to 11 and `z` from 69.3 to 71.7, shares with the lipped funnel (the body
+/// and the lip's tube of radius 2 about the circle of radius `major` at
+/// `z = 70.5`). At a distance `ρ` from the axis, the body and the tube hold
+/// the same heights all round, so the shared volume is the integral over `ρ`
+/// of the heights in the plate held there, times the arc of the circle of
+/// radius `ρ` over the plate.
+fn tab_in_lipped_funnel(major: f64) -> f64 {
+    let skin = 1.6 / FRAC_1_SQRT_2;
+    let (top, outside) = (70.5, 9.5 + skin);
+    let (low, high) = (69.3, 71.7);
+    let held = |rho: f64| {
+        let mut spans: Vec<(f64, f64)> = Vec::new();
+        let off = rho - major;
+        if off.abs() < 2.0 {
+            let h = off.mul_add(-off, 4.0).sqrt();
+            spans.push((top - h, top + h));
+        }
+        if rho - outside < top {
+            spans.push((rho - outside, top));
+        }
+        let mut clipped: Vec<(f64, f64)> = spans
+            .into_iter()
+            .map(|(a, b)| (a.max(low), b.min(high)))
+            .filter(|(a, b)| b > a)
+            .collect();
+        clipped.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut length = 0.0;
+        let mut reach = f64::NEG_INFINITY;
+        for (a, b) in clipped {
+            let a = a.max(reach);
+            if b > a {
+                length += b - a;
+            }
+            reach = reach.max(b);
+        }
+        length
+    };
+    let arc = |rho: f64| 2.0 * rho * (80.0 / rho).acos().min((11.0 / rho).asin());
+    integrate(|rho| held(rho) * arc(rho), (80.0, major + 2.0), 40_000)
+}
+
+/// The hang tab's plate runs out over the rim through the lip's tube: it
+/// cuts two islands out of the tube's band, one round its outer side and a
+/// lens on the inner side under the plate's top, and fuses with the wall
+/// below the rim.
+#[test]
+fn a_hang_tab_fuses_through_a_funnels_lip() {
+    let skin = 1.6 / FRAC_1_SQRT_2;
+    let major = 80.0 + skin / 2.0 + 0.8;
+    let profile = funnel_profile();
+    let lip = 2.0 * PI * PI * major * 4.0;
+    let lipped = pappus(&profile) + lip - lip_in_wall(major);
+    let truth = lipped + 28.0 * 22.0 * 2.4 - tab_in_lipped_funnel(major);
+    for pose in POSES {
+        let mut topo = Topology::new();
+        let body = lathe(&mut topo, &profile, 2.0 * PI);
+        let torus = make_torus(&mut topo, major, 2.0, 32).unwrap();
+        transform_solid(&mut topo, torus, &Mat4::translation(0.0, 0.0, 70.5)).unwrap();
+        let exact = BooleanOptions {
+            mesh_fallback: false,
+            ..BooleanOptions::default()
+        };
+        let funnel = boolean_with_options(&mut topo, BooleanOp::Fuse, body, torus, exact).unwrap();
+        let plate = make_box(&mut topo, 28.0, 22.0, 2.4).unwrap();
+        transform_solid(&mut topo, plate, &Mat4::translation(-108.0, -11.0, 69.3)).unwrap();
+        let operands = (
+            posed(&mut topo, funnel, pose),
+            posed(&mut topo, plate, pose),
+        );
+        fuse_exactly(
+            &mut topo,
+            operands,
+            pose,
+            &[("cone", 4), ("cylinder", 4), ("plane", 8), ("torus", 1)],
+            truth,
+            ([-86.0, -12.0, 68.0], [-78.0, 12.0, 73.0], 14),
         );
     }
 }

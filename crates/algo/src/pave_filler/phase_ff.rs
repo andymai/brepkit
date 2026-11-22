@@ -6397,6 +6397,10 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
         FaceSurface::Torus(t) if face_boundary_all_degenerate(topo, face_id, tol)? => {
             Some(t.aabb())
         }
+        // A band of a ring bulges past its edges too: the tube's outer side
+        // between two latitudes, whose boundary reaches the outer equator
+        // only along the seam.
+        FaceSurface::Torus(t) => torus_patch_box(topo, face_id, t),
         // A NURBS face can bulge far past its boundary (a lofted wall
         // between its two rims); its control net bounds it.
         FaceSurface::Nurbs(n) => Some(n.aabb()),
@@ -6417,6 +6421,27 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
         FaceSurface::Nurbs(n) => super::helpers::nurbs_face_box(topo, face_id, n, bounds, tol),
         _ => Ok(bounds),
     }
+}
+
+/// The box of a ring torus face over the ring and tube angles its outer wire
+/// spans. `None` on a horn or spindle torus, whose far sheet's points do not
+/// project to their own angles.
+fn torus_patch_box(
+    topo: &Topology,
+    face_id: FaceId,
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+) -> Option<Aabb3> {
+    use std::f64::consts::TAU;
+    if torus.major_radius() <= torus.minor_radius() {
+        return None;
+    }
+    let surface = FaceSurface::Torus(torus.clone());
+    let tube = face_tube_window(topo, face_id, &surface).unwrap_or((0.0, TAU));
+    let ring = face_circumferential_u_gap(topo, face_id, &surface)
+        .map_or((0.0, TAU), |(lo, hi)| {
+            (hi, if lo < hi { lo + TAU } else { lo })
+        });
+    Some(torus.patch_aabb(ring, tube))
 }
 
 /// Pole-side axis of a spherical face, from its boundary winding: the summed
@@ -9342,6 +9367,11 @@ fn emit_split_circle_arcs(
                 max.y().max(c.y() + r),
                 max.z().max(c.z() + r),
             );
+        } else if let FaceSurface::Torus(torus) = face.surface()
+            && let Some(patch) = torus_patch_box(topo, fid, torus)
+        {
+            let joined = Aabb3 { min, max }.union(patch);
+            (min, max) = (joined.min, joined.max);
         }
         Some(Aabb3 { min, max }.expanded(tol.linear * 10.0))
     };

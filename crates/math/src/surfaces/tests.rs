@@ -351,6 +351,43 @@ fn torus_aabb_x_axis() {
     assert!(point_approx_eq(bb.max, Point3::new(3.0, 13.0, 13.0)));
 }
 
+/// The band of an upright ring's outer side between two latitudes reaches
+/// the outer equator all round, past the box of its two rims.
+#[test]
+fn torus_patch_aabb_of_an_outer_band() {
+    let t = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 10.0, 3.0).unwrap();
+    let bb = t.patch_aabb((0.0, 2.0 * PI), (-FRAC_PI_2, FRAC_PI_2));
+    assert!(point_approx_eq(bb.min, Point3::new(-13.0, -13.0, -3.0)));
+    assert!(point_approx_eq(bb.max, Point3::new(13.0, 13.0, 3.0)));
+    let top = t.patch_aabb((0.0, FRAC_PI_2), (FRAC_PI_2, PI));
+    assert!(point_approx_eq(top.min, Point3::new(0.0, 0.0, 0.0)));
+    assert!(point_approx_eq(top.max, Point3::new(10.0, 10.0, 3.0)));
+}
+
+/// Every point of a patch of a tilted ring, its tube angles running across
+/// the angle's origin, lies in the patch's box.
+#[test]
+fn torus_patch_aabb_holds_its_patch() {
+    let t = ToroidalSurface::with_axis(
+        Point3::new(1.0, -2.0, 0.5),
+        10.0,
+        3.0,
+        Vec3::new(0.3, -0.4, 1.0),
+    )
+    .unwrap();
+    let (u, v) = ((2.5, 4.0), (5.0, 7.5));
+    let bb = t.patch_aabb(u, v);
+    let n = 200;
+    for i in 0..=n {
+        for j in 0..=n {
+            let s = f64::from(i) / f64::from(n);
+            let w = f64::from(j) / f64::from(n);
+            let p = t.evaluate((u.1 - u.0).madd(s, u.0), (v.1 - v.0).madd(w, v.0));
+            assert!(bb.expanded(1e-9).contains_point(p), "{p:?} off {bb:?}");
+        }
+    }
+}
+
 #[test]
 fn revolution_with_x_axis() {
     // Tests the other candidate branch for revolution surfaces

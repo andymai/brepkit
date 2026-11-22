@@ -663,6 +663,28 @@ pub(super) fn is_point_on_boundary_uv(
         if (foot - point).length() > size * tol {
             continue;
         }
+        // The step from the point to its foot crosses the arc, so the arc's
+        // own radius does not scale it. Off a rim of a large ring, the tube's
+        // radius does: read the step in the surface's parameters. (A sphere's
+        // `u` runs wild near its poles, and its arcs keep the 3D test.)
+        if matches!(
+            surface,
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Torus(_)
+        ) && let Some((fu, fv)) = surface.project_point(foot)
+        {
+            let du = (pu - fu + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+                - std::f64::consts::PI;
+            let dv = match surface {
+                FaceSurface::Torus(_) => {
+                    (pv - fv + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+                        - std::f64::consts::PI
+                }
+                _ => pv - fv,
+            };
+            if du.hypot(dv) > tol {
+                continue;
+            }
+        }
         // `domain_with_endpoints` returns the CCW span between its arguments;
         // a reversed-traversal edge covers the CCW span END→START, so orient
         // by the flag or the complement arc is tested instead.
