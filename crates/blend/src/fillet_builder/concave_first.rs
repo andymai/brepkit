@@ -15,6 +15,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use brepkit_math::madd::Madd;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
@@ -278,6 +279,24 @@ fn image_of(topo: &Topology, edge: EdgeId, source: EdgeId, tol: f64) -> Result<b
     Ok(true)
 }
 
+/// How near a point must lie to an edge to count as on it: a fraction of the
+/// points' extent, and a roundoff allowance for coordinates far from the
+/// origin. Moving a solid does not change which edges match.
+fn match_tolerance(points: &[Point3]) -> f64 {
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    let mut far = 0.0_f64;
+    for p in points {
+        for (k, c) in [p.x(), p.y(), p.z()].into_iter().enumerate() {
+            lo[k] = lo[k].min(c);
+            hi[k] = hi[k].max(c);
+            far = far.max(c.abs());
+        }
+    }
+    let extent = (0..3).map(|k| hi[k] - lo[k]).fold(0.0, f64::max);
+    (64.0 * f64::EPSILON).madd(far, 1e-7 * extent.max(1.0))
+}
+
 /// Build the concave rounds, then the convex rounds on what they leave (see
 /// the module notes): `None` where a concave round takes a convex round's
 /// whole edge, or where either build fails or leaves an edge unrounded.
@@ -310,15 +329,14 @@ pub(super) fn build(
         .copied()
         .filter(|edge| !before.contains(edge))
         .collect();
-    let mut scale = 1.0_f64;
+    let mut corners = Vec::with_capacity(2 * after.len());
     for &edge in &after {
         let data = topo.edge(edge)?;
         for vertex in [data.start(), data.end()] {
-            let p = topo.vertex(vertex)?.point();
-            scale = scale.max(p.x().abs()).max(p.y().abs()).max(p.z().abs());
+            corners.push(topo.vertex(vertex)?.point());
         }
     }
-    let tol = 1e-7 * scale;
+    let tol = match_tolerance(&corners);
 
     // Each convex edge's pieces left by the concave rounds.
     let mut source_of: HashMap<EdgeId, EdgeId> = HashMap::new();
@@ -413,4 +431,28 @@ pub(super) fn build(
         failed: Vec::new(),
         is_partial: false,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::match_tolerance;
+    use brepkit_math::vec::Point3;
+
+    #[test]
+    fn moving_the_solid_far_off_keeps_its_match_tolerance() {
+        let corners: Vec<Point3> = (0..8)
+            .map(|k| {
+                let bit = |b: usize| if k & (1 << b) == 0 { 0.0 } else { 10.0 };
+                Point3::new(bit(0), bit(1), bit(2))
+            })
+            .collect();
+        let near = match_tolerance(&corners);
+        assert!((near - 1e-6).abs() < 1e-12, "{near}");
+        let moved: Vec<Point3> = corners
+            .iter()
+            .map(|p| Point3::new(p.x() + 1e8, p.y(), p.z()))
+            .collect();
+        let far = match_tolerance(&moved);
+        assert!(far < 1e-5, "a solid moved 1e8 off matches within {far}");
+    }
 }
