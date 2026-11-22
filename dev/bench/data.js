@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795379016159,
+  "lastUpdate": 1795379245665,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -75599,6 +75599,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 15810276,
             "range": "± 116633",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a40c22fe9e6cd50c3481dac4a7c5979a33280c50",
+          "message": "fix(algo,heal,operations,check): read a closed section's run in u, keep a bored ball's halves apart, and seam a band before a boolean (#2694)\n\n## Summary\n\nOn main, three kinds of face on a surface of revolution go wrong. In\neach, a loop winds the axis, or the engine guesses that it does:\n\n- A closed section on a periodic face gets end UVs a full turn apart,\neven when it does not wind the axis (#2692).\n- `unify_faces` merges the two halves of a bored ball into one sphere\nface whose mesh has 98 open edges. A later cut of that ball's top\nremoves nothing and passes as valid (#2668).\n- A cylinder band with no seam meshes with 128 open edges, cannot enter\na boolean, and reads its own centre as outside (#2656).\n\nWith this change, each of them is exact, valid and watertight in every\npose tested. The pose sweep and the truth audit give the same output as\nmain.\n\nFixes #2692, fixes #2668, fixes #2656.\n\n## The change\n\n- **Closed section end UVs (#2692).** The branch in\n`fill_images_faces.rs` read the way round from one point. Then it always\nput the end a period away. The new `closed_section_end_uvs` counts the\nsection's turns round the axis:\n- A circle or ellipse winds once when the axis passes through the region\nit bounds, and its normal gives the way round.\n- For a B-spline curve, it proves the run on each knot span, read as a\nrational Bézier piece. Take a piece with positive weights whose control\npoints, seen along the axis, lie in an open half-plane about the axis.\nThat piece turns by the wrapped angle between its ends. It halves any\nother piece, up to 48 times. A piece whose weights are all negative\npasses too.\n- A section within the linear tolerance of the axis gets no count: a\nmeridian, or a circle through or next to a pole. A spline piece's\ncontrol hull must keep the same distance from the axis.\n- When there is no count, the branch leaves both end UVs unset, so the\nface splitter reads them from the pcurve. A loop across the seam got\n(0.0737, 0.522) → (6.3569, 0.522). Its ends now match.\n- **A bored ball's halves (#2668).** The merged face holds both poles of\nits sphere's chart, with a loop at each mouth of the rod's hole. So the\nchart reads neither loop as a boundary. `seamless_band` in\n`operations/src/heal.rs` let every sphere merge through. It now refuses\na sphere merge with several loops when no loop keeps a pole off the\nface. For that it uses the mesher's `sphere_loop_reads_right`. The two\nhalves stay apart, as the boolean built them.\n- **A band with no seam (#2656).**\n- The seam code of the STEP reader moves from `io/src/step/seam.rs` to\n`heal/src/fix/seam.rs`, with a new `lacks_seam`. The STEP reader reaches\nit through `operations::heal::close_seams` and `anchor_circle`, because\nio does not depend on heal.\n- `boolean_inner` passes each operand through `heal::with_seams`. When a\nface of the operand lacks its seam, it seams a copy and leaves the\noperand as it was, as `flatten_planar_nurbs_faces` does.\n- The structured band meshers take a band whose rims are its outer wire\nand its one hole (`band_rim_wires`).\n- `check::util::face_aabb` now bounds a face by its holes too. The\nwall's box missed the top rim, so rays did not test the wall.\n`UvRegion::Band` in `check::classify::boundary` reads a point as on such\na band when it lies between the rims.\n- The module map in `CLAUDE.md` and the `io-formats` skill now name\n`fix/seam.rs`.\n\n## Tests\n\n- `a_closed_sections_end_uvs_differ_by_its_run_in_u` gives the branch\ncircles round the axis, either way round, from three starts. It also\ngives it a loop across the seam, a loop clear of it, and a closed\ndegree-1 spline. `a_spline_circle_with_short_quarter_spans_runs_a_turn`\ngives it a rational circle whose first three quarters span 0.0003 of its\nknots, both ways. 64 even samples skip those quarters.\n`a_spline_circle_with_a_concentrated_span_runs_a_turn` gives it a circle\nwhose 330 degree span has its homogeneous points scaled by 1, 1000 and\n1,000,000. Each step's wrapped delta passes, and the sum reads no turn.\n- `a_spline_circle_with_negated_weights_runs_a_turn` and\n`a_section_with_no_proved_run_leaves_a_line_pcurves_end_unset` pin the\nnegative weights and the fallback.\n`a_conics_turns_about_the_axis_read_none_where_it_touches_the_axis`\nchecks meridians, circles 1e-12 to 1e-6 from a pole, and torus\nmeridians, each as an exact circle and as a rational spline.\n- `unify_bored_ball.rs` runs five poses. It checks 2 sphere faces,\n`validate_solid`, and the volume against a Simpson integral. It also\nchecks a watertight mesh at two deflections, and a later cut of the top\ncap.\n\n| Solid | Open mesh edges | Cut of the top cap (exact 4.896424957) |\n|---|---|---|\n| Two halves, as the boolean built them | 0 | 4.896424957 |\n| Merged face, on main | 98 | 5.332059138: nothing removed, and valid |\n\n- `drum_without_a_seam.rs` runs a drum (radius 2, height 3) and a\nfrustum in four poses. It checks validity, the exact volume and a\nwatertight mesh. It also cuts a box from the top, and a box through the\nwall across the new seam. It also checks point classification, and that\nthe operand does not change.\n\n| Drum check | main | this PR |\n|---|---|---|\n| Open mesh edges | 128 | 0 |\n| A 1 x 1 x 1 box cut from the top | needs the mesh fallback |\n37.199111843 = 37.699111843 - 0.5 |\n| `classify_point` at the centre | Outside | Inside |\n\n- All tests of brepkit-algo (526), brepkit-heal (98) and brepkit-check\n(167) pass.\n- The brepkit-operations lib tests for tessellate, boolean and heal\n(386) pass.\n- The io lib tests for step and seam (64) pass, and so do the 21 io test\nfiles with step or seam in their names.\n- 57 operations integration test files have ball, sphere, rod, drum,\nband, seam or unify in their names. All pass.\n- `check-doc-paths.sh`, `check-boundaries.sh` and `check-mul-add.sh`\npass.\n\n## Still open\n\n- `closed_section_end_uvs` reads the run in `u` only. On a torus, the\nend `v` stays equal to the start `v`. The torus splitters read their own\nwalks, not these UVs, so no test shows an effect.\n- A merged sphere face with both poles on it could hold together if the\nsphere's chart turned to the rod's axis, as heal's `merge_whole_sphere`\ndoes. This PR keeps the halves apart instead.",
+          "timestamp": "2026-11-22T20:21:15Z",
+          "tree_id": "823c1cf966fedfb89f503bd93850a6d4b4d93d3a",
+          "url": "https://github.com/andymai/brepkit/commit/a40c22fe9e6cd50c3481dac4a7c5979a33280c50"
+        },
+        "date": 1795379236317,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1187737,
+            "range": "± 5839",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1252610,
+            "range": "± 43093",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13771,
+            "range": "± 37",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 787246,
+            "range": "± 4646",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26686920,
+            "range": "± 66230",
             "unit": "ns/iter"
           }
         ]
