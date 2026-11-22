@@ -3,11 +3,15 @@
 //! A concave round (it adds material) and a convex round (it takes material
 //! off) that meet at a corner are not closed by a patch over the corner: at
 //! a square step they touch each other at one point, with no crease between
-//! them. So the concave rounds are built first. Each convex round then runs along what is left of
-//! its edge. Where the end of a concave round joins two convex rounds of one
-//! radius, tangent to both, the convex round runs on round that end too: a
-//! ball rolling along one convex edge rolls round the concave round's end on
-//! to the other.
+//! them. So the concave rounds are built first. Each convex round then runs
+//! along what is left of its edge. Where the end of a concave round joins
+//! two convex rounds of one radius, tangent to both, the convex round runs
+//! on round that end too: a ball rolling along one convex edge rolls round
+//! the concave round's end on to the other.
+//!
+//! Where a concave round takes a convex round's whole edge, or where either
+//! build fails or leaves an edge unrounded, the rounds are built in one
+//! pass, as with no such corner.
 
 use std::collections::{HashMap, HashSet};
 
@@ -95,18 +99,28 @@ fn adds_material(
     })
 }
 
+/// A copy of a radius law that has no closure.
+fn copy_law(law: &RadiusLaw) -> Option<RadiusLaw> {
+    match *law {
+        RadiusLaw::Constant(radius) => Some(RadiusLaw::Constant(radius)),
+        RadiusLaw::Linear { start, end } => Some(RadiusLaw::Linear { start, end }),
+        RadiusLaw::SCurve { start, end } => Some(RadiusLaw::SCurve { start, end }),
+        RadiusLaw::Custom(_) => None,
+    }
+}
+
 /// Split the picked edges into [`Stages`] where a corner joins a concave
-/// round to a convex one; `None` where no corner does.
+/// round to a convex one. `None` where no corner does, where such a corner
+/// has a round that is neither (its edges turn both ways, or read flat),
+/// where a convex round varies in radius (its edge is shorter once the
+/// concave rounds are built), or where a concave round's law has a closure.
 ///
 /// # Errors
-/// [`BlendError::PlanningFailure`] where such a corner has a round that is
-/// neither (its edges turn both ways, or read flat), or a convex round of
-/// varying radius (its edge is shorter once the concave rounds are built),
-/// or a topology lookup failure.
+/// A topology lookup failure.
 pub(super) fn stages(
     topo: &Topology,
     solid: SolidId,
-    edge_sets: &mut Vec<(Vec<EdgeId>, RadiusLaw)>,
+    edge_sets: &[(Vec<EdgeId>, RadiusLaw)],
 ) -> Result<Option<Stages>, BlendError> {
     let Ok(plan) = FilletPlan::build(topo, solid, edge_sets) else {
         return Ok(None);
@@ -140,13 +154,7 @@ pub(super) fn stages(
             .collect();
         if at.contains(&Some(true)) && at.contains(&Some(false)) {
             if at.contains(&None) {
-                return Err(BlendError::PlanningFailure {
-                    reason: format!(
-                        "concave and convex rounds meet at vertex {}, with a round that \
-                         is neither",
-                        junction.vertex.index()
-                    ),
-                });
+                return Ok(None);
             }
             mixed = true;
         }
@@ -165,22 +173,21 @@ pub(super) fn stages(
         concave: Vec::new(),
         convex: Vec::new(),
     };
-    for (edges, law) in std::mem::take(edge_sets) {
-        let (second, first): (Vec<EdgeId>, Vec<EdgeId>) =
-            edges.into_iter().partition(|edge| convex.contains(edge));
+    for (edges, law) in edge_sets {
+        let (second, first): (Vec<EdgeId>, Vec<EdgeId>) = edges
+            .iter()
+            .copied()
+            .partition(|edge| convex.contains(edge));
         if !second.is_empty() {
-            let RadiusLaw::Constant(radius) = law else {
-                return Err(BlendError::PlanningFailure {
-                    reason: "concave and convex rounds meet at a corner, and a convex round \
-                             varies in radius"
-                        .to_owned(),
-                });
+            let RadiusLaw::Constant(radius) = *law else {
+                return Ok(None);
             };
-            if !first.is_empty() {
-                stages.concave.push((first, RadiusLaw::Constant(radius)));
-            }
             stages.convex.push((second, radius));
-        } else if !first.is_empty() {
+        }
+        if !first.is_empty() {
+            let Some(law) = copy_law(law) else {
+                return Ok(None);
+            };
             stages.concave.push((first, law));
         }
     }
@@ -272,45 +279,27 @@ fn image_of(topo: &Topology, edge: EdgeId, source: EdgeId, tol: f64) -> Result<b
 }
 
 /// Build the concave rounds, then the convex rounds on what they leave (see
-/// the module notes).
+/// the module notes): `None` where a concave round takes a convex round's
+/// whole edge, or where either build fails or leaves an edge unrounded.
 ///
 /// # Errors
-/// A [`BlendError`] from either build, or a topology lookup failure.
+/// A topology lookup failure.
 #[allow(clippy::too_many_lines)]
 pub(super) fn build(
     topo: &mut Topology,
     solid: SolidId,
     stages: Stages,
-) -> Result<BlendResult, BlendError> {
+) -> Result<Option<BlendResult>, BlendError> {
     let Stages { concave, convex } = stages;
     let mut first = FilletBuilder::new(topo, solid);
     for (edges, law) in concave {
         first.add_edges_with_law(&edges, law);
     }
-    let made = first.build()?;
-    let unmade = |reason: &str| -> Vec<(EdgeId, BlendError)> {
-        convex
-            .iter()
-            .flat_map(|(edges, _)| edges.iter().copied())
-            .map(|edge| {
-                (
-                    edge,
-                    BlendError::PlanningFailure {
-                        reason: reason.to_owned(),
-                    },
-                )
-            })
-            .collect()
+    let Ok(made) = first.build() else {
+        return Ok(None);
     };
     if made.solid == solid || !made.failed.is_empty() {
-        let mut failed = made.failed;
-        failed.extend(unmade("a concave round it meets at a corner failed"));
-        return Ok(BlendResult {
-            solid: made.solid,
-            succeeded: made.succeeded,
-            failed,
-            is_partial: true,
-        });
+        return Ok(None);
     }
 
     let before: HashSet<EdgeId> = solid_edges(topo, solid)?.into_iter().collect();
@@ -334,7 +323,6 @@ pub(super) fn build(
     // Each convex edge's pieces left by the concave rounds.
     let mut source_of: HashMap<EdgeId, EdgeId> = HashMap::new();
     let mut sets: Vec<(Vec<EdgeId>, f64)> = Vec::with_capacity(convex.len());
-    let mut failed: Vec<(EdgeId, BlendError)> = Vec::new();
     for (edges, radius) in &convex {
         let mut images = Vec::new();
         for &edge in edges {
@@ -351,13 +339,7 @@ pub(super) fn build(
                 found
             };
             if found.is_empty() {
-                failed.push((
-                    edge,
-                    BlendError::PlanningFailure {
-                        reason: "a concave round it meets at a corner takes its whole edge"
-                            .to_owned(),
-                    },
-                ));
+                return Ok(None);
             }
             for image in found {
                 source_of.insert(image, edge);
@@ -413,44 +395,22 @@ pub(super) fn build(
         sets[set].0.push(bridge);
     }
 
-    let mut succeeded = made.succeeded;
-    if sets.iter().all(|(images, _)| images.is_empty()) {
-        return Ok(BlendResult {
-            solid: made.solid,
-            succeeded,
-            is_partial: !failed.is_empty(),
-            failed,
-        });
-    }
     let mut second = FilletBuilder::new(topo, made.solid);
     for (images, radius) in &sets {
-        if !images.is_empty() {
-            second.add_edges(images, *radius);
-        }
+        second.add_edges(images, *radius);
     }
-    let rounded = second.build()?;
-    let mut lost: HashSet<EdgeId> = HashSet::new();
-    for (image, error) in rounded.failed {
-        let Some(&edge) = source_of.get(&image) else {
-            continue;
-        };
-        if lost.insert(edge) {
-            failed.push((edge, error));
-        }
+    let Ok(rounded) = second.build() else {
+        return Ok(None);
+    };
+    if !rounded.failed.is_empty() || rounded.solid == made.solid {
+        return Ok(None);
     }
-    let mut done: HashSet<EdgeId> = HashSet::new();
-    for image in rounded.succeeded {
-        if let Some(&edge) = source_of.get(&image)
-            && !lost.contains(&edge)
-            && done.insert(edge)
-        {
-            succeeded.push(edge);
-        }
-    }
-    Ok(BlendResult {
+    let mut succeeded = made.succeeded;
+    succeeded.extend(convex.iter().flat_map(|(edges, _)| edges.iter().copied()));
+    Ok(Some(BlendResult {
         solid: rounded.solid,
         succeeded,
-        is_partial: !failed.is_empty(),
-        failed,
-    })
+        failed: Vec::new(),
+        is_partial: false,
+    }))
 }

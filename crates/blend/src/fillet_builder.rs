@@ -122,10 +122,12 @@ impl<'a> FilletBuilder<'a> {
         let Self {
             topo,
             solid,
-            mut edge_sets,
+            edge_sets,
         } = self;
-        if let Some(stages) = concave_first::stages(topo, solid, &mut edge_sets)? {
-            return concave_first::build(topo, solid, stages);
+        if let Some(stages) = concave_first::stages(topo, solid, &edge_sets)?
+            && let Some(result) = concave_first::build(topo, solid, stages)?
+        {
+            return Ok(result);
         }
         let snapshot = SolidSnapshot::capture(topo, solid)?;
         let result = build_in_place(topo, solid, edge_sets);
