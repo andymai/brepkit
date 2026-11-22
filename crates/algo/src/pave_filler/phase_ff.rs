@@ -1825,6 +1825,12 @@ enum FaceExtent {
         nurbs: Option<Box<crate::classifier::SpanTrim>>,
         /// The last point `nurbs` placed, the start for the next.
         hint: std::cell::Cell<Option<(f64, f64)>>,
+        /// A sphere face's own trim, read against its wires as well as the
+        /// window. The window is the band of latitudes its boundary spans,
+        /// which holds the rest of that band round the ball (a quarter of
+        /// the ball between two great circles off its axis takes in most of
+        /// the ball).
+        ball: Option<Box<crate::classifier::SphereFaceTrim>>,
     },
 }
 
@@ -2018,6 +2024,10 @@ impl FaceExtent {
                 .ok()
                 .flatten()
                 .map(Box::new);
+            let ball = crate::classifier::SphereFaceTrim::new(topo, face_id)
+                .ok()
+                .flatten()
+                .map(Box::new);
             Some(Self::Analytic {
                 surface: surface.clone(),
                 v0,
@@ -2032,6 +2042,7 @@ impl FaceExtent {
                 own_sheet,
                 nurbs,
                 hint: std::cell::Cell::new(None),
+                ball,
             })
         }
     }
@@ -2131,12 +2142,18 @@ impl FaceExtent {
                 uv_holes,
                 uv_base,
                 own_sheet,
+                ball,
                 ..
             } => surface.project_point(p).is_some_and(|(u, v)| {
                 // Unlike `contains` (conservative keep on projection failure),
                 // the STRICT gate fails closed: an unprojectable point cannot
                 // certify a genuine interior crossing.
                 if *own_sheet && !on_own_sheet(surface, p, u, v) {
+                    return false;
+                }
+                if let (Some(trim), FaceSurface::Sphere(sphere)) = (ball, surface)
+                    && !trim.holds_clear(p, depth * sphere.radius())
+                {
                     return false;
                 }
                 let in_v = in_window(v, (*v0, *v1), -depth, *periodic_v);
@@ -2196,9 +2213,15 @@ impl FaceExtent {
                 uv_holes,
                 uv_base,
                 own_sheet,
+                ball,
                 ..
             } => surface.project_point(p).is_none_or(|(u, v)| {
                 if *own_sheet && !on_own_sheet(surface, p, u, v) {
+                    return false;
+                }
+                if let (Some(trim), FaceSurface::Sphere(sphere)) = (ball, surface)
+                    && !trim.holds(p, margin * sphere.radius())
+                {
                     return false;
                 }
                 let in_v = in_window(v, (*v0, *v1), *margin, *periodic_v);
