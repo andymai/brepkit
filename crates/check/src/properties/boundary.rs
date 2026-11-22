@@ -1401,13 +1401,23 @@ pub(super) fn nurbs_face_over_domain(
     }))
 }
 
-/// A face on an open NURBS surface, its integrals by Green's theorem as
+/// A face on a NURBS surface, its integrals by Green's theorem as
 /// [`integrate_by_boundary`] takes them, with `F(u, v) = ∫ g(s, v) ds` from
 /// the start of `u`'s domain in panels between the surface's knots, and
 /// each edge cut where it crosses a knot line, so every panel's integrand
-/// is smooth. `None` for a surface that closes on itself or shrinks to a
-/// point along a side (its `(u, v)` would not be one-to-one), a wire a
-/// point of which does not project, or a region of no area.
+/// is smooth.
+///
+/// A surface that closes on itself along one direction (a wall turned in
+/// B-spline form) is cut open along its seam. Each wire's coordinate that way
+/// is carried on across the seam, which is a knot line too, so the wire's
+/// path in `(u, v)` closes up as on an open surface. Across `u`, each period
+/// on adds a whole turn's integral, `F(u + P, v) = F(u, v) + F(u₁, v)`;
+/// across `v`, `F` repeats as `v` does.
+///
+/// `None` for a surface that closes both ways or shrinks to a point along a
+/// side (its `(u, v)` would not be one-to-one), a wire that winds round the
+/// closed direction, a wire a point of which does not project, or a region
+/// of no area.
 pub(super) fn nurbs_face_by_boundary(
     topo: &Topology,
     face: &Face,
@@ -1421,9 +1431,9 @@ pub(super) fn nurbs_face_by_boundary(
     let FaceSurface::Nurbs(s) = face.surface() else {
         return Ok(None);
     };
-    if !open_and_poleless(s) {
+    let Some(closure) = closure(s) else {
         return Ok(None);
-    }
+    };
     let Some(wires) = boundary_wires(topo, face)? else {
         return Ok(None);
     };
@@ -1559,10 +1569,26 @@ pub(super) fn nurbs_face_by_boundary(
             && matches!(curve, EdgeCurve::NurbsCurve(c)
                 if is_side(s, c, 0, side_reach) || is_side(s, c, 2, side_reach))
     };
+    // On a surface closed along one direction, the coordinate that way is
+    // carried on along each wire across the seam: a point's copy of it a
+    // whole number of periods on from the last point's.
+    let closed = match closure {
+        Closure::Open => None,
+        Closure::AlongU => Some((0_usize, u1 - u0, u0)),
+        Closure::AlongV => Some((1_usize, v1 - v0, v0)),
+    };
+    let coord = |q: (f64, f64), pick: usize| if pick == 0 { q.0 } else { q.1 };
+    let lift = |near: f64, x: f64, period: f64| period.madd(((near - x) / period).round(), x);
     let mut pieces: Vec<Piece<'_, '_>> = Vec::new();
     for (k, wire) in wires.iter().enumerate() {
+        let first = pieces.len();
+        // The closed coordinate where the wire starts and where it stands.
+        let (mut began, mut run): (Option<f64>, Option<f64>) = (None, None);
         for edge in wire {
-            if along_v_side(edge.curve) {
+            // On a closed surface a side is followed all the same: it
+            // carries the closed coordinate a turn round.
+            let side = along_v_side(edge.curve);
+            if side && closed.is_none() {
                 continue;
             }
             let on = |t: f64, seed: Option<(f64, f64)>| on(edge, t, seed);
@@ -1579,6 +1605,23 @@ pub(super) fn nurbs_face_by_boundary(
                     samples.push((t, q));
                     seed = Some(q);
                 }
+                let mut lifted: Vec<f64> = Vec::with_capacity(9);
+                if let Some((pick, period, _)) = closed {
+                    for &(_, q) in &samples {
+                        let x = coord(q, pick);
+                        let at = run.map_or(x, |r| lift(r, x, period));
+                        // A step that long could as well run the other way.
+                        if run.is_some_and(|r| (at - r).abs() > 0.25 * period) {
+                            return Ok(None);
+                        }
+                        began.get_or_insert(at);
+                        run = Some(at);
+                        lifted.push(at);
+                    }
+                }
+                if side {
+                    continue;
+                }
                 let mut cuts = vec![ta, tb];
                 // A sample on a knot line is a cut itself; the bisection
                 // below only takes a knot strictly between two samples.
@@ -1590,12 +1633,46 @@ pub(super) fn nurbs_face_by_boundary(
                         cuts.push(t);
                     }
                 }
-                for w in samples.windows(2) {
+                for (i, w) in samples.windows(2).enumerate() {
                     let ((t_a, a), (t_b, b)) = (w[0], w[1]);
                     for (knots, pick) in [(&u_knots, 0_usize), (&v_knots, 1_usize)] {
-                        let coord = |q: (f64, f64)| if pick == 0 { q.0 } else { q.1 };
+                        // Along the closed direction the knot lines repeat
+                        // every period, the seam among them, and are found on
+                        // the coordinate carried on.
+                        if let Some((_, period, seam)) = closed.filter(|c| c.0 == pick) {
+                            let (la, lb) = (lifted[i], lifted[i + 1]);
+                            let (low, high) = (la.min(lb), la.max(lb));
+                            for &line in knots.iter().chain([&seam]) {
+                                #[allow(clippy::cast_possible_truncation)]
+                                let (first, last) = (
+                                    ((low - line) / period).floor() as i64,
+                                    ((high - line) / period).ceil() as i64,
+                                );
+                                for m in first..=last {
+                                    #[allow(clippy::cast_precision_loss)]
+                                    let x = period.madd(m as f64, line);
+                                    if x <= low || x >= high {
+                                        continue;
+                                    }
+                                    let (mut lo, mut hi) = (t_a, t_b);
+                                    for _ in 0..50 {
+                                        let mid = 0.5 * (lo + hi);
+                                        let Some(q) = on(mid, Some(a)) else {
+                                            return Ok(None);
+                                        };
+                                        if (lift(la, coord(q, pick), period) - x) * (la - x) > 0.0 {
+                                            lo = mid;
+                                        } else {
+                                            hi = mid;
+                                        }
+                                    }
+                                    cuts.push(0.5 * (lo + hi));
+                                }
+                            }
+                            continue;
+                        }
                         for &k in knots {
-                            if (coord(a) - k) * (coord(b) - k) >= 0.0 {
+                            if (coord(a, pick) - k) * (coord(b, pick) - k) >= 0.0 {
                                 continue;
                             }
                             let (mut lo, mut hi) = (t_a, t_b);
@@ -1604,7 +1681,7 @@ pub(super) fn nurbs_face_by_boundary(
                                 let Some(q) = on(mid, Some(a)) else {
                                     return Ok(None);
                                 };
-                                if (coord(q) - k) * (coord(a) - k) > 0.0 {
+                                if (coord(q, pick) - k) * (coord(a, pick) - k) > 0.0 {
                                     lo = mid;
                                 } else {
                                     hi = mid;
@@ -1614,19 +1691,59 @@ pub(super) fn nurbs_face_by_boundary(
                         }
                     }
                 }
+                // A piece's points are read on the copy of the closed
+                // coordinate nearest a sample of it: one that turns far is
+                // cut at every sample, so each piece stays within a quarter
+                // turn of it.
+                if let Some((_, period, _)) = closed {
+                    let (lo, hi) = lifted
+                        .iter()
+                        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), &x| {
+                            (lo.min(x), hi.max(x))
+                        });
+                    if hi - lo > 0.125 * period {
+                        cuts.extend(samples[1..8].iter().map(|&(t, _)| t));
+                    }
+                }
                 cuts.sort_by(f64::total_cmp);
                 if tb < ta {
                     cuts.reverse();
                 }
                 cuts.dedup_by(|x, y| (*x - *y).abs() <= 1e-12 * (tb - ta).abs());
-                let start = samples[0].1;
-                pieces.extend(cuts.windows(2).map(|w| Piece {
-                    wire: k,
-                    edge,
-                    from: w[0],
-                    to: w[1],
-                    start,
+                pieces.extend(cuts.windows(2).map(|w| {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let nearest = (8.0 * (f64::midpoint(w[0], w[1]) - ta) / (tb - ta))
+                        .round()
+                        .clamp(0.0, 8.0) as usize;
+                    Piece {
+                        wire: k,
+                        edge,
+                        from: w[0],
+                        to: w[1],
+                        start: samples[nearest].1,
+                        lifted: lifted.get(nearest).copied().unwrap_or(0.0),
+                    }
                 }));
+            }
+        }
+        // A wire that winds round the closed direction bounds a band with
+        // another: which side of it the face lies on its area cannot tell.
+        if let (Some((_, period, _)), Some(b), Some(r)) = (closed, began, run)
+            && ((r - b) / period).abs() > 1e-6
+        {
+            return Ok(None);
+        }
+        // A wire that closes up may be read on any copy of the domain, a
+        // whole turn on along `u` adding `∮ F(u₁, v) dv = 0`: the copy it
+        // mostly lies in takes the fewest whole turns.
+        if let Some((0, period, seam)) = closed {
+            let wire_pieces = &mut pieces[first..];
+            #[allow(clippy::cast_precision_loss)]
+            let mean =
+                wire_pieces.iter().map(|p| p.lifted).sum::<f64>() / wire_pieces.len().max(1) as f64;
+            let shift = period * ((mean - seam) / period).floor();
+            for piece in wire_pieces {
+                piece.lifted -= shift;
             }
         }
     }
@@ -1654,6 +1771,16 @@ pub(super) fn nurbs_face_by_boundary(
             }
             let dv = e.madd(sv.dot(velocity), -f * su.dot(velocity)) / det;
             let mut term = antiderivative(c.0, c.1)?;
+            // Each turn on round `u` adds the integral of a whole turn.
+            if let Some((0, period, _)) = closed {
+                let turns = ((piece.lifted - c.0) / period).round();
+                if turns != 0.0 {
+                    let whole = antiderivative(u1, c.1)?;
+                    for (x, w) in term.iter_mut().zip(whole) {
+                        *x = turns.madd(w, *x);
+                    }
+                }
+            }
             for x in &mut term {
                 *x *= dv;
             }
@@ -1712,6 +1839,9 @@ struct Piece<'e, 'a> {
     from: f64,
     to: f64,
     start: (f64, f64),
+    /// On a surface closed along one direction, the coordinate that way
+    /// carried on along the wire to the sample `start` is read at.
+    lifted: f64,
 }
 
 /// `d/dt` of `curve` at `t` as `evaluate_with_endpoints` runs it from
@@ -1722,6 +1852,32 @@ fn edge_velocity(curve: &EdgeCurve, t: f64, start: Point3, end: Point3) -> Vec3 
         EdgeCurve::Circle(c) => c.tangent(t) * c.radius(),
         EdgeCurve::Ellipse(e) => e.tangent(t),
         EdgeCurve::NurbsCurve(n) => n.derivatives(t, 1)[1],
+    }
+}
+
+/// Which way a NURBS surface closes on itself.
+#[derive(Clone, Copy)]
+enum Closure {
+    Open,
+    AlongU,
+    AlongV,
+}
+
+/// Which way a NURBS surface that shrinks to a point along no side closes
+/// on itself; `None` for one that closes both ways or has a pole.
+fn closure(s: &brepkit_math::nurbs::surface::NurbsSurface) -> Option<Closure> {
+    let (sides, near) = side_samples(s);
+    let length = |pts: &[Point3]| pts.windows(2).map(|w| (w[1] - w[0]).length()).sum::<f64>();
+    let same =
+        |a: &[Point3], b: &[Point3]| a.iter().zip(b).all(|(p, q)| (*p - *q).length() <= near);
+    if !sides.iter().all(|p| length(p) > near) {
+        return None;
+    }
+    match (same(&sides[0], &sides[1]), same(&sides[2], &sides[3])) {
+        (false, false) => Some(Closure::Open),
+        (true, false) => Some(Closure::AlongU),
+        (false, true) => Some(Closure::AlongV),
+        (true, true) => None,
     }
 }
 

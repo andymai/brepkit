@@ -4,6 +4,9 @@
 //! - A block 24 x 24 x 1000 less a D-shaped hole: a bore of radius 10 cut
 //!   off by a flat that leans 5e-8 off the bore's axis, which meets the bore
 //!   along two arcs of an ellipse 2e8 across, centred 1e8 away.
+//! - A frustum whose wall is put in its B-spline form, which closes round on
+//!   itself, with its bottom rim chamfered: the wall is trimmed along the
+//!   chamfer's contact, which its seam crosses.
 
 #[cfg(test)]
 mod tests {
@@ -11,13 +14,18 @@ mod tests {
 
     use std::f64::consts::PI;
 
+    use brepkit_heal::custom::convert_to_bspline::face_bspline_surface;
     use brepkit_math::mat::Mat4;
     use brepkit_math::quadrature::gauss_legendre_points;
+    use brepkit_operations::blend_ops::chamfer_v2;
     use brepkit_operations::boolean::{BooleanOp, boolean};
     use brepkit_operations::measure::solid_volume;
-    use brepkit_operations::primitives::{make_box, make_cylinder};
+    use brepkit_operations::primitives::{make_box, make_cone, make_cylinder};
     use brepkit_operations::transform::transform_solid;
     use brepkit_topology::Topology;
+    use brepkit_topology::edge::EdgeCurve;
+    use brepkit_topology::explorer::{solid_edges, solid_faces};
+    use brepkit_topology::face::FaceSurface;
     use brepkit_topology::solid::SolidId;
 
     fn poses() -> Vec<(&'static str, Mat4)> {
@@ -84,6 +92,55 @@ mod tests {
             let mut topo = Topology::new();
             let solid = d_holed_block(&mut topo);
             transform_solid(&mut topo, solid, &pose).unwrap();
+            let volume = solid_volume(&topo, solid, 1e-3).unwrap();
+            assert!(
+                (volume - expected).abs() < 1e-9 * expected,
+                "{name}: {volume}, expected {expected}, off {:e}",
+                (volume - expected) / expected
+            );
+        }
+    }
+
+    /// The frustum 3 to 1 across and 4 high, its wall in B-spline form,
+    /// placed by `pose`, with its bottom rim chamfered 0.25 into the base and
+    /// 0.4 up the wall.
+    fn chamfered_b_spline_frustum(topo: &mut Topology, pose: &Mat4) -> SolidId {
+        let frustum = make_cone(topo, 3.0, 1.0, 4.0).unwrap();
+        let rim = solid_edges(topo, frustum)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                matches!(topo.edge(e).unwrap().curve(),
+                    EdgeCurve::Circle(c) if c.center().z().abs() < 1e-9)
+            })
+            .unwrap();
+        for face in solid_faces(topo, frustum).unwrap() {
+            if topo.face(face).unwrap().surface().is_planar() {
+                continue;
+            }
+            let wall = face_bspline_surface(topo, face).unwrap().unwrap();
+            topo.face_mut(face)
+                .unwrap()
+                .set_surface(FaceSurface::Nurbs(wall));
+        }
+        transform_solid(topo, frustum, pose).unwrap();
+        let built = chamfer_v2(topo, frustum, &[rim], 0.4, 0.25).unwrap();
+        assert!(built.failed.is_empty(), "{:?}", built.failed);
+        built.solid
+    }
+
+    #[test]
+    fn a_chamfered_b_spline_frustum_measures_exactly_at_a_coarse_deflection() {
+        // The section the chamfer takes off, 0.25 along the base and 0.4 up
+        // the wall, which rises 4 as it closes in by 2, swept round the axis
+        // at its centroid's radius.
+        let (sin, cos) = 2.0_f64.atan2(1.0).sin_cos();
+        let section = 0.5 * 0.25 * 0.4 * sin;
+        let removed = 2.0 * PI * (3.0 - 0.4f64.mul_add(cos, 0.25) / 3.0) * section;
+        let expected = PI * 4.0 / 3.0 * (9.0 + 3.0 + 1.0) - removed;
+        for (name, pose) in poses() {
+            let mut topo = Topology::new();
+            let solid = chamfered_b_spline_frustum(&mut topo, &pose);
             let volume = solid_volume(&topo, solid, 1e-3).unwrap();
             assert!(
                 (volume - expected).abs() < 1e-9 * expected,
