@@ -1812,10 +1812,10 @@ fn run_crossings(
             }
             let tc = f64::midpoint(lo, hi);
             let pc = curve.evaluate_with_endpoints(tc, start_pos, end_pos);
+            // Each change of side lies between its own two samples, so two
+            // roots meet only where both land on one point.
             if distance_to_surface(pc, surface) < tol.linear
-                && !out
-                    .iter()
-                    .any(|&(_, q)| (pc - q).length() < tol.linear * 100.0)
+                && !out.iter().any(|&(_, q)| (pc - q).length() <= tol.linear)
             {
                 out.push((tc, pc));
             }
@@ -2587,6 +2587,37 @@ mod tests {
         assert_eq!(crossings.len(), 2, "{crossings:?}");
         assert!((crossings[0].1.x() - 0.404).abs() < 1e-6, "{crossings:?}");
         assert!((crossings[1].1.x() - 0.421).abs() < 1e-6, "{crossings:?}");
+    }
+
+    /// Two crossings in one run of samples near a ball, 90 tolerances apart:
+    /// a line at `y = sqrt(0.001² - (4.5e-6)²)` crosses a ball of radius
+    /// 0.001 at `x = ±4.5e-6`.
+    #[test]
+    fn two_crossings_of_a_small_ball_90_tolerances_apart_are_both_kept() {
+        use brepkit_math::surfaces::SphericalSurface;
+        let (radius, x) = (1e-3_f64, 4.5e-6_f64);
+        let y = radius.madd(radius, -x * x).sqrt();
+        let surface =
+            FaceSurface::Sphere(SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), radius).unwrap());
+        let (a, b) = (Point3::new(-5e-5, y, 0.0), Point3::new(5e-5, y, 0.0));
+        let crossings = find_edge_surface_crossings(
+            &EdgeCurve::Line,
+            a,
+            b,
+            0.0,
+            1.0,
+            &surface,
+            None,
+            Tolerance::new(),
+        );
+        let xs: Vec<f64> = crossings.iter().map(|(_, p)| p.x()).collect();
+        assert_eq!(xs.len(), 2, "crossings at {xs:?}");
+        for (got, want) in xs.iter().zip([-x, x]) {
+            assert!(
+                (got - want).abs() < 1e-10,
+                "crossing at {got}, expected {want}"
+            );
+        }
     }
 
     /// A line within the tolerance of a ball over a run of samples that
