@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795358116810,
+  "lastUpdate": 1795374507910,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -75383,6 +75383,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 16816514,
             "range": "± 123412",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "73017d02ea1afb0baf036537852e2ba7287eb886",
+          "message": "fix(operations,blend): chamfer builds the same topology on every run, and the hole guard skips a face with no hole (#2688)\n\n## Summary\n\n- **Chamfer topology:** on main, `chamfer::chamfer` of a box's 12 edges\ngives a different face, edge and vertex order in each run. With this\nchange, it gives the same topology in every run.\n- **Fillet speed:** on main, `fillet_v2` of a box's 12 edges spends most\nof its time in the hole guard, but the box has no hole. With this\nchange, it takes 0.49 ms where it took 4.4 ms. The output does not\nchange.\n\nFixes #2676, fixes #2675.\n\n## The change\n\n- **Chamfer topology (#2676).** `chamfer_core` made its corner faces in\nthe order of a std `HashMap`. Each instance of that map has its own\nseed, so the ids of the result changed from run to run. The corner faces\nnow come in the order of their vertex ids (`BTreeMap`). The solid centre\nis now summed in face order.\n- **Hole guard (#2675).** `check_holes_clear_of_closed_contacts` sampled\neach open contact at 1024 points, and each edge it rounds at 64, on\nevery plane face. The guard reads open contacts only against the face's\nholes. It reads a closed contact only against holes or a second closed\ncontact. On a face with no hole, it now returns before it samples,\nunless the face has two closed contacts. A face with a hole takes the\nsame path as before.\n\n## Tests\n\n- `blend_determinism.rs` builds each chamfer and fillet path 6 times in\none process. It compares the face, wire, edge and vertex ids and the\npoints bit for bit.\n- `chamfer_box_all_edges` and `chamfer_asymmetric_box_all_edges` fail on\nmain and pass now.\n- The other paths pass on main and now: `chamfer_v2`, `fillet_v2`, the\nwalked and rim chamfers, and the bevel and rolling-ball fillets.\n- In 5 separate processes, the 10 mm box chamfered at d = 1.5 gives one\ndigest.\n- `hole_guard_reads_no_curve_on_a_face_with_no_hole` counts the curve\npoints the guard reads. It reads none on a face with no hole (2112 on\nmain) and some on a face with a hole. It still refuses a hole under the\nband, and two closed contacts that cross.\n- Times, from a profiling build with `std::time::Instant` (median):\n\n| Case | main | this PR | Runs |\n|---|---|---|---|\n| `fillet_v2`, the 12 edges of `make_box(20, 20, 20)`, r = 1 | 4.35 to\n4.56 ms | 0.485 to 0.497 ms | 400 |\n| `fillet_v2`, the top edges of a 20 x 12 x 4 plate with an r = 2 bore,\nr = 0.5 | 2.17 to 2.23 ms | 1.52 to 1.59 ms | 100 |\n\n- Both fillets give the same topology digest and volume before and after\n(box 7949.834793499, plate 905.636983579).\n- `cargo nextest run -p brepkit-blend`: 217 passed.\n- brepkit-operations `--lib` tests for chamfer and fillet: 88 passed.\n- 97 integration test files in `crates/operations/tests` have chamfer,\nfillet, blend or round in their names. In them, 452 tests passed, 0\nfailed, and 1 has an ignore on main.\n- `check-mul-add.sh` and `check-boundaries.sh` pass.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes chamfer results varying between runs, and speeds up `fillet_v2` on\nsolids without holes; the output is unchanged. Fixes #2676 and #2675.\n\n**Chamfer topology**\n- `chamfer_core` built corner faces in std `HashMap` order, whose\nper-map seed changed between runs, so chamfering a box's 12 edges\nproduced different face, edge, and vertex ordering each time. It now\nuses a `BTreeMap` ordered by vertex IDs, and the solid center is summed\nin face order.\n- Added `blend_determinism.rs`, which repeats each chamfer and fillet\npath 6 times in one process and compares faces, wires, edges, vertices,\nand points bit-for-bit. The two box chamfer tests fail on main and pass\nnow.\n\n**Hole guard speed**\n- `check_holes_clear_of_closed_contacts` sampled every open contact and\nrounded edge on every plane face, even faces with no holes. It now\nreturns before sampling on hole-free faces unless they have two closed\ncontacts; faces with holes take the same path as before.\n- `fillet_v2` of a 20 mm box's 12 edges drops from ~4.4 ms to ~0.49 ms,\nand on a holed plate from ~2.2 ms to ~1.55 ms, with identical topology\nand volume. A test confirms the guard reads no curve points on a\nhole-free face and still rejects a hole under the band and crossing\nclosed contacts.\n\n<sup>Written for commit 2844bb83eec84457915f2db81ab516cb1837cc62.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2688?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2688?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2688&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-22T19:04:56Z",
+          "tree_id": "37cbea9ae1041f269ae3be69887684e882a20a45",
+          "url": "https://github.com/andymai/brepkit/commit/73017d02ea1afb0baf036537852e2ba7287eb886"
+        },
+        "date": 1795374494443,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 740680,
+            "range": "± 15309",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 772339,
+            "range": "± 6528",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8712,
+            "range": "± 152",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 489676,
+            "range": "± 3688",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 16901140,
+            "range": "± 243979",
             "unit": "ns/iter"
           }
         ]
