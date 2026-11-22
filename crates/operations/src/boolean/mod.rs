@@ -4307,29 +4307,52 @@ fn any_vertex_of(topo: &Topology, faces: &[FaceId]) -> Option<Point3> {
     None
 }
 
+/// The box of the vertices of `faces`, or `None` for faces with no vertex.
+/// Its extremes are points on the faces.
+fn vertex_box(topo: &Topology, faces: &[FaceId]) -> Option<brepkit_math::aabb::Aabb3> {
+    let mut points = Vec::new();
+    for &fid in faces {
+        let face = topo.face(fid).ok()?;
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid).ok()?.edges() {
+                let edge = topo.edge(oe.edge()).ok()?;
+                for vid in [edge.start(), edge.end()] {
+                    points.push(topo.vertex(vid).ok()?.point());
+                }
+            }
+        }
+    }
+    brepkit_math::aabb::Aabb3::try_from_points(points)
+}
+
 /// True when the face components are side-by-side pieces (a cut split one
 /// solid into N parts), false when one nests inside another (a hollow solid:
-/// outer surface and cavity surface in one shell). Overlapping boxes pass;
-/// a box inside another's is only a suspect, rejected when a ray-parity
-/// probe finds the inner piece enclosed.
+/// outer surface and cavity surface in one shell). A piece is a suspect
+/// inside another when all its vertices lie in a box that holds the other
+/// whole; a ray-parity probe then decides. Each order of each pair is tried.
 fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -> bool {
-    // Each piece's box reads its curved edges and faces by their extremes:
-    // a ball's vertices all lie on its own rims, so a box of its vertices can
-    // miss the room it takes. The outer box of a pair also holds each NURBS
-    // face's control net, so it bounds the piece whole, while the inner box
-    // stays tight: nesting puts the inner piece's tight box in the outer
-    // piece's whole one. A piece that cannot be boxed gives the conservative
-    // answer.
+    // Each piece has two boxes. The box of its vertices has points on the
+    // piece at its extremes. The other holds the piece whole: its curved
+    // edges and faces read by their extremes, and each NURBS face's control
+    // net. A piece nested in another lies in the other's whole box, its
+    // vertices too. Only the vertices stand for the inner piece: a box read
+    // off its faces can reach past it (a NURBS face is sampled over its
+    // untrimmed surface, a NURBS edge read by its control hull), and such a
+    // box can miss the nesting. A ball's vertices all lie on its own rims, so
+    // the box of its vertices cannot stand for the outer piece. A piece that
+    // cannot be boxed gives the conservative answer.
     let mut boxes: Vec<(brepkit_math::aabb::Aabb3, brepkit_math::aabb::Aabb3)> =
         Vec::with_capacity(components.len());
     for comp in components {
-        let Ok(tight) = crate::measure::face_set_bounding_box(topo, comp) else {
+        let Some(on) = vertex_box(topo, comp) else {
             return false;
         };
-        let Ok(held) = crate::measure::hold_nurbs_faces(topo, comp, tight) else {
+        let Ok(whole) = crate::measure::face_set_bounding_box(topo, comp)
+            .and_then(|tight| crate::measure::hold_nurbs_faces(topo, comp, tight))
+        else {
             return false;
         };
-        boxes.push((tight, held));
+        boxes.push((on, whole));
     }
 
     // Reject NESTING, not mere AABB overlap.
@@ -4357,7 +4380,7 @@ fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -
     // is tight in the direction that matters: nesting implies it, and rotation
     // does not manufacture it.
     let eps = 1e-7;
-    let contains = |outer: usize, inner: usize| {
+    let may_nest = |outer: usize, inner: usize| {
         let (o, i) = (boxes[outer].1, boxes[inner].0);
         o.min.x() - eps <= i.min.x()
             && o.min.y() - eps <= i.min.y()
@@ -4366,22 +4389,20 @@ fn components_are_disjoint_pieces(topo: &Topology, components: &[Vec<FaceId>]) -
             && o.max.y() + eps >= i.max.y()
             && o.max.z() + eps >= i.max.z()
     };
-    // AABB containment is only the PRE-FILTER. It is necessary for nesting but
-    // far from sufficient: a ring's box contains the box of a separate piece
-    // sitting in its HOLE, and a lattice is full of rings. So a suspect pair
-    // gets a real ray-parity test against the enclosing candidate's own surface,
-    // and only genuine enclosure rejects. If the probe cannot be evaluated the
+    // The box test is only the PRE-FILTER. It is necessary for nesting but far
+    // from sufficient: a ring's box holds a separate piece sitting in its
+    // HOLE, and a lattice is full of rings. So a suspect pair gets a real
+    // ray-parity test against the enclosing candidate's own surface, and only
+    // genuine enclosure rejects. Both orders of a pair can pass the box test
+    // (a NURBS piece's control net can reach past the piece round it), so
+    // each order is probed on its own. If the probe cannot be evaluated the
     // pair falls back to the conservative answer.
-    for i in 0..boxes.len() {
-        for j in (i + 1)..boxes.len() {
-            let (outer, inner) = if contains(i, j) {
-                (i, j)
-            } else if contains(j, i) {
-                (j, i)
-            } else {
+    for outer in 0..boxes.len() {
+        for inner in 0..boxes.len() {
+            if outer == inner || !may_nest(outer, inner) {
                 continue;
-            };
-            let diag = (boxes[outer].0.max - boxes[outer].0.min).length();
+            }
+            let diag = (boxes[outer].1.max - boxes[outer].1.min).length();
             let deflection = (diag / 200.0).max(1e-4);
             let Some(probe) = any_vertex_of(topo, &components[inner]) else {
                 return false;

@@ -8045,8 +8045,8 @@ fn nested_pieces_are_not_disjoint() {
 /// A ball's cavity off the ball's centre nests in the ball, though the box of
 /// its vertices does not lie in the ball's: each ball's vertices all lie on
 /// its own equator, so each box of vertices is a flat slice through its own
-/// centre. Read by their faces' extremes, the boxes nest, and the ray probe
-/// finds the cavity inside the ball.
+/// centre. Read by its faces' extremes, the ball's box holds the cavity's
+/// vertices, and the ray probe finds the cavity inside the ball.
 #[test]
 fn a_ball_cavity_off_the_balls_centre_is_nested() {
     use brepkit_math::mat::Mat4;
@@ -8106,6 +8106,133 @@ fn a_ball_cavity_off_the_balls_centre_is_nested() {
         assert!(
             !super::components_are_disjoint_pieces(&topo, &comps),
             "{name}: the cavity nests in the ball"
+        );
+    }
+}
+
+/// The box `face_set_bounding_box` gives a component, and the box that also
+/// holds its NURBS faces' control nets.
+fn face_and_net_boxes(
+    topo: &Topology,
+    comp: &[FaceId],
+) -> (brepkit_math::aabb::Aabb3, brepkit_math::aabb::Aabb3) {
+    let faces = crate::measure::face_set_bounding_box(topo, comp).unwrap();
+    let nets = crate::measure::hold_nurbs_faces(topo, comp, faces).unwrap();
+    (faces, nets)
+}
+
+fn box_holds(o: brepkit_math::aabb::Aabb3, i: brepkit_math::aabb::Aabb3) -> bool {
+    o.min.x() <= i.min.x()
+        && o.min.y() <= i.min.y()
+        && o.min.z() <= i.min.z()
+        && o.max.x() >= i.max.x()
+        && o.max.y() >= i.max.y()
+        && o.max.z() >= i.max.z()
+}
+
+/// A ball in B-spline form, off the centre of a slightly larger ball, nests
+/// in it whichever order the two come in. The cavity's control net reaches
+/// past the outer ball's faces, so each box held the other: the check
+/// probed only one way round, and with the cavity listed first it probed the
+/// outer ball's vertex against the cavity, found it outside, and read the
+/// pair as disjoint.
+#[test]
+fn a_spline_ball_cavity_nests_whichever_order_it_comes_in() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::explorer::solid_faces;
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1);
+    for (name, pose) in [
+        ("upright", Mat4::identity()),
+        ("turned", turn),
+        ("mirrored", Mat4::scale(1.0, -1.0, 1.0)),
+    ] {
+        let mut topo = Topology::new();
+        let ball = crate::primitives::make_sphere(&mut topo, 3.5, 32).unwrap();
+        crate::transform::transform_solid(&mut topo, ball, &Mat4::translation(0.0, 0.0, 7.7))
+            .unwrap();
+        let cavity = crate::primitives::make_sphere(&mut topo, 3.0, 32).unwrap();
+        let place =
+            Mat4::translation(0.0, 0.0, 8.0) * Mat4::rotation_x(0.9) * Mat4::rotation_y(0.4);
+        crate::transform::transform_solid(&mut topo, cavity, &place).unwrap();
+        assert!(crate::heal::convert_to_bspline(&mut topo, cavity).unwrap() > 0);
+        for s in [ball, cavity] {
+            crate::transform::transform_solid(&mut topo, s, &pose).unwrap();
+        }
+        let (ball_faces, cavity_faces) = (
+            solid_faces(&topo, ball).unwrap(),
+            solid_faces(&topo, cavity).unwrap(),
+        );
+        assert!(
+            cavity_faces
+                .iter()
+                .all(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Nurbs(_))),
+            "{name}: the cavity's walls are B-splines"
+        );
+        if name == "upright" {
+            let (ball_box, ball_whole) = face_and_net_boxes(&topo, &ball_faces);
+            let (cavity_box, cavity_whole) = face_and_net_boxes(&topo, &cavity_faces);
+            assert!(
+                box_holds(ball_whole, cavity_box) && box_holds(cavity_whole, ball_box),
+                "each box must hold the other for this test to mean anything"
+            );
+        }
+        for comps in [
+            vec![cavity_faces.clone(), ball_faces.clone()],
+            vec![ball_faces.clone(), cavity_faces.clone()],
+        ] {
+            assert!(
+                !super::components_are_disjoint_pieces(&topo, &comps),
+                "{name}: the cavity nests in the ball, listed {}",
+                if comps[0] == cavity_faces {
+                    "first"
+                } else {
+                    "second"
+                }
+            );
+        }
+    }
+}
+
+/// A cavity cut from a ball and put in B-spline form, nested off the
+/// centre of a ball. Its faces are sampled over their untrimmed surfaces, so
+/// the box they give reaches above the cut and past the outer ball's own
+/// box, though every point of the cavity lies inside the ball. The check
+/// read that box against the ball's and found no nesting to probe.
+#[test]
+fn a_cavity_whose_face_box_reaches_past_its_ball_is_nested() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_topology::explorer::solid_faces;
+    let mut topo = Topology::new();
+    let ball = crate::primitives::make_sphere(&mut topo, 9.0, 32).unwrap();
+    let small = crate::primitives::make_sphere(&mut topo, 3.0, 32).unwrap();
+    let place = Mat4::translation(0.0, 0.0, 8.0) * Mat4::rotation_x(0.9) * Mat4::rotation_y(0.4);
+    crate::transform::transform_solid(&mut topo, small, &place).unwrap();
+    let lid = crate::primitives::make_box(&mut topo, 20.0, 20.0, 10.0).unwrap();
+    crate::transform::transform_solid(&mut topo, lid, &Mat4::translation(-10.0, -10.0, 8.0))
+        .unwrap();
+    // The ball of radius 3 below z = 8: its farthest point from the origin
+    // is on the rim, sqrt(8^2 + 3^2) = 8.54, inside the ball of radius 9.
+    let cavity = boolean(&mut topo, BooleanOp::Cut, small, lid).unwrap();
+    assert!(crate::heal::convert_to_bspline(&mut topo, cavity).unwrap() > 0);
+    let (ball_faces, cavity_faces) = (
+        solid_faces(&topo, ball).unwrap(),
+        solid_faces(&topo, cavity).unwrap(),
+    );
+    let (ball_box, _) = face_and_net_boxes(&topo, &ball_faces);
+    let (cavity_box, _) = face_and_net_boxes(&topo, &cavity_faces);
+    assert!(
+        cavity_box.max.z() > ball_box.max.z(),
+        "the cavity's face box must reach past the ball's for this test to mean anything: {} against {}",
+        cavity_box.max.z(),
+        ball_box.max.z()
+    );
+    for comps in [
+        vec![cavity_faces.clone(), ball_faces.clone()],
+        vec![ball_faces, cavity_faces],
+    ] {
+        assert!(
+            !super::components_are_disjoint_pieces(&topo, &comps),
+            "the cavity nests in the ball"
         );
     }
 }
