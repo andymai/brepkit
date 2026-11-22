@@ -10357,6 +10357,117 @@ mod tests {
         ))
     }
 
+    /// The frustum of the cone `x^2 + y^2 = z^2` from z = 2 to 6, its seam at
+    /// `+x`, with a window from z = 3 to 4.5 and from -0.5 to 0.5 about the
+    /// axis: two coaxial arcs and two rulings across the seam. Also the cone.
+    fn holed_frustum(topo: &mut Topology) -> (FaceId, brepkit_math::surfaces::ConicalSurface) {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ConicalSurface;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        let cone = ConicalSurface::with_ref_dir(
+            Point3::new(0.0, 0.0, 0.0),
+            z,
+            std::f64::consts::FRAC_PI_4,
+            x,
+        )
+        .unwrap();
+        let at = |u: f64, h: f64| Point3::new(h * u.cos(), h * u.sin(), h);
+        let arc = |h: f64| Circle3D::new_with_ref(Point3::new(0.0, 0.0, h), z, h, x).unwrap();
+        let mut vertex = |p: Point3| topo.add_vertex(Vertex::new(p, 1e-7));
+        let (bottom, top) = (vertex(at(0.0, 2.0)), vertex(at(0.0, 6.0)));
+        let corners = [
+            vertex(at(-0.5, 3.0)),
+            vertex(at(0.5, 3.0)),
+            vertex(at(0.5, 4.5)),
+            vertex(at(-0.5, 4.5)),
+        ];
+        let mut edge = |a, b, curve| topo.add_edge(Edge::new(a, b, curve));
+        let low = edge(bottom, bottom, EdgeCurve::Circle(arc(2.0)));
+        let seam = edge(bottom, top, EdgeCurve::Line);
+        let high = edge(top, top, EdgeCurve::Circle(arc(6.0)));
+        let sill = edge(corners[0], corners[1], EdgeCurve::Circle(arc(3.0)));
+        let right = edge(corners[1], corners[2], EdgeCurve::Line);
+        let lintel = edge(corners[3], corners[2], EdgeCurve::Circle(arc(4.5)));
+        let left = edge(corners[3], corners[0], EdgeCurve::Line);
+        let outer = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(low, true),
+                    OrientedEdge::new(seam, true),
+                    OrientedEdge::new(high, false),
+                    OrientedEdge::new(seam, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let window = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(left, false),
+                    OrientedEdge::new(lintel, true),
+                    OrientedEdge::new(right, false),
+                    OrientedEdge::new(sill, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let face = topo.add_face(Face::new(
+            outer,
+            vec![window],
+            FaceSurface::Cone(cone.clone()),
+        ));
+        (face, cone)
+    }
+
+    /// The holed frustum's extent leaves out the window across the seam, on
+    /// both sides of the seam and on it, and keeps the frustum round it:
+    /// under, over and beside the window and on the far side of the axis.
+    #[test]
+    fn a_frustums_extent_leaves_out_a_window_across_its_seam() {
+        let tol = Tolerance::default();
+        let mut topo = Topology::new();
+        let (face, cone) = holed_frustum(&mut topo);
+        let surface = FaceSurface::Cone(cone.clone());
+        let range = face_v_range(&topo, face, &surface);
+        let extent = FaceExtent::new(&topo, face, &surface, range, tol).unwrap();
+        let on = |u: f64, h: f64| cone.evaluate(u, h * std::f64::consts::SQRT_2);
+        for (u, h) in [
+            (0.0, 3.75),
+            (0.3, 3.75),
+            (-0.3, 3.75),
+            (0.45, 3.1),
+            (-0.45, 4.4),
+        ] {
+            let p = on(u, h);
+            assert!(!extent.contains(p), "in the window at u {u}, z {h}");
+            assert!(
+                !extent.contains_strict(p, 0.0),
+                "in the window at u {u}, z {h}"
+            );
+        }
+        for (u, h) in [
+            (0.0, 2.5),
+            (0.0, 5.25),
+            (0.8, 3.75),
+            (-0.8, 3.75),
+            (std::f64::consts::PI, 3.75),
+            (0.3, 2.9),
+            (-0.3, 4.6),
+        ] {
+            let p = on(u, h);
+            assert!(extent.contains(p), "on the frustum at u {u}, z {h}");
+            assert!(
+                extent.contains_strict(p, 0.01),
+                "on the frustum at u {u}, z {h}"
+            );
+        }
+    }
+
     /// A circle of radius 9.99 whose centre lies 0.01001 off the thin ring's
     /// runs into the ring along a short arc between 24 samples of it. It
     /// is not off the ring, whichever way the rims are stored. A circle of
