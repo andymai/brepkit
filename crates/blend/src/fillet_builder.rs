@@ -34,6 +34,7 @@ use crate::trimmer;
 use crate::walker::{Walker, WalkerConfig, approximate_blend_surface, interpolate_blend_surface};
 use crate::{BlendError, BlendResult};
 
+mod concave_first;
 mod wall_run_up;
 
 type BlendCrossEdge = (EdgeId, VertexId, VertexId);
@@ -123,6 +124,19 @@ impl<'a> FilletBuilder<'a> {
             solid,
             edge_sets,
         } = self;
+        if let Some(stages) = concave_first::stages(topo, solid, &edge_sets)? {
+            // A staged attempt that falls back leaves nothing in the arena.
+            let staged = topo.transaction(|topo| {
+                concave_first::build(topo, solid, stages)
+                    .map_err(Some)?
+                    .ok_or(None)
+            });
+            match staged {
+                Ok(result) => return Ok(result),
+                Err(Some(error)) => return Err(error),
+                Err(None) => {}
+            }
+        }
         let snapshot = SolidSnapshot::capture(topo, solid)?;
         let result = build_in_place(topo, solid, edge_sets);
         match result {
@@ -723,14 +737,14 @@ impl<'a> FilletBuilder<'a> {
                 }
                 for &edge_id in &junction.unselected_sharp_edges {
                     let edge = topo.edge(edge_id)?;
-                    if matches!(edge.curve(), EdgeCurve::Line) {
-                        let spoke = (
-                            topo.vertex(edge.start())?.point(),
-                            topo.vertex(edge.end())?.point(),
-                        );
-                        if !spokes.contains(&spoke) {
-                            spokes.push(spoke);
-                        }
+                    let spoke = (
+                        topo.vertex(edge.start())?.point(),
+                        topo.vertex(edge.end())?.point(),
+                    );
+                    if trimmer::is_straight(edge.curve(), spoke.0, spoke.1)
+                        && !spokes.contains(&spoke)
+                    {
+                        spokes.push(spoke);
                     }
                 }
             }
