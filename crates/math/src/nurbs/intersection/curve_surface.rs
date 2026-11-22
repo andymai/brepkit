@@ -200,17 +200,26 @@ fn net_box(net: &[Hpoint]) -> Aabb3 {
 }
 
 /// How far a surface net of `nu` by `nv` points reaches along `u` and along
-/// `v`: the longest distance between a line's two end points, each way.
+/// `v`: the longest control polygon of a line, each way. A line's end chord
+/// would read a span that closes on itself as no reach at all.
 fn net_spread(net: &[Hpoint], nu: usize, nv: usize) -> (f64, f64) {
     let at = |i: usize, j: usize| {
         let h = net[i * nv + j];
         Point3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3])
     };
     let along_u = (0..nv)
-        .map(|j| (at(nu - 1, j) - at(0, j)).length())
+        .map(|j| {
+            (1..nu)
+                .map(|i| (at(i, j) - at(i - 1, j)).length())
+                .sum::<f64>()
+        })
         .fold(0.0, f64::max);
     let along_v = (0..nu)
-        .map(|i| (at(i, nv - 1) - at(i, 0)).length())
+        .map(|i| {
+            (1..nv)
+                .map(|j| (at(i, j) - at(i, j - 1)).length())
+                .sum::<f64>()
+        })
         .fold(0.0, f64::max);
     (along_u, along_v)
 }
