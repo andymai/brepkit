@@ -6,7 +6,9 @@
 use std::f64::consts::PI;
 
 use brepkit_math::mat::Mat4;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{self, BooleanOp, BooleanOptions};
+use brepkit_operations::classify::{PointClassification, classify_point};
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::primitives::{make_cylinder, make_sphere};
 use brepkit_operations::tessellate::{
@@ -252,6 +254,68 @@ fn a_thin_ball_face_beside_a_rods_cap_meshes_closed() {
                 0,
                 "{name}: non-manifold mesh"
             );
+        }
+    }
+}
+
+#[test]
+fn two_rods_at_a_ball_turned_near_a_quarter_turn_fuse_exactly() {
+    // The ball's equator runs 0.011 to 0.016 radians from the second rod's
+    // cap circle, and the sliver between them stays a face of the ball.
+    let opts = BooleanOptions {
+        mesh_fallback: false,
+        unify_faces: false,
+        ..BooleanOptions::default()
+    };
+    for spin in [1.555, 1.56, 1.58, 1.59] {
+        for (pose_name, pose) in [
+            ("upright", Mat4::identity()),
+            ("turned", turned()),
+            ("mirrored", Mat4::scale(1.0, -1.0, 1.0) * turned()),
+        ] {
+            let name = format!("spin {spin} {pose_name}");
+            let mut topo = Topology::new();
+            let [ball, a, b] = scene(&mut topo, spin, &pose);
+            let first =
+                boolean::boolean_with_options(&mut topo, BooleanOp::Fuse, ball, a, opts).unwrap();
+            let fused = boolean::boolean_with_options(&mut topo, BooleanOp::Fuse, first, b, opts)
+                .map_err(|e| format!("{name}: {e}"))
+                .unwrap();
+            let report = validate_solid(&topo, fused).unwrap();
+            assert!(report.is_valid(), "{name}: {:?}", report.issues);
+            let v = solid_volume(&topo, fused, 0.0005).unwrap();
+            assert!(
+                (v - expected()).abs() < 1e-6 * expected(),
+                "{name}: volume {v}"
+            );
+            let mesh = tessellate_solid(&topo, fused, 0.005).unwrap();
+            assert_eq!(boundary_edge_count(&mesh), 0, "{name}: open mesh");
+            assert_eq!(
+                non_manifold_edge_count(&mesh),
+                0,
+                "{name}: non-manifold mesh"
+            );
+            // Along each rod, in the ball's quarter outside both rods, past
+            // the ball there, and beside each rod.
+            let away = Vec3::new(1.0, -1.0, 0.0) * (1.0 / 2.0_f64.sqrt());
+            for (p, want) in [
+                (Point3::new(-3.0, 0.0, 0.0), PointClassification::Inside),
+                (Point3::new(0.0, 3.0, 0.0), PointClassification::Inside),
+                (
+                    Point3::new(0.0, 0.0, 0.0) + away * 0.9,
+                    PointClassification::Inside,
+                ),
+                (Point3::new(0.6, -0.01, -0.6), PointClassification::Inside),
+                (
+                    Point3::new(0.0, 0.0, 0.0) + away * 1.05,
+                    PointClassification::Outside,
+                ),
+                (Point3::new(-3.0, 1.1, 0.0), PointClassification::Outside),
+                (Point3::new(1.1, 3.0, 0.0), PointClassification::Outside),
+            ] {
+                let got = classify_point(&topo, fused, pose.mul_point(p), 0.01, 1e-7).unwrap();
+                assert_eq!(got, want, "{name} at {p:?}");
+            }
         }
     }
 }
