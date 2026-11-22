@@ -268,8 +268,34 @@ fn ellipse_zero_axis_error() {
     );
 }
 
+/// The distance from `p` to the nearest of a dense scan of `ellipse`, each
+/// best sample refined by golden section between its neighbours.
+fn nearest_by_scan(ellipse: &Ellipse3D, p: Point3) -> f64 {
+    const N: u32 = 4_000;
+    let off = |t: f64| (ellipse.evaluate(t) - p).length();
+    let step = 2.0 * PI / f64::from(N);
+    let best = (0..N)
+        .map(|k| step.madd(f64::from(k), -PI))
+        .min_by(|&a, &b| off(a).total_cmp(&off(b)))
+        .unwrap();
+    let (mut lo, mut hi) = (best - step, best + step);
+    let golden = 0.5 * (5.0_f64.sqrt() - 1.0);
+    for _ in 0..200 {
+        let (a, b) = ((hi - lo).madd(-golden, hi), (hi - lo).madd(golden, lo));
+        if off(a) < off(b) {
+            hi = b;
+        } else {
+            lo = a;
+        }
+    }
+    off(best).min(off(0.5 * (lo + hi)))
+}
+
 /// A point off the ellipse along its normal projects to the point it was
-/// moved from, which the angle of the point drawn onto a circle is not.
+/// moved from, which the angle of the point drawn onto a circle is not;
+/// and every point, inside the ellipse, on either axis, at its centre or
+/// far off, projects to a point no farther than the nearest of a dense
+/// scan.
 #[test]
 fn ellipse_project_finds_the_nearest_point() {
     let ellipse = Ellipse3D::new(
@@ -290,6 +316,47 @@ fn ellipse_project_finds_the_nearest_point() {
             assert!(gap.abs() < 1e-12, "t {t} off {off}: {back}");
         }
     }
+    let normal = Vec3::new(0.3, -0.2, 1.0).normalize().unwrap();
+    let centre = Point3::new(0.5, 1.0, -2.0);
+    let frame = crate::frame::Frame3::from_normal(centre, normal).unwrap();
+    let ellipses = [
+        Ellipse3D::new(centre, normal, 3.0, 2.0).unwrap(),
+        Ellipse3D::new(centre, normal, 5.0, 1.0).unwrap(),
+        Ellipse3D::new(centre, normal, 2.0, 2.0).unwrap(),
+        // The longer semi-axis along `v`.
+        Ellipse3D::with_axes(centre, frame.z, 1.0, 3.0, frame.x, frame.y).unwrap(),
+    ];
+    let across = [-1e6, -2.9, -1.2, -0.7, -0.3, 0.0, 0.3, 0.7, 1.2, 2.9, 1e3];
+    for ellipse in &ellipses {
+        let (a, b) = (ellipse.semi_major(), ellipse.semi_minor());
+        let (u, v) = (ellipse.u_axis(), ellipse.v_axis());
+        for x in across {
+            for y in across {
+                let p = centre + u * (a * x) + v * (b * y);
+                let t = ellipse.project(p);
+                assert!(t > -PI && t <= PI, "({x}, {y}) on {a} x {b}: {t}");
+                let reached = (ellipse.evaluate(t) - p).length();
+                let nearest = nearest_by_scan(ellipse, p);
+                let scale = (p - centre).length().max(a.max(b));
+                assert!(
+                    reached <= nearest + 1e-12 * scale,
+                    "({x}, {y}) on {a} x {b}: {reached}, the scan finds {nearest}"
+                );
+            }
+        }
+    }
+    // A point near the centre on the longer axis has two nearest points,
+    // off the axis, where the curve's own angle is no nearest point.
+    let wide = &ellipses[0];
+    let p = centre + wide.u_axis() * 0.5;
+    let t = wide.project(p);
+    assert!((t - 0.3_f64.acos()).abs() < 1e-12, "{t}");
+    assert!(((wide.evaluate(t) - p).length_squared() - 3.8).abs() < 1e-12);
+    // At the centre of a circle every point is nearest: `0`. At the centre
+    // of a longer ellipse, the end of its shorter semi-axis.
+    assert!(ellipses[2].project(centre).abs() < 1e-15);
+    assert!((ellipses[0].project(centre) - FRAC_PI_2).abs() < 1e-15);
+    assert!((ellipses[3].project(centre)).abs() < 1e-15);
 }
 
 /// A long arc of an ellipse 2e8 across and 10 wide, centred 1e8 away, as a

@@ -798,46 +798,35 @@ impl Ellipse3D {
 
     /// Project a point onto the ellipse, returning the angle parameter of
     /// its nearest point, in `(-π, π]`.
+    ///
+    /// The point is taken into the ellipse's plane and reflected into the
+    /// quadrant of its positive semi-axes, where its nearest point lies too.
+    /// There the nearest point is the root of a monotone function of one
+    /// variable, found by Newton kept inside a closing bracket. Where more
+    /// than one point of the ellipse is nearest, the one with no negative
+    /// coordinate along either axis is taken: the centre of a circle gives
+    /// `0`, the centre of a longer ellipse the end of its shorter semi-axis,
+    /// and a point on the longer axis within its evolute the nearest point
+    /// on the positive side of the shorter one.
     #[must_use]
     pub fn project(&self, point: Point3) -> f64 {
         let q = point - self.center;
         let (x, y) = (self.u_axis.dot(q), self.v_axis.dot(q));
         let (a, b) = (self.semi_major, self.semi_minor);
-        let distance2 = |t: f64| {
-            let (s, c) = t.sin_cos();
-            a.madd(c, -x).powi(2) + b.madd(s, -y).powi(2)
-        };
-        // The angle of the point drawn onto the circle the ellipse is
-        // squeezed from is its nearest point only on a circle. On a long thin
-        // ellipse a point off it by rounding alone (a section of a wall
-        // nearly along its axis, centred far away) moves that angle a long
-        // way along the curve: Newton on the distance's slope takes it on.
-        let guess = (y / b).atan2(x / a);
-        let mut t = guess;
-        for _ in 0..8 {
-            let (s, c) = t.sin_cos();
-            let (dx, dy) = (a.madd(c, -x), b.madd(s, -y));
-            let slope = (b * c).madd(dy, -a * s * dx);
-            let bend = (a * s).powi(2) + (b * c).powi(2) - (a * c).madd(dx, b * s * dy);
-            let step = slope / bend;
-            if bend <= 0.0 || !step.is_finite() || step.abs() > 0.5 {
-                break;
-            }
-            t -= step;
-            if step.abs() <= 4.0 * f64::EPSILON * t.abs().max(1.0) {
-                break;
-            }
+        if !(x.is_finite() && y.is_finite()) {
+            return (y / b).atan2(x / a);
         }
-        if t.to_bits() != guess.to_bits() && distance2(t).total_cmp(&distance2(guess)).is_gt() {
-            t = guess;
-        }
-        if t > PI {
-            t - 2.0 * PI
-        } else if t <= -PI {
-            t + 2.0 * PI
+        let (nx, ny) = if a >= b {
+            nearest_in_quadrant((a, b), (x.abs(), y.abs()))
         } else {
-            t
-        }
+            let (ny, nx) = nearest_in_quadrant((b, a), (y.abs(), x.abs()));
+            (nx, ny)
+        };
+        let nx = if x < 0.0 { -nx } else { nx };
+        let ny = if y < 0.0 { -ny } else { ny };
+        // `atan2` reads a point a hair below the negative axis as `-π`.
+        let t = (ny / b).atan2(nx / a);
+        if t <= -PI { t + 2.0 * PI } else { t }
     }
 
     /// The u-axis direction (major axis direction).
@@ -903,6 +892,88 @@ impl Ellipse3D {
             v_axis,
         })
     }
+}
+
+/// The point of the ellipse `(x / e0)² + (y / e1)² = 1`, `e0 >= e1 > 0`,
+/// nearest the point `(y0, y1)` with neither coordinate negative: it lies in
+/// the same quadrant.
+///
+/// Off both axes the nearest point is `(r y0 / (σ + r - 1), y1 / σ)` with
+/// `r = (e0 / e1)²` and `σ` the root `lagrange_root` finds. On the shorter
+/// axis it is that axis's end. On the longer axis it leaves the axis while
+/// the point lies within the evolute, `e0 y0 < e0² - e1²`, and is the
+/// axis's end beyond.
+fn nearest_in_quadrant((e0, e1): (f64, f64), (y0, y1): (f64, f64)) -> (f64, f64) {
+    if y1 > 0.0 {
+        if y0 > 0.0 {
+            let ratio = e0 / e1;
+            let r = ratio * ratio;
+            let wider = (e0 - e1) * (e0 + e1) / (e1 * e1);
+            let sigma = lagrange_root(r * (y0 / e0), wider, y1 / e1);
+            (r * y0 / (sigma + wider), y1 / sigma)
+        } else {
+            (0.0, e1)
+        }
+    } else {
+        let (reach, span) = (e0 * y0, (e0 - e1) * (e0 + e1));
+        if reach < span {
+            let c = reach / span;
+            (e0 * c, e1 * c.madd(-c, 1.0).sqrt())
+        } else {
+            (e0, 0.0)
+        }
+    }
+}
+
+/// The root `σ` of `f(σ) = (n0 / (σ + d))² + (z1 / σ)² - 1` for `n0, z1 > 0`
+/// and `d >= 0`, where `f` falls and bends up.
+///
+/// `σ` is one more than the Lagrange multiplier scaled to the shorter
+/// semi-axis, so a root near nothing (a point a hair off the longer axis,
+/// within the evolute) keeps its digits. The root lies between `z1` (where
+/// the second term alone is one) and `1` for a point inside the ellipse,
+/// and between `1` and `|(n0, z1)|` (where the two terms together are at
+/// most one) for a point outside. Newton starts at `1`, where a point on
+/// the curve has its root, and each step that would leave the bracket
+/// halves it instead; the bracket closes round the root at every step, so
+/// the search ends on it.
+fn lagrange_root(n0: f64, d: f64, z1: f64) -> f64 {
+    let at = |sigma: f64| {
+        let (near, far) = (1.0 / (sigma + d), 1.0 / sigma);
+        let (p, q) = (n0 * near, z1 * far);
+        let (pp, qq) = (p * p, q * q);
+        (pp + qq - 1.0, -2.0 * pp.madd(near, qq * far))
+    };
+    let mut sigma = 1.0;
+    let (mut f, mut slope) = at(sigma);
+    let (mut lo, mut hi) = if f < 0.0 {
+        (z1, 1.0)
+    } else {
+        (1.0, n0.madd(n0, z1 * z1).sqrt())
+    };
+    // Halving alone ends within the 2100 halvings a double's exponent range
+    // allows; Newton ends far sooner.
+    for _ in 0..2100 {
+        if f > 0.0 {
+            lo = sigma;
+        } else if f < 0.0 {
+            hi = sigma;
+        } else {
+            return sigma;
+        }
+        let newton = sigma - f / slope;
+        let next = if newton > lo && newton < hi {
+            newton
+        } else {
+            f64::midpoint(lo, hi)
+        };
+        if next <= lo || next >= hi || next.to_bits() == sigma.to_bits() {
+            return sigma;
+        }
+        sigma = next;
+        (f, slope) = at(sigma);
+    }
+    sigma
 }
 
 /// A 3D parabola defined by vertex, axis direction, and focal length.
