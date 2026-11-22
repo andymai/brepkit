@@ -211,35 +211,60 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
         BlendParams { u1, v1, u2, v2 }
     }
 
-    /// Whether a step from `from` (whose section is `last`) to the section
-    /// `next` keeps to one branch: solved from `from` at the step's middle
-    /// `s_mid`, each contact must lie within three quarters of the step's
-    /// move of both ends. On one branch it lies about half way; a step that
-    /// leaps to another branch makes the leap in one half.
+    /// Whether a step from `from` (whose section is `last`, at `s0`) to the
+    /// section `next` (at `s1`) keeps to one branch: solved at the step's
+    /// middle, each contact must lie within three quarters of its own move
+    /// of both ends, and so again in the half where a contact makes the
+    /// most of its move, down to `DEPTH` halvings. On one branch each
+    /// contact lies about half way at every halving; a leap to another
+    /// branch, however fast the contact runs beside it, ends up a half's
+    /// whole move.
     fn splits_evenly(
         &self,
         from: BlendParams,
         last: &CircSection,
         next: &CircSection,
-        s_mid: f64,
+        (s0, s1): (f64, f64),
     ) -> bool {
-        let Ok(ctx) = self.make_context(s_mid) else {
-            return false;
-        };
-        let Some(mid) = self.newton_solve(from, &ctx) else {
-            return false;
-        };
-        let mid = self.func.section(self.surf1, self.surf2, &mid, &ctx);
-        // Each contact on its own, so that one that runs fast cannot hide a
-        // leap of the other; one that barely moves may stray by the solve's
-        // own tolerance.
+        const DEPTH: usize = 8;
+        // A contact that barely moves may stray by the solve's own tolerance.
         let slack = 2.0 * self.config.tol_3d;
-        let even = |a: Point3, m: Point3, b: Point3| {
-            let moved = (b - a).length();
-            (m - a).length() <= 0.75f64.madd(moved, slack)
-                && (b - m).length() <= 0.75f64.madd(moved, slack)
-        };
-        even(last.p1, mid.p1, next.p1) && even(last.p2, mid.p2, next.p2)
+        let (mut from, mut start, mut end) = (from, last.clone(), next.clone());
+        let (mut lo, mut hi) = (s0, s1);
+        for _ in 0..DEPTH {
+            let s_mid = f64::midpoint(lo, hi);
+            let Ok(ctx) = self.make_context(s_mid) else {
+                return false;
+            };
+            let Some(at_mid) = self.newton_solve(from, &ctx) else {
+                return false;
+            };
+            let mid = self.func.section(self.surf1, self.surf2, &at_mid, &ctx);
+            // Each contact's moves over the two halves.
+            let halves = [(start.p1, mid.p1, end.p1), (start.p2, mid.p2, end.p2)]
+                .map(|(a, m, b)| ((m - a).length(), (b - m).length(), (b - a).length()));
+            if halves.iter().any(|&(first, second, moved)| {
+                first > 0.75f64.madd(moved, slack) || second > 0.75f64.madd(moved, slack)
+            }) {
+                return false;
+            }
+            let share = |(first, second, _): (f64, f64, f64)| {
+                let total = first + second;
+                if total > 0.0 { first / total } else { 0.5 }
+            };
+            let firsts = halves.map(share);
+            let most_first = firsts[0].max(firsts[1]);
+            let most_second = (1.0 - firsts[0]).max(1.0 - firsts[1]);
+            if most_first >= most_second {
+                end = mid;
+                hi = s_mid;
+            } else {
+                start = mid;
+                lo = s_mid;
+                from = at_mid;
+            }
+        }
+        true
     }
 
     /// Run Newton-Raphson iteration to convergence from an initial guess.
@@ -460,12 +485,7 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
                         .section(self.surf1, self.surf2, converged, &ctx_next);
                     let moved = (sec.p1 - last.p1).length().max((sec.p2 - last.p2).length());
                     moved <= MAX_CONTACT_SPEED * clamped_step
-                        || self.splits_evenly(
-                            params,
-                            last,
-                            &sec,
-                            s + direction * 0.5 * clamped_step,
-                        )
+                        || self.splits_evenly(params, last, &sec, (s, s_next))
                 })
             });
             if let Some(converged) = solved {
@@ -1366,7 +1386,7 @@ mod tests {
         };
         let (from, last) = solve(0.0);
         let (_, next) = solve(0.1);
-        walker.splits_evenly(from, &last, &next, 0.05)
+        walker.splits_evenly(from, &last, &next, (0.0, 0.1))
     }
 
     /// A contact that leaps from where it was to where it lands, at `at`.
@@ -1417,6 +1437,17 @@ mod tests {
             |t| 200.0 * t,
             |_| false
         ));
+    }
+
+    /// A contact that runs 200 times as fast as the spine and leaps 20 past
+    /// the step's middle stands at 0, 10 and 40: each half of the step moves
+    /// it within three quarters of the whole, but the half with the leap
+    /// splits unevenly again.
+    #[test]
+    fn a_leap_hidden_by_a_fast_run_of_the_same_contact_does_not_split_evenly() {
+        let lept = |t: f64| 200.0f64.mul_add(t, leap(0.075, 20.0)(t));
+        assert!(!step_splits_evenly(lept, |t| t, |_| false));
+        assert!(!step_splits_evenly(|t| t, lept, |_| false));
     }
 
     #[test]
