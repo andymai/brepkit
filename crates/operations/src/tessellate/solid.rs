@@ -283,6 +283,31 @@ fn nurbs_normal_at(
     surface.normal(near.u, near.v).ok()
 }
 
+/// The ends of two chords in a surface's `(u, v)`.
+type ChordPair = ((f64, f64), (f64, f64), (f64, f64), (f64, f64));
+
+/// Two chords `a`-`b` and `c`-`d` in a surface's `(u, v)`, laid out to cross
+/// where they cross on the surface. With `period`, `u` runs round a turn: each
+/// chord is unwrapped along itself, and the second moves by whole turns so its
+/// middle lies nearest the first's. Read from its first end, a chord across
+/// the seam would sit a turn from the other where it crosses it.
+fn chords_in_one_turn(
+    a: (f64, f64),
+    b: (f64, f64),
+    c: (f64, f64),
+    d: (f64, f64),
+    period: Option<f64>,
+) -> ChordPair {
+    let Some(period) = period else {
+        return (a, b, c, d);
+    };
+    let turns = |from: f64, to: f64| ((to - from) / period).round() * period;
+    let b = (b.0 - turns(a.0, b.0), b.1);
+    let d = (d.0 - turns(c.0, d.0), d.1);
+    let shift = -turns(f64::midpoint(a.0, b.0), f64::midpoint(c.0, d.0));
+    (a, b, (c.0 + shift, c.1), (d.0 + shift, d.1))
+}
+
 /// What [`tessellate_solid_core`] returns.
 pub(super) struct CoreMesh {
     /// The solid's mesh.
@@ -754,9 +779,7 @@ pub(super) fn split_crossing_spline_chords(
                 {
                     return;
                 }
-                let b = (near(a, b), b.1);
-                let c = (near(a, c), c.1);
-                let d = (near(c, d), d.1);
+                let (a, b, c, d) = chords_in_one_turn(a, b, c, d, round_seam.then_some(su));
                 // A chord across a closed surface's seam is no chord in (u, v).
                 if [(a, b), (c, d)]
                     .iter()
@@ -2442,4 +2465,32 @@ pub(super) fn tessellate_face_with_shared_edges(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::chords_in_one_turn;
+    use std::f64::consts::TAU;
+
+    fn orient(a: (f64, f64), b: (f64, f64), c: (f64, f64)) -> f64 {
+        (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)
+    }
+
+    /// A chord from u = 3.15 back across the seam to u = 0.05 on a sphere
+    /// crosses a chord near u = 0.1. Read with its first end next to the
+    /// other chord's, it sat a turn away and missed it.
+    #[test]
+    fn a_chord_across_the_seam_meets_the_chord_it_crosses() {
+        let (a, b) = ((0.0, 1.5), (0.2, 1.5));
+        let (c, d) = ((3.15, 1.56), (0.05, 1.499));
+        for (p, q, r, s) in [(a, b, c, d), (c, d, a, b)] {
+            let (p, q, r, s) = chords_in_one_turn(p, q, r, s, Some(TAU));
+            assert!(
+                orient(p, q, r) * orient(p, q, s) < 0.0 && orient(r, s, p) * orient(r, s, q) < 0.0,
+                "the chords {p:?}-{q:?} and {r:?}-{s:?} do not cross"
+            );
+        }
+        // On a surface that does not run round, nothing moves.
+        assert_eq!(chords_in_one_turn(a, b, c, d, None), (a, b, c, d));
+    }
 }
