@@ -6610,9 +6610,12 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
     }
 }
 
-/// The box of a ring torus face over the ring and tube angles its outer wire
-/// spans. `None` on a horn or spindle torus, whose far sheet's points do not
-/// project to their own angles.
+/// The box of a ring torus face over the ring and tube angles its wires can
+/// reach. The face spans, in each angle, the turn less the widest arc its
+/// wires leave out, read from bounds on each edge's angles that hold every
+/// point of the edge (`torus_edge_arcs`); a face whose wires cannot be so
+/// bounded takes the whole turn. `None` on a horn or spindle torus, whose
+/// far sheet's points do not project to their own angles.
 fn torus_patch_box(
     topo: &Topology,
     face_id: FaceId,
@@ -6622,13 +6625,284 @@ fn torus_patch_box(
     if torus.major_radius() <= torus.minor_radius() {
         return None;
     }
-    let surface = FaceSurface::Torus(torus.clone());
-    let tube = face_tube_window(topo, face_id, &surface).unwrap_or((0.0, TAU));
-    let ring = face_circumferential_u_gap(topo, face_id, &surface)
-        .map_or((0.0, TAU), |(lo, hi)| {
-            (hi, if lo < hi { lo + TAU } else { lo })
-        });
-    Some(torus.patch_aabb(ring, tube))
+    let face = topo.face(face_id).ok()?;
+    let (mut ring, mut tube) = (Vec::new(), Vec::new());
+    let mut bounded = true;
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(wid).ok()?.edges() {
+            let edge = topo.edge(oe.edge()).ok()?;
+            let ends = (
+                topo.vertex(edge.start()).ok()?.point(),
+                topo.vertex(edge.end()).ok()?.point(),
+            );
+            bounded &= torus_edge_arcs(torus, edge.curve(), ends, &mut ring, &mut tube);
+        }
+    }
+    let whole = (0.0, TAU);
+    let span = |arcs: &[(f64, f64)]| {
+        bounded
+            .then(|| turn_left_by(arcs))
+            .flatten()
+            .unwrap_or(whole)
+    };
+    Some(torus.patch_aabb(span(&ring), span(&tube)))
+}
+
+/// The angle from `from` to `to` about the origin of the plane, in the
+/// range from minus a half turn to a half turn.
+fn angle_between(from: (f64, f64), to: (f64, f64)) -> f64 {
+    (from.0 * to.1 - from.1 * to.0).atan2(from.0.madd(to.0, from.1 * to.1))
+}
+
+/// The arc of angles about the origin of the plane that holds the convex
+/// hull of `points`, as its first angle and its length, when the hull keeps
+/// `clear` from the origin and lies within less than a half turn of it.
+fn hull_angle_arc(points: &[(f64, f64)], clear: f64) -> Option<(f64, f64)> {
+    let &first = points.first()?;
+    let offsets: Vec<f64> = points.iter().map(|&p| angle_between(first, p)).collect();
+    let lo = offsets.iter().copied().fold(0.0, f64::min);
+    let hi = offsets.iter().copied().fold(0.0, f64::max);
+    (hi - lo < std::f64::consts::PI - 1e-9 && hull_clearance(points) > clear)
+        .then(|| (first.1.atan2(first.0) + lo, hi - lo))
+}
+
+/// How near the convex hull of `points` comes to the origin of the plane, at
+/// least, when the hull does not hold it: the least distance to a segment
+/// between two of the points, the hull's edges among them.
+fn hull_clearance(points: &[(f64, f64)]) -> f64 {
+    let mut least = f64::INFINITY;
+    for (i, &(ax, ay)) in points.iter().enumerate() {
+        for &(bx, by) in &points[i..] {
+            let (ex, ey) = (bx - ax, by - ay);
+            let len2 = ex.madd(ex, ey * ey);
+            let f = if len2 > 0.0 {
+                (-(ax.madd(ex, ay * ey)) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            least = least.min(ex.madd(f, ax).hypot(ey.madd(f, ay)));
+        }
+    }
+    least
+}
+
+/// Arcs of the ring and tube angles of a torus that hold every point of the
+/// convex hull of `points`. The ring angle's arc holds the hull seen along
+/// the axis. The hull's points lie between its least and greatest distances
+/// from the axis, and between its least and greatest heights; the tube
+/// angle's arc holds that box of the tube's half-plane. `None` when the hull
+/// comes near the axis or the box holds the tube's centre.
+fn hull_torus_arcs(
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    points: &[Point3],
+) -> Option<((f64, f64), (f64, f64))> {
+    let (centre, major) = (torus.center(), torus.major_radius());
+    let clear = Tolerance::new().linear * major.max(1.0);
+    let flat: Vec<(f64, f64)> = points
+        .iter()
+        .map(|&p| {
+            (
+                (p - centre).dot(torus.x_axis()),
+                (p - centre).dot(torus.y_axis()),
+            )
+        })
+        .collect();
+    let ring = hull_angle_arc(&flat, clear)?;
+    let near = hull_clearance(&flat) - major;
+    let far = flat
+        .iter()
+        .map(|&(x, y)| x.hypot(y))
+        .fold(f64::NEG_INFINITY, f64::max)
+        - major;
+    let heights = points.iter().map(|&p| (p - centre).dot(torus.z_axis()));
+    let low = heights.clone().fold(f64::INFINITY, f64::min);
+    let high = heights.fold(f64::NEG_INFINITY, f64::max);
+    if near <= 0.0 && far >= 0.0 && low <= 0.0 && high >= 0.0 {
+        return None;
+    }
+    let tube = hull_angle_arc(&[(near, low), (near, high), (far, low), (far, high)], 0.0)?;
+    Some((ring, tube))
+}
+
+/// Push onto `ring` and `tube` arcs of a torus's ring and tube angles that
+/// hold every point of an edge on it, `curve` between `ends`. A circle about
+/// the torus's axis, or one round its tube in a half-plane through the axis,
+/// takes its exact arcs. Any other edge is read in pieces that each lie in a
+/// hull: a segment, the triangle an arc of a circle or an ellipse of less
+/// than a quarter turn makes with the meeting point of its end tangents, or
+/// a spline's knot span, its weights of one sign, in its control points'
+/// hull. A piece is halved until both its arcs are short, at most 16 times.
+/// `false` when a piece cannot be bounded.
+fn torus_edge_arcs(
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    curve: &EdgeCurve,
+    (start, end): (Point3, Point3),
+    ring: &mut Vec<(f64, f64)>,
+    tube: &mut Vec<(f64, f64)>,
+) -> bool {
+    use std::f64::consts::{FRAC_PI_2, TAU};
+    const MAX_HALVINGS: u32 = 16;
+    const MAX_PIECES: usize = 1 << 14;
+    const SHORT: f64 = 0.05;
+    let (centre, major, minor) = (torus.center(), torus.major_radius(), torus.minor_radius());
+    let (x, y, z) = (torus.x_axis(), torus.y_axis(), torus.z_axis());
+    let tol = Tolerance::new().linear * major.max(1.0);
+    let ring_angle = |p: Point3| (p - centre).dot(y).atan2((p - centre).dot(x));
+    let (t0, t1) = if matches!(curve, EdgeCurve::Line) {
+        (0.0, 1.0)
+    } else {
+        let (a, b) = curve.domain_with_endpoints(start, end);
+        (a.min(b), a.max(b))
+    };
+    if let EdgeCurve::Circle(c) = curve {
+        let to_centre = c.center() - centre;
+        let height = to_centre.dot(z);
+        let radial = to_centre - z * height;
+        let turns = c.u_axis().cross(c.v_axis());
+        let span = t1 - t0;
+        // A circle about the axis: its ring angle runs with its own, its
+        // tube angle stays put.
+        if c.normal().cross(z).length() <= 1e-12 && radial.length() <= tol {
+            let along = turns.dot(x.cross(y)) > 0.0;
+            let first = ring_angle(c.evaluate(t0));
+            ring.push((if along { first } else { first - span }, span));
+            tube.push((height.atan2(c.radius() - major), 0.0));
+            return true;
+        }
+        // A circle round the tube in a half-plane through the axis: its
+        // tube angle runs with its own, its ring angle stays put.
+        if let Ok(out) = radial.normalize()
+            && height.abs() <= tol
+            && (radial.length() - major).abs() <= tol
+            && (c.radius() - minor).abs() <= tol
+            && c.normal().cross(out.cross(z)).length() <= 1e-12
+        {
+            let along = turns.dot(out.cross(z)) > 0.0;
+            let q = c.evaluate(t0) - centre;
+            let first = q.dot(z).atan2(q.dot(out) - major);
+            ring.push((radial.dot(y).atan2(radial.dot(x)), 0.0));
+            tube.push((if along { first } else { first - span }, span));
+            return true;
+        }
+    }
+    let hull = |a: f64, b: f64| -> Option<Vec<Point3>> {
+        match curve {
+            EdgeCurve::Line => Some(vec![start + (end - start) * a, start + (end - start) * b]),
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                let (middle, half) = (f64::midpoint(a, b), 0.5 * (b - a));
+                let at = |t: f64| curve.evaluate_with_endpoints(t, start, end);
+                // The meeting point of the end tangents: the middle point
+                // pushed out from the centre by the secant of half the arc.
+                let (centre, apex_from) = match curve {
+                    EdgeCurve::Circle(c) => (c.center(), c.evaluate(middle)),
+                    EdgeCurve::Ellipse(e) => (e.center(), e.evaluate(middle)),
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return None,
+                };
+                let apex = centre + (apex_from - centre) * (1.0 / half.cos());
+                Some(vec![at(a), at(b), apex])
+            }
+            EdgeCurve::NurbsCurve(spline) => {
+                let points =
+                    brepkit_math::nurbs::decompose::curve_bezier_between(spline, a, b).ok()?;
+                let one_sign =
+                    points.iter().all(|q| q[3] > 0.0) || points.iter().all(|q| q[3] < 0.0);
+                one_sign.then(|| {
+                    points
+                        .iter()
+                        .map(|q| Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3]))
+                        .collect()
+                })
+            }
+        }
+    };
+    let mut cuts = vec![t0];
+    match curve {
+        EdgeCurve::NurbsCurve(spline) => {
+            for &k in spline.knots() {
+                if k > cuts[cuts.len() - 1] && k < t1 {
+                    cuts.push(k);
+                }
+            }
+        }
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+            let quarters = ((t1 - t0) / FRAC_PI_2).ceil().max(1.0);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let n = quarters.min(8.0) as u32 + 1;
+            for k in 1..n {
+                cuts.push((t1 - t0).madd(f64::from(k) / f64::from(n), t0));
+            }
+        }
+        EdgeCurve::Line => {}
+    }
+    cuts.push(t1);
+    if t1 - t0 > 2.0 * TAU {
+        return false;
+    }
+    let mut pending: Vec<(f64, f64, u32)> = cuts.windows(2).map(|w| (w[0], w[1], 0)).collect();
+    let mut read = 0;
+    while let Some((a, b, halvings)) = pending.pop() {
+        read += 1;
+        if read > MAX_PIECES {
+            return false;
+        }
+        match hull(a, b).and_then(|points| hull_torus_arcs(torus, &points)) {
+            Some((r, t)) if (r.1 <= SHORT && t.1 <= SHORT) || halvings == MAX_HALVINGS => {
+                ring.push(r);
+                tube.push(t);
+                continue;
+            }
+            None if halvings == MAX_HALVINGS => return false,
+            _ => {}
+        }
+        let middle = f64::midpoint(a, b);
+        pending.push((a, middle, halvings + 1));
+        pending.push((middle, b, halvings + 1));
+    }
+    true
+}
+
+/// The arc of a turn that `arcs` (each its first angle and its length)
+/// leave out at their widest gap, as the arc that is left: its first angle
+/// and its last, after the first by less than a turn. `None` when the arcs
+/// leave no gap.
+fn turn_left_by(arcs: &[(f64, f64)]) -> Option<(f64, f64)> {
+    use std::f64::consts::TAU;
+    if arcs.is_empty() || arcs.iter().any(|&(_, len)| len >= TAU) {
+        return None;
+    }
+    // Each arc from its first angle in the first turn; one that runs past
+    // the turn's end also from a turn back, so its end covers the start.
+    let mut spans: Vec<(f64, f64)> = Vec::with_capacity(2 * arcs.len());
+    for &(first, len) in arcs {
+        let lo = first.rem_euclid(TAU);
+        spans.push((lo, lo + len));
+        if lo + len > TAU {
+            spans.push((lo - TAU, lo + len - TAU));
+        }
+    }
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut covered: Vec<(f64, f64)> = Vec::new();
+    for (lo, hi) in spans {
+        let (lo, hi) = (lo.max(0.0), hi.min(TAU));
+        if hi < lo {
+            continue;
+        }
+        match covered.last_mut() {
+            Some(last) if lo <= last.1 => last.1 = last.1.max(hi),
+            _ => covered.push((lo, hi)),
+        }
+    }
+    let wrap = covered.first()?.0 + TAU;
+    let mut widest: Option<(f64, f64)> = None;
+    for (i, &(_, hi)) in covered.iter().enumerate() {
+        let next = covered.get(i + 1).map_or(wrap, |c| c.0);
+        if next - hi > widest.map_or(1e-9, |(lo, up)| up - lo) {
+            widest = Some((hi, next));
+        }
+    }
+    let (gap_lo, gap_hi) = widest?;
+    let shift = if gap_hi >= TAU { TAU } else { 0.0 };
+    Some((gap_hi - shift, gap_lo + TAU - shift))
 }
 
 /// Pole-side axis of a spherical face, from its boundary winding: the summed
@@ -11233,6 +11507,119 @@ mod tests {
         let ring = thin_ring(&mut topo, false);
         assert!(plane_face_clear_of_loop(&topo, ring, &ellipse(9.99), tol));
         assert!(!plane_face_clear_of_loop(&topo, ring, &ellipse(10.01), tol));
+    }
+
+    /// The outer half of the tube of a ring (10, 2), between its top and
+    /// bottom latitudes, its seam the meridian at the ring angle 0. Each rim
+    /// is a rational quadratic circle whose four quarters run over the
+    /// parameters 0 to 0.001, 0.001 to 0.002, 0.002 to 0.003 and 0.003 to
+    /// 1, counterclockwise about the axis or clockwise. Read at even steps
+    /// of its parameter, such a rim reached one quarter of the ring.
+    fn torus_band_with_skewed_rims(
+        topo: &mut Topology,
+        clockwise: bool,
+    ) -> (FaceId, brepkit_math::surfaces::ToroidalSurface) {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 10.0, 2.0).unwrap();
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        let mut rim = |z: f64| {
+            let mut corners = vec![
+                (1.0, 0.0),
+                (1.0, 1.0),
+                (0.0, 1.0),
+                (-1.0, 1.0),
+                (-1.0, 0.0),
+                (-1.0, -1.0),
+                (0.0, -1.0),
+                (1.0, -1.0),
+                (1.0, 0.0),
+            ];
+            if clockwise {
+                corners.reverse();
+            }
+            let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+                2,
+                vec![
+                    0.0, 0.0, 0.0, 0.001, 0.001, 0.002, 0.002, 0.003, 0.003, 1.0, 1.0, 1.0,
+                ],
+                corners
+                    .iter()
+                    .map(|&(x, y)| Point3::new(10.0 * x, 10.0 * y, z))
+                    .collect(),
+                vec![1.0, s, 1.0, s, 1.0, s, 1.0, s, 1.0],
+            )
+            .unwrap();
+            let start = topo.add_vertex(Vertex::new(Point3::new(10.0, 0.0, z), 1e-7));
+            (
+                topo.add_edge(Edge::new(start, start, EdgeCurve::NurbsCurve(curve))),
+                start,
+            )
+        };
+        let (bottom, low) = rim(-2.0);
+        let (top, high) = rim(2.0);
+        let meridian =
+            Circle3D::new(Point3::new(10.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0), 2.0).unwrap();
+        let seam = topo.add_edge(Edge::new(low, high, EdgeCurve::Circle(meridian)));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(bottom, true),
+                    OrientedEdge::new(seam, true),
+                    OrientedEdge::new(top, false),
+                    OrientedEdge::new(seam, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Torus(torus.clone())));
+        (face, torus)
+    }
+
+    /// A band's box holds the whole band, the outer equator on the far side
+    /// of the ring from the seam included, however its rims' quarters are
+    /// spread over their parameters and whichever way they run.
+    #[test]
+    fn a_torus_band_with_skewed_spline_rims_keeps_its_whole_box() {
+        for clockwise in [false, true] {
+            let mut topo = Topology::new();
+            let (face, torus) = torus_band_with_skewed_rims(&mut topo, clockwise);
+            let bound = torus_patch_box(&topo, face, &torus).unwrap();
+            for i in 0..=64 {
+                for j in 0..=16 {
+                    let u = std::f64::consts::TAU * f64::from(i) / 64.0;
+                    let v = std::f64::consts::PI
+                        .madd(f64::from(j) / 16.0, -std::f64::consts::FRAC_PI_2);
+                    let p = torus.evaluate(u, v);
+                    assert!(
+                        bound.expanded(1e-9).contains_point(p),
+                        "clockwise {clockwise}: {p:?} off {bound:?}"
+                    );
+                }
+            }
+            assert!(bound.max.x() - bound.min.x() < 24.0 + 1e-6);
+            assert!(bound.max.z() - bound.min.z() < 4.0 + 1e-6);
+        }
+    }
+
+    /// Arcs of a turn leave out their widest gap, and an arc that runs past
+    /// the turn's end covers the start of the next.
+    #[test]
+    fn arcs_of_a_turn_leave_out_their_widest_gap() {
+        let left = turn_left_by(&[(0.1, 0.1), (0.5, 0.1)]).unwrap();
+        assert!(
+            (left.0 - 0.1).abs() < 1e-12 && (left.1 - 0.6).abs() < 1e-12,
+            "{left:?}"
+        );
+        let wrapped = turn_left_by(&[(0.1, 0.1), (0.5, 0.1), (6.0, 1.0)]).unwrap();
+        assert!(
+            (wrapped.0 - 6.0).abs() < 1e-12 && (wrapped.1 - 7.0).abs() < 1e-12,
+            "{wrapped:?}"
+        );
+        assert!(turn_left_by(&[(0.0, 3.2), (3.1, 3.2)]).is_none());
     }
 
     /// A point on a torus and a plane lies on their section: its error is
