@@ -2386,14 +2386,16 @@ fn conic_least(
 /// the same curve with every weight turned positive. A piece whose control
 /// points all read `floor` or more stays there, and a piece read below
 /// `floor` at a point of the curve is past it. A piece between is halved,
-/// which keeps its weights positive. Past the cap on halvings, a piece left
-/// between straddles `floor` by less than its hull's slack and reads as not
-/// past.
+/// which keeps its weights positive. Each span has its own cap on halvings,
+/// so spans that only come near `floor` do not use up the halvings of a span
+/// that dips past it.
 ///
 /// # Errors
 ///
 /// A piece with a zero weight, or weights of both signs, has no such hull,
-/// and samples of it prove nothing: the revolve is refused.
+/// and samples of it prove nothing: the revolve is refused. So is a span
+/// whose cap on halvings runs out while a piece of it is still between: a
+/// hull not settled is not clear of `floor`.
 fn spline_dips_below(
     curve: &NurbsCurve,
     f: &impl Fn(Point3) -> f64,
@@ -2403,6 +2405,11 @@ fn spline_dips_below(
     let unbounded = || crate::OperationsError::InvalidInput {
         reason: "the revolve profile has a rational span with a zero weight or weights of \
                  both signs, which the test against the axis cannot bound"
+            .into(),
+    };
+    let unsettled = || crate::OperationsError::InvalidInput {
+        reason: "the revolve profile has a span whose hull still reaches across the axis after \
+                 the test against the axis has halved it as far as it may"
             .into(),
     };
     let segments =
@@ -2426,26 +2433,29 @@ fn spline_dips_below(
             return Err(unbounded());
         }
     }
-    let mut halvings = 0;
-    while let Some(piece) = pieces.pop() {
-        if piece.control_points().iter().all(|&p| f(p) >= floor) {
-            continue;
+    for span in pieces {
+        let mut open = vec![span];
+        let mut halvings = 0;
+        while let Some(piece) = open.pop() {
+            if piece.control_points().iter().all(|&p| f(p) >= floor) {
+                continue;
+            }
+            let (d0, d1) = piece.domain();
+            let middle = 0.5 * (d0 + d1);
+            if [d0, middle, d1]
+                .iter()
+                .any(|&t| f(piece.evaluate(t)) < floor)
+            {
+                return Ok(true);
+            }
+            if halvings >= MAX_HALVINGS {
+                return Err(unsettled());
+            }
+            halvings += 1;
+            let (left, right) = brepkit_math::nurbs::knot_ops::curve_split(&piece, middle)?;
+            open.push(left);
+            open.push(right);
         }
-        let (d0, d1) = piece.domain();
-        let middle = 0.5 * (d0 + d1);
-        if [d0, middle, d1]
-            .iter()
-            .any(|&t| f(piece.evaluate(t)) < floor)
-        {
-            return Ok(true);
-        }
-        if halvings >= MAX_HALVINGS {
-            continue;
-        }
-        halvings += 1;
-        let (left, right) = brepkit_math::nurbs::knot_ops::curve_split(&piece, middle)?;
-        pieces.push(left);
-        pieces.push(right);
     }
     Ok(false)
 }

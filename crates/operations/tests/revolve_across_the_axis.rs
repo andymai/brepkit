@@ -313,6 +313,60 @@ mod tests {
         }
     }
 
+    /// A quadratic B-spline of 801 spans along the axis. Each span but the
+    /// first comes down to touch the axis once, at a third of the way along
+    /// it or two thirds, between the points that halving it reads: its hull
+    /// reaches across until it is halved several times. The first span dips
+    /// 0.01 across the axis about two thirds of the way along it, where
+    /// neither its ends nor its middle reach. Each span is halved within a
+    /// budget of its own, so the many spans that only touch the axis leave
+    /// the dip's span the halvings that find it, and the profile is refused.
+    #[test]
+    fn a_narrow_dip_after_many_spans_that_touch_the_axis_is_refused() {
+        const SPANS: u32 = 801;
+        // A span `x = A (t - 1/3)^2` from `x = A / 9` to `x = 4 A / 9`, or
+        // the same run backward, whose middle control point is `-2 A / 9`.
+        let a = 1000.0;
+        let (low, high, middle) = (a / 9.0, 4.0 * a / 9.0, -2.0 * a / 9.0);
+        // Lowering the dip span's middle control point by `d` lowers the
+        // curve by `2 d t (1 - t)`, by 0.01 at t = 2 / 3.
+        let d = 0.0225;
+        for (name, f) in frames() {
+            let mut points = Vec::new();
+            let mut knots = vec![0.0; 3];
+            for span in 0..SPANS {
+                let z = f64::from(span);
+                // The spans run high to low, then low to high, by turns.
+                let start = if span.is_multiple_of(2) { high } else { low };
+                let dip = if span == 0 { d } else { 0.0 };
+                points.push(f.at(start, z));
+                points.push(f.at(middle - dip, z + 0.5));
+                if span > 0 {
+                    knots.extend([z, z]);
+                }
+            }
+            let end = if SPANS.is_multiple_of(2) { high } else { low };
+            points.push(f.at(end, f64::from(SPANS)));
+            knots.extend([f64::from(SPANS); 3]);
+            let weights = vec![1.0; points.len()];
+            let spline = NurbsCurve::new(2, knots, points.clone(), weights).unwrap();
+            let top = f64::from(SPANS);
+            let mut topo = Topology::new();
+            let face = profile(
+                &mut topo,
+                &f,
+                (points[0], points[points.len() - 1]),
+                EdgeCurve::NurbsCurve(spline),
+                &[f.at(500.0, top), f.at(500.0, 0.0)],
+            );
+            let result = revolve(&mut topo, face, f.origin, f.axis, TAU);
+            assert!(
+                matches!(&result, Err(OperationsError::InvalidInput { reason }) if reason.contains("reaches across")),
+                "{name}: {result:?}"
+            );
+        }
+    }
+
     /// A rectangle across the axis: refused.
     #[test]
     fn a_rectangle_across_the_axis_is_refused() {
