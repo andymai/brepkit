@@ -4908,6 +4908,34 @@ pub(super) fn split_face_with_internal_loops(
                 parent_loop[lj] = Some(li);
             }
         }
+        // So is a hole of the face all on that side: a ball's hole where a
+        // small ball stood, inside the loop of a third ball cut across it,
+        // left on the remainder, lies inside the remainder's new hole.
+        for (hi, hole) in original_inner_wires.iter().enumerate() {
+            if consumed_holes.contains(&hi) {
+                continue;
+            }
+            let pts = sample_edges_3d(hole);
+            let mut best: Option<(f64, usize)> = None;
+            for (li, cap) in caps.iter().enumerate() {
+                let Some((c, n, d)) = cap else {
+                    continue;
+                };
+                if !pts.is_empty()
+                    && pts.iter().all(|p| (*p - *c).dot(*n) > tol_3d * 100.0)
+                    && best.is_none_or(|(bd, _)| *d > bd)
+                {
+                    best = Some((*d, li));
+                }
+            }
+            if let Some((_, li)) = best {
+                log::debug!(
+                    "split_face_with_internal_loops: face {face_id:?} loop {li} encloses hole {hi}"
+                );
+                nested_holes_by_loop[li].push(hi);
+                nested_holes.insert(hi);
+            }
+        }
     }
     // On a cylinder or cone wall a loop that does not wind the axis lies
     // in one stretch of `(u, v)`: laid out about one `u`, the loops nest as
