@@ -1380,18 +1380,34 @@ fn face_interior_candidates(
     };
     let step = (loops.outer.len() / 12).max(1);
     let mut candidates = Vec::new();
-    for corner in loops.outer.iter().step_by(step) {
-        let q = Point2::new(0.5 * (p0.x() + corner.x()), 0.5 * (p0.y() + corner.y()));
-        if !loops.contains(q) {
-            continue;
-        }
-        if let Some(p) = loops.to_3d(q)
-            && (p - sample).length() > tol.linear
-        {
-            candidates.push(p);
-        }
-        if candidates.len() >= 8 {
-            break;
+    // A thin face can lie within the tolerance of the opposing boundary
+    // over most of its width and clear of it only near one of its edges: a
+    // ball's sliver between a rod's rim and the ball's equator, 3e-7 inside
+    // the rod's wall at most, is within 1e-7 of it up to its middle. Points
+    // most of the way to the loop follow the halfway points.
+    for deep in [false, true] {
+        let mut found = 0;
+        for corner in loops.outer.iter().step_by(step) {
+            let q = if deep {
+                Point2::new(
+                    0.875.madd(corner.x() - p0.x(), p0.x()),
+                    0.875.madd(corner.y() - p0.y(), p0.y()),
+                )
+            } else {
+                Point2::new(0.5 * (p0.x() + corner.x()), 0.5 * (p0.y() + corner.y()))
+            };
+            if !loops.contains(q) {
+                continue;
+            }
+            if let Some(p) = loops.to_3d(q)
+                && (p - sample).length() > tol.linear
+            {
+                candidates.push(p);
+                found += 1;
+            }
+            if found >= 8 {
+                break;
+            }
         }
     }
     Ok(candidates)

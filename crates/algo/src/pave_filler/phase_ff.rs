@@ -4173,6 +4173,14 @@ fn trim_ellipse_to_boundary_crossings(
                 SecCurve::Circ(c) => EdgeCurve::Circle((*c).clone()),
             }
         }
+        /// Whether the arc from `t0` to `t1` is shorter than a millionth of
+        /// the curve's smaller radius: its two ends are one crossing.
+        fn is_sliver(&self, t0: f64, t1: f64) -> bool {
+            match self {
+                SecCurve::Ell(e) => ellipse_arc_is_sliver(e, t0, t1),
+                SecCurve::Circ(_) => (t1 - t0) < 1e-6,
+            }
+        }
     }
     let sec = match &raw.curve {
         EdgeCurve::Ellipse(e) => SecCurve::Ell(e),
@@ -4568,8 +4576,7 @@ fn trim_ellipse_to_boundary_crossings(
         {
             continue;
         }
-        // Skip a degenerate sliver (the two crossings coincide angularly).
-        if (t1 - t0) < 1e-6 {
+        if sec.is_sliver(t0, t1) {
             continue;
         }
         // Split into sub-arcs each spanning strictly less than π, mirroring
@@ -4610,6 +4617,35 @@ fn trim_ellipse_to_boundary_crossings(
     }
 
     if arcs.is_empty() { None } else { Some(arcs) }
+}
+
+/// Whether the arc of `ellipse` from `t0` to `t1` is shorter than a
+/// millionth of its semi-minor axis. The arc is read by its length, not its
+/// angle. A flat leaning 5e-8 off the axis of a bore of radius 10 meets the
+/// bore in an ellipse of semi-major axis 2e8, where a millionth of a radian
+/// runs 170 along the curve.
+///
+/// The length is bounded above: the speed `|(a sin t, b cos t)|` is at most
+/// `|(a S, b C)|`, with `S` and `C` the largest `|sin|` and `|cos|` over the
+/// span. The speed at the span's middle can be far less than at its ends,
+/// as across the tip of a long ellipse's major axis.
+fn ellipse_arc_is_sliver(ellipse: &brepkit_math::curves::Ellipse3D, t0: f64, t1: f64) -> bool {
+    use std::f64::consts::{FRAC_PI_2, PI};
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    // Whether the span holds `phase + k π` for some whole `k`.
+    let holds = |phase: f64| ((lo - phase) / PI).ceil() <= ((hi - phase) / PI).floor();
+    let sin_most = if holds(FRAC_PI_2) {
+        1.0
+    } else {
+        lo.sin().abs().max(hi.sin().abs())
+    };
+    let cos_most = if holds(0.0) {
+        1.0
+    } else {
+        lo.cos().abs().max(hi.cos().abs())
+    };
+    let (a, b) = (ellipse.semi_major(), ellipse.semi_minor());
+    (a * sin_most).hypot(b * cos_most) * (hi - lo) < 1e-6 * b
 }
 
 /// Whether a closed plane section through `point`, crossing none of the
@@ -10678,6 +10714,30 @@ fn piece_side(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+
+    /// An arc of a long thin ellipse across the tip of its major axis is
+    /// slow at its middle and fast at its ends: over 8e-7 radians about the
+    /// tip of the ellipse with semi-axes 2e9 and 100, the speed at the
+    /// middle times the span is 8e-5, but the two chords from the tip to
+    /// the ends alone are 3.3e-4 long, more than a millionth of 100.
+    #[test]
+    fn an_ellipse_arc_is_a_sliver_only_when_it_is_short() {
+        use brepkit_math::curves::Ellipse3D;
+        use std::f64::consts::PI;
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let long = Ellipse3D::new(origin, z, 2e9, 100.0).unwrap();
+        let (t0, t1) = (PI - 4e-7, PI + 4e-7);
+        let chords = (long.evaluate(t0) - long.evaluate(PI)).length()
+            + (long.evaluate(PI) - long.evaluate(t1)).length();
+        assert!(chords > 3e-4, "chords {chords}");
+        assert!(!ellipse_arc_is_sliver(&long, t0, t1));
+        assert!(ellipse_arc_is_sliver(&long, PI - 1e-10, PI + 1e-10));
+        let bore = Ellipse3D::new(origin, z, 2e8, 10.0).unwrap();
+        let t = 2.0 * PI / 3.0;
+        assert!(!ellipse_arc_is_sliver(&bore, t, t + 6.9e-7));
+        assert!(ellipse_arc_is_sliver(&bore, t, t + 1e-15));
+    }
 
     /// The ring in `z = 0` between radii 10 and 10.02 about the origin, its
     /// rims whole circles, or rational quadratics in four quarters when
