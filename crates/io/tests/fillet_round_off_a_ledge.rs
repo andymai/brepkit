@@ -19,6 +19,11 @@
 //!   beside the round's end and runs on under the ledge's outline, a
 //!   little past the band's end section, so the cylinder itself runs up
 //!   to the band, which is run on past its end to meet it.
+//! - A boss's end disc on a peg, its rim rounded at r = 1, the rim ending
+//!   where the boss overhangs the peg's end by 0.005: the disc's outline
+//!   steps out that far past the rim's end, then back along the peg's end,
+//!   so the runout patch's line on the disc cuts across that step's
+//!   corner. The corner it cuts off becomes a face of its own.
 //!
 //! Read from STEP, as a file gives the part.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -73,6 +78,42 @@ fn edge_near(topo: &Topology, solid: SolidId, p: Point3, within: f64) -> EdgeId 
         .unwrap();
     assert!(off(best) < within, "no edge through {p:?}: {}", off(best));
     best
+}
+
+/// The mesh edges used by one triangle only, the mesh's points welded at
+/// 1e-5, as a consumer would.
+fn welded_open_edges(topo: &Topology, solid: SolidId, deflection: f64) -> usize {
+    let (mesh, _) = brepkit_operations::tessellate::tessellate_solid_grouped_with_tolerance(
+        topo, solid, deflection, 0.5,
+    )
+    .unwrap();
+    #[allow(clippy::cast_possible_truncation)]
+    let key = |p: Point3| {
+        (
+            (p.x() * 1e5).round() as i64,
+            (p.y() * 1e5).round() as i64,
+            (p.z() * 1e5).round() as i64,
+        )
+    };
+    let mut weld = std::collections::HashMap::new();
+    let ids: Vec<usize> = mesh
+        .positions
+        .iter()
+        .map(|&p| {
+            let n = weld.len();
+            *weld.entry(key(p)).or_insert(n)
+        })
+        .collect();
+    let mut uses = std::collections::HashMap::new();
+    for t in mesh.indices.chunks_exact(3) {
+        for (i, j) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            let (a, b) = (ids[i as usize], ids[j as usize]);
+            if a != b {
+                *uses.entry((a.min(b), a.max(b))).or_insert(0) += 1;
+            }
+        }
+    }
+    uses.values().filter(|&&n| n == 1).count()
 }
 
 /// How many times the plane face's wires cross themselves, each edge
@@ -230,6 +271,37 @@ fn a_wall_beside_a_round_s_end_runs_on_under_the_ledge_and_up_to_the_band() {
     let expected = 93_180_093.95;
     assert!(
         (volume - expected).abs() < 2e-4 * expected,
+        "volume {volume}, expected {expected}"
+    );
+}
+
+#[test]
+fn a_runout_line_across_a_sliver_step_cuts_the_corner_off() {
+    let mut topo = Topology::new();
+    let peg = load(&mut topo, "peg_boss_rim_tab.step");
+    let pick = edge_through(&topo, peg, Point3::new(-7.0, -19.950_000_372_529, 0.0));
+    let result = fillet_v2(&mut topo, peg, &[pick], 1.0).unwrap();
+    assert!(result.failed.is_empty(), "{:?}", result.failed);
+    let report = validate_solid(&topo, result.solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    assert_eq!(
+        self_crossings(&topo, result.solid),
+        0,
+        "a loop crosses itself"
+    );
+    // The part's twenty-two faces, the band, a runout patch at each end and
+    // the two corners cut off.
+    assert_eq!(solid_faces(&topo, result.solid).unwrap().len(), 27);
+    // Its mesh closes once welded (the band's seams repeat their points).
+    for deflection in [0.5, 0.05] {
+        let open = welded_open_edges(&topo, result.solid, deflection);
+        assert_eq!(open, 0, "{open} open mesh edges at {deflection}");
+    }
+    // Another kernel's measure of its result of the same fillet.
+    let volume = solid_volume(&topo, result.solid, 0.01).unwrap();
+    let expected = 4_911.465_6;
+    assert!(
+        (volume - expected).abs() < 1e-4 * expected,
         "volume {volume}, expected {expected}"
     );
 }

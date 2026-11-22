@@ -39,9 +39,9 @@ use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve, EdgeId};
-use brepkit_topology::face::{FaceId, FaceSurface};
+use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::vertex::{Vertex, VertexId};
-use brepkit_topology::wire::{OrientedEdge, WireId};
+use brepkit_topology::wire::{OrientedEdge, Wire, WireId};
 
 use super::{
     band_meets_cap, cylinder_meets_cap, edge_nearest, rewrite_wire, straight_edge, torus_meets_cap,
@@ -66,10 +66,223 @@ pub(super) fn run_walls_up_over_runouts(
                 faces.remove(index);
                 continue 'runouts;
             }
+            if let Some(corner) = split_runout_notch(topo, &faces, face_id, input_edges)? {
+                faces.push(corner);
+                continue 'runouts;
+            }
         }
         break;
     }
     Ok(faces)
+}
+
+/// Splits off the corner of a ledge's outline that a runout patch's line
+/// cuts across, where `face_id` is the patch (see the module's docs).
+///
+/// The patch's line `l` on the ledge runs from the contact's end `E` to the
+/// ledge's corner `C`. Where the outline from `C` first steps a little the
+/// round's way (a short edge, a file's sliver) and then crosses `l` at `X`,
+/// the ledge's loop ran out past `X` and back, crossing itself. The ledge
+/// keeps `l` from `E` to `X` and its outline on from `X`; the corner the
+/// line cut off (`C`, the short edges, `X`), on the ledge's surface,
+/// becomes a face of its own, and the patch takes `l` in its two pieces.
+/// Returns the new face.
+#[allow(clippy::too_many_lines)]
+fn split_runout_notch(
+    topo: &mut Topology,
+    faces: &[FaceId],
+    face_id: FaceId,
+    input_edges: &std::collections::HashSet<EdgeId>,
+) -> Result<Option<FaceId>, BlendError> {
+    // How much shorter than `l` the outline's step before the crossing is.
+    const SHORT: f64 = 0.1;
+    for patch in patches(topo, faces, face_id, input_edges)? {
+        let (l_id, ledge, ledge_wire) = patch.l;
+        let l_edge = topo.edge(l_id)?.clone();
+        if !matches!(l_edge.curve(), EdgeCurve::Line) {
+            continue;
+        }
+        let [cp, ep] = [patch.corner, patch.e].map(|v| topo.vertex(v).map(Vertex::point));
+        let (cp, ep) = (cp?, ep?);
+        let length = (cp - ep).length();
+        let tol = 1e-6 * length.max(1.0);
+        let ledge_edges = topo.wire(ledge_wire)?.edges().to_vec();
+        let Some(at) = ledge_edges.iter().position(|oe| oe.edge() == l_id) else {
+            continue;
+        };
+        let n = ledge_edges.len();
+        if n < 4 {
+            continue;
+        }
+        let oriented_start = |oe: &OrientedEdge| -> Result<VertexId, BlendError> {
+            let edge = topo.edge(oe.edge())?;
+            Ok(if oe.is_forward() {
+                edge.start()
+            } else {
+                edge.end()
+            })
+        };
+        // Walked through the wire backwards from `l` where `l` taken this
+        // way starts at the corner.
+        let backward = oriented_start(&ledge_edges[at])? == patch.corner;
+        // The outline from the corner: a short edge, then the one `l`
+        // crosses.
+        let index = |step: usize| {
+            if backward {
+                (at + n - step) % n
+            } else {
+                (at + step) % n
+            }
+        };
+        let (first, second) = (ledge_edges[index(1)].edge(), ledge_edges[index(2)].edge());
+        if first == l_id || second == l_id || first == second {
+            continue;
+        }
+        let first_edge = topo.edge(first)?.clone();
+        if first_edge.start() != patch.corner && first_edge.end() != patch.corner {
+            continue;
+        }
+        let near = if first_edge.start() == patch.corner {
+            first_edge.end()
+        } else {
+            first_edge.start()
+        };
+        let np = topo.vertex(near)?.point();
+        if (np - cp).length() > SHORT * length {
+            continue;
+        }
+        let second_edge = topo.edge(second)?.clone();
+        if second_edge.start() != near && second_edge.end() != near {
+            continue;
+        }
+        let far = if second_edge.start() == near {
+            second_edge.end()
+        } else {
+            second_edge.start()
+        };
+        let (lt0, lt1) = l_edge.curve().domain_with_endpoints(
+            topo.vertex(l_edge.start())?.point(),
+            topo.vertex(l_edge.end())?.point(),
+        );
+        let Some((_, x)) = crossing(
+            topo,
+            second,
+            (
+                l_edge.curve(),
+                topo.vertex(l_edge.start())?.point(),
+                topo.vertex(l_edge.end())?.point(),
+            ),
+            (lt0, lt1),
+            tol,
+        )?
+        else {
+            continue;
+        };
+        let fp = topo.vertex(far)?.point();
+        if [cp, ep, np, fp]
+            .iter()
+            .any(|&end| (end - x).length() <= 10.0 * tol)
+        {
+            continue;
+        }
+        let Some((_, other_wire)) = one_use(topo, faces, ledge, second)? else {
+            continue;
+        };
+        let (s_curve, s_start, s_end) = edge_curve(topo, &second_edge)?;
+        let (s0, s1) = s_curve.domain_with_endpoints(s_start, s_end);
+        let (te, gap) = nearest_param((&s_curve, s_start, s_end), (s0, s1), x);
+        if gap > 10.0 * tol {
+            continue;
+        }
+        // The pieces: `l` from `E` to `X` and from `X` to the corner, the
+        // crossed edge from `X` to each end.
+        let xv = topo.add_vertex(Vertex::new(x, 1e-7));
+        let l1 = topo.add_edge(Edge::new(patch.e, xv, EdgeCurve::Line));
+        let l2 = topo.add_edge(Edge::new(xv, patch.corner, EdgeCurve::Line));
+        let to_far = edge_piece(topo, second, te, xv, second_edge.end() == far)?;
+        let to_near = edge_piece(topo, second, te, xv, second_edge.end() == near)?;
+        let starts = |oe: OrientedEdge, v: VertexId| {
+            let edge = &if oe.edge() == l_id {
+                l_edge.clone()
+            } else {
+                second_edge.clone()
+            };
+            (if oe.is_forward() {
+                edge.start()
+            } else {
+                edge.end()
+            }) == v
+        };
+        let paths = |topo: &Topology, steps: &[(EdgeId, VertexId)]| path(topo, steps);
+        let ledge_l = paths(topo, &[(l1, patch.e)])?;
+        let ledge_l_back = paths(topo, &[(l1, xv)])?;
+        let ledge_far = paths(topo, &[(to_far, xv)])?;
+        let ledge_far_back = paths(topo, &[(to_far, far)])?;
+        rewrite_wire(topo, ledge_wire, |oe| {
+            if oe.edge() == l_id {
+                if starts(oe, patch.e) {
+                    ledge_l.clone()
+                } else {
+                    ledge_l_back.clone()
+                }
+            } else if oe.edge() == first {
+                vec![]
+            } else if oe.edge() == second {
+                if starts(oe, near) {
+                    ledge_far.clone()
+                } else {
+                    ledge_far_back.clone()
+                }
+            } else {
+                vec![oe]
+            }
+        })?;
+        let other_on = paths(topo, &[(to_near, near), (to_far, xv)])?;
+        let other_back = paths(topo, &[(to_far, far), (to_near, xv)])?;
+        rewrite_wire(topo, other_wire, |oe| {
+            if oe.edge() == second {
+                if starts(oe, near) {
+                    other_on.clone()
+                } else {
+                    other_back.clone()
+                }
+            } else {
+                vec![oe]
+            }
+        })?;
+        let patch_wire = topo.face(face_id)?.outer_wire();
+        let patch_on = paths(topo, &[(l1, patch.e), (l2, xv)])?;
+        let patch_back = paths(topo, &[(l2, patch.corner), (l1, xv)])?;
+        rewrite_wire(topo, patch_wire, |oe| {
+            if oe.edge() == l_id {
+                if starts(oe, patch.e) {
+                    patch_on.clone()
+                } else {
+                    patch_back.clone()
+                }
+            } else {
+                vec![oe]
+            }
+        })?;
+        // The corner cut off, its loop the ledge's way round: the short edge
+        // and the crossed edge's piece to `X` as the ledge ran them, then
+        // `l` back to the corner.
+        let loop_edges = if backward {
+            paths(topo, &[(to_near, xv), (first, near), (l2, patch.corner)])?
+        } else {
+            paths(topo, &[(first, patch.corner), (to_near, near), (l2, xv)])?
+        };
+        let wire = topo.add_wire(Wire::new(loop_edges, true)?);
+        let ledge_face = topo.face(ledge)?;
+        let mut corner = Face::new(wire, Vec::new(), ledge_face.surface().clone());
+        corner.set_reversed(ledge_face.is_reversed());
+        log::debug!(
+            "runout {face_id:?}: its line cut off the ledge's corner {:?}, now a face",
+            patch.corner
+        );
+        return Ok(Some(topo.add_face(corner)));
+    }
+    Ok(None)
 }
 
 /// Every use of `edge` among `faces` but `face_id`'s: the face and wire.
