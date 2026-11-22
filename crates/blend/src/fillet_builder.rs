@@ -2137,8 +2137,8 @@ fn outward_normal_at(
     Ok(Some(if face.is_reversed() { -normal } else { normal }))
 }
 
-/// Fold out a spur where a face's wire runs along a straight edge and back
-/// along a longer straight edge that overlaps it.
+/// Fold out a spur where a face's wire runs along an edge and back along a
+/// longer edge that overlaps it.
 ///
 /// A terminal whose cap cannot be notched keeps the edge leaving the spine's
 /// end (the spoke) whole, and the trim bridges the contact's end to that
@@ -2161,6 +2161,11 @@ fn outward_normal_at(
 /// a step's edge): the face's wire runs along those edges and back along the
 /// contact. Folding one edge at a time, the contact takes the input's edges,
 /// and the round meets each face beyond them along its own edge.
+///
+/// The spoke may be curved: a round ending on a floor that flat seams cut
+/// in pieces at the spine's end keeps the arc where the floor meets a bore
+/// whole, and the runout edge runs back along it to the contact. The arc is
+/// split there the same way.
 fn fold_spoke_spurs(
     topo: &mut Topology,
     faces: &[FaceId],
@@ -2195,9 +2200,8 @@ fn fold_spoke_spurs(
                     if v != v2 || p == q {
                         continue;
                     }
-                    if !straight_edge(topo, e1, ON_LINE)? || !straight_edge(topo, e2, ON_LINE)? {
-                        continue;
-                    }
+                    let straight =
+                        straight_edge(topo, e1, ON_LINE)? && straight_edge(topo, e2, ON_LINE)?;
                     let (pp, vp, qp) = (point(topo, p)?, point(topo, v)?, point(topo, q)?);
                     // Which of the two is the short one doubling back over
                     // the other: its far end lies inside the long one.
@@ -2210,9 +2214,17 @@ fn fold_spoke_spurs(
                         let t = (far - vp).dot(span) / length2;
                         t > 1e-9 && t < 1.0 - 1e-9 && (vp + span * t - far).length() <= ON_LINE
                     };
-                    let (short, long, short_first) = if inside(pp, qp) {
+                    let (short, long, short_first) = if straight {
+                        if inside(pp, qp) {
+                            (first, second, true)
+                        } else if inside(qp, pp) {
+                            (second, first, false)
+                        } else {
+                            continue;
+                        }
+                    } else if curved_spur(topo, first.edge(), second.edge(), v, ON_LINE)? {
                         (first, second, true)
-                    } else if inside(qp, pp) {
+                    } else if curved_spur(topo, second.edge(), first.edge(), v, ON_LINE)? {
                         (second, first, false)
                     } else {
                         continue;
@@ -2293,10 +2305,31 @@ fn fold_spoke_spurs(
                         long.edge(),
                         point(topo, split)?
                     );
-                    let rest = topo.add_edge(Edge::new(split, far, EdgeCurve::Line));
+                    // The far piece, stored the way the long edge is: from
+                    // the split to the far end, or (where the long edge
+                    // starts at the far end) back from it.
+                    let rest_from_split = long_edge.end() == far;
+                    let rest = if straight {
+                        topo.add_edge(Edge::new(split, far, EdgeCurve::Line))
+                    } else {
+                        let Some(piece) =
+                            long_piece(&long_edge, point(topo, split)?, rest_from_split)
+                        else {
+                            continue;
+                        };
+                        topo.add_edge(if rest_from_split {
+                            Edge::new(split, far, piece)
+                        } else {
+                            Edge::new(far, split, piece)
+                        })
+                    };
+                    let rest_from_split = straight || rest_from_split;
                     // In this wire the pair becomes the far piece alone, run
                     // the way the long edge was.
-                    let rest_here = OrientedEdge::new(rest, long.oriented_start(&long_edge) == v);
+                    let rest_here = OrientedEdge::new(
+                        rest,
+                        (long.oriented_start(&long_edge) == v) == rest_from_split,
+                    );
                     let mut folded = Vec::with_capacity(n - 1);
                     for (k, &oe) in edges.iter().enumerate() {
                         if k == i {
@@ -2323,9 +2356,9 @@ fn fold_spoke_spurs(
                             OrientedEdge::new(short.edge(), short.is_forward() == short_from_v);
                         if from_v {
                             rewritten.push(short_away);
-                            rewritten.push(OrientedEdge::new(rest, true));
+                            rewritten.push(OrientedEdge::new(rest, rest_from_split));
                         } else {
-                            rewritten.push(OrientedEdge::new(rest, false));
+                            rewritten.push(OrientedEdge::new(rest, !rest_from_split));
                             rewritten
                                 .push(OrientedEdge::new(short.edge(), !short_away.is_forward()));
                         }
@@ -2338,6 +2371,58 @@ fn fold_spoke_spurs(
         }
     }
     Ok(())
+}
+
+/// Whether `short`, leaving `v`, runs back along `long`, which also leaves
+/// `v`: each of its points lies within `tol` of `long`, and its far end
+/// lies inside `long`, clear of both of its ends. For a pair where either
+/// edge is curved (a cap's arc kept whole past a round's contact, and the
+/// runout edge along it).
+fn curved_spur(
+    topo: &Topology,
+    short: EdgeId,
+    long: EdgeId,
+    v: VertexId,
+    tol: f64,
+) -> Result<bool, BlendError> {
+    const SAMPLES: u32 = 8;
+    let (s, l) = (topo.edge(short)?, topo.edge(long)?);
+    if s.start() == s.end() || l.start() == l.end() {
+        return Ok(false);
+    }
+    let far = if s.start() == v { s.end() } else { s.start() };
+    let far_point = topo.vertex(far)?.point();
+    for end in [l.start(), l.end()] {
+        if (topo.vertex(end)?.point() - far_point).length() <= tol {
+            return Ok(false);
+        }
+    }
+    let (a, b) = (
+        topo.vertex(s.start())?.point(),
+        topo.vertex(s.end())?.point(),
+    );
+    let (t0, t1) = s.curve().domain_with_endpoints(a, b);
+    for k in 0..=SAMPLES {
+        let t = (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0);
+        let at = s.curve().evaluate_with_endpoints(t, a, b);
+        if edge_nearest(topo, long, at, None)?.0 > tol {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// The curve of `edge`'s piece between `split` (a point on it) and its end
+/// (`toward_end`) or its start, stored the way `edge` is. An analytic curve
+/// is its own piece: the piece's ends give its span. A B-spline is cut at
+/// `split`. `None` where `split` does not project on to it.
+fn long_piece(edge: &Edge, split: Point3, toward_end: bool) -> Option<EdgeCurve> {
+    let EdgeCurve::NurbsCurve(curve) = edge.curve() else {
+        return Some(edge.curve().clone());
+    };
+    let found = brepkit_math::nurbs::projection::project_point_to_curve(curve, split, 1e-9).ok()?;
+    let (left, right) = brepkit_math::nurbs::knot_ops::curve_split(curve, found.parameter).ok()?;
+    Some(EdgeCurve::NurbsCurve(if toward_end { right } else { left }))
 }
 
 /// Split a face pinched along a contact that runs over one of the face's

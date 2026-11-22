@@ -906,11 +906,16 @@ fn plan_run_up(
         }
         walls.push((wall, wall_wire, edge_id, from));
         if let Some((tc, x)) = crossing(topo, edge_id, (&c_curve, c_start, c_end), from_e, tol)? {
-            // Not at the contact's far end, and not at the edge's ends.
+            // Not at either end of the contact, and not at the edge's ends.
+            // An outline through `E` itself (an edge of the ledge the trim
+            // left whole past `E`) meets the contact where it starts: the
+            // contact runs off nothing there.
             let (_, xe) = edge_nearest(topo, edge_id, x, None)?;
             let ends = [topo.vertex(from)?.point(), topo.vertex(to)?.point()];
+            let span = (from_e.1 - from_e.0).abs();
             if ends.iter().any(|&end| (end - xe).length() <= 10.0 * tol)
-                || (tc - from_e.1).abs() <= 1e-9 * (from_e.1 - from_e.0).abs()
+                || (tc - from_e.1).abs() <= 1e-9 * span
+                || (tc - from_e.0).abs() <= 1e-9 * span
             {
                 return Ok(None);
             }
