@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795412138456,
+  "lastUpdate": 1795417794139,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -76301,6 +76301,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25584164,
             "range": "± 50571",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0f032a2fb9cd0d4e6c626ca9757667485e596798",
+          "message": "fix(math,algo,operations): cut a taper pin's hole exactly in every pose, keep crossings and touches apart, and put a long ellipse's crossings on their plane (#2735)\n\n## Summary\n\nOn main:\n\n- a taper pin's hole through a turned rod is refused in 4 of 16 poses\n(#2657). 3 more read 1.6e-6 to 1.2e-5 off the closed form;\n- `trim_ellipse_to_boundary_crossings` merges crossings within 1e-9 rad.\nOn an ellipse 2e8 across, that is up to 0.17 along the curve. So a\nnarrow strip's two crossings merge, and its trim returns nothing\n(#2710);\n- the corners of a D-shaped hole whose flat leans 5e-8 off its bore sit\nup to 1.19e-7 off their end caps (#2726);\n- a run of edge samples within the tolerance of a surface that both\ntouches and crosses it gives the touch no pave (#2713).\n\nWith this change, all 16 taper-pin poses are exact within 1.4e-8 of the\nclosed form. The strip's crossings both stay, the D-hole's corners lie\nwithin 3e-14 of their caps, and each touch gets its pave. The pose sweep\nand the truth audit give the same output as main.\n\nFixes #2657, fixes #2710, fixes #2726, fixes #2713.\n\n## The change\n\n- **The taper pin (#2657).** Two faults.\n- `ruling_cone_cylinder` in `analytic_intersection.rs` sent a window of\nmeeting rulings to the marcher when the window held fewer than 8 of its\n128 samples. The pin's narrow end holds 7 or 8, by the rod's turn. Now\none sample is enough, because each window is sampled again between its\nends. Only samples that meet the cone count. The scan finds each peak of\nthe discriminant between its points, so a window narrower than a step\ngoes to the marcher. The marched loops lay 1.9e-5 to 8.1e-5 off both\nsurfaces.\n- `seam_anchor_on_winding_loop` in `fill_images_faces.rs` missed a seam\ncrossing that falls exactly on a sample. So the loop did not start on\nthe cone's seam. The cone's side split into 2 pieces and not 3, and the\nresult had 2 free edges. Its two sibling functions already take that\ncase.\n- **Crossings close in angle (#2710).** The merge now compares an upper\nbound of the arc's length with the linear tolerance\n(`ellipse_arc_length_bound`). For a circle the bound is r·Δt.\n- **Corners on their caps (#2726).** Phase EF's `conic_plane_crossings`\nread the crossing in closed form from the ellipse's centre 1e8 away, and\nkept that rounding. The new `settle_conic_crossing` takes Newton steps\nfrom the root. It writes the conic's change over a step as products with\n`2 sin(δ/2)`, free of the far centre. Phase FF's\n`conic_arc_plane_crossings` uses the same function, so the vertex and\nthe section ends still meet.\n- Each reads a crossing's angle from the arc's start as the root's\noffset plus the Newton step. So a step below the float spacing still\ncounts. A crossing past an edge's end stays only near the end vertex. A\nclosed edge reads its angle round its seam.\n- **A touch in a run (#2713).** The new `run_contacts` adds each touch\ninside a run. A touch is a root of the curve's tangent along the\nsurface's normal, where the distance has a minimum within the tolerance.\nA crossing wins over a touch beside it, and of two touches the nearer\none stays. Two crossings never merge. A root of the rate is a touch only\nwhere the distance falls into it and rises out of it on one side.\n- Each sample interval is halved until a bound on the rate's second\nderivative proves that it holds no root or one root. A B-spline surface\nhas no such bound, so there the halving stops after 4 steps. A spline\nedge is read one knot span at a time, so each end takes the rate from\nits own side. Each call reads at most 32768 intervals, 4 times the most\nany test needs, and then reads the rest once each, as main did.\n\n## Tests\n\n- `a_taper_pin_cuts_both_of_its_holes_in_a_rod` covers all 16 poses:\nspins 0, 0.3, 0.9, 1.4, 2.0, 2.6, 3.0 and 3.6, both ways round. Each has\n4 faces, is valid, meshes closed, and reads within 2e-11 relative. The\ntest of refused poses is gone, because no pose refuses now. Each pose\ntakes under 20 ms in a profiling build.\n- `a_taper_pin_through_a_turned_rod_traces_both_loops` checks the curves\nof all 16 cases within 1e-7 of both surfaces.\n`a_winding_loop_on_the_seam_at_a_sample_is_anchored` pins the seam\nanchor. `a_pin_tip_between_two_samples_is_not_traced_from_a_miss` checks\nthat a seed off the cone is not traced.\n- `crossings_close_in_angle_on_a_long_ellipse_both_stay`: a strip 1e-3\nwide across the bore gives 2 arcs, where main gives none.\n- `a_d_holes_corners_lie_on_its_end_caps` checks the corners in 7 poses\nand 2 lengths, and `a_long_ellipse_crosses_a_plane_on_the_plane` the\ncrossing (4.47e-8 off on main). Two tests keep a crossing settled past\nan arc's start off that arc. In the 6 poses square to the axes, the\nblock's volume is now within 1.5e-15 relative.\n- `a_run_that_touches_and_crosses_a_wall_keeps_both` and\n`a_run_that_touches_a_wall_twice_keeps_both_touches` run on a real\ncylinder face. Each kept one vertex on main, and keeps both now. So does\n`a_touch_and_a_most_between_two_samples_keep_the_touch`, with a touch\nbetween two samples.\n`a_spline_touching_a_wall_before_and_after_a_kink_keeps_both_touches`\nchecks a double knot, and `a_line_along_a_thin_rod_stops_at_the_budget`\nchecks the interval budget.\n`a_dip_between_two_samples_crosses_twice_and_touches_nowhere` gives two\ncrossings between two samples, where the earlier code gave one false\ntouch.\n- brepkit-math and brepkit-algo (1334) pass, and so do all\nbrepkit-operations tests (2611).\n\n## Still open\n\n- The general marcher fits a cone and a cylinder 2e-5 to 8e-5 off both\nsurfaces, with steps 0.23 to 0.31 apart. This case no longer reaches it.\n- In the D-hole's oblique pose, ellipse points still carry the far\ncentre's rounding: corners sit up to 5e-9 off the bore and the flat.",
+          "timestamp": "2026-11-23T07:05:54Z",
+          "tree_id": "7d29e9de926089b914fa24a0b69b78988a2d2e0c",
+          "url": "https://github.com/andymai/brepkit/commit/0f032a2fb9cd0d4e6c626ca9757667485e596798"
+        },
+        "date": 1795417780844,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1182776,
+            "range": "± 43026",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1250378,
+            "range": "± 32441",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13304,
+            "range": "± 62",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 779807,
+            "range": "± 2274",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26852412,
+            "range": "± 295517",
             "unit": "ns/iter"
           }
         ]
