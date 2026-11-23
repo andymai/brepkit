@@ -93,7 +93,21 @@ impl<'a> Arc<'a> {
                         });
                 at.map_or_else(|| vec![span], |t| vec![(t, d1), (d0, t)])
             }
-            _ => vec![span],
+            _ => {
+                // A B-spline edge whose vertices lie off its curve's ends
+                // by more than `domain_with_endpoints` welds reads as the
+                // whole curve from its first knot, which can run against
+                // the edge: it is read the way its vertices lie.
+                let at = |t: f64| curve.evaluate_with_endpoints(t, ends.0, ends.1);
+                let (first, last) = (at(span.0), at(span.1));
+                let along = (first - ends.0).length() + (last - ends.1).length();
+                let against = (first - ends.1).length() + (last - ends.0).length();
+                if against < along {
+                    vec![(span.1, span.0)]
+                } else {
+                    vec![span]
+                }
+            }
         };
         if !forward {
             spans.reverse();
@@ -974,9 +988,13 @@ fn face_wires_issue(
         wires.push(arcs);
     }
     let bounds: Vec<Bounds> = wires.iter().map(|w| Bounds::of(w)).collect();
+    let unbroken: Vec<bool> = wires
+        .iter()
+        .map(|w| runs_unbroken(w, MOST_GAP * tolerance))
+        .collect();
     for (j, b) in wires.iter().enumerate() {
         for (i, a) in wires.iter().enumerate().skip(j + 1) {
-            if bounds[i].clear_of(&bounds[j], tolerance) {
+            if bounds[i].clear_of(&bounds[j], tolerance) || !(unbroken[i] && unbroken[j]) {
                 continue;
             }
             if wires_cross(face.surface(), a, b, tolerance) {
@@ -1196,6 +1214,19 @@ fn convex_spline(
     (one_way && total.abs() <= most).then_some((start, end, total))
 }
 
+/// Whether each piece of a wire starts within `gap` of where the piece
+/// before it ends. Where the edges' curves do not meet at the wire's
+/// vertices, the wire is not followed along its curves, and no crossing of
+/// it is read.
+fn runs_unbroken(wire: &[Arc<'_>], gap: f64) -> bool {
+    let n = wire.len();
+    (0..n).all(|k| (wire[k].at(1.0) - wire[(k + 1) % n].at(0.0)).length() <= gap)
+}
+
+/// The most a wire's curves may lie apart where one edge ends and the next
+/// starts, in tolerances, for the wire to be read for crossings.
+const MOST_GAP: f64 = 100.0;
+
 /// The first wire of the face that crosses itself, as
 /// [`check_face_wire_crossings`] reads it.
 fn crossed_wire(
@@ -1211,7 +1242,9 @@ fn crossed_wire(
             continue;
         }
         let (stretches, uses) = wire_stretches(topo, wire_id)?;
-        if stretches.len() > 1 && wire_crosses_itself(face.surface(), &stretches, &uses, tolerance)
+        if stretches.len() > 1
+            && runs_unbroken(&stretches, MOST_GAP * tolerance)
+            && wire_crosses_itself(face.surface(), &stretches, &uses, tolerance)
         {
             return Ok(Some(wire_id));
         }
@@ -1623,6 +1656,133 @@ mod tests {
                 assert_eq!(reported, crosses, "{corners:?}: {:?}", report.issues);
             }
         }
+    }
+
+    /// A rectangle on a plane and on a cylinder's wall whose bottom edge is
+    /// a B-spline stored against its curve, with the curve `off` above its
+    /// vertices. At 2e-5, past the gap within which `domain_with_endpoints`
+    /// welds them, that reads the edge as the curve from its first knot,
+    /// against the edge, which broke the wire at both its ends. The edge is
+    /// read the way its vertices lie, and the wire crosses nothing. At 0.3
+    /// the curves do not meet at the wire's vertices, and the wire is not
+    /// read for crossings.
+    #[test]
+    fn a_b_spline_edge_stored_against_its_curve_reads_from_its_start() {
+        let corners = [(-1.0, 0.0), (1.0, 0.0), (1.0, 2.0), (-1.0, 2.0)];
+        for surface in [
+            None,
+            Some(wall_surfaces()[0].clone()),
+            Some(wall_surfaces()[1].clone()),
+        ] {
+            for off in [2e-5, 0.3] {
+                let mut topo = Topology::new();
+                let place = |(t, z): (f64, f64)| match surface {
+                    None => Point3::new(3.0 * t, z, 0.0),
+                    Some(_) => Point3::new(RADIUS * t.cos(), RADIUS * t.sin(), z),
+                };
+                let ids: Vec<VertexId> = corners
+                    .iter()
+                    .map(|&c| {
+                        let p = place(c);
+                        vertex(&mut topo, [p.x(), p.y(), p.z()])
+                    })
+                    .collect();
+                let curve = if surface.is_some() {
+                    let ring = Circle3D::new(Point3::new(0.0, 0.0, off), Z, RADIUS).unwrap();
+                    let arc = brepkit_geometry::convert::curve_to_nurbs::circle_to_nurbs(
+                        &ring, -1.0, 1.0,
+                    )
+                    .unwrap();
+                    reversed_curve(&arc)
+                } else {
+                    let points = vec![place((1.0, off)), place((-1.0, off))];
+                    brepkit_math::nurbs::curve::NurbsCurve::new(
+                        1,
+                        vec![0.0, 0.0, 1.0, 1.0],
+                        points,
+                        vec![1.0; 2],
+                    )
+                    .unwrap()
+                };
+                let bottom = topo.add_edge(Edge::new(ids[0], ids[1], EdgeCurve::NurbsCurve(curve)));
+                let mut edges = vec![OrientedEdge::new(bottom, true)];
+                for k in 1..4 {
+                    let (i, j) = (k, (k + 1) % 4);
+                    if surface.is_some() && k == 2 {
+                        let ring = Circle3D::new(Point3::new(0.0, 0.0, 2.0), Z, RADIUS).unwrap();
+                        let e = topo.add_edge(Edge::new(ids[j], ids[i], EdgeCurve::Circle(ring)));
+                        edges.push(OrientedEdge::new(e, false));
+                    } else {
+                        let e = topo.add_edge(Edge::new(ids[i], ids[j], EdgeCurve::Line));
+                        edges.push(OrientedEdge::new(e, true));
+                    }
+                }
+                let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+                let on = surface
+                    .clone()
+                    .unwrap_or(FaceSurface::Plane { normal: Z, d: 0.0 });
+                let face = topo.add_face(Face::new(wire, vec![], on));
+                let found = check_face_wire_crossings(&topo, face, 1e-6).unwrap();
+                assert!(found.is_empty(), "{surface:?} off {off}: {found:?}");
+            }
+        }
+    }
+
+    /// A bow tie on a plane whose first diagonal is a B-spline stored
+    /// against its curve, the curve 2e-5 aside of its vertices. Read the way
+    /// its vertices lie, the diagonal crosses the other one, and the wire is
+    /// reported.
+    #[test]
+    fn a_bow_tie_with_a_b_spline_stored_against_its_curve_is_reported() {
+        let mut topo = Topology::new();
+        let corners = [
+            [0.0, 0.0, 0.0],
+            [2.0, 2.0, 0.0],
+            [2.0, 0.0, 0.0],
+            [0.0, 2.0, 0.0],
+        ];
+        let ids = points(&mut topo, &corners);
+        let aside = Vec3::new(-1.0, 1.0, 0.0) * (2e-5 / 2.0_f64.sqrt());
+        let diagonal = brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                Point3::new(2.0, 2.0, 0.0) + aside,
+                Point3::new(0.0, 0.0, 0.0) + aside,
+            ],
+            vec![1.0; 2],
+        )
+        .unwrap();
+        let mut edges = vec![OrientedEdge::new(
+            topo.add_edge(Edge::new(ids[0], ids[1], EdgeCurve::NurbsCurve(diagonal))),
+            true,
+        )];
+        for k in 1..4 {
+            let e = topo.add_edge(Edge::new(ids[k], ids[(k + 1) % 4], EdgeCurve::Line));
+            edges.push(OrientedEdge::new(e, true));
+        }
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = flat(&mut topo, wire, vec![]);
+        assert!(
+            !check_face_wire_crossings(&topo, face, 1e-6)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(crossed(&topo, face).is_some());
+    }
+
+    /// The same curve run the other way.
+    fn reversed_curve(
+        curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    ) -> brepkit_math::nurbs::curve::NurbsCurve {
+        let (d0, d1) = curve.domain();
+        brepkit_math::nurbs::curve::NurbsCurve::new(
+            curve.degree(),
+            curve.knots().iter().rev().map(|&k| d0 + d1 - k).collect(),
+            curve.control_points().iter().rev().copied().collect(),
+            curve.weights().iter().rev().copied().collect(),
+        )
+        .unwrap()
     }
 
     /// A band of a cone between two whole circles and up a line of the
