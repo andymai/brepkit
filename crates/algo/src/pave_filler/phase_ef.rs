@@ -1946,30 +1946,38 @@ fn run_contacts_counted(
     /// Halvings without a bound on the rate.
     const UNBOUNDED_HALVINGS: u32 = 4;
     let floor = 1e-3 * tol.linear;
-    // The point, the signed distance and its rate, on `on`.
-    let foot_on = |on: &EdgeCurve, t: f64| -> Option<(Point3, f64, f64)> {
-        let pt = on.evaluate_with_endpoints(t, start_pos, end_pos);
+    // The point, the signed distance and its rate, the rate of a spline
+    // read in its knot span `span` when one is given.
+    let foot_on = |span: Option<usize>, t: f64| -> Option<(Point3, f64, f64)> {
+        let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
         let (u, v) = surface.project_point(pt)?;
         let normal = surface.normal(u, v);
         let side = (pt - surface.evaluate(u, v)?).dot(normal);
-        let rate = curve_velocity(on, start_pos, end_pos, t).dot(normal);
-        Some((pt, side, rate))
+        let velocity = match (curve, span) {
+            (EdgeCurve::NurbsCurve(n), Some(span)) => spline_velocity_in_span(n, span, t)?,
+            _ => curve_velocity(curve, start_pos, end_pos, t),
+        };
+        Some((pt, side, velocity.dot(normal)))
     };
-    let foot = |t: f64| foot_on(curve, t);
+    let foot = |t: f64| foot_on(None, t);
+    // The knot span of a spline that holds `[a, b]`.
+    let span_of = |a: f64, b: f64| -> Option<usize> {
+        let EdgeCurve::NurbsCurve(n) = curve else {
+            return None;
+        };
+        let count = n.control_points().len();
+        Some(brepkit_math::nurbs::basis::find_span(
+            count,
+            n.degree(),
+            f64::midpoint(a, b),
+            n.knots(),
+        ))
+    };
     // The bounds on the curve's first three derivatives over `[a, b]`,
     // which lies within one knot span of a spline.
     let speeds = |a: f64, b: f64| -> Option<[f64; 3]> {
-        match curve {
-            EdgeCurve::NurbsCurve(n) => {
-                let count = n.control_points().len();
-                let span = brepkit_math::nurbs::basis::find_span(
-                    count,
-                    n.degree(),
-                    f64::midpoint(a, b),
-                    n.knots(),
-                );
-                spline_span_derivative_bounds(n, span)
-            }
+        match (curve, span_of(a, b)) {
+            (EdgeCurve::NurbsCurve(n), Some(span)) => spline_span_derivative_bounds(n, span),
             _ => curve_derivative_bounds(curve, start_pos, end_pos),
         }
     };
@@ -1993,70 +2001,67 @@ fn run_contacts_counted(
             })
             .collect();
     let mut cuts: Vec<f64> = ts.to_vec();
-    // A spline is read in pieces split at its knots, each piece up to the
-    // parameter it is keyed by: a piece read at its end gives the rate on
-    // its own side of a knot where the derivative jumps, which the whole
-    // spline reads from the span after it.
-    let mut pieces: Vec<(f64, EdgeCurve)> = Vec::new();
+    // The mosts of the distance the search passes, for the rises below.
+    let mut mosts: Vec<(f64, f64)> = Vec::new();
+    // A spline is cut at its knots, and each interval reads its rates in
+    // its own knot span: at a knot where the derivative jumps, a span
+    // search reads it from the span after the knot. Where the rate changes
+    // sign across a knot, the distance has a least or a most at the knot
+    // itself. More knots in the run than the budget leave the run to its
+    // samples alone.
+    let mut over = false;
     if let (EdgeCurve::NurbsCurve(nurbs), [first, .., last]) = (curve, ts) {
         let (lo, hi) = (first.min(*last), first.max(*last));
-        let mut knots: Vec<f64> = nurbs
-            .knots()
-            .iter()
-            .copied()
-            .filter(|&k| lo < k && k < hi)
-            .collect();
-        knots.dedup();
-        let mut rest = nurbs.clone();
-        for &k in &knots {
-            if let Ok((head, tail)) = brepkit_math::nurbs::knot_ops::curve_split(&rest, k) {
-                pieces.push((k, EdgeCurve::NurbsCurve(head)));
-                rest = tail;
+        let knots = nurbs.knots();
+        let inside =
+            &knots[knots.partition_point(|&k| k <= lo)..knots.partition_point(|&k| k < hi)];
+        over = inside.len() + cuts.len() > RUN_INTERVALS;
+        if !over {
+            let count = nurbs.control_points().len();
+            let degree = nurbs.degree();
+            let span_at = |end: usize| end.checked_sub(1).map(|s| s.clamp(degree, count - 1));
+            let mut previous = f64::NEG_INFINITY;
+            for &k in inside {
+                if k <= previous {
+                    continue;
+                }
+                previous = k;
+                cuts.push(k);
+                let (Some(before), Some(after)) = (
+                    span_at(knots.partition_point(|&u| u < k)),
+                    span_at(knots.partition_point(|&u| u <= k)),
+                ) else {
+                    continue;
+                };
+                let (Some((p, s, g_in)), Some((_, _, g_out))) =
+                    (foot_on(Some(before), k), foot_on(Some(after), k))
+                else {
+                    continue;
+                };
+                if (g_in > 0.0) == (g_out > 0.0) {
+                    continue;
+                }
+                let sign = if s < 0.0 { -1.0 } else { 1.0 };
+                if s.abs() <= floor || (sign * g_in <= 0.0 && sign * g_out >= 0.0) {
+                    if distance_to_surface(p, surface) < tol.linear {
+                        contacts.push(Contact {
+                            t: k,
+                            p,
+                            depth: s.abs(),
+                            crossing: false,
+                        });
+                    }
+                } else {
+                    mosts.push((k, s.abs()));
+                }
             }
         }
-        pieces.push((f64::INFINITY, EdgeCurve::NurbsCurve(rest)));
-        cuts.extend(knots);
     }
     cuts.sort_by(f64::total_cmp);
     cuts.dedup();
-    // The piece that holds `[a, b]`.
-    let piece = |a: f64, b: f64| -> &EdgeCurve {
-        let mid = f64::midpoint(a, b);
-        pieces
-            .get(pieces.partition_point(|&(end, _)| end <= mid))
-            .map_or(curve, |(_, on)| on)
-    };
-    // The mosts of the distance the search passes, for the rises below.
-    let mut mosts: Vec<(f64, f64)> = Vec::new();
-    // Where the rate jumps across a knot from one sign to the other, the
-    // distance has a least or a most at the knot itself.
-    for pair in pieces.windows(2) {
-        let k = pair[0].0;
-        let (Some((p, s, g_in)), Some((_, _, g_out))) =
-            (foot_on(&pair[0].1, k), foot_on(&pair[1].1, k))
-        else {
-            continue;
-        };
-        if (g_in > 0.0) == (g_out > 0.0) {
-            continue;
-        }
-        let sign = if s < 0.0 { -1.0 } else { 1.0 };
-        if s.abs() <= floor || (sign * g_in <= 0.0 && sign * g_out >= 0.0) {
-            if distance_to_surface(p, surface) < tol.linear {
-                contacts.push(Contact {
-                    t: k,
-                    p,
-                    depth: s.abs(),
-                    crossing: false,
-                });
-            }
-        } else {
-            mosts.push((k, s.abs()));
-        }
-    }
     let mut stack: Vec<(Reading, Reading, u32)> = Vec::new();
     for pair in cuts.windows(2) {
-        let on = piece(pair[0], pair[1]);
+        let on = span_of(pair[0], pair[1]);
         if let (Some((_, sa, ga)), Some((_, sb, gb))) = (foot_on(on, pair[0]), foot_on(on, pair[1]))
         {
             stack.push(((pair[0], sa, ga), (pair[1], sb, gb), 0));
@@ -2067,7 +2072,7 @@ fn run_contacts_counted(
         read += 1;
         let width = b - a;
         let changes = (g_a > 0.0) != (g_b > 0.0);
-        let spent = read > RUN_INTERVALS || halvings >= MOST_HALVINGS;
+        let spent = over || read > RUN_INTERVALS || halvings >= MOST_HALVINGS;
         let bound = if spent { None } else { bend(a, b) };
         let settled = spent
             || match bound {
@@ -2082,7 +2087,7 @@ fn run_contacts_counted(
             c1 * width <= tol.linear
                 || width * (0.125 * m).madd(width * width, g_a.abs().max(g_b.abs())) < floor
         });
-        let on = piece(a, b);
+        let on = span_of(a, b);
         if !(settled || short) {
             let mid = f64::midpoint(a, b);
             if let Some((_, s_m, g_m)) = foot_on(on, mid) {
@@ -2279,6 +2284,35 @@ fn curve_velocity(curve: &EdgeCurve, start_pos: Point3, end_pos: Point3, t: f64)
         }
         EdgeCurve::NurbsCurve(n) => n.derivatives(t, 1).get(1).copied().unwrap_or(zero),
     }
+}
+
+/// A spline's derivative at `t` read in its knot span `span`, about the
+/// span's first control point: at a knot that ends the span, the
+/// derivative on the span's side, which a span search takes from the span
+/// after the knot.
+fn spline_velocity_in_span(
+    n: &brepkit_math::nurbs::curve::NurbsCurve,
+    span: usize,
+    t: f64,
+) -> Option<Vec3> {
+    let p = n.degree();
+    let first = span.checked_sub(p)?;
+    let points = n.control_points().get(first..=span)?;
+    let weights = n.weights().get(first..=span)?;
+    let mut ders = vec![0.0; 2 * (p + 1)];
+    brepkit_math::nurbs::basis::ders_basis_funs_into(span, t, p, 1, n.knots(), &mut ders);
+    let origin = *points.first()?;
+    let zero = Vec3::new(0.0, 0.0, 0.0);
+    let (mut at, mut rate, mut w, mut w_rate) = (zero, zero, 0.0, 0.0);
+    for (j, (&q, &weight)) in points.iter().zip(weights).enumerate() {
+        let offset = q - origin;
+        let (b0, b1) = (ders[j] * weight, ders[p + 1 + j] * weight);
+        at += offset * b0;
+        rate += offset * b1;
+        w += b0;
+        w_rate += b1;
+    }
+    (w > 0.0).then(|| (rate - at * (w_rate / w)) * (1.0 / w))
 }
 
 /// Bounds on the lengths of the first three derivatives of a line, a
@@ -3382,6 +3416,45 @@ mod tests {
         assert_eq!(xs.len(), 2, "contacts at {xs:?}");
         for (x, want) in xs.iter().zip([-0.01, 0.5]) {
             assert!((x - want).abs() < 1e-6, "contact at {x}, expected {want}");
+        }
+    }
+
+    /// A cubic spline with `inner` knots inside its domain, laid along the
+    /// top of a rod of radius 1: the search reads it span by span, and a
+    /// spline with more knots in the run than the budget by its samples
+    /// alone, neither splitting it nor reading past the budget.
+    #[test]
+    fn a_spline_with_many_knots_stays_within_the_budget() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Vec3;
+        let rod = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, -1.0), Vec3::new(1.0, 0.0, 0.0), 1.0)
+                .unwrap(),
+        );
+        #[allow(clippy::cast_precision_loss)]
+        let ts: Vec<f64> = (0..=N_SAMPLES)
+            .map(|i| i as f64 / N_SAMPLES as f64)
+            .collect();
+        for (inner, most) in [(10_000_usize, RUN_INTERVALS), (40_000, N_SAMPLES)] {
+            #[allow(clippy::cast_precision_loss)]
+            let knots: Vec<f64> = std::iter::repeat_n(0.0, 4)
+                .chain((1..=inner).map(|i| i as f64 / (inner + 1) as f64))
+                .chain(std::iter::repeat_n(1.0, 4))
+                .collect();
+            let count = inner + 4;
+            #[allow(clippy::cast_precision_loss)]
+            let points: Vec<Point3> = (0..count)
+                .map(|i| Point3::new(2.0f64.madd(i as f64 / (count - 1) as f64, -1.0), 0.0, 0.0))
+                .collect();
+            let (a, b) = (points[0], points[count - 1]);
+            let spline =
+                EdgeCurve::NurbsCurve(NurbsCurve::new(3, knots, points, vec![1.0; count]).unwrap());
+            let started = std::time::Instant::now();
+            let (_, read) = run_contacts_counted(&spline, a, b, &ts, &rod, Tolerance::new());
+            let took = started.elapsed().as_secs_f64();
+            assert!(read <= most, "{inner} knots: read {read}");
+            assert!(took < 30.0, "{inner} knots: took {took} s");
         }
     }
 
