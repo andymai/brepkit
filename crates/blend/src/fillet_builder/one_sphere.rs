@@ -20,6 +20,9 @@
 
 use std::collections::{HashMap, HashSet};
 
+use brepkit_math::aabb::Aabb3;
+use brepkit_math::madd::Madd;
+use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
@@ -102,7 +105,7 @@ pub(super) fn join_sphere_faces_the_rim_crosses(
                 continue;
             }
             let (fa, fb) = (topo.face(a)?, topo.face(b)?);
-            if fa.is_reversed() != fb.is_reversed() || !one_surface(fa.surface(), fb.surface()) {
+            if fa.is_reversed() != fb.is_reversed() || !one_surface(topo, a, b)? {
                 continue;
             }
             let sphere = matches!(fa.surface(), FaceSurface::Sphere(_));
@@ -237,9 +240,7 @@ pub(super) fn join_sphere_bands_at_picked_rims(
                 continue;
             };
             let other = topo.face(beyond)?;
-            if other.is_reversed() != face.is_reversed()
-                || !one_sphere(face.surface(), other.surface())
-            {
+            if other.is_reversed() != face.is_reversed() || !one_sphere(topo, band, beyond)? {
                 continue;
             }
             let far_edges: HashSet<EdgeId> = far.iter().map(OrientedEdge::edge).collect();
@@ -325,68 +326,136 @@ fn join_band(
     Ok(shared)
 }
 
-/// Whether two faces' surfaces are one sphere read alike: each takes the
-/// same point at each parameter pair, so either face's edges lie on the
-/// other's surface where they lie on their own.
-fn one_sphere(a: &FaceSurface, b: &FaceSurface) -> bool {
-    matches!((a, b), (FaceSurface::Sphere(_), FaceSurface::Sphere(_))) && read_alike(a, b)
+/// Whether faces `a` and `b` lie on one sphere read alike (see
+/// [`read_alike`]): each surface takes the same point at each parameter
+/// pair, so either face's edges and pcurves lie on the other's surface where
+/// they lie on their own.
+fn one_sphere(topo: &Topology, a: FaceId, b: FaceId) -> Result<bool, BlendError> {
+    let (sa, sb) = (topo.face(a)?.surface(), topo.face(b)?.surface());
+    if !matches!((sa, sb), (FaceSurface::Sphere(_), FaceSurface::Sphere(_))) {
+        return Ok(false);
+    }
+    same_surface(topo, a, b)
 }
 
-/// Whether two faces' surfaces are one sphere, cylinder, cone or torus read
-/// alike (see [`one_sphere`]).
-fn one_surface(a: &FaceSurface, b: &FaceSurface) -> bool {
-    matches!(
-        (a, b),
+/// Whether faces `a` and `b` lie on one sphere, cylinder, cone or torus
+/// read alike (see [`one_sphere`]).
+fn one_surface(topo: &Topology, a: FaceId, b: FaceId) -> Result<bool, BlendError> {
+    let (sa, sb) = (topo.face(a)?.surface(), topo.face(b)?.surface());
+    if !matches!(
+        (sa, sb),
         (FaceSurface::Sphere(_), FaceSurface::Sphere(_))
             | (FaceSurface::Cylinder(_), FaceSurface::Cylinder(_))
             | (FaceSurface::Cone(_), FaceSurface::Cone(_))
             | (FaceSurface::Torus(_), FaceSurface::Torus(_))
-    ) && read_alike(a, b)
+    ) {
+        return Ok(false);
+    }
+    same_surface(topo, a, b)
+}
+
+/// [`read_alike`] for the surfaces of `a` and `b`, over the reach of the two
+/// faces from `a`'s surface's centre, origin or apex.
+fn same_surface(topo: &Topology, a: FaceId, b: FaceId) -> Result<bool, BlendError> {
+    let (sa, sb) = (topo.face(a)?.surface(), topo.face(b)?.surface());
+    let from = match sa {
+        FaceSurface::Sphere(s) => s.center(),
+        FaceSurface::Cylinder(s) => s.origin(),
+        FaceSurface::Cone(s) => s.apex(),
+        FaceSurface::Torus(s) => s.center(),
+        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => return Ok(false),
+    };
+    let reach = reach_from(topo, &[a, b], from)?;
+    Ok(read_alike(sa, sb, reach))
+}
+
+/// The farthest corner from `from` of the box round the wires of `faces`,
+/// read at points along each edge.
+fn reach_from(topo: &Topology, faces: &[FaceId], from: Point3) -> Result<f64, BlendError> {
+    const STEPS: u32 = 8;
+    let mut points = Vec::new();
+    for &face in faces {
+        let data = topo.face(face)?;
+        for wire in std::iter::once(data.outer_wire()).chain(data.inner_wires().iter().copied()) {
+            for oe in topo.wire(wire)?.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let (p, q) = (
+                    topo.vertex(edge.start())?.point(),
+                    topo.vertex(edge.end())?.point(),
+                );
+                let (t0, t1) = edge.curve().domain_with_endpoints(p, q);
+                points.extend((0..=STEPS).map(|k| {
+                    let t = (t1 - t0).madd(f64::from(k) / f64::from(STEPS), t0);
+                    edge.curve().evaluate_with_endpoints(t, p, q)
+                }));
+            }
+        }
+    }
+    if points.is_empty() {
+        return Ok(0.0);
+    }
+    let bounds = Aabb3::from_points(points.iter().copied());
+    let (lo, hi) = (bounds.min, bounds.max);
+    let mut reach = 0.0_f64;
+    for k in 0..8 {
+        let corner = Point3::new(
+            if k & 1 == 0 { lo.x() } else { hi.x() },
+            if k & 2 == 0 { lo.y() } else { hi.y() },
+            if k & 4 == 0 { lo.z() } else { hi.z() },
+        );
+        reach = reach.max((corner - from).length());
+    }
+    Ok(reach)
 }
 
 /// Whether two surfaces are one sphere, cylinder, cone or torus in one
 /// frame: the same centre, origin or apex, the same axes, and the same radii
 /// or half-angle. Lengths agree within a part in 1e9 of the surface's own
-/// size (its radius, a torus's major radius, 1 for a cone), so where the
-/// surface lies does not change the answer. Then each takes the same point at
-/// each parameter pair.
-fn read_alike(a: &FaceSurface, b: &FaceSurface) -> bool {
+/// size (its radius, a torus's major radius, 1 for a cone), and never by more
+/// than the linear tolerance, so where the surface lies does not change the
+/// answer. An axis or a half-angle that turns moves the surface by the angle
+/// times the distance from its centre, so the angles, times `reach` (how far
+/// the faces lie from the centre), agree within the same length. Then each
+/// takes the same point at each parameter pair over the faces.
+fn read_alike(a: &FaceSurface, b: &FaceSurface, reach: f64) -> bool {
     const PART: f64 = 1e-9;
-    let near = |p: Point3, q: Point3, size: f64| (p - q).length() <= PART * size;
-    let along = |u: Vec3, v: Vec3| (u - v).length() <= PART;
-    let equal = |x: f64, y: f64, size: f64| (x - y).abs() <= PART * size;
+    let linear = Tolerance::new().linear;
+    let tol = |size: f64| (PART * size).min(linear);
+    let near = |p: Point3, q: Point3, size: f64| (p - q).length() <= tol(size);
+    let along = |u: Vec3, v: Vec3, size: f64| (u - v).length() * reach <= tol(size);
+    let equal = |x: f64, y: f64, size: f64| (x - y).abs() <= tol(size);
     match (a, b) {
         (FaceSurface::Sphere(a), FaceSurface::Sphere(b)) => {
             let size = a.radius();
             near(a.center(), b.center(), size)
                 && equal(a.radius(), b.radius(), size)
-                && along(a.x_axis(), b.x_axis())
-                && along(a.y_axis(), b.y_axis())
-                && along(a.z_axis(), b.z_axis())
+                && along(a.x_axis(), b.x_axis(), size)
+                && along(a.y_axis(), b.y_axis(), size)
+                && along(a.z_axis(), b.z_axis(), size)
         }
         (FaceSurface::Cylinder(a), FaceSurface::Cylinder(b)) => {
             let size = a.radius();
             near(a.origin(), b.origin(), size)
                 && equal(a.radius(), b.radius(), size)
-                && along(a.axis(), b.axis())
-                && along(a.x_axis(), b.x_axis())
-                && along(a.y_axis(), b.y_axis())
+                && along(a.axis(), b.axis(), size)
+                && along(a.x_axis(), b.x_axis(), size)
+                && along(a.y_axis(), b.y_axis(), size)
         }
         (FaceSurface::Cone(a), FaceSurface::Cone(b)) => {
             near(a.apex(), b.apex(), 1.0)
-                && equal(a.half_angle(), b.half_angle(), 1.0)
-                && along(a.axis(), b.axis())
-                && along(a.x_axis(), b.x_axis())
-                && along(a.y_axis(), b.y_axis())
+                && (a.half_angle() - b.half_angle()).abs() * reach <= tol(1.0)
+                && along(a.axis(), b.axis(), 1.0)
+                && along(a.x_axis(), b.x_axis(), 1.0)
+                && along(a.y_axis(), b.y_axis(), 1.0)
         }
         (FaceSurface::Torus(a), FaceSurface::Torus(b)) => {
             let size = a.major_radius();
             near(a.center(), b.center(), size)
                 && equal(a.major_radius(), b.major_radius(), size)
                 && equal(a.minor_radius(), b.minor_radius(), size)
-                && along(a.x_axis(), b.x_axis())
-                && along(a.y_axis(), b.y_axis())
-                && along(a.z_axis(), b.z_axis())
+                && along(a.x_axis(), b.x_axis(), size)
+                && along(a.y_axis(), b.y_axis(), size)
+                && along(a.z_axis(), b.z_axis(), size)
         }
         _ => false,
     }
@@ -538,9 +607,13 @@ mod tests {
         ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface,
     };
     use brepkit_math::vec::{Point3, Vec3};
-    use brepkit_topology::face::FaceSurface;
+    use brepkit_topology::Topology;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{Face, FaceId, FaceSurface};
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
 
-    use super::{one_sphere, one_surface};
+    use super::{one_surface, read_alike};
 
     const PLACES: [f64; 2] = [0.0, 1e6];
 
@@ -553,10 +626,8 @@ mod tests {
     #[test]
     fn balls_apart_stay_apart_and_one_ball_joins_at_any_place() {
         for x in PLACES {
-            assert!(!one_sphere(&ball(x), &ball(x + 1e-4)), "apart at {x}");
-            assert!(!one_surface(&ball(x), &ball(x + 1e-4)), "apart at {x}");
-            assert!(one_sphere(&ball(x), &ball(x)), "one ball at {x}");
-            assert!(one_surface(&ball(x), &ball(x)), "one ball at {x}");
+            assert!(!read_alike(&ball(x), &ball(x + 1e-4), 2.0), "apart at {x}");
+            assert!(read_alike(&ball(x), &ball(x), 2.0), "one ball at {x}");
         }
     }
 
@@ -578,9 +649,46 @@ mod tests {
         };
         for x in PLACES {
             for make in [&rod as &dyn Fn(f64) -> FaceSurface, &cone, &ring] {
-                assert!(!one_surface(&make(x), &make(x + 1e-4)), "apart at {x}");
-                assert!(one_surface(&make(x), &make(x)), "one at {x}");
+                assert!(!read_alike(&make(x), &make(x + 1e-4), 3.0), "apart at {x}");
+                assert!(read_alike(&make(x), &make(x), 3.0), "one at {x}");
             }
+        }
+    }
+
+    /// A face of the unit cylinder about `axis` through the origin, `length`
+    /// long, bounded by lines between two of its rulings.
+    fn wall(topo: &mut Topology, axis: Vec3, length: f64) -> FaceId {
+        let surface = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), axis, 1.0).unwrap();
+        let corners = [
+            (1.0, 0.0, 0.0),
+            (1.0, 0.0, length),
+            (0.0, 1.0, length),
+            (0.0, 1.0, 0.0),
+        ]
+        .map(|(x, y, z)| topo.add_vertex(Vertex::new(Point3::new(x, y, z), 1e-7)));
+        let edges: Vec<OrientedEdge> = (0..4)
+            .map(|k| {
+                let edge = Edge::new(corners[k], corners[(k + 1) % 4], EdgeCurve::Line);
+                OrientedEdge::new(topo.add_edge(edge), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        topo.add_face(Face::new(wire, vec![], FaceSurface::Cylinder(surface)))
+    }
+
+    /// Two faces of cylinders whose axes differ by 5e-10 radians lie apart by
+    /// 5e-4 at a million from the origin: they are two surfaces there. Faces
+    /// of them a unit long lie within 1e-9 of each other: one surface.
+    #[test]
+    fn nearly_coaxial_long_walls_stay_apart() {
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let leaning = Vec3::new(5e-10, 0.0, 1.0).normalize().unwrap();
+        for (length, one) in [(1e6, false), (1.0, true)] {
+            let mut topo = Topology::new();
+            let a = wall(&mut topo, up, length);
+            let b = wall(&mut topo, leaning, length);
+            assert_eq!(one_surface(&topo, a, b).unwrap(), one, "{length} long");
+            assert!(one_surface(&topo, a, a).unwrap(), "{length} long, one face");
         }
     }
 }
