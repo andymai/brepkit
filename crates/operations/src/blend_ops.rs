@@ -506,15 +506,17 @@ fn fillet_fault(
 
 /// A straight through-bore: a cylinder wall with the material round it, from
 /// a circle that is a hole in one plane face to a circle that is a hole in
-/// another.
+/// another. The wall may be in pieces split along whole circles (a part fused
+/// from two halves has its bores split where the halves meet).
 struct Bore {
-    wall: FaceId,
+    walls: Vec<FaceId>,
     mouths: [(FaceId, brepkit_topology::wire::WireId); 2],
     centres: [Point3; 2],
     radius: f64,
 }
 
 /// The through-bores with a mouth on one of `faces`.
+#[allow(clippy::too_many_lines)]
 fn bores_opening_on(
     topo: &Topology,
     solid: SolidId,
@@ -541,7 +543,10 @@ fn bores_opening_on(
             }
         }
     }
-    let mut bores = Vec::new();
+    // Each piece of wall: a cylinder face between two whole circles, joined
+    // by lines (its seam).
+    let mut pieces: HashMap<FaceId, ([EdgeId; 2], Point3, Vec3, f64)> = HashMap::new();
+    let mut by_circle: HashMap<EdgeId, Vec<FaceId>> = HashMap::new();
     for &face_id in &all {
         let face = topo.face(face_id)?;
         let FaceSurface::Cylinder(cylinder) = face.surface() else {
@@ -563,30 +568,88 @@ fn bores_opening_on(
         if other || a == b {
             continue;
         }
-        let (Some(&ha), Some(&hb)) = (holes.get(&a), holes.get(&b)) else {
+        pieces.insert(
+            face_id,
+            (
+                [a, b],
+                cylinder.origin(),
+                cylinder.axis(),
+                cylinder.radius(),
+            ),
+        );
+        by_circle.entry(a).or_default().push(face_id);
+        by_circle.entry(b).or_default().push(face_id);
+    }
+    let mut bores = Vec::new();
+    let mut taken: HashSet<FaceId> = HashSet::new();
+    for &face_id in &all {
+        let Some(&([a, b], origin, axis, radius)) = pieces.get(&face_id) else {
+            continue;
+        };
+        if taken.contains(&face_id) {
+            continue;
+        }
+        // Start from a piece with a mouth, and walk the wall piece by piece
+        // across the circles it is split along to the other mouth.
+        let (mouth_edge, mut across) = if holes.contains_key(&a) {
+            (a, b)
+        } else if holes.contains_key(&b) {
+            (b, a)
+        } else {
+            continue;
+        };
+        let tol_axis = Tolerance::loose().angular;
+        let mut walls = vec![face_id];
+        let mut current = face_id;
+        let mut far = None;
+        for _ in 0..pieces.len() {
+            if holes.contains_key(&across) {
+                far = Some(across);
+                break;
+            }
+            let next = by_circle.get(&across).and_then(|fs| {
+                fs.iter().copied().find(|&f| {
+                    f != current
+                        && !walls.contains(&f)
+                        && pieces.get(&f).is_some_and(|&(_, o, ax, r)| {
+                            let tol = Tolerance::new().linear * (1.0 + radius);
+                            (r - radius).abs() <= tol
+                                && ax.cross(axis).length() <= tol_axis
+                                && (o - origin).cross(axis).length() <= tol
+                        })
+                })
+            });
+            let Some(next) = next else { break };
+            let [na, nb] = pieces[&next].0;
+            across = if na == across { nb } else { na };
+            walls.push(next);
+            current = next;
+        }
+        let Some(far) = far else { continue };
+        let (Some(&ha), Some(&hb)) = (holes.get(&mouth_edge), holes.get(&far)) else {
             continue;
         };
         if !(faces.contains(&ha.0) || faces.contains(&hb.0)) {
             continue;
         }
-        let radius = cylinder.radius();
         let along = hb.2 - ha.2;
         let tol = Tolerance::new().linear * (1.0 + radius + along.length());
         if (ha.3 - radius).abs() > tol
             || (hb.3 - radius).abs() > tol
-            || along.cross(cylinder.axis()).length() > tol
+            || along.cross(axis).length() > tol
             || along.length() <= tol
         {
             continue;
         }
         // A pin or a hub meets its faces in circles too, with its material
         // inside its wall: a bore's wall faces its axis.
-        let on_wall = topo.vertex(topo.edge(a)?.start())?.point();
+        let on_wall = topo.vertex(topo.edge(mouth_edge)?.start())?.point();
         if outward_normal_at(topo, face_id, on_wall)?.is_none_or(|n| n.dot(on_wall - ha.2) >= 0.0) {
             continue;
         }
+        taken.extend(walls.iter().copied());
         bores.push(Bore {
-            wall: face_id,
+            walls,
             mouths: [(ha.0, ha.1), (hb.0, hb.1)],
             centres: [ha.2, hb.2],
             radius,
@@ -1088,7 +1151,7 @@ fn fillet_over_bores(
     }
     // The solid with the bores filled: their walls left out, their mouths
     // no longer holes.
-    let walls: HashSet<FaceId> = bores.iter().map(|b| b.wall).collect();
+    let walls: HashSet<FaceId> = bores.iter().flat_map(|b| b.walls.iter().copied()).collect();
     let mut filled: HashMap<FaceId, Vec<_>> = HashMap::new();
     for bore in &bores {
         for &(face, wire) in &bore.mouths {
