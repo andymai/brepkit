@@ -1129,7 +1129,10 @@ fn conic_plane_crossings(
         // within the tolerance of one of the edge's ends.
         let along = from_start + step;
         if closed {
-            out.push((t0 + along.rem_euclid(TAU), p));
+            // A step just below the seam, a ring's crossing at its own
+            // angle 0, rounds up to a whole turn; it stays at the seam.
+            let round = along.rem_euclid(TAU);
+            out.push((t0 + if round < TAU { round } else { 0.0 }, p));
         } else if (0.0..=t1 - t0).contains(&along) {
             out.push((t0 + along, p));
         } else if (p - end_pos).length() <= tol.linear {
