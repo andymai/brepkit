@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795446868074,
+  "lastUpdate": 1795447909424,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -76733,6 +76733,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 16314215,
             "range": "± 263455",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c1cf9e44790b287f134284d8ec9bd9f3f8523eec",
+          "message": "fix(math): bound a marched section's fit off both surfaces, start each march on the curve, and fit plane-torus sections faster (#2749)\n\n## Summary\n\nOn main, the general marcher's cubic goes through the marched points\nonly. Between them it lies 1.2e-5 to 1.1e-4 off both surfaces, with the\npoints 0.08 to 0.31 apart. The alternating projections can leave a seed\nwhere two walls pass closest. Its march runs 1001 points and ends 2.6\nfrom its start (#2736).\n\nWith this change, each marched fit has a proven bound on its distance\nfrom both surfaces over every knot span, and stays within 9.9e-8. Each\nmarch starts on the curve, and a seed where the surfaces only touch\nstarts none. Plane-torus fits take 6% to 14% less time, with the same\noutput (#2674).\n\nFixes #2736. For #2674, the residual closed with #2696, and the fit's\npoint count is still open.\n\n## The change\n\n- **A bound on the fit (#2736).** The new\n`analytic_intersection/section_fit.rs` bounds each knot span of a fit\nagainst each surface.\n- Along a span, each surface's implicit form is a polynomial of degree\n6, or 12 for a torus. Its Bernstein coefficients bound it, and a proven\nlower bound of the gradient turns that into a distance. A cone uses the\ndistance from its ruling.\n- Where a bound exceeds the linear tolerance, the fit adds section\npoints, each moved onto the curve by Newton steps. A fit that cannot be\nproved is refused.\n- **Seeds on the curve (#2736).** Each seed moves onto both surfaces by\nNewton steps, or drops out. A seed where the two normals lie within\nabout 1e-6 of parallel starts no march. Two rods that only touch now\ntrace no section, where main emitted a 5-point curve up to 1.3e-5 off\nboth.\n- **Both halves of a cone, and scale.** The cone's distance and bound\nuse |h|, so sections on the cone's negative half are fitted and proved.\nA span through the apex is halved, and a fit that keeps one is refused.\nThe cone projection keeps a foot on the point's own side. A seed settles\nuntil each component of its Newton step falls below that coordinate's\nfloat spacing.\n- **Far from the origin.** The marcher moves both surfaces to the middle\nof the region, traces and fits there, and moves the curves back. It also\nmoves each cylinder's frame along its axis to the point nearest the\nregion. Each coordinate takes one rounding, so the frame stays on the\naxis. The rounding of that move counts against the linear tolerance,\nbefore any fit. A section is refused where less than half the tolerance\nremains, from about 2.3e8 out. So a touch or a crossing 1e6 from the\norigin reads as one at the origin does.\n- **Plane-torus fits (#2674).** `solve_interpolation` keeps one flat\nvector for its band rows and one for its basis values, with the same\npivots and arithmetic. The plane-torus fit's check stops its Newton\nsteps once they move a middle by less than a quarter of the bound.\n\n- **A shallow dip.** Take a rod of radius 0.6 that dips 7e-4 or 2.7e-5\ninto the top of `make_torus(4, 1.5)`. It crosses the ring in two loops\n0.02 to 0.04 across. On main the march misses them with no error in all\n28 poses: the cut returns the whole ring, and the intersect returns\nnothing. Now each refuses, near the origin and 1e6 or 1e9 away.\n\n## Cost\n\nThe bounded fit needs about 125 points on a loop where main used 36 to\n54, so marched booleans take longer. Mean of 30 runs in a profiling\nbuild, alternated with main:\n\n| Boolean | main | this branch |\n|---|---|---|\n| ring ∩ rod | 19.3 / 9.1 / 9.3 ms | 20.7 / 10.9 / 10.9 ms |\n| ring − rod | 6.6 to 6.8 ms | 7.75 to 7.9 ms |\n| cone tip − rod | 1.4 to 1.55 ms | 1.7 to 1.76 ms |\n\nOver the poses, the ring ∩ rod volume varies by 7.5e-8, where main\nvaries by 8e-6. Plane-torus intersects take 6% to 14% less time, for\nexample 4.47 to 4.12 ms upright for the box at (3, 5.2, 1.1).\n\n## Tests\n\n- `marched_cone_cylinder_sections_stay_on_both_between_their_points`\nruns the general marcher on the taper pin in 16 spins and flips, both\nways round. It also runs a tilted tube and a cone with a cylinder at a\nband's edge. Each curve is sampled at 4000 points against both surfaces.\nOn main it reads 4.8e-5 off.\n- `a_seed_where_two_walls_pass_closest_starts_no_march` and\n`rods_that_only_touch_trace_no_section` pin the seeds.\n`a_marched_loop_closes_on_both_surfaces` now holds 1e-7, from 1e-4.\n- `negative_nappe_sections_are_marched_on_both_cones`,\n`a_fit_along_a_negative_ruling_is_bounded` and\n`a_touch_far_from_the_origin_settles_as_one_near_it_does` pin the cone's\nhalves and the scale.\n`a_section_far_from_the_origin_is_traced_as_near_it` traces the ring and\nrod 1e6 out along each axis.\n`frames_far_along_a_rods_axis_read_as_near_ones` moves a rod's frame 1e6\nalong its axis, and\n`a_tilted_rod_framed_far_along_its_axis_is_traced_on_it` moves a tilted\nrod's frame 1e12 along it. `rod_dipping_into_a_ring.rs` checks that the\ndip is carved or refused in all 28 cases, with probes and a volume check\non any result. It fails on main.\n- `a_short_newton_check_reads_each_middle_as_the_full_one_does` pins the\nshorter plane-torus check. All 12 plane-torus volumes match main to the\nlast digit.\n- brepkit-math and brepkit-algo (1345) pass, and so do all\nbrepkit-operations and brepkit-io tests (3258, 26 skipped).\n- The pose sweep is unchanged. In the truth audit, the ring less a rod\ngoes from up to 2e-8 off to 2e-9. The ring ∩ rod goes from up to 6e-7 to\n8e-8.\n\n## Still open\n\n- Plane-torus loops still take up to about 600 points. A first pass\nplaced by the section's fourth derivative, or a trim that reuses the\nloop's exact points, could cut them.\n- Small shallow loops, like the dip above, are refused and not carved:\nthe march steps are too coarse for them (#2755).\n- The ring ∩ rod residual of 7e-8 does not move with the marched\ntolerance, so it comes from elsewhere.",
+          "timestamp": "2026-11-23T15:27:54Z",
+          "tree_id": "4a8b7269b13b3c32ad9aa56a73641815cd83962b",
+          "url": "https://github.com/andymai/brepkit/commit/c1cf9e44790b287f134284d8ec9bd9f3f8523eec"
+        },
+        "date": 1795447899195,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 887041,
+            "range": "± 21462",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 939924,
+            "range": "± 14038",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9820,
+            "range": "± 36",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 578462,
+            "range": "± 5145",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19570004,
+            "range": "± 60968",
             "unit": "ns/iter"
           }
         ]
