@@ -24,7 +24,9 @@
 //! measured) or `P` (a panic).
 //!
 //! - `GOOD`: each step whose exact result is not empty is valid, its mesh
-//!   has no open edge, and its volume is within 2e-4 of the oracle's.
+//!   has no open edge, and its volume is within 2e-4 of the oracle's, or
+//!   within 1e-9 of it: the oracle's cells read a sliver of 1e-8 to some
+//!   parts in 1e4.
 //! - `BAD`: a boolean gave an exact solid that fails one of these, at any
 //!   step. The line gives the step, `valid`, the faces by surface type,
 //!   `not2` (edges that two faces do not share), `open` (open mesh edges),
@@ -607,7 +609,7 @@ fn score(topo: &Topology, s: SolidId, expected: f64) -> (bool, String) {
     let open = tessellate_solid(topo, s, 0.01)
         .map(|m| boundary_edge_count(&m))
         .unwrap_or(usize::MAX);
-    let good = valid && rel.abs() < 2e-4 && open == 0;
+    let good = valid && (rel.abs() < 2e-4 || (vol - expected).abs() < 1e-9) && open == 0;
     let detail = format!(
         "valid={valid} faces={} not2={} open={open} rel={rel:.2e} axes={}",
         census(topo, s),
