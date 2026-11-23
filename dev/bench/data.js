@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795383817512,
+  "lastUpdate": 1795392280709,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -75815,6 +75815,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21549176,
             "range": "± 72291",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5eeb6718fd41caecaca142c28d715f6ae03ecc44",
+          "message": "chore(main): release 4.11.38 (#2715)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.38](https://github.com/andymai/brepkit/compare/v4.11.37...v4.11.38)\n(2026-11-22)\n\n\n### Bug Fixes\n\n* **algo:** keep split arcs and long section pieces on the turn they\nrun, and split a lens at any crossing\n([#2691](https://github.com/andymai/brepkit/issues/2691))\n([06de75b](https://github.com/andymai/brepkit/commit/06de75bf36182815a447596fb2e41db1e6ad815f))\n* **blend,check,operations:** round a pocket wall into a bore and a\nfused L's rim, and refuse a walking fillet that leaves an invalid solid\n([#2701](https://github.com/andymai/brepkit/issues/2701))\n([1d14937](https://github.com/andymai/brepkit/commit/1d14937ba6685863157a49e1d326c724e0bd30ef))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-23T00:00:27Z",
+          "tree_id": "6608eca5d8aabbd45f263c51c40d263a2f4cd462",
+          "url": "https://github.com/andymai/brepkit/commit/5eeb6718fd41caecaca142c28d715f6ae03ecc44"
+        },
+        "date": 1795392272624,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1185296,
+            "range": "± 7430",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1245199,
+            "range": "± 8875",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12177,
+            "range": "± 51",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 800686,
+            "range": "± 10466",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25470414,
+            "range": "± 208636",
             "unit": "ns/iter"
           }
         ]
