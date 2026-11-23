@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795393514926,
+  "lastUpdate": 1795397221219,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -75923,6 +75923,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27251031,
             "range": "± 79357",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6346e25833b7c0e39a9c7f3fc471e90f2d556946",
+          "message": "chore(main): release 4.11.39 (#2727)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.39](https://github.com/andymai/brepkit/compare/v4.11.38...v4.11.39)\n(2026-11-23)\n\n\n### Bug Fixes\n\n* **blend,operations:** refuse an open fillet_variable rebuild, retry a\nvariable round across flat seams, and speed the run-up planner\n([#2719](https://github.com/andymai/brepkit/issues/2719))\n([da0211a](https://github.com/andymai/brepkit/commit/da0211affa40a8542373e847379710223431a874))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases `brepkit` v4.11.39, which bumps the workspace crate versions\nand updates the changelog with fixes from the `blend` and `operations`\ncrates:\n\n- Open fillet_variable rebuilds are now refused.\n- Variable rounds retry across flat seams.\n- The run-up planner is faster.\n\n<sup>Written for commit 064feeed3bdcfb95a5666fb26767ac764d289a78.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2727?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2727?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2727&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-23T01:23:29Z",
+          "tree_id": "302874d3624d990848ee4e5e9cecae64a2790db7",
+          "url": "https://github.com/andymai/brepkit/commit/6346e25833b7c0e39a9c7f3fc471e90f2d556946"
+        },
+        "date": 1795397211413,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 810457,
+            "range": "± 7833",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 878385,
+            "range": "± 15622",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9984,
+            "range": "± 70",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 548696,
+            "range": "± 4711",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18331913,
+            "range": "± 164234",
             "unit": "ns/iter"
           }
         ]
