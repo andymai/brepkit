@@ -151,6 +151,12 @@ impl JunctionRegistry {
             .push(p);
     }
 
+    fn crossings_of(&self, fa: FaceId, fb: FaceId) -> &[Point3] {
+        self.crossings
+            .get(&Self::pair_key(fa, fb))
+            .map_or(&[], Vec::as_slice)
+    }
+
     /// The pair's boundary crossing lying on `raw` within `band`, at a
     /// parameter within `step` of `t`, nearest `t`: where a window bisected
     /// against a sampled boundary polygon truly ends.
@@ -2808,6 +2814,23 @@ fn restrict_curves_to_faces(
                 inb.iter().filter(|v| **v).count()
             );
         }
+        // A marched loop leaves a face only where the face's outline crosses
+        // the partner's surface. Samples can miss a short run past the outline
+        // (a rod's footprint on a ball just past the equator that bounds the
+        // face), so the loop is cut at those crossings where they lie on it.
+        if closed
+            && matches!(raw.curve, EdgeCurve::NurbsCurve(_))
+            && let Some(pieces) = split_closed_section_at_crossings(
+                &raw,
+                ext_a,
+                ext_b,
+                junctions.crossings_of(fa, fb),
+                tol,
+            )
+        {
+            out.extend(pieces);
+            continue;
+        }
         // An in-both run spanning fewer than two segments (b1-b0 < 2, i.e. at
         // most two consecutive in-both samples) is a tangency/grazing point —
         // such a curve never splits either face, so drop it.
@@ -4269,6 +4292,148 @@ fn trim_closed_curve_to_inboth_arc(
         // evaluates correctly.
         vec![one_arc(t0, t1)]
     }
+}
+
+/// A closed marched section cut at the pair's boundary crossings that lie
+/// on it, with each piece kept whose middle lies on both faces. The section
+/// leaves a face only across the face's outline, where the outline meets
+/// the partner's surface, so each piece between two such points lies on
+/// both faces or off one of them along its whole length. Pieces on both
+/// faces next to each other join into one section, so a point where the loop
+/// only touches an outline cuts nothing. `None` when fewer
+/// than two crossings lie on the section, when a piece's middle lies so near
+/// an outline that a face's strict test and its margin test disagree, when
+/// points along a piece read on both sides, or when every piece lies on
+/// both faces.
+fn split_closed_section_at_crossings(
+    raw: &RawCurve,
+    ext_a: &FaceExtent,
+    ext_b: &FaceExtent,
+    crossings: &[Point3],
+    tol: Tolerance,
+) -> Option<Vec<RawCurve>> {
+    const SAMPLES: usize = 512;
+    let (lo, hi) = raw.t_range;
+    let span = hi - lo;
+    if span <= 0.0 {
+        return None;
+    }
+    let point_at = |t: f64| raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
+    #[allow(clippy::cast_precision_loss)]
+    let ts: Vec<f64> = (0..=SAMPLES)
+        .map(|i| span.madd(i as f64 / SAMPLES as f64, lo))
+        .collect();
+    let pts: Vec<Point3> = ts.iter().map(|&t| point_at(t)).collect();
+    let mut cuts: Vec<(f64, Point3)> = Vec::new();
+    for &p in crossings {
+        let nearest = (0..=SAMPLES)
+            .min_by(|&i, &j| (pts[i] - p).length().total_cmp(&(pts[j] - p).length()))?;
+        let (mut a, mut b) = (
+            ts[nearest.saturating_sub(1)],
+            ts[(nearest + 1).min(SAMPLES)],
+        );
+        for _ in 0..60 {
+            let m1 = a + (b - a) / 3.0;
+            let m2 = b - (b - a) / 3.0;
+            if (point_at(m1) - p).length() < (point_at(m2) - p).length() {
+                b = m2;
+            } else {
+                a = m1;
+            }
+        }
+        let s = f64::midpoint(a, b);
+        if (point_at(s) - p).length() > 100.0 * tol.linear
+            || cuts
+                .iter()
+                .any(|&(_, q)| (q - p).length() <= 100.0 * tol.linear)
+        {
+            continue;
+        }
+        cuts.push((s, p));
+    }
+    if cuts.len() < 2 {
+        return None;
+    }
+    cuts.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let piece = |t_range: (f64, f64), p_start: Point3, p_end: Point3| RawCurve {
+        curve: raw.curve.clone(),
+        bbox: raw.bbox,
+        t_range,
+        p_start,
+        p_end,
+    };
+    // Each piece between two cuts, unwrapped past the end of the domain, and
+    // whether it lies on both faces.
+    let n = cuts.len();
+    let mut pieces: Vec<(f64, Point3, f64, Point3, bool)> = Vec::with_capacity(n);
+    for (k, &(s0, p0)) in cuts.iter().enumerate() {
+        let (s1, p1) = cuts
+            .get(k + 1)
+            .copied()
+            .unwrap_or((cuts[0].0 + span, cuts[0].1));
+        // Whether the point a fraction `f` along the piece lies on both
+        // faces, strictly and within the margins.
+        let reads = |f: f64| {
+            let t = (s1 - s0).madd(f, s0);
+            let m = point_at(if t > hi { t - span } else { t });
+            (
+                ext_a.contains_strict(m, 0.0) && ext_b.contains_strict(m, 0.0),
+                ext_a.contains(m) && ext_b.contains(m),
+            )
+        };
+        let (strict, lenient) = reads(0.5);
+        // A piece read on both sides along it crosses an outline at a point
+        // the crossings miss.
+        if strict != lenient
+            || (1..8).any(|k| {
+                let (s, l) = reads(f64::from(k) / 8.0);
+                s == l && s != strict
+            })
+        {
+            return None;
+        }
+        pieces.push((s0, p0, s1, p1, strict));
+    }
+    // A loop that only touches an outline (a rod's wall tangent to a drum's
+    // rims) stays whole.
+    let first_off = pieces.iter().position(|piece| !piece.4)?;
+    // Each run of pieces on both faces, from the piece after one off them,
+    // is one section: a cut where the loop only touches an outline joins
+    // the pieces either side.
+    let mut runs: Vec<(f64, Point3, f64, Point3)> = Vec::new();
+    let mut open: Option<(f64, Point3, f64, Point3)> = None;
+    for step in 1..=n {
+        let k = (first_off + step) % n;
+        let shift = if first_off + step >= n { span } else { 0.0 };
+        let (s0, p0, s1, p1, on) = pieces[k];
+        let (s0, s1) = (s0 + shift, s1 + shift);
+        if on {
+            open = Some(open.map_or((s0, p0, s1, p1), |(a, pa, _, _)| (a, pa, s1, p1)));
+        } else if let Some(run) = open.take() {
+            runs.push(run);
+        }
+    }
+    let mut out = Vec::with_capacity(runs.len());
+    for (s0, p0, s1, p1) in runs {
+        // Back into the domain, or past its end at most.
+        let back = span * ((s0 - lo) / span).floor();
+        let (s0, s1) = (s0 - back, s1 - back);
+        if s1 <= hi {
+            out.push(piece((s0, s1), p0, p1));
+            continue;
+        }
+        // A clamped spline is read only inside its domain, and a cut where
+        // the domain ends would put a vertex in the middle of the piece.
+        let EdgeCurve::NurbsCurve(spline) = &raw.curve else {
+            return None;
+        };
+        let from_s0 = crate::builder::fill_images_faces::start_closed_curve_at(spline, s0)?;
+        out.push(RawCurve {
+            curve: EdgeCurve::NurbsCurve(from_s0),
+            ..piece((s0, s1), p0, p1)
+        });
+    }
+    Some(out)
 }
 
 /// Trim a closed `Ellipse` section (the intersection of a thin planar tread

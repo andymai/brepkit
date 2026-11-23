@@ -104,19 +104,37 @@ fn cavity_hemispheres_mesh_their_own_halves() {
             continue;
         }
         halves += 1;
-        // The wire's turn about +z: counter-clockwise leaves the north half
-        // on its left.
+        // The wire's turn about +z, read at points along each edge (a closed
+        // circle's ends meet): counter-clockwise leaves the north half on its
+        // left.
         let wire = topo.wire(data.outer_wire()).unwrap();
-        let mut turn = 0.0;
+        let mut along = Vec::new();
         for oe in wire.edges() {
             let edge = topo.edge(oe.edge()).unwrap();
-            let (a, b) = (
+            let (s, e) = (
                 topo.vertex(edge.start()).unwrap().point(),
                 topo.vertex(edge.end()).unwrap().point(),
             );
-            let (a, b) = if oe.is_forward() { (a, b) } else { (b, a) };
-            turn += a.x().mul_add(b.y(), -(a.y() * b.x()));
+            let (t0, t1) = edge.curve().domain_with_endpoints(s, e);
+            let mut points: Vec<_> = (0..16)
+                .map(|k| {
+                    let t = (t1 - t0).mul_add(f64::from(k) / 16.0, t0);
+                    edge.curve().evaluate_with_endpoints(t, s, e)
+                })
+                .collect();
+            if !oe.is_forward() {
+                points.push(edge.curve().evaluate_with_endpoints(t1, s, e));
+                points.reverse();
+                points.pop();
+            }
+            along.extend(points);
         }
+        let turn: f64 = (0..along.len())
+            .map(|k| {
+                let (a, b) = (along[k], along[(k + 1) % along.len()]);
+                a.x().mul_add(b.y(), -(a.y() * b.x()))
+            })
+            .sum();
         let mesh = tessellate(&topo, face, 0.01).unwrap();
         #[allow(clippy::cast_precision_loss)]
         let mean_z =

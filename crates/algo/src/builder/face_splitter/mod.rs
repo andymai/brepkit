@@ -6884,9 +6884,9 @@ pub fn split_face_2d(
 /// How a face's ball is charted for its split.
 enum BallChart {
     /// Another surface, or a ball face no chart is read for: one with no
-    /// sections, one whose outline is all chords (a hemisphere of
-    /// `make_sphere`, whose own paths read its poles), or one that holds a
-    /// pole of every axis tried.
+    /// sections, one whose outline is all chords or all arcs of its chart's
+    /// equator (a hemisphere, whose own paths read its poles), or one that
+    /// holds a pole of every axis tried.
     Unclear,
     /// The face's own chart, whose poles keep clear of its wires and
     /// sections. A face that holds one of them winds the chart.
@@ -6948,8 +6948,8 @@ fn pole_clear_chart(
             let edge = topo.edge(oe.edge()).ok()?;
             let start = topo.vertex(edge.start()).ok()?.point();
             let end = topo.vertex(edge.end()).ok()?.point();
-            if i == 0 && !(matches!(edge.curve(), EdgeCurve::Line) && (start - end).length() > 0.0)
-            {
+            let chord = matches!(edge.curve(), EdgeCurve::Line) && (start - end).length() > 0.0;
+            if i == 0 && !chord && !special_cases::on_chart_equator(sphere, edge.curve(), 1e-7) {
                 chords_only = false;
             }
             sample(&mut dirs, edge.curve(), start, end);
@@ -8386,6 +8386,20 @@ fn split_face_2d_impl(
             // seam connections (e.g., torus), not true line boundaries.
             && (e.start_3d - e.end_3d).length() > tol.linear
     });
+    // A hemisphere bounded by its chart's equator has no seam edge either.
+    let equator_outline = match &surface {
+        FaceSurface::Sphere(sphere) => {
+            !boundary_edges.is_empty()
+                && boundary_edges
+                    .iter()
+                    .all(|e| special_cases::on_chart_equator(sphere, &e.curve_3d, tol.linear))
+        }
+        FaceSurface::Plane { .. }
+        | FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_)
+        | FaceSurface::Torus(_)
+        | FaceSurface::Nurbs(_) => false,
+    };
     // `split_noseam_face_direct` carves cap+band from OPEN section arcs (it
     // skips full-circle sections, relying on the FF boundary-crossing split to
     // pre-open them). A hemisphere cut by a cylinder yields a CLOSED circle
@@ -8412,7 +8426,7 @@ fn split_face_2d_impl(
                 && !is_point_on_boundary_uv(s.end, &surface, &boundary_edges, 0.01)
         })
         && !sections_form_winding_chain(sections, &surface, tol.linear);
-    if all_boundary_line
+    if (all_boundary_line || equator_outline)
         && !is_plane
         && has_open_section
         && !inside_loops

@@ -320,14 +320,13 @@ impl<'a> StepBuilder<'a> {
     /// A whole sphere written as one face bounded only by a VERTEX_LOOP (a
     /// point on it, as some writers write a ball) has no edge to bound a
     /// face with. It reads as `make_sphere` builds one: two hemispheres
-    /// meeting along a polygon inscribed in the equator about the sphere's
+    /// meeting along one circle edge round the equator about the sphere's
     /// axis. `None` for any other face.
     fn build_whole_sphere(
         &mut self,
         face_ref: u64,
         flip: bool,
     ) -> Result<Option<[brepkit_topology::face::FaceId; 2]>, IoError> {
-        const EQUATOR_SEGMENTS: u32 = 32;
         let attrs = self.get_entity(face_ref)?.attrs.clone();
         let list_refs = parse_list_refs(&attrs);
         let [bound_ref] = list_refs[..] else {
@@ -363,33 +362,20 @@ impl<'a> StepBuilder<'a> {
             (orient_tail.ends_with(".F.") || orient_tail.ends_with(".FALSE.")) != inward;
 
         let (c, r) = (sphere.center(), sphere.radius());
-        let (x, y) = (sphere.x_axis(), sphere.y_axis());
-        let vertices: Vec<_> = (0..EQUATOR_SEGMENTS)
-            .map(|i| {
-                let t = std::f64::consts::TAU * f64::from(i) / f64::from(EQUATOR_SEGMENTS);
-                let p = c + x * (r * t.cos()) + y * (r * t.sin());
-                self.topo.add_vertex(Vertex::new(p, 1e-7))
-            })
-            .collect();
-        let edges: Vec<_> = (0..vertices.len())
-            .map(|i| {
-                let j = (i + 1) % vertices.len();
-                self.topo
-                    .add_edge(Edge::new(vertices[i], vertices[j], EdgeCurve::Line))
-            })
-            .collect();
+        let x = sphere.x_axis();
+        let equator = brepkit_math::curves::Circle3D::new_with_ref(c, sphere.z_axis(), r, x)
+            .map_err(|e| IoError::ParseError {
+                reason: format!("ADVANCED_FACE #{face_ref}: {e}"),
+            })?;
+        let vertex = self.topo.add_vertex(Vertex::new(c + x * r, 1e-7));
+        let edge = self
+            .topo
+            .add_edge(Edge::new(vertex, vertex, EdgeCurve::Circle(equator)));
         // Each loop runs counterclockwise about the outward normal: round
         // the axis it bounds the upper half, the other way the lower.
         let loops = [
-            edges
-                .iter()
-                .map(|&e| OrientedEdge::new(e, true))
-                .collect::<Vec<_>>(),
-            edges
-                .iter()
-                .rev()
-                .map(|&e| OrientedEdge::new(e, false))
-                .collect(),
+            vec![OrientedEdge::new(edge, true)],
+            vec![OrientedEdge::new(edge, false)],
         ];
         let mut halves = Vec::with_capacity(2);
         for oriented in loops {

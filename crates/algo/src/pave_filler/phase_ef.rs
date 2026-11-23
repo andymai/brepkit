@@ -732,12 +732,16 @@ fn check_edge_face_pairs(
                 }
                 crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
             }
-            // A curved edge crossing a ball between two samples (a ring's rim
-            // through a ball across it) shows only as the side of the sphere
-            // flipping, and counts where the face's own wires hold it.
+            // An edge crossing a ball between two samples (a ring's rim
+            // through a ball across it, a rod's seam line out through a ball's
+            // wall) shows only as the side of the sphere flipping, and counts
+            // where the face's own wires hold it.
             if matches!(
                 curve,
-                EdgeCurve::NurbsCurve(_) | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)
+                EdgeCurve::NurbsCurve(_)
+                    | EdgeCurve::Circle(_)
+                    | EdgeCurve::Ellipse(_)
+                    | EdgeCurve::Line
             ) && matches!(surface, FaceSurface::Sphere(_))
                 && let Some(trim) = sphere_trims[face_idx]
                     .get_or_insert_with(|| {
@@ -2444,6 +2448,12 @@ fn distance_derivative_bounds(surface: &FaceSurface, p: Point3, reach: f64) -> O
 /// Points where a curve passes from one side of a surface to the other,
 /// bisected onto the surface. A flip where the projection jumps to another
 /// part of the surface lands off it and is dropped.
+///
+/// A line, a circle or an ellipse against a cylinder or a ball is read closer
+/// where it can cross and come back between two samples: the side there is
+/// the signed distance from the surface, which changes no faster than the
+/// curve moves, so two samples whose distances add up to more than the
+/// curve's most travel between them hold no crossing.
 fn find_side_flips(
     curve: &EdgeCurve,
     start_pos: Point3,
@@ -2453,17 +2463,64 @@ fn find_side_flips(
     surface: &FaceSurface,
     tol: Tolerance,
 ) -> Vec<(f64, Point3)> {
+    // Past this many samples a curve that runs along the surface is read no
+    // closer: the scan of runs near the surface finds its contacts.
+    const MOST_SAMPLES: usize = 1 << 12;
     let side = |t: f64| -> Option<f64> {
         let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
         let (u, v) = surface.project_point(pt)?;
         let on = surface.evaluate(u, v)?;
         Some((pt - on).dot(surface.normal(u, v)))
     };
+    let speed = match (curve, surface) {
+        (EdgeCurve::Circle(c), FaceSurface::Cylinder(_) | FaceSurface::Sphere(_)) => {
+            Some(c.radius())
+        }
+        (EdgeCurve::Ellipse(e), FaceSurface::Cylinder(_) | FaceSurface::Sphere(_)) => {
+            Some(e.semi_major())
+        }
+        (EdgeCurve::Line, FaceSurface::Cylinder(_) | FaceSurface::Sphere(_)) => {
+            Some((end_pos - start_pos).length() / (t1 - t0).abs().max(f64::MIN_POSITIVE))
+        }
+        _ => None,
+    };
+    let mut samples: Vec<(f64, Option<f64>)> = (0..=N_SAMPLES)
+        .map(|i| {
+            let t = (t1 - t0).madd(i as f64 / N_SAMPLES as f64, t0);
+            (t, side(t))
+        })
+        .collect();
+    if let Some(speed) = speed {
+        let shortest = tol.linear / speed.max(f64::MIN_POSITIVE);
+        loop {
+            let mut finer = Vec::with_capacity(samples.len() * 2);
+            let mut added = false;
+            for w in samples.windows(2) {
+                finer.push(w[0]);
+                let ((ta, sa), (tb, sb)) = (w[0], w[1]);
+                if let (Some(sa), Some(sb)) = (sa, sb)
+                    && (sa > 0.0) == (sb > 0.0)
+                    && (tb - ta).abs() > shortest
+                    && sa.abs() + sb.abs() <= speed * (tb - ta).abs()
+                {
+                    let tm = f64::midpoint(ta, tb);
+                    finer.push((tm, side(tm)));
+                    added = true;
+                }
+            }
+            if let Some(&last) = samples.last() {
+                finer.push(last);
+            }
+            if !added || finer.len() > MOST_SAMPLES {
+                break;
+            }
+            samples = finer;
+        }
+    }
     let mut out = Vec::new();
     let mut prev: Option<(f64, f64)> = None;
-    for i in 0..=N_SAMPLES {
-        let t = (t1 - t0).madd(i as f64 / N_SAMPLES as f64, t0);
-        let Some(s) = side(t) else {
+    for (t, s) in samples {
+        let Some(s) = s else {
             prev = None;
             continue;
         };
@@ -3967,5 +4024,58 @@ mod tests {
         }
         let rim = ring_crossings(&[249.25], 47.3, &[0.0]);
         assert_eq!(rim.len(), 1, "{rim:?}");
+    }
+
+    /// A ball's equator passing 5e-4 inside a rod's wall crosses the wall
+    /// twice on each side of the ball, 0.028 apart, between two of the 64
+    /// samples. All four crossings are found, each on the circle and on the
+    /// wall, in several turns of the scene.
+    #[test]
+    fn a_circle_crossing_a_wall_twice_between_two_samples_crosses_it_twice() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Vec3;
+        let tol = Tolerance::new();
+        // The pair of crossings lies about 0.035 and 0.063 round the circle,
+        // between its samples at 0 and pi / 32.
+        let (rho, y0) = (0.2, 0.049);
+        let z0 = 5e-4_f64.sin() - rho;
+        for turn in [
+            Mat4::identity(),
+            Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1),
+            Mat4::rotation_y(2.0) * Mat4::rotation_x(-0.9),
+        ] {
+            let at = |p: Point3| turn.mul_point(p);
+            let along = |v: Vec3| {
+                turn.mul_point(Point3::new(v.x(), v.y(), v.z())) - at(Point3::new(0.0, 0.0, 0.0))
+            };
+            let circle = Circle3D::new_with_ref(
+                at(Point3::new(0.0, 0.0, 0.0)),
+                along(Vec3::new(0.0, 0.0, 1.0)),
+                1.0,
+                along(Vec3::new(1.0, 0.0, 0.0)),
+            )
+            .unwrap();
+            let wall = FaceSurface::Cylinder(
+                CylindricalSurface::new(
+                    at(Point3::new(0.0, y0, z0)),
+                    along(Vec3::new(1.0, 0.0, 0.0)),
+                    rho,
+                )
+                .unwrap(),
+            );
+            let start = circle.evaluate(0.0);
+            let curve = EdgeCurve::Circle(circle);
+            let found =
+                find_side_flips(&curve, start, start, 0.0, std::f64::consts::TAU, &wall, tol);
+            assert_eq!(found.len(), 4, "{found:?}");
+            for (k, (t, p)) in found.into_iter().enumerate() {
+                assert!(distance_to_surface(p, &wall) < tol.linear, "{p:?}");
+                assert!((curve.evaluate_with_endpoints(t, start, start) - p).length() < 1e-12);
+                let side = if k < 2 { 0.0 } else { std::f64::consts::PI };
+                assert!((t - side).abs() < std::f64::consts::PI / 32.0, "{k}: {t}");
+            }
+        }
     }
 }

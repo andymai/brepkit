@@ -126,8 +126,7 @@ pub(super) fn split_noseam_face_direct(
     // nests it in the piece holding it, and the pieces along the boundary
     // fail the face rather than keep a piece whole over it. One in the
     // boundary's own plane runs along the boundary.
-    let boundary_pts: Vec<Point3> = boundary_edges.iter().map(|e| e.start_3d).collect();
-    let boundary_plane = loop_plane(&boundary_pts);
+    let boundary_plane = seam_plane(boundary_edges);
     let on_boundary = |c: &OrientedPCurveEdge| {
         boundary_plane.is_some_and(|(n, at)| {
             edge_samples(c, 8)
@@ -482,8 +481,7 @@ fn split_noseam_by_arrangement(
     // arcs) is a lune kept beside it, so one chain is enough: a half-space
     // across the seam, or a column whose corners reach inside the ball
     // joining three walls' arcs into one chain.
-    let verts: Vec<Point3> = boundary_edges.iter().map(|e| e.start_3d).collect();
-    let Some((seam_n, seam_p)) = loop_plane(&verts) else {
+    let Some((seam_n, seam_p)) = seam_plane(boundary_edges) else {
         return Vec::new();
     };
     // Arcs that close into a loop of their own clear of the seam (a
@@ -571,13 +569,22 @@ fn split_noseam_by_arrangement(
     }
 
     // Reconstruct the seam as its exact circle and split it at the crossings,
-    // so the seam arcs share endpoints EXACTLY with the open arcs.
+    // so the seam arcs share endpoints EXACTLY with the open arcs. A seam of
+    // circle arcs is split where the face across it splits it too, so it
+    // takes no extra vertex there.
+    let circle_seam = boundary_edges
+        .iter()
+        .all(|e| matches!(e.curve_3d, EdgeCurve::Circle(_)));
     let Some(seam_arcs) = build_seam_arcs_split(
         surface,
         boundary_edges,
         open_sections,
         tol,
-        SeamSplit::Halve,
+        if circle_seam {
+            SeamSplit::AtCrossings
+        } else {
+            SeamSplit::Halve
+        },
     ) else {
         return Vec::new();
     };
@@ -647,11 +654,18 @@ fn split_noseam_by_arrangement(
             | FaceSurface::Nurbs(_) => loop_polyline_unwrapped(l).1,
         }
     };
+    // A loop that runs out along a curve and back along it again. Two
+    // different curves between the same two points (a section's arc and the
+    // seam arc under it) bound a region.
+    let middle = |e: &OrientedPCurveEdge| edge_samples(e, 2).get(1).copied();
     let loop_is_sliver = |l: &[OrientedPCurveEdge]| -> bool {
         for i in 0..l.len() {
             for j in (i + 1)..l.len() {
                 if (l[i].start_3d - l[j].end_3d).length() < tol * 100.0
                     && (l[i].end_3d - l[j].start_3d).length() < tol * 100.0
+                    && middle(&l[i])
+                        .zip(middle(&l[j]))
+                        .is_none_or(|(a, b)| (a - b).length() < tol * 100.0)
                 {
                     return true;
                 }
@@ -665,15 +679,18 @@ fn split_noseam_by_arrangement(
     // past the seam, which a broken trace can leave as the only other
     // winding loop). Orient it to wind as the parent boundary does, so the
     // collar is its interior.
+    // A seam of circle arcs is the exact circle, and an arc 1e-4 off its
+    // plane (a rod's footprint just past it) bounds a region beside it.
+    let seam_band = if circle_seam { tol * 10.0 } else { tol * 1e3 };
     let on_seam = |e: &OrientedPCurveEdge| {
         edge_samples(e, 2)
             .iter()
-            .all(|&p| (p - seam_p).dot(seam_n).abs() <= tol * 1e3)
+            .all(|&p| (p - seam_p).dot(seam_n).abs() <= seam_band)
     };
     let parent_net_u = net_u(boundary_edges);
     let mut best: Option<usize> = None;
     for (i, l) in loops.iter().enumerate() {
-        if l.len() < 3 || loop_is_sliver(l) || l.iter().all(&on_seam) {
+        if l.len() < 2 || loop_is_sliver(l) || l.iter().all(&on_seam) {
             continue;
         }
         if net_u(l).abs() < std::f64::consts::PI {
@@ -779,8 +796,11 @@ fn split_noseam_by_arrangement(
     }
 
     // Each region's classification sample lies inside it and clear of its
-    // holes: a sample in a hole reads the hole's patch instead.
-    let Some(interior_3d) = region_sample(surface, &region, &collar_holes) else {
+    // holes: a sample in a hole reads the hole's patch instead. The face's
+    // own holes go to the pieces afterwards, and a sample keeps clear of
+    // them too.
+    let Some(interior_3d) = region_sample(surface, &region, &[&collar_holes[..], holes].concat())
+    else {
         return Vec::new();
     };
     let mut pieces = vec![SplitSubFace {
@@ -792,15 +812,17 @@ fn split_noseam_by_arrangement(
         rank,
         precomputed_interior: Some(interior_3d),
     }];
-    for (l, holes) in lunes.into_iter().zip(lune_holes) {
+    for (l, lune_holes) in lunes.into_iter().zip(lune_holes) {
         let outer_wire = if flip { reverse_loop(l) } else { l.clone() };
-        let Some(interior) = region_sample(surface, &outer_wire, &holes) else {
+        let Some(interior) =
+            region_sample(surface, &outer_wire, &[&lune_holes[..], holes].concat())
+        else {
             return Vec::new();
         };
         pieces.push(SplitSubFace {
             surface: surface.clone(),
             outer_wire,
-            inner_wires: holes,
+            inner_wires: lune_holes,
             reversed,
             parent: face_id,
             rank,
@@ -1034,18 +1056,25 @@ fn split_into_lunes(
         return None;
     }
     let seam_arcs = build_seam_arcs(surface, boundary_edges, arcs, tol)?;
-    let [one, other] = &seam_arcs[..] else {
-        return None;
+    // The seam arcs from `from` on to `to`, end to start. A seam of circle
+    // arcs keeps its own vertices, so a side can take more than one arc.
+    let run = |from: Point3, to: Point3| -> Option<Vec<OrientedPCurveEdge>> {
+        let mut at = from;
+        let mut out = Vec::new();
+        for _ in 0..seam_arcs.len() {
+            let arc = seam_arcs
+                .iter()
+                .find(|s| (s.start_3d - at).length() < near)?;
+            out.push(arc.clone());
+            at = arc.end_3d;
+            if (at - to).length() < near {
+                return Some(out);
+            }
+        }
+        None
     };
-    let (back, over) = if (one.start_3d - b).length() < near {
-        (one.clone(), other.clone())
-    } else {
-        (other.clone(), one.clone())
-    };
-    if (back.start_3d - b).length() >= near
-        || (back.end_3d - a).length() >= near
-        || (over.end_3d - b).length() >= near
-    {
+    let (back, over) = (run(b, a)?, run(a, b)?);
+    if back.len() + over.len() != seam_arcs.len() {
         return None;
     }
     // Each lune's sample lies on the great circle from its seam arc's middle
@@ -1105,8 +1134,23 @@ fn split_into_lunes(
         }
         (first, span)
     };
-    let lune = |outer: Vec<OrientedPCurveEdge>, seam: &OrientedPCurveEdge| {
-        let m = (*edge_samples(seam, 2).get(1)? - center).normalize().ok()?;
+    // The point of a run of seam arcs halfway along it.
+    let middle = |seam: &[OrientedPCurveEdge]| -> Option<Point3> {
+        let pts: Vec<Point3> = seam.iter().flat_map(|arc| edge_samples(arc, 64)).collect();
+        let steps: Vec<f64> = pts.windows(2).map(|w| (w[1] - w[0]).length()).collect();
+        let half = 0.5 * steps.iter().sum::<f64>();
+        let mut walked = 0.0;
+        for (w, &step) in pts.windows(2).zip(&steps) {
+            if walked + step >= half {
+                let f = (half - walked) / step.max(f64::MIN_POSITIVE);
+                return Some(w[0] + (w[1] - w[0]) * f);
+            }
+            walked += step;
+        }
+        None
+    };
+    let lune = |outer: Vec<OrientedPCurveEdge>, seam: &[OrientedPCurveEdge]| {
+        let m = (middle(seam)? - center).normalize().ok()?;
         let (reach, span) = first_crossing(m, chain_mid);
         let (a, b) = ((1.0 - 0.5 * reach) * span, 0.5 * reach * span);
         let across = (m * a.sin() + chain_mid * b.sin()).normalize().ok()?;
@@ -1120,14 +1164,11 @@ fn split_into_lunes(
             precomputed_interior: Some(center + across * sphere.radius()),
         })
     };
-    let first_side: Vec<OrientedPCurveEdge> = chain
-        .iter()
-        .cloned()
-        .chain(std::iter::once(back.clone()))
-        .collect();
+    let first_side: Vec<OrientedPCurveEdge> =
+        chain.iter().cloned().chain(back.iter().cloned()).collect();
     let second_side: Vec<OrientedPCurveEdge> = reverse_loop(&chain)
         .into_iter()
-        .chain(std::iter::once(over.clone()))
+        .chain(over.iter().cloned())
         .collect();
     Some(vec![lune(first_side, &back)?, lune(second_side, &over)?])
 }
@@ -1184,9 +1225,7 @@ fn build_seam_arcs_split(
         return None;
     };
 
-    // Seam-plane normal + a point on it, from the boundary polygon.
-    let verts: Vec<Point3> = boundary_edges.iter().map(|e| e.start_3d).collect();
-    let (plane_n, plane_pt) = loop_plane(&verts)?;
+    let (plane_n, plane_pt) = seam_plane(boundary_edges)?;
 
     // Seam circle on the sphere: centre offset from the sphere centre along the
     // plane normal by the plane's signed distance; radius from Pythagoras.
@@ -1212,6 +1251,18 @@ fn build_seam_arcs_split(
     }
     if unique.len() < 2 {
         return None;
+    }
+    // An outline of arcs of the circle keeps its own vertices, which the
+    // face across the seam keeps too.
+    if boundary_edges
+        .iter()
+        .all(|e| matches!(e.curve_3d, EdgeCurve::Circle(_)))
+    {
+        for p in boundary_edges.iter().map(|e| e.start_3d) {
+            if !unique.iter().any(|q| (*q - p).length() < tol * 100.0) {
+                unique.push(p);
+            }
+        }
     }
 
     // Sort crossings by angle on the seam circle, then build the arc between
@@ -1573,6 +1624,48 @@ fn loop_plane(pts: &[Point3]) -> Option<(brepkit_math::vec::Vec3, Point3)> {
     #[allow(clippy::cast_precision_loss)]
     let c = c * (1.0 / pts.len() as f64);
     Some((n.normalize().ok()?, Point3::new(c.x(), c.y(), c.z())))
+}
+
+/// Whether `curve` is an arc of the equator of `sphere`'s own chart: a circle
+/// through the sphere's centre, of its radius, about its `z` axis.
+pub(super) fn on_chart_equator(
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    curve: &EdgeCurve,
+    tol: f64,
+) -> bool {
+    let EdgeCurve::Circle(c) = curve else {
+        return false;
+    };
+    let near = tol * sphere.radius().max(1.0);
+    (c.center() - sphere.center()).length() <= near
+        && (c.radius() - sphere.radius()).abs() <= near
+        && 1.0 - c.normal().dot(sphere.z_axis()).abs() <= 1e-9
+}
+
+/// The plane of a sphere face's seam, its normal along the way the outline
+/// runs round it, and a point on it. An outline of arcs of one circle gives
+/// the circle's plane. A chord polygon gives the plane of its vertices.
+fn seam_plane(boundary_edges: &[OrientedPCurveEdge]) -> Option<(brepkit_math::vec::Vec3, Point3)> {
+    let Some(EdgeCurve::Circle(first)) = boundary_edges.first().map(|e| &e.curve_3d) else {
+        let verts: Vec<Point3> = boundary_edges.iter().map(|e| e.start_3d).collect();
+        return loop_plane(&verts);
+    };
+    let way = |e: &OrientedPCurveEdge| match &e.curve_3d {
+        EdgeCurve::Circle(c) if e.forward => Some(c.normal()),
+        EdgeCurve::Circle(c) => Some(-c.normal()),
+        EdgeCurve::Line | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => None,
+    };
+    let n = way(&boundary_edges[0])?;
+    let at = first.center();
+    for e in boundary_edges {
+        let EdgeCurve::Circle(c) = &e.curve_3d else {
+            return None;
+        };
+        if way(e)?.dot(n) < 1.0 - 1e-9 || (c.center() - at).dot(n).abs() > 1e-9 * c.radius() {
+            return None;
+        }
+    }
+    Some((n, at))
 }
 
 /// Reverse a loop's orientation (a hole is traversed opposite to the containing

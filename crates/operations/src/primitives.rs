@@ -9,7 +9,7 @@
 
 use brepkit_math::madd::Madd;
 use std::collections::{HashMap, HashSet};
-use std::f64::consts::{FRAC_PI_2, PI, TAU};
+use std::f64::consts::{FRAC_PI_2, PI};
 
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
@@ -455,20 +455,18 @@ pub fn make_cone(
 
 /// Create a sphere solid centered at the origin.
 ///
-/// Built as a single spherical face with a degenerate boundary wire,
-/// boundary wire, yielding exact `SphericalSurface` geometry with proper
-/// topology for boolean operations.
+/// Built as two hemispheres of one exact `SphericalSurface`, bounded by
+/// one closed circle edge at the equator (`z = 0`). The edge starts at
+/// `(radius, 0, 0)` and runs counterclockwise about `+Z`, so its angle is
+/// the sphere's `u` along `v = 0`.
 ///
-/// The `segments` parameter controls the number of vertices on the
-/// equatorial boundary polygon (minimum 4). Higher values improve
-/// boolean accuracy for curved intersections. Tessellation density
-/// is separately controlled by the `deflection` parameter at
-/// tessellation time.
+/// The `segments` parameter has no effect on the B-Rep. It is kept for
+/// API compatibility and must be at least 4. Tessellation density is
+/// controlled by the `deflection` parameter at tessellation time.
 ///
 /// # Errors
 ///
 /// Returns an error if `radius` is zero or negative, or `segments < 4`.
-#[allow(clippy::too_many_lines)]
 pub fn make_sphere(
     topo: &mut Topology,
     radius: f64,
@@ -487,55 +485,27 @@ pub fn make_sphere(
         });
     }
 
-    let surface_n =
-        brepkit_math::surfaces::SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), radius)
+    let origin = Point3::new(0.0, 0.0, 0.0);
+    let up = Vec3::new(0.0, 0.0, 1.0);
+    let surface_n = brepkit_math::surfaces::SphericalSurface::new(origin, radius)
+        .map_err(crate::OperationsError::Math)?;
+    let surface_s = surface_n.clone();
+
+    let equator =
+        brepkit_math::curves::Circle3D::new_with_ref(origin, up, radius, Vec3::new(1.0, 0.0, 0.0))
             .map_err(crate::OperationsError::Math)?;
-    let surface_s =
-        brepkit_math::surfaces::SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), radius)
-            .map_err(crate::OperationsError::Math)?;
+    let v_eq = topo.add_vertex(Vertex::new(Point3::new(radius, 0.0, 0.0), tol.linear));
+    let e_eq = topo.add_edge(Edge::new(v_eq, v_eq, EdgeCurve::Circle(equator)));
 
-    // Equatorial polygon: `segments` vertices evenly spaced on the circle
-    // at z = 0, forming the shared boundary between north and south hemispheres.
-    let eq_verts: Vec<_> = (0..segments)
-        .map(|i| {
-            let theta = TAU * i as f64 / segments as f64;
-            let pt = Point3::new(radius * theta.cos(), radius * theta.sin(), 0.0);
-            topo.add_vertex(Vertex::new(pt, tol.linear))
-        })
-        .collect();
-
-    // Line edges connecting consecutive equatorial vertices (closed polygon).
-    let eq_edges: Vec<_> = (0..segments)
-        .map(|i| {
-            let j = (i + 1) % segments;
-            topo.add_edge(Edge::new(eq_verts[i], eq_verts[j], EdgeCurve::Line))
-        })
-        .collect();
-
-    // North hemisphere: equatorial wire traversed forward (CCW from +Z).
-    // Outward normal points upward (+Z hemisphere).
-    let north_wire = Wire::new(
-        eq_edges
-            .iter()
-            .map(|&eid| OrientedEdge::new(eid, true))
-            .collect(),
-        true,
-    )
-    .map_err(crate::OperationsError::Topology)?;
+    // Each hemisphere runs its boundary counterclockwise about its own
+    // outward normal: the north one along the circle, the south one against it.
+    let north_wire = Wire::new(vec![OrientedEdge::new(e_eq, true)], true)
+        .map_err(crate::OperationsError::Topology)?;
     let north_wid = topo.add_wire(north_wire);
     let north_face = topo.add_face(Face::new(north_wid, vec![], FaceSurface::Sphere(surface_n)));
 
-    // South hemisphere: equatorial wire traversed backward (CW from +Z).
-    // Outward normal points downward (-Z hemisphere).
-    let south_wire = Wire::new(
-        eq_edges
-            .iter()
-            .rev()
-            .map(|&eid| OrientedEdge::new(eid, false))
-            .collect(),
-        true,
-    )
-    .map_err(crate::OperationsError::Topology)?;
+    let south_wire = Wire::new(vec![OrientedEdge::new(e_eq, false)], true)
+        .map_err(crate::OperationsError::Topology)?;
     let south_wid = topo.add_wire(south_wire);
     let south_face = topo.add_face(Face::new(south_wid, vec![], FaceSurface::Sphere(surface_s)));
 

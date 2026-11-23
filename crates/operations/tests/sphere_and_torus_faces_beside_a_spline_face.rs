@@ -66,10 +66,13 @@ fn rounded_cap(topo: &mut Topology, r: f64) -> SolidId {
     let below = make_box(topo, 4.0, 4.0, 4.0).unwrap();
     transform_solid(topo, below, &Mat4::translation(-2.0, -2.0, -4.5)).unwrap();
     let cut = boolean(topo, BooleanOp::Cut, ball, below).unwrap();
+    // The ball's equator is a circle edge too; the rim lies in `z = -0.5`.
     let rim: Vec<_> = solid_edges(topo, cut)
         .unwrap()
         .into_iter()
-        .filter(|&e| matches!(topo.edge(e).unwrap().curve(), EdgeCurve::Circle(_)))
+        .filter(|&e| {
+            matches!(topo.edge(e).unwrap().curve(), EdgeCurve::Circle(c) if c.center().z() < -0.25)
+        })
         .collect();
     assert_eq!(rim.len(), 1, "the cut leaves one rim circle");
     fillet_v2(topo, cut, &rim, r).unwrap().solid

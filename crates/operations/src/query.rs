@@ -836,8 +836,8 @@ mod tests {
         let ball = crate::primitives::make_sphere(&mut topo, 3.0, 16).unwrap();
         let all = solid_edges(&topo, ball).unwrap();
         let inside = edges_in_one_surface(&topo, ball, &all).unwrap();
-        assert_eq!(all.len(), 16);
-        assert_eq!(inside.len(), 16, "each edge is between the two halves");
+        assert_eq!(all.len(), 1, "the equator is one circle");
+        assert_eq!(inside.len(), 1, "the equator is between the two halves");
     }
 
     #[test]
