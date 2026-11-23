@@ -10287,3 +10287,131 @@ fn cut_per_piece_keeps_the_cavities() {
         );
     }
 }
+
+/// Upright, turned, mirrored, turned and mirrored, and rolled.
+fn five_poses() -> [(&'static str, brepkit_math::mat::Mat4); 5] {
+    use brepkit_math::mat::Mat4;
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1);
+    [
+        ("upright", Mat4::identity()),
+        ("turned", turn),
+        ("mirrored", Mat4::scale(1.0, -1.0, 1.0)),
+        ("turned+mirrored", turn * Mat4::scale(-1.0, 1.0, 1.0)),
+        ("rolled", Mat4::rotation_x(std::f64::consts::FRAC_PI_2)),
+    ]
+}
+
+/// A boolean with an empty operand gives the trivial result, with the mesh
+/// fallback on and off: a fuse gives a copy of the other operand, a cut of
+/// the empty solid and an intersect give the empty solid, and a cut by the
+/// empty solid gives a copy of the solid.
+#[test]
+fn an_empty_operand_gives_the_trivial_result() {
+    use BooleanOp::{Cut, Fuse, Intersect};
+
+    for (name, pose) in five_poses() {
+        for mesh_fallback in [true, false] {
+            let mut topo = Topology::new();
+            let ball = crate::primitives::make_sphere(&mut topo, 1.0, 32).unwrap();
+            crate::transform::transform_solid(&mut topo, ball, &pose).unwrap();
+            let truth = crate::measure::solid_volume(&topo, ball, 0.0005).unwrap();
+            let ball_faces = brepkit_topology::explorer::solid_faces(&topo, ball).unwrap();
+            let empty = topo.add_empty_solid();
+            let opts = BooleanOptions {
+                mesh_fallback,
+                ..BooleanOptions::default()
+            };
+            for (op, empty_first, gives_ball) in [
+                (Fuse, true, true),
+                (Fuse, false, true),
+                (Cut, true, false),
+                (Cut, false, true),
+                (Intersect, true, false),
+                (Intersect, false, false),
+            ] {
+                let case =
+                    format!("{name} fallback={mesh_fallback} {op:?} empty_first={empty_first}");
+                let (a, b) = if empty_first {
+                    (empty, ball)
+                } else {
+                    (ball, empty)
+                };
+                let r = boolean_with_options(&mut topo, op, a, b, opts)
+                    .unwrap_or_else(|e| panic!("{case}: {e}"));
+                assert!(r != ball && r != empty, "{case}: not a new solid");
+                if gives_ball {
+                    let faces = brepkit_topology::explorer::solid_faces(&topo, r).unwrap();
+                    assert_eq!(faces.len(), ball_faces.len(), "{case}");
+                    assert!(
+                        faces.iter().all(|f| !ball_faces.contains(f)),
+                        "{case}: not a copy"
+                    );
+                    let report = crate::validate::validate_solid(&topo, r).unwrap();
+                    assert!(report.is_valid(), "{case}: {:?}", report.issues);
+                    let volume = crate::measure::solid_volume(&topo, r, 0.0005).unwrap();
+                    assert!(
+                        ((volume - truth) / truth).abs() < 1e-9,
+                        "{case}: volume {volume} against {truth}"
+                    );
+                } else {
+                    assert!(topo.is_empty_solid(r), "{case}: not empty");
+                }
+                let (r, _) = boolean_with_evolution(&mut topo, op, a, b)
+                    .unwrap_or_else(|e| panic!("{case} with evolution: {e}"));
+                assert_eq!(topo.is_empty_solid(r), !gives_ball, "{case} with evolution");
+            }
+            for op in [Fuse, Cut, Intersect] {
+                let r = boolean_with_options(&mut topo, op, empty, empty, opts).unwrap();
+                assert!(
+                    r != empty && topo.is_empty_solid(r),
+                    "{name} {op:?} of two empty solids"
+                );
+            }
+            assert_eq!(
+                brepkit_topology::explorer::solid_faces(&topo, ball).unwrap(),
+                ball_faces,
+                "{name}: the operand changed"
+            );
+        }
+    }
+}
+
+/// A chain of booleans goes on past a step whose result is empty, with the
+/// mesh fallback off: a ball less a box far from it, intersected with that
+/// box, is empty, and a fuse of it with a second box gives that box.
+#[test]
+fn a_chain_goes_on_past_an_empty_step() {
+    use brepkit_math::mat::Mat4;
+
+    let opts = BooleanOptions {
+        mesh_fallback: false,
+        unify_faces: false,
+        ..BooleanOptions::default()
+    };
+    for (name, pose) in five_poses() {
+        let mut topo = Topology::new();
+        let ball = crate::primitives::make_sphere(&mut topo, 1.0, 32).unwrap();
+        let far = crate::primitives::make_box(&mut topo, 0.5, 0.5, 0.5).unwrap();
+        let place = Mat4::translation(2.0, 0.3, -0.2);
+        crate::transform::transform_solid(&mut topo, far, &place).unwrap();
+        let block = crate::primitives::make_box(&mut topo, 0.4, 0.6, 0.8).unwrap();
+        let place = Mat4::translation(0.2, -0.1, 0.3);
+        crate::transform::transform_solid(&mut topo, block, &place).unwrap();
+        for s in [ball, far, block] {
+            crate::transform::transform_solid(&mut topo, s, &pose).unwrap();
+        }
+        let common =
+            boolean_with_options(&mut topo, BooleanOp::Intersect, ball, far, opts).unwrap();
+        assert!(topo.is_empty_solid(common), "{name}");
+        for op in [BooleanOp::Fuse, BooleanOp::Cut, BooleanOp::Intersect] {
+            let r = boolean_with_options(&mut topo, op, common, block, opts)
+                .unwrap_or_else(|e| panic!("{name} {op:?}: {e}"));
+            if op == BooleanOp::Fuse {
+                let volume = crate::measure::solid_volume(&topo, r, 0.0005).unwrap();
+                assert!((volume - 0.192).abs() < 1e-12, "{name}: volume {volume}");
+            } else {
+                assert!(topo.is_empty_solid(r), "{name} {op:?}");
+            }
+        }
+    }
+}

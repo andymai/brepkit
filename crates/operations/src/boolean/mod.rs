@@ -155,6 +155,9 @@ fn boolean_inner(
     b: SolidId,
 ) -> Result<SolidId, crate::OperationsError> {
     LAST_USED_MESH_FALLBACK.with(|f| f.set(false));
+    if let Some(result) = empty_operand_result(topo, op, a, b)? {
+        return Ok(result);
+    }
     let tol = brepkit_math::tolerance::Tolerance::new();
 
     // A tool of NURBS faces wholly inside a blank of them, the two
@@ -1112,6 +1115,32 @@ fn boolean_inner(
     Ok(enforce_manifold_shell(topo, result).unwrap_or(result))
 }
 
+/// The result of `op` when `a` or `b` is the empty solid, as a new solid: a
+/// fuse gives a copy of the other operand, a cut gives a copy of `a` or the
+/// empty solid, and an intersect gives the empty solid. `None` when neither
+/// operand is empty.
+fn empty_operand_result(
+    topo: &mut Topology,
+    op: BooleanOp,
+    a: SolidId,
+    b: SolidId,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    let (a_empty, b_empty) = (topo.is_empty_solid(a), topo.is_empty_solid(b));
+    if !a_empty && !b_empty {
+        return Ok(None);
+    }
+    let kept = match op {
+        BooleanOp::Fuse if a_empty => (!b_empty).then_some(b),
+        BooleanOp::Fuse | BooleanOp::Cut => (!a_empty).then_some(a),
+        BooleanOp::Intersect => None,
+    };
+    let result = match kept {
+        Some(s) => crate::copy::copy_solid(topo, s)?,
+        None => topo.add_empty_solid(),
+    };
+    Ok(Some(result))
+}
+
 /// Perform a boolean operation with custom options.
 ///
 /// Runs the standard GFA boolean pipeline, then applies post-processing
@@ -1568,11 +1597,15 @@ pub fn boolean_with_evolution(
 ) -> Result<(SolidId, crate::evolution::EvolutionMap), crate::OperationsError> {
     use brepkit_topology::explorer::solid_faces;
 
+    // With an empty operand the result is a copy or the empty solid, which
+    // the heuristic below attributes face by face.
+    let distinct = a != b && !topo.is_empty_solid(a) && !topo.is_empty_solid(b);
+
     // A tool of NURBS faces wholly inside the blank: each face of the result
     // is a copy of one input face, so the provenance is exact with no engine
     // run.
     if op == BooleanOp::Cut
-        && a != b
+        && distinct
         && nurbs_tool_strictly_inside(topo, a, b, brepkit_math::tolerance::Tolerance::new())
         && let Ok((result, origins)) = build_contained_cut_hollow_with_origins(topo, a, b)
         && validate_boolean_result(topo, result).is_ok()
@@ -1600,7 +1633,7 @@ pub fn boolean_with_evolution(
     // it on the fallback, which is accepted
     // — deduplicating would mean threading the relation through `boolean`'s
     // public signature.
-    let trivial = a != b && {
+    let trivial = distinct && {
         use brepkit_algo::classifier::try_build_analytic_classifier;
         let tol = brepkit_math::tolerance::Tolerance::new();
         let ca = try_build_analytic_classifier(topo, a);
@@ -1608,7 +1641,7 @@ pub fn boolean_with_evolution(
         let rel = detect_trivial_relation(topo, a, b, ca.as_ref(), cb.as_ref(), tol);
         rel.identical || rel.a_in_b || rel.b_in_a
     };
-    if a != b && !trivial {
+    if distinct && !trivial {
         let input_indices: Vec<usize> = solid_faces(topo, a)?
             .into_iter()
             .chain(solid_faces(topo, b)?)
