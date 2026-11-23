@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795464815266,
+  "lastUpdate": 1795468042909,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -77003,6 +77003,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24742102,
             "range": "± 91317",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "698785d2676e82135d031f61df95d3100e6e2b31",
+          "message": "fix(check,operations): report a wire's self-crossing only where it crosses, check pcurves against their edges, and report a malformed pcurve (#2769)\n\n## Summary\n\nOn main:\n\n- the check crate's `validate_solid` reports `WireSelfIntersection` on\nvalid walls with a seam, such as a `make_cylinder` with its wall in\nB-spline form. Over the pose sweep and the truth audit it reports 459\nsuch errors, and 20 on a fused cube truss (#2758);\n- the operations `validate_solid` does not compare pcurves with their\nedges. It passes the #2634 chamfer, whose contact pcurve lies 5.98 off\nits edge (#2757);\n- `validate_solid` panics with \"index out of bounds\" on a solid that\nholds a malformed pcurve, for example one read from an arena dump.\n\nWith this change, the check crate reports a wire only where it crosses\nitself, and none of the 459 remain. The operations `validate_solid`\nreports a pcurve off its edge, and a malformed pcurve is reported, not\nevaluated. The pose sweep and the truth audit give the same output as\nmain.\n\nFixes #2758, fixes #2757.\n\n## The change\n\n- **Self-crossings (#2758).** The old check sampled each edge in 3D and\ntook any two edges that came within 1e-6 as a crossing. A seam used once\neach way is at distance 0 from itself.\n- The check now uses the meeting search and side test that the\noperations validator uses on plane faces, on every face.\n- That search gave false crossings on cones, frustums and tori. It read\na closed circle from its frame's origin, and a closed B-spline from its\nfirst knot. It now reads a closed curve from its vertex.\n- A B-spline edge whose vertex lies more than 1e-5 off its curve's end\nwas read backward. One whose curve runs past its vertices read a false\ncrossing. Both now read between their vertices.\n- **Pcurves off their edges (#2757).** The operations `validate_solid`\nreads each pcurve on a curved face at 11 points of its span. It uses the\ncheck crate's `check_edge_same_parameter`. A reading off its edge by\nmore than the chamfer gate's bound is reported. Only the full\n`validate_solid` runs it.\n- **Malformed pcurves.** The new `Curve2D::is_well_formed` catches a\ndegree past the control points and knots that fall.\n`check_edge_same_parameter` reports such a pcurve, or a span or reading\nthat is not finite, without evaluating it. `deserialize_solid` refuses a\ndump that holds one, with `IoError::ParseError`.\n\n## Tests\n\n- `validate_seam_wires.rs` passes cylinders, cones, frustums, balls and\nrings, in analytic and B-spline form, in 4 poses. It also passes the\nbands a slab leaves on a frustum and a ring. Unit tests report a figure\neight on a cylinder and a bow tie, and read a B-spline edge between its\nvertices. `the_check_crate_reads_no_crossing_on_the_key_slots_cone`\ncovers a real cut.\n- `a_chamfers_contact_pcurve_a_turn_off_its_wall_is_reported` rebuilds\nthe #2634 chamfer on a cylinder's two rims and a frustum's rim in 4\nposes. It fails on main.\n- `a_malformed_pcurve_is_reported_without_being_evaluated`,\n`malformed_curves_are_told_from_well_formed_ones` and\n`a_dump_with_a_malformed_pcurve_is_refused` pin the malformed case. On\nmain the first panics.\n- Before the pcurve check went on, it read 1155 pcurves on 629 test\nsolids. The largest deviation of a correct pcurve was 0.45 of its bound.\nIt fires on 2 tests, and both hold false pcurves on purpose. One now\nvalidates a twin chamfer made without them.\n- brepkit-check (195) passes, and so do all brepkit-operations and\nbrepkit-io tests (3274, 26 skipped).\n\n## Cost\n\nOn the fused cube truss, the check crate's `validate_solid` takes 16.1\nms, against 7.9 ms on main, which also reported 20 false errors there.\nThe operations `validate_solid` takes 111.7 ms against 108.6 ms on main,\nwithin noise.\n\n## Still open\n\n- A pcurve that passes is read at 11 points only, so it is not proved to\nfollow its edge between them. A report is always a real fault.\n- The check crate reports `ShellConnected` on a solid with several lumps\nin one shell, which the operations validator accepts by design.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the check crate's `WireSelfIntersection` reporting so it no longer\nfires on valid seams, adds pcurve-to-edge validation to the operations\n`validate_solid`, and reports malformed pcurves instead of panicking.\n\n**What changed**\n\n- Wire crossings are now detected on each face's surface using the same\nmeeting and side test the operations validator uses on plane faces, so a\nseam used once each way no longer reads as a crossing (fixes #2758).\n- Closed curves and B-spline edges are read from their vertices rather\nthan from their frame or first knot, and edges that lie slightly off\ntheir curves are read between their vertices.\n- The operations `validate_solid` reads each pcurve on a curved face at\n11 points of its span against its edge and reports a pcurve that\ndeviates beyond the tolerance (fixes #2757).\n- `Curve2D::is_well_formed` flags malformed pcurves;\n`check_edge_same_parameter` and `deserialize_solid` report or reject\nthem without evaluating.\n\n<sup>Written for commit 1697c0982c87ec3d5077707b09df3cf3190dcd11.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2769?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2769?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2769&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-23T21:03:38Z",
+          "tree_id": "da2acbf755a8603fa1946211b20953fac275542e",
+          "url": "https://github.com/andymai/brepkit/commit/698785d2676e82135d031f61df95d3100e6e2b31"
+        },
+        "date": 1795468028176,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 887250,
+            "range": "± 22100",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 896586,
+            "range": "± 23914",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9762,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 570451,
+            "range": "± 8210",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19742147,
+            "range": "± 52072",
             "unit": "ns/iter"
           }
         ]
