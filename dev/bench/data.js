@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795468042909,
+  "lastUpdate": 1795471648611,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -77057,6 +77057,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19742147,
             "range": "± 52072",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "99f785ad7d805c6f62349363a43b9121006e255e",
+          "message": "chore(main): release 4.11.45 (#2780)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.45](https://github.com/andymai/brepkit/compare/v4.11.44...v4.11.45)\n(2026-11-23)\n\n\n### Bug Fixes\n\n* **algo:** trace crossing circles on a plane face, cut sections at a\nnotched wall's edge, and split a ball face round a pole\n([#2775](https://github.com/andymai/brepkit/issues/2775))\n([07356e9](https://github.com/andymai/brepkit/commit/07356e9808f87e0e8dfefae525f880565bd1a3b6))\n* **check,operations:** report a wire's self-crossing only where it\ncrosses, check pcurves against their edges, and report a malformed\npcurve ([#2769](https://github.com/andymai/brepkit/issues/2769))\n([698785d](https://github.com/andymai/brepkit/commit/698785d2676e82135d031f61df95d3100e6e2b31))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-23T22:02:56Z",
+          "tree_id": "35094046b0c268d4cfb6531b90c984cc34e1bee8",
+          "url": "https://github.com/andymai/brepkit/commit/99f785ad7d805c6f62349363a43b9121006e255e"
+        },
+        "date": 1795471635013,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1213337,
+            "range": "± 9807",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1270529,
+            "range": "± 24298",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12885,
+            "range": "± 205",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 802423,
+            "range": "± 9379",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26072946,
+            "range": "± 385932",
             "unit": "ns/iter"
           }
         ]
