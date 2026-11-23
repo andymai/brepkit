@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.39](https://github.com/andymai/brepkit/compare/v4.11.38...v4.11.39) (2026-11-23)
+
+
+### Bug Fixes
+
+* **blend,operations:** refuse an open fillet_variable rebuild, retry a variable round across flat seams, and speed the run-up planner ([#2719](https://github.com/andymai/brepkit/issues/2719)) ([da0211a](https://github.com/andymai/brepkit/commit/da0211affa40a8542373e847379710223431a874))
+
 ## [4.11.38](https://github.com/andymai/brepkit/compare/v4.11.37...v4.11.38) (2026-11-22)
 
 
