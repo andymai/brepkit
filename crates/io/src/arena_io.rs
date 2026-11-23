@@ -450,6 +450,14 @@ pub fn deserialize_solid(bytes: &[u8], topo: &mut Topology) -> Result<SolidId, I
         let face = *face_ids
             .get(pc.face)
             .ok_or_else(|| index_err("face", pc.face))?;
+        if !(pc.t_start.is_finite() && pc.t_end.is_finite() && pc.curve.is_well_formed()) {
+            return Err(IoError::ParseError {
+                reason: format!(
+                    "arena dump holds a malformed pcurve of edge {} on face {}",
+                    pc.edge, pc.face
+                ),
+            });
+        }
         topo.pcurves_mut()
             .set(edge, face, PCurve::new(pc.curve, pc.t_start, pc.t_end));
     }
@@ -610,6 +618,53 @@ mod tests {
             assert_eq!(a.axis().0[i].to_bits(), b.axis().0[i].to_bits());
             assert_eq!(a.x_axis().0[i].to_bits(), b.x_axis().0[i].to_bits());
             assert_eq!(a.y_axis().0[i].to_bits(), b.y_axis().0[i].to_bits());
+        }
+    }
+
+    /// A dump holds whatever data its bytes hold. A pcurve whose B-spline
+    /// has more degrees than control points, or knots that fall, would read
+    /// past its arrays when evaluated: such a dump is refused. The dump it
+    /// was made from loads.
+    #[test]
+    fn a_dump_with_a_malformed_pcurve_is_refused() {
+        use brepkit_math::curves2d::NurbsCurve2D;
+        use brepkit_math::vec::Point2;
+
+        let mut topo = Topology::new();
+        let solid = make_cylinder(&mut topo, 3.0, 4.0).unwrap();
+        let wall = solid_faces(&topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .unwrap();
+        let rim = brepkit_topology::explorer::face_edges(&topo, wall).unwrap()[0];
+        let line = NurbsCurve2D::from_line(Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)).unwrap();
+        topo.pcurves_mut()
+            .set(rim, wall, PCurve::new(Curve2D::Nurbs(line), 0.0, 1.0));
+        let bytes = serialize_solid(&topo, solid).unwrap();
+        assert!(deserialize_solid(&bytes, &mut Topology::new()).is_ok());
+
+        let tamper = |edit: &dyn Fn(&mut serde_json::Value)| {
+            let mut dump: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            let nurbs = dump["pcurves"][0]["curve"]
+                .get_mut("Nurbs")
+                .expect("the pcurve is a B-spline");
+            edit(nurbs);
+            serde_json::to_vec(&dump).unwrap()
+        };
+        for bad in [
+            tamper(&|nurbs| {
+                nurbs["degree"] = serde_json::json!(3);
+                nurbs["knots"] = serde_json::json!([0.0, 0.0, 0.0, 1.0, 1.0, 1.0]);
+            }),
+            tamper(&|nurbs| nurbs["knots"] = serde_json::json!([1.0, 1.0, 0.0, 0.0])),
+            tamper(&|nurbs| nurbs["weights"] = serde_json::json!([1.0])),
+        ] {
+            let found = deserialize_solid(&bad, &mut Topology::new());
+            assert!(
+                matches!(&found, Err(IoError::ParseError { reason }) if reason.contains("malformed pcurve")),
+                "{found:?}"
+            );
         }
     }
 }

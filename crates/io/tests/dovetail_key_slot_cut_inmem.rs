@@ -101,3 +101,22 @@ fn a_key_slot_cut_through_a_pocket_cone_rim_is_exact() {
         );
     }
 }
+
+/// The cut's pocket cone face runs along two B-spline edges that meet at a
+/// vertex 1.3e-5 off both their curves, past the gap within which
+/// `domain_with_endpoints` welds them, so it reads one of them against its
+/// direction. The check crate's `validate_solid` read that wire as crossing
+/// itself. It reads each edge the way its vertices lie, and finds no fault
+/// in the cut or in the intersect.
+#[test]
+fn the_check_crate_reads_no_crossing_on_the_key_slots_cone() {
+    use brepkit_check::validate::{ValidateOptions, validate_solid as check_solid};
+    for op in [BooleanOp::Cut, BooleanOp::Intersect] {
+        let mut topo = Topology::new();
+        let plate = load(&mut topo, "dovetail_key_slot_plate.bin");
+        let tool = load(&mut topo, "dovetail_key_slot_tool.bin");
+        let result = exact(&mut topo, op, plate, tool);
+        let report = check_solid(&topo, result, &ValidateOptions::default()).unwrap();
+        assert!(report.is_valid(), "{op:?}: {:?}", report.issues);
+    }
+}

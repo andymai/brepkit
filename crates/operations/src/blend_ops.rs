@@ -2144,8 +2144,9 @@ mod tests {
 
     /// A chamfer's contact whose pcurve on the B-spline wall runs from u = 1
     /// to 2 on the knot domain 0 to 1, a whole turn off: read through the
-    /// wall, it strays far from its edge. The solid checks pass the result,
-    /// and the chamfer's gate refuses it. The result as built passes both.
+    /// wall, it strays far from its edge. The solid checks report the
+    /// result, and the chamfer's gate refuses it. The result as built passes
+    /// both.
     #[test]
     fn a_chamfer_whose_pcurve_leaves_its_edge_is_refused() {
         use brepkit_math::curves2d::{Curve2D, Line2D, NurbsCurve2D};
@@ -2206,10 +2207,13 @@ mod tests {
         }
         let (edge, face, pcurve) = moved.expect("a contact's pcurve on the wall");
         topo.pcurves_mut().set(edge, face, pcurve);
+        let report = crate::validate::validate_solid(&topo, built.solid).unwrap();
         assert!(
-            crate::validate::validate_solid(&topo, built.solid)
-                .unwrap()
-                .is_valid()
+            report
+                .issues
+                .iter()
+                .any(|issue| issue.description.contains("pcurve")),
+            "{report:?}"
         );
         let error = super::valid_chamfer(&mut topo, solid, built)
             .err()

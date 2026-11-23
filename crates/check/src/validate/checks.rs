@@ -30,7 +30,8 @@ pub enum CheckId {
     WireClosure3D,
     /// Edge appears 3+ times in the same wire.
     WireRedundantEdge,
-    /// Wire has a self-intersection (non-adjacent edges cross).
+    /// A wire crosses itself on its face's surface (two of its edges, or
+    /// one edge with itself, cross).
     WireSelfIntersection,
     /// Face has no surface.
     FaceNoSurface,

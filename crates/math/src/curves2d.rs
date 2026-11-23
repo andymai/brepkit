@@ -452,6 +452,47 @@ impl Curve2D {
             Self::Nurbs(c) => c.tangent(t),
         }
     }
+
+    /// Whether the curve gives a finite point at each finite parameter, and
+    /// a NURBS curve can be evaluated without reading past its arrays. A
+    /// curve that was read from data and not built by a constructor need
+    /// not be: the data can hold any values.
+    ///
+    /// Every number is finite. A line's direction is not zero, and a
+    /// circle's radius and an ellipse's semi-axes are positive. A NURBS
+    /// curve has fewer degrees than control points, a knot for each control
+    /// point and the degree and one more, knots that do not fall, a span of
+    /// positive length, and a positive weight for each control point.
+    #[must_use]
+    pub fn is_well_formed(&self) -> bool {
+        let point = |p: Point2| p.x().is_finite() && p.y().is_finite();
+        match self {
+            Self::Line(c) => {
+                let d = c.direction();
+                point(c.origin()) && point(Point2::new(d.x(), d.y())) && d.length() > 0.0
+            }
+            Self::Circle(c) => point(c.center) && c.radius.is_finite() && c.radius > 0.0,
+            Self::Ellipse(c) => {
+                point(c.center)
+                    && [c.semi_major, c.semi_minor]
+                        .iter()
+                        .all(|&a| a.is_finite() && a > 0.0)
+                    && c.rotation.is_finite()
+            }
+            Self::Nurbs(c) => {
+                let n = c.control_points.len();
+                let p = c.degree;
+                n > p
+                    && c.knots.len() == n + p + 1
+                    && c.weights.len() == n
+                    && c.knots.iter().all(|k| k.is_finite())
+                    && c.knots.windows(2).all(|pair| pair[0] <= pair[1])
+                    && c.knots[p] < c.knots[n]
+                    && c.weights.iter().all(|&w| w.is_finite() && w > 0.0)
+                    && c.control_points.iter().all(|&q| point(q))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -459,6 +500,59 @@ impl Curve2D {
 mod tests {
     use super::*;
     use std::f64::consts::PI;
+
+    /// Curves the constructors build are well formed. Curves with fields
+    /// no constructor gives, as data read from a file can hold, are not.
+    #[test]
+    fn malformed_curves_are_told_from_well_formed_ones() {
+        let o = Point2::new(0.0, 0.0);
+        let cubic = |degree: usize, knots: Vec<f64>, n: usize, weight: f64| {
+            Curve2D::Nurbs(NurbsCurve2D {
+                degree,
+                knots,
+                control_points: (0..n).map(|k| Point2::new(k as f64, 0.0)).collect(),
+                weights: vec![weight; n],
+            })
+        };
+        let unit = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        for good in [
+            Curve2D::Line(Line2D::new(o, Vec2::new(1.0, 2.0)).unwrap()),
+            Curve2D::Circle(Circle2D::new(o, 2.0).unwrap()),
+            Curve2D::Ellipse(Ellipse2D::new(o, 2.0, 1.0, 0.3).unwrap()),
+            Curve2D::Nurbs(NurbsCurve2D::from_line(o, Point2::new(1.0, 1.0)).unwrap()),
+            cubic(3, unit.clone(), 4, 1.0),
+        ] {
+            assert!(good.is_well_formed(), "{good:?}");
+        }
+        for bad in [
+            Curve2D::Line(Line2D {
+                origin: o,
+                direction: Vec2::new(0.0, 0.0),
+            }),
+            Curve2D::Line(Line2D {
+                origin: Point2::new(f64::NAN, 0.0),
+                direction: Vec2::new(1.0, 0.0),
+            }),
+            Curve2D::Circle(Circle2D {
+                center: o,
+                radius: 0.0,
+            }),
+            Curve2D::Ellipse(Ellipse2D {
+                center: o,
+                semi_major: f64::INFINITY,
+                semi_minor: 1.0,
+                rotation: 0.0,
+            }),
+            cubic(3, vec![0.0, 0.0, 0.0, 0.0, 1.0], 1, 1.0),
+            cubic(3, vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0], 4, 1.0),
+            cubic(3, vec![0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0], 4, 1.0),
+            cubic(3, vec![0.0, 0.0, 0.0, 0.0, f64::NAN, 1.0, 1.0, 1.0], 4, 1.0),
+            cubic(3, vec![0.0; 8], 4, 1.0),
+            cubic(3, unit, 4, 0.0),
+        ] {
+            assert!(!bad.is_well_formed(), "{bad:?}");
+        }
+    }
 
     const TOL: f64 = 1e-10;
 
