@@ -10198,6 +10198,42 @@ mod tests {
         }
     }
 
+    /// A cone's distance holds `-|h| cos`, which has no second derivative
+    /// across the apex's plane. Off the axis on that plane, within the
+    /// rounding of `h`, no curvature is read, along the axis or across it,
+    /// so neither a march station nor a search for a touch is built there:
+    /// both find nothing, and no touch is read. Just off the plane each
+    /// curvature reads again.
+    #[test]
+    fn a_cone_reads_no_curvature_on_its_apex_plane() {
+        use section_fit::Carrier;
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let cone = ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), axis, 0.7).unwrap();
+        let rod =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 3.0), Vec3::new(1.0, 0.0, 0.0), 1.0)
+                .unwrap();
+        let (a, b) = (
+            AnalyticSurface::Cone(&cone),
+            AnalyticSurface::Cylinder(&rod),
+        );
+        let across = Vec3::new(1.0, 0.0, 0.0);
+        for on in [
+            Point3::new(2.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 1e-17),
+            Point3::new(2.0, 0.0, -1e-17),
+        ] {
+            assert!(a.distance(on).is_some());
+            assert!(a.bend(on, axis).is_none(), "{on:?} along the axis");
+            assert!(a.bend(on, across).is_none(), "{on:?} across");
+            assert!(station(&a, &b, on, axis).is_none(), "{on:?} station");
+            assert!(singular_point(&a, &b, on, 1.0).is_none(), "{on:?} touch");
+        }
+        for off in [Point3::new(2.0, 0.0, 1e-3), Point3::new(2.0, 0.0, -1e-3)] {
+            assert!(a.bend(off, axis).is_some(), "{off:?} along the axis");
+            assert!(a.bend(off, across).is_some(), "{off:?} across");
+        }
+    }
+
     /// Upright, turned and moved, and mirrored through a slanted plane.
     fn three_poses() -> [crate::mat::Mat4; 3] {
         use crate::mat::Mat4;

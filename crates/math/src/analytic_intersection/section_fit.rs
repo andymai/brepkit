@@ -83,7 +83,8 @@ pub(super) trait Carrier {
     /// The second derivative of the signed distance of [`Self::distance`]
     /// along the unit vector `v` at `p`: on the surface, with `v` tangent
     /// to it, its curvature along `v`, positive where it bends away from
-    /// the gradient. `None` where the distance has no second derivative.
+    /// the gradient. `None` where the distance has no second derivative: on
+    /// an axis, at a centre, or on a cone's apex plane.
     fn bend(&self, p: Point3, v: Vec3) -> Option<f64>;
 
     /// Which sheet of the surface [`Self::distance`] reads at `p`: a cone's
@@ -319,10 +320,14 @@ impl Carrier for AnalyticSurface<'_> {
                 let r = w.length();
                 (r > 0.0).then(|| turn(v, w * (1.0 / r)) / r)
             }
+            // `|h|` has no second derivative across the apex's plane: there,
+            // within the rounding of `h`, none is read.
             Self::Cone(c) => {
-                let across = across_of(p - c.apex(), c.axis());
+                let w = p - c.apex();
+                let h = c.axis().dot(w);
+                let across = w - c.axis() * h;
                 let rho = across.length();
-                (rho > 0.0).then(|| {
+                (rho > 0.0 && h.abs() > 64.0 * f64::EPSILON * w.length()).then(|| {
                     c.half_angle().sin() * turn(across_of(v, c.axis()), across * (1.0 / rho)) / rho
                 })
             }
