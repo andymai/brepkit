@@ -3358,7 +3358,7 @@ fn conic_turns_about_u_axis(
 /// conic's normal: a meridian circle once, a circle round the axis and a
 /// small loop on the tube not at all. `None` on another surface, and when
 /// the core comes within the linear tolerance of the conic, where `v` has
-/// no value: there the count turns on rounding.
+/// no value, or may: there the count turns on rounding.
 fn conic_turns_round_tube(
     surface: &FaceSurface,
     center: Point3,
@@ -3388,17 +3388,25 @@ fn conic_turns_round_tube(
     );
     let swing = ca.hypot(cb);
     let psi = cb.atan2(ca);
+    if d.abs() + swing <= tol {
+        // The core lies in the conic's plane, within the tolerance all
+        // round: a circle of radius `big` about the foot of its centre. Each
+        // point of the conic lies at least `near` from that foot and at most
+        // `far` from it, exactly for a circle and as bounds for an ellipse.
+        // The conic clears the core when those keep the tolerance from
+        // `big` on one side, and then winds the tube nothing; else the two
+        // may meet.
+        let foot = origin - normal * d;
+        let reach = (foot - center).length();
+        let near = (reach - ra.max(rb)).max(ra.min(rb) - reach);
+        let far = reach + ra.max(rb);
+        return (near > big + tol || far < big - tol).then_some(0.0);
+    }
     if swing <= d.abs() {
-        // The core keeps to one side of the plane. It comes nearest the
-        // plane at `psi`, or half a turn on.
-        let near = if d < 0.0 {
-            psi
-        } else {
-            psi + std::f64::consts::PI
-        };
-        let clear = d.abs() - swing > tol
-            || conic_axis_gap(center, (a, ra), (b, rb), core(near), normal) > tol;
-        return clear.then_some(0.0);
+        // The core keeps to one side of the plane. Clear of it by more than
+        // the tolerance, it cannot meet the conic. Nearer, it touches the
+        // plane, and no clearance is proved.
+        return (d.abs() - swing > tol).then_some(0.0);
     }
     let theta = (-d / swing).acos();
     let inside = |phi: f64| -> Option<bool> {
@@ -8441,6 +8449,61 @@ mod tests {
         let mut twice = square;
         twice.extend([rim(false), rim(false)]);
         assert!(!sections_only_as_slits(&twice, &[], 1e-7));
+    }
+
+    /// Conics in the plane of a torus's core circle, radius 3: one that
+    /// crosses the core has no turns round the tube to read, and gives no
+    /// end UVs; one that keeps clear of it, inside or out, winds the tube
+    /// nothing (an equator's ends lie a turn apart in `u` only). A unit
+    /// circle about (3, 0, 0) crosses the core at x = 17/6, and a clearance
+    /// read at one point of the core passed it.
+    #[test]
+    fn a_conic_in_the_cores_plane_crossing_it_has_no_turns() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::surfaces::ToroidalSurface;
+        use std::f64::consts::TAU;
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let torus = FaceSurface::Torus(ToroidalSurface::new(origin, 3.0, 1.0).unwrap());
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let circle = |c: Point3, r: f64| {
+            let turns = conic_turns_round_tube(&torus, c, (x, r), (y, r));
+            let curve = EdgeCurve::Circle(Circle3D::new(c, z, r).unwrap());
+            let start = c + x * r;
+            (turns, closed_section_end_uvs(&curve, start, &torus, TAU))
+        };
+        let crossing = Point3::new(3.0, 0.0, 0.0);
+        assert_eq!(
+            circle(crossing, 1.0),
+            (None, None),
+            "a circle across the core"
+        );
+        for r in [4.0, 2.0] {
+            let (turns, ends) = circle(origin, r);
+            assert_eq!(turns, Some(0.0), "the equator of radius {r}");
+            let (s, e) = ends.unwrap();
+            assert!(
+                (e.x() - s.x() - TAU).abs() < 1e-12 && (e.y() - s.y()).abs() < 1e-12,
+                "the equator of radius {r}: {s:?} {e:?}"
+            );
+        }
+        let ellipse = |c: Point3, ra: f64, rb: f64| {
+            let e = Ellipse3D::new_with_ref(c, z, ra, rb, x).unwrap();
+            conic_turns_round_tube(&torus, c, (e.u_axis(), ra), (e.v_axis(), rb))
+        };
+        assert_eq!(
+            ellipse(crossing, 1.0, 0.5),
+            None,
+            "an ellipse across the core"
+        );
+        assert_eq!(
+            ellipse(Point3::new(0.5, 0.0, 0.0), 1.5, 1.0),
+            Some(0.0),
+            "an ellipse inside the core"
+        );
     }
 
     /// On a ring torus of radii 3 and 1 a closed section's end UVs differ by
