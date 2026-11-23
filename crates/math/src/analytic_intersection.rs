@@ -4056,10 +4056,11 @@ fn ruling_cone_cylinder(
         return None;
     }
     let samples = ruling_samples(cyl, &roots);
-    // A window of meeting rulings narrower than the sampling would vanish
-    // (a cone's tip just through the wall) while the others still made
-    // loops; a finer scan finds every window, and any that the sampling
-    // covers thinly goes to the marcher.
+    // A window of meeting rulings that no sample meets would vanish (a
+    // cone's tip just through the wall) while the others still made loops;
+    // a finer scan finds every window, and one with no sample goes to the
+    // marcher. A window with a sample is sampled afresh between its ends,
+    // however few samples it holds.
     let scan = WINDOW_SCAN * RULING_SAMPLES;
     // Ruling sample `i` lies midway between scan points
     // `WINDOW_SCAN i + 7` and `WINDOW_SCAN i + 8`.
@@ -4076,10 +4077,11 @@ fn ruling_cone_cylinder(
             while k < start + scan && meets(k) {
                 k += 1;
             }
-            let covered = (first..k)
-                .filter(|&j| j % WINDOW_SCAN == WINDOW_SCAN / 2 - 1 && meets(j + 1))
-                .count();
-            if covered < WINDOW_MIN_SAMPLES {
+            let sampled = (first..k).any(|j| {
+                j % WINDOW_SCAN == WINDOW_SCAN / 2 - 1
+                    && samples[(j / WINDOW_SCAN) % RULING_SAMPLES].is_some()
+            });
+            if !sampled {
                 return None;
             }
         }
@@ -4306,9 +4308,8 @@ fn window_cone_sphere(
 }
 
 /// Scan points per ruling sample when looking for windows of meeting
-/// rulings, and the fewest samples a window needs to be fit.
+/// rulings.
 const WINDOW_SCAN: usize = 16;
-const WINDOW_MIN_SAMPLES: usize = 8;
 
 /// Rulings sampled around a swept cylinder, half a step off u = 0 so the
 /// branches of a self-touching curve (equal crossing cylinders) do not share
@@ -6122,6 +6123,57 @@ mod tests {
                     on_ball.abs() < 1e-5 && on_cone.abs() < 1e-5 && p.z() < 3.0,
                     "ball at {centre:?}: off by {on_ball}, {on_cone} at {p:?}"
                 );
+            }
+        }
+    }
+
+    /// A taper pin through a rod, the rod turned about its axis: the pin's
+    /// narrow end meets fewer than 8 of the rod's 128 sampled rulings in
+    /// some turns, and the rulings still trace both of its loops there.
+    #[test]
+    fn a_taper_pin_through_a_turned_rod_traces_both_loops() {
+        use crate::traits::ParametricCurve;
+        let slope = 0.7_f64 / 16.0;
+        let half = (1.0 / slope).atan();
+        for flip in [false, true] {
+            let (apex_y, axis_y) = if flip {
+                (-8.0 - 0.8 / slope, 1.0)
+            } else {
+                (-8.0 + 1.5 / slope, -1.0)
+            };
+            let pin = ConicalSurface::new(
+                Point3::new(0.0, apex_y, 10.0),
+                Vec3::new(0.0, axis_y, 0.0),
+                half,
+            )
+            .unwrap();
+            for spin in [0.0_f64, 0.3, 0.9, 1.4, 2.0, 2.6, 3.0, 3.6] {
+                let rod = CylindricalSurface::with_ref_dir(
+                    Point3::new(0.0, 0.0, 0.0),
+                    Vec3::new(0.0, 0.0, 1.0),
+                    5.0,
+                    Vec3::new(spin.cos(), spin.sin(), 0.0),
+                )
+                .unwrap();
+                let curves = ruling_cone_cylinder(&pin, &rod, true);
+                assert!(curves.is_some(), "spin {spin} flip {flip}: no trace");
+                let curves = curves.unwrap();
+                assert_eq!(curves.len(), 2, "spin {spin} flip {flip}: loops");
+                for c in &curves {
+                    let (t0, t1) = c.curve.domain();
+                    for k in 0..=1000 {
+                        let p = ParametricCurve::evaluate(
+                            &c.curve,
+                            (t1 - t0).madd(f64::from(k) / 1000.0, t0),
+                        );
+                        let on_rod = p.x().hypot(p.y()) - 5.0;
+                        let on_pin = p.x().hypot(p.z() - 10.0) - slope * (p.y() - apex_y).abs();
+                        assert!(
+                            on_rod.abs() < 1e-7 && on_pin.abs() < 1e-7,
+                            "spin {spin} flip {flip}: off by {on_rod:.2e}, {on_pin:.2e}"
+                        );
+                    }
+                }
             }
         }
     }

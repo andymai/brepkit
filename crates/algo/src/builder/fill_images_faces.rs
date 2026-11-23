@@ -1631,16 +1631,25 @@ fn seam_anchor_on_winding_loop(
             .map(|(u, _)| wrap(u - seam_u))
     };
     let param = |k: u32| t0 + (t1 - t0) * f64::from(k) / f64::from(SAMPLES);
+    let samples = (0..=SAMPLES)
+        .map(|k| delta(param(k)))
+        .collect::<Option<Vec<f64>>>()?;
     let mut winding = 0.0;
     let mut crossing = None;
-    let mut prev = delta(t0)?;
     for k in 1..=SAMPLES {
-        let d = delta(param(k))?;
+        let (prev, d) = (samples[k as usize - 1], samples[k as usize]);
         winding += wrap(d - prev);
-        if crossing.is_none() && prev * d < 0.0 && (prev - d).abs() < half {
+        // A crossing exactly at a sample reads zero there: it belongs to the
+        // step that reaches it, when the loop goes on to the other side (the
+        // next sample; the loop's last sample is its first).
+        let crosses = if d == 0.0 {
+            prev * samples[if k == SAMPLES { 1 } else { k as usize + 1 }] < 0.0
+        } else {
+            prev * d < 0.0
+        };
+        if crossing.is_none() && crosses && (prev - d).abs() < half {
             crossing = Some((param(k - 1), param(k), prev));
         }
-        prev = d;
     }
     if (winding.abs() - period).abs() > 0.5 * period / std::f64::consts::TAU {
         return None;
@@ -7463,6 +7472,77 @@ mod tests {
             assert!(arc.holds(at(2.5, 2.0), 1e-7), "forward {forward}");
             assert!(arc.holds(at(7.5, 2.0), 1e-7), "forward {forward}");
             assert!(!arc.holds(at(5.0, 0.0), 1e-7), "forward {forward}");
+        }
+    }
+
+    /// A loop round a cylinder that meets the face's seam exactly at one of
+    /// the samples is anchored there, as it is when it meets the seam
+    /// between two samples.
+    #[test]
+    fn a_winding_loop_on_the_seam_at_a_sample_is_anchored() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use std::f64::consts::{PI, TAU};
+        let mut topo = Topology::new();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let wall = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z, 5.0).unwrap();
+        let seam_point = |h: f64| wall.evaluate(0.0, h);
+        let (bottom, top) = (
+            topo.add_vertex(Vertex::new(seam_point(0.0), 1e-7)),
+            topo.add_vertex(Vertex::new(seam_point(10.0), 1e-7)),
+        );
+        let rim = |topo: &mut Topology, h: f64, v| {
+            let circle = Circle3D::new(Point3::new(0.0, 0.0, h), z, 5.0).unwrap();
+            topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)))
+        };
+        let (low, high) = (rim(&mut topo, 0.0, bottom), rim(&mut topo, 10.0, top));
+        let seam = topo.add_edge(Edge::new(bottom, top, EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(low, true),
+                    OrientedEdge::new(seam, true),
+                    OrientedEdge::new(high, false),
+                    OrientedEdge::new(seam, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let face_id = topo.add_face(Face::new(wire, vec![], FaceSurface::Cylinder(wall.clone())));
+        // A polygon round the wall at mid height from the far side, its
+        // middle corner on the seam: the samples at 1/64 steps reach that
+        // corner exactly at t = 1/2.
+        let count = 16;
+        for (offset, on_sample) in [(0.0, true), (0.01, false)] {
+            #[allow(clippy::cast_precision_loss)]
+            let mut corners: Vec<Point3> = (0..count)
+                .map(|i| {
+                    if i == count / 2 && on_sample {
+                        seam_point(5.0)
+                    } else {
+                        wall.evaluate((TAU * i as f64).madd(1.0 / count as f64, PI + offset), 5.0)
+                    }
+                })
+                .collect();
+            corners.push(corners[0]);
+            #[allow(clippy::cast_precision_loss)]
+            let knots: Vec<f64> = std::iter::once(0.0)
+                .chain((0..=count).map(|i| i as f64 / count as f64))
+                .chain(std::iter::once(1.0))
+                .collect();
+            let lp = NurbsCurve::new(1, knots, corners, vec![1.0; count + 1]).unwrap();
+            let face = topo.face(face_id).unwrap();
+            let anchor = seam_anchor_on_winding_loop(&topo, face, &lp);
+            assert!(anchor.is_some(), "offset {offset}: no anchor");
+            let (at, t) = anchor.unwrap();
+            let (u, _) = wall.project_point(at);
+            let off = (u + PI).rem_euclid(TAU) - PI;
+            assert!(
+                off.abs() < 1e-12,
+                "offset {offset}: anchor {off} off the seam"
+            );
+            assert!((lp.evaluate(t) - at).length() < 1e-12, "offset {offset}");
         }
     }
 
