@@ -114,7 +114,10 @@ pub(super) fn check_edge_edge_pairs(
 }
 
 /// Where two edges cross: each crossing's parameter on `a`, on `b`, and its
-/// point, read as [`check_edge_edge_pairs`] reads them.
+/// point. A place [`check_edge_edge_pairs`] reads from the chords alone is
+/// refined on both curves, and kept only where they meet there within the
+/// linear tolerance: two arcs about one centre whose chords cross meet
+/// nowhere.
 ///
 /// # Errors
 ///
@@ -138,7 +141,20 @@ pub(super) fn edge_crossings(
     ) {
         return Ok(Vec::new());
     }
-    find_edge_edge_crossings(topo, a, data_a, b, data_b, tol)
+    let (curve_a, curve_b) = (topo.edge(a)?.curve(), topo.edge(b)?.curve());
+    Ok(find_edge_edge_crossings(topo, a, data_a, b, data_b, tol)?
+        .into_iter()
+        .filter_map(|(t_a, t_b, _)| {
+            let (t_a, t_b, p) =
+                refine_on_curves((curve_a, data_a), (curve_b, data_b), (t_a, t_b), tol.linear)?;
+            let on_a = curve_a.evaluate_with_endpoints(t_a, data_a.start_pos, data_a.end_pos);
+            let on_b = curve_b.evaluate_with_endpoints(t_b, data_b.start_pos, data_b.end_pos);
+            ((on_a - on_b).length() <= tol.linear
+                && (p - on_a).length() <= tol.linear
+                && (p - on_b).length() <= tol.linear)
+                .then_some((t_a, t_b, p))
+        })
+        .collect())
 }
 
 /// A box that holds an edge's curve between its ends: the exact box of a

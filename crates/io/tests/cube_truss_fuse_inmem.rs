@@ -26,6 +26,9 @@ use brepkit_math::mat::Mat4;
 use brepkit_operations::boolean::{BooleanOp, BooleanOptions, boolean_with_options};
 use brepkit_operations::compound_ops::fuse_all;
 use brepkit_operations::measure::solid_volume;
+use brepkit_operations::tessellate::{
+    boundary_edge_count, non_manifold_edge_count, tessellate_solid,
+};
 use brepkit_operations::transform::transform_solid;
 use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
@@ -368,6 +371,13 @@ fn struts_that_end_at_one_point_fuse_in_one_pass() {
                 "{label}: {shape:?}"
             );
             assert_eq!(shape.len(), 2, "{label}: {shape:?}");
+            let mesh = tessellate_solid(&topo, fused, 0.05).unwrap();
+            assert_eq!(boundary_edge_count(&mesh), 0, "{label}: open mesh");
+            assert_eq!(
+                non_manifold_edge_count(&mesh),
+                0,
+                "{label}: mesh not manifold"
+            );
             // The line integral reads these few rods to about 1e-5 of their
             // volume, and differently for each order of the rods.
             let expected = union_volume(&rods);

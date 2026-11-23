@@ -677,6 +677,8 @@ fn split_sections_at_triple_points(
         reading: Reading,
         /// A box proven to hold the section, where one can be read.
         bbox: Option<brepkit_math::aabb::Aabb3>,
+        /// A whole loop, from its one vertex round to it.
+        closed: bool,
     }
 
     if sources.len() < 3 {
@@ -701,7 +703,12 @@ fn split_sections_at_triple_points(
         let edge = topo.edge(pb.original_edge)?;
         let start = topo.vertex(edge.start())?.point();
         let end = topo.vertex(edge.end())?.point();
-        if (start - end).length() <= WELD {
+        // Ends that meet bound a whole loop (a circle round a wall) when the
+        // curve turns between them, and a section of no length otherwise.
+        let closed = (edge.start() == edge.end() || (start - end).length() < 1e-9)
+            && !matches!(edge.curve(), EdgeCurve::Line)
+            && (pb.end.parameter - pb.start.parameter).abs() > 1e-9;
+        if (start - end).length() <= WELD && !closed {
             continue;
         }
         let reading = match edge.curve() {
@@ -718,6 +725,7 @@ fn split_sections_at_triple_points(
             params: (pb.start.parameter, pb.end.parameter),
             reading,
             bbox: phase_ee::proven_span_box(edge.curve(), start, end).map(|b| b.expanded(WELD)),
+            closed,
         });
         for face in [curve.face_a, curve.face_b] {
             on_face.entry(face).or_default().push(k);
@@ -815,9 +823,31 @@ fn split_sections_at_triple_points(
                 y.0.total_cmp(&x.0)
             }
         });
+        let mut cut_at = vec![start];
+        cut_at.extend(list.into_iter().map(|(at, v)| Pave::new(v, at)));
+        cut_at.push(end);
+        // A loop's pieces each run less than half its turn: an open arc of a
+        // circle or an ellipse is read the shorter way round between its
+        // ends, and two pieces of a loop cut once would share both ends.
+        let turn = (end.parameter - start.parameter).abs();
         let mut paves = vec![start];
-        paves.extend(list.into_iter().map(|(at, v)| Pave::new(v, at)));
-        paves.push(end);
+        for w in cut_at.windows(2) {
+            let span = w[1].parameter - w[0].parameter;
+            if sections[k].closed {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let parts = (span.abs() / (0.499 * turn)).ceil().max(1.0) as u32;
+                for m in 1..parts {
+                    let t = span.madd(f64::from(m) / f64::from(parts), w[0].parameter);
+                    let p = original.curve.evaluate_with_endpoints(
+                        t,
+                        sections[k].start,
+                        sections[k].end,
+                    );
+                    paves.push(Pave::new(topo.add_vertex(Vertex::new(p, tol.linear)), t));
+                }
+            }
+            paves.push(w[1]);
+        }
         for (n, w) in paves.windows(2).enumerate() {
             let edge = topo.add_edge(Edge::new(w[0].vertex, w[1].vertex, original.curve.clone()));
             let piece = arena.pave_blocks.alloc(PaveBlock::new(edge, w[0], w[1]));
