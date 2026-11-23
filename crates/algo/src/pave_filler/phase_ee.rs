@@ -113,6 +113,34 @@ pub(super) fn check_edge_edge_pairs(
     Ok(())
 }
 
+/// Where two edges cross: each crossing's parameter on `a`, on `b`, and its
+/// point, read as [`check_edge_edge_pairs`] reads them.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a topology lookup fails.
+pub(super) fn edge_crossings(
+    topo: &Topology,
+    a: EdgeId,
+    b: EdgeId,
+    tol: Tolerance,
+) -> Result<Vec<(f64, f64, Point3)>, AlgoError> {
+    let data = collect_edge_data(topo, &[a, b])?;
+    let [data_a, data_b] = data.as_slice() else {
+        return Ok(Vec::new());
+    };
+    if !aabbs_overlap(
+        &data_a.bbox_min,
+        &data_a.bbox_max,
+        &data_b.bbox_min,
+        &data_b.bbox_max,
+        tol.linear,
+    ) {
+        return Ok(Vec::new());
+    }
+    find_edge_edge_crossings(topo, a, data_a, b, data_b, tol)
+}
+
 /// Pre-computed edge data for fast intersection checks.
 struct EdgeData {
     /// Start vertex position.

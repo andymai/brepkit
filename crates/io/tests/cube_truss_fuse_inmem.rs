@@ -334,3 +334,59 @@ fn struts_that_meet_on_a_chord_axis_out_of_plane_fuse() {
         );
     }
 }
+
+/// Three or four struts that end at one corner of the truss, with no chord
+/// round them: struts 4, 6, 16 and 18 at `(70, 120, 120)`. Each two of their
+/// walls meet in a curve, and each three walls meet at one point inside the
+/// three faces, where the three curves cross.
+#[test]
+fn struts_that_end_at_one_point_fuse_in_one_pass() {
+    let sets: [&[usize]; 5] = [
+        &[4, 6, 16],
+        &[4, 16, 18],
+        &[4, 6, 18],
+        &[6, 16, 18],
+        &[4, 6, 16, 18],
+    ];
+    let mut volumes: Vec<Vec<f64>> = Vec::new();
+    for (name, pose) in poses() {
+        let mut row = Vec::new();
+        for set in sets {
+            let mut topo = Topology::new();
+            let solids = load(&mut topo, &pose);
+            let struts: Vec<SolidId> = set.iter().map(|&i| solids[i]).collect();
+            let rods: Vec<Rod> = struts.iter().map(|&s| rod(&topo, s)).collect();
+            let label = format!("{name}, struts {set:?}");
+            let fused = brepkit_algo::gfa::fuse_n(&mut topo, &struts).unwrap();
+            let report = validate_solid(&topo, fused).unwrap();
+            assert!(report.is_valid(), "{label}: {:?}", report.issues);
+            assert_eq!(edges_not_used_twice(&topo, fused), 0, "{label}");
+            let shape = census(&topo, fused);
+            assert_eq!(
+                shape.get("cylinder"),
+                Some(&set.len()),
+                "{label}: {shape:?}"
+            );
+            assert_eq!(shape.len(), 2, "{label}: {shape:?}");
+            // The line integral reads these few rods to about 1e-5 of their
+            // volume, and differently for each order of the rods.
+            let expected = union_volume(&rods);
+            let volume = solid_volume(&topo, fused, 0.005).unwrap();
+            assert!(
+                (volume - expected).abs() < 2e-5 * expected,
+                "{label}: volume {volume} should be {expected}"
+            );
+            row.push(volume);
+        }
+        volumes.push(row);
+    }
+    // Every pose holds the same solid, and struts 6 and 18 are mirror
+    // images in the plane y = z through the corner, as are 4 and 16.
+    let same = |a: f64, b: f64| (a - b).abs() < 1e-9 * a;
+    for row in &volumes {
+        assert!(same(row[0], row[1]) && same(row[2], row[3]), "{row:?}");
+        for (v, w) in row.iter().zip(&volumes[0]) {
+            assert!(same(*v, *w), "{volumes:?}");
+        }
+    }
+}
