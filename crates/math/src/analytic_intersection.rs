@@ -2489,54 +2489,65 @@ fn marched_sections_near(
     let region = region.map(|r| r.expanded(2.0 * char_size / grid_res as f64));
 
     // Seeds: the middle of each cell of a grid over a patch whose distance
-    // from the other patch is within the cell's reach from its middle, a
-    // quarter over its farthest corner, with that distance. Every point of
-    // the section lies in a cell of each patch, so each cell it crosses
-    // gives a seed. Also the least distance of any cell's middle.
-    let cells = |surf: &dyn Fn(f64, f64) -> Point3,
+    // from the other surface is within the cell's reach from its middle (see
+    // [`cell_reach`]). Every point of the section lies in a cell of each
+    // patch, no farther from its middle than that, so each cell it crosses
+    // gives a seed. Also, for the first patch, the least distance of any
+    // cell's middle from the other patch, and the box of the seeds' cells.
+    let cells = |surface: &AnalyticSurface<'_>,
+                 surf: &dyn Fn(f64, f64) -> Point3,
                  (u_range, v_range): ((f64, f64), (f64, f64)),
                  other: &AnalyticSurface<'_>,
-                 (other_u, other_v): ((f64, f64), (f64, f64)),
-                 other_surf: &dyn Fn(f64, f64) -> Point3| {
-        let n = grid_res;
+                 near: Option<Aabb3>,
+                 patch_gap: Option<&dyn Fn(Point3) -> f64>| {
         #[allow(clippy::cast_precision_loss)]
-        let at = |i: usize, j: usize, half: f64| {
-            let u = (u_range.1 - u_range.0).madd((i as f64 + half) / n as f64, u_range.0);
-            let v = (v_range.1 - v_range.0).madd((j as f64 + half) / n as f64, v_range.0);
-            surf(u, v)
-        };
-        let corners: Vec<Point3> = (0..=n)
-            .flat_map(|i| (0..=n).map(move |j| (i, j)))
-            .map(|(i, j)| at(i, j, 0.0))
-            .collect();
+        let n = grid_res as f64;
+        let (du, dv) = ((u_range.1 - u_range.0) / n, (v_range.1 - v_range.0) / n);
         let mut found = Vec::new();
         let mut least = f64::INFINITY;
-        for i in 0..n {
-            for j in 0..n {
-                let middle = at(i, j, 0.5);
-                let (u, v) = project_analytic(other, middle, other_u, other_v);
-                let foot = other_surf(u, v);
-                let dist = (middle - foot).length();
-                least = least.min(dist);
-                let reach = 1.25
-                    * [(0, 0), (1, 0), (0, 1), (1, 1)]
-                        .iter()
-                        .map(|&(di, dj)| (corners[(i + di) * (n + 1) + j + dj] - middle).length())
-                        .fold(0.0, f64::max);
-                if dist <= reach && region.is_none_or(|r| r.expanded(reach).contains_point(middle))
-                {
-                    found.push((dist, middle + (foot - middle) * 0.5));
+        let mut held: Option<Aabb3> = None;
+        for i in 0..grid_res {
+            for j in 0..grid_res {
+                #[allow(clippy::cast_precision_loss)]
+                let (u, v) = (
+                    du.madd(i as f64 + 0.5, u_range.0),
+                    dv.madd(j as f64 + 0.5, v_range.0),
+                );
+                let middle = surf(u, v);
+                if let Some(gap) = patch_gap {
+                    least = least.min(gap(middle));
+                }
+                let reach = cell_reach(surface, (0.5 * du, 0.5 * dv), v);
+                if near.is_some_and(|r| !r.expanded(reach).contains_point(middle)) {
+                    continue;
+                }
+                let Some((dist, normal)) = section_fit::Carrier::distance(other, middle) else {
+                    continue;
+                };
+                if dist.abs() <= reach {
+                    found.push((dist.abs(), middle - normal * (0.5 * dist)));
+                    let cell = Aabb3 {
+                        min: middle,
+                        max: middle,
+                    }
+                    .expanded(reach);
+                    held = Some(held.map_or(cell, |h| h.union(cell)));
                 }
             }
         }
-        (found, least)
+        (found, least, held)
     };
-    let (mut candidates, min_dist) = cells(
+    let gap_to_b = |q: Point3| {
+        let (u, v) = project_analytic(&b, q, u_range_b, v_range_b);
+        (q - surf_b(u, v)).length()
+    };
+    let (mut candidates, min_dist, held) = cells(
+        &a,
         surf_a.as_ref(),
         (u_range_a, v_range_a),
         &b,
-        (u_range_b, v_range_b),
-        surf_b.as_ref(),
+        region,
+        Some(&gap_to_b),
     );
 
     // Cheap rejection: the grid samples surface A; the closest sample's
@@ -2549,17 +2560,20 @@ fn marched_sections_near(
     // ~80 inner-wall × outer-wall pairs that dominate pavefiller time).
     #[allow(clippy::cast_precision_loss)]
     let reject_dist = (char_size / grid_res as f64) * 3.0;
-    if min_dist > reject_dist {
+    // With no seed on A, no point of the section lies on A's patch.
+    let Some(held) = held.filter(|_| min_dist <= reject_dist) else {
         return Ok(vec![]);
-    }
-    // Two loops in one cell of one patch can lie in two cells of the other.
+    };
+    // Two loops in one cell of one patch can lie in two cells of the other,
+    // which lie within their reach of A's seeds' cells.
     candidates.extend(
         cells(
+            &b,
             surf_b.as_ref(),
             (u_range_b, v_range_b),
             &a,
-            (u_range_a, v_range_a),
-            surf_a.as_ref(),
+            Some(held),
+            None,
         )
         .0,
     );
@@ -2715,6 +2729,20 @@ fn marched_sections_near(
     }
 
     Ok(curves)
+}
+
+/// How far a point of the patch of `surface` within `du` and `dv` of
+/// parameter from `(u, v)` can lie from that point: the steps times the
+/// greatest rates at which the surface moves with each parameter there.
+fn cell_reach(surface: &AnalyticSurface<'_>, (du, dv): (f64, f64), v: f64) -> f64 {
+    match surface {
+        AnalyticSurface::Cylinder(c) => du.madd(c.radius(), dv),
+        AnalyticSurface::Cone(c) => (du * c.half_angle().cos()).madd(v.abs() + dv, dv),
+        AnalyticSurface::Sphere(s) => (du + dv) * s.radius(),
+        AnalyticSurface::Torus(t) => {
+            du.madd(t.major_radius() + t.minor_radius(), dv * t.minor_radius())
+        }
+    }
 }
 
 /// Whether `p`, a point of the section whose next branch lies `gap` away,
