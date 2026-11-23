@@ -1530,14 +1530,16 @@ fn find_edge_surface_crossings(
         })
         .collect();
 
-    // A run of samples within the tolerance of the surface that stays on one
-    // side of it is one contact, where the edge comes nearest to it. An edge
+    // A run of samples within the tolerance of the surface holds a contact
+    // where the edge comes nearest to it, not one at each sample. An edge
     // nearly tangent to the surface stays within the tolerance over a long
     // stretch (a ball's equator 3e-7 inside a rod's wall for a third of a
     // turn), and a crossing at each of its samples would cut it into pieces
     // that all lie on the surface. Where the edge passes to the other side
     // inside the run, each such crossing is kept: a line 6e-8 inside a ball
-    // at its middle crosses it twice, 2385 tolerances apart.
+    // at its middle crosses it twice, 2385 tolerances apart. Each touch the
+    // run also holds, a least of the distance apart from the crossings, is
+    // kept as well.
     let mut run: Option<(usize, usize)> = None;
     let near_a_crossing = |t: f64, crossings: &[(f64, Point3)]| {
         crossings
@@ -1562,14 +1564,7 @@ fn find_edge_surface_crossings(
             let around: Vec<f64> = (first.saturating_sub(1)..=(last + 1).min(n))
                 .map(|k| samples[k].0)
                 .collect();
-            let flips = run_crossings(
-                curve,
-                start_pos,
-                end_pos,
-                around.iter().copied(),
-                surface,
-                tol,
-            );
+            let flips = run_contacts(curve, start_pos, end_pos, &around, surface, tol);
             if !flips.is_empty() {
                 let before = crossings.len();
                 for (t, p) in flips {
@@ -1893,6 +1888,116 @@ fn run_crossings(
         prev = Some((t, s));
     }
     out
+}
+
+/// Where a curve meets a surface between the first and last of the
+/// parameters `ts`: each change of side, as [`run_crossings`] finds them,
+/// and each touch, where the distance comes down to a least within the
+/// tolerance and rises again on the same side. A touch is a root of the
+/// curve's tangent along the surface's normal, the distance's rate. A touch
+/// and the contact beside it are one contact where the distance between
+/// them rises less than a thousandth of the tolerance above the higher of
+/// the two: a crossing is kept over a touch, and of two touches the nearer
+/// to the surface. Two crossings stay apart as [`run_crossings`] keeps them.
+fn run_contacts(
+    curve: &EdgeCurve,
+    start_pos: Point3,
+    end_pos: Point3,
+    ts: &[f64],
+    surface: &FaceSurface,
+    tol: Tolerance,
+) -> Vec<(f64, Point3)> {
+    /// A contact's parameter, point and distance from the surface, and
+    /// whether the curve passes through the surface there.
+    struct Contact {
+        t: f64,
+        p: Point3,
+        depth: f64,
+        crossing: bool,
+    }
+    let floor = 1e-3 * tol.linear;
+    let foot = |t: f64| -> Option<(Point3, f64, f64)> {
+        let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
+        let (u, v) = surface.project_point(pt)?;
+        let normal = surface.normal(u, v);
+        let side = (pt - surface.evaluate(u, v)?).dot(normal);
+        let rate = curve
+            .tangent_with_endpoints(t, start_pos, end_pos)
+            .dot(normal);
+        Some((pt, side, rate))
+    };
+    let mut contacts: Vec<Contact> =
+        run_crossings(curve, start_pos, end_pos, ts.iter().copied(), surface, tol)
+            .into_iter()
+            .map(|(t, p)| Contact {
+                t,
+                p,
+                depth: 0.0,
+                crossing: true,
+            })
+            .collect();
+    for pair in ts.windows(2) {
+        let (Some((_, s_lo, g_lo)), Some((_, s_hi, g_hi))) = (foot(pair[0]), foot(pair[1])) else {
+            continue;
+        };
+        if (g_lo > 0.0) == (g_hi > 0.0) {
+            continue;
+        }
+        let (mut lo, mut hi, mut g_at_lo) = (pair[0], pair[1], g_lo);
+        for _ in 0..60 {
+            let mid = f64::midpoint(lo, hi);
+            let Some((_, _, g_mid)) = foot(mid) else {
+                break;
+            };
+            if (g_mid > 0.0) == (g_at_lo > 0.0) {
+                lo = mid;
+                g_at_lo = g_mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let tm = f64::midpoint(lo, hi);
+        let Some((pm, s_m, _)) = foot(tm) else {
+            continue;
+        };
+        // A most of the distance between two of its leasts is no contact.
+        if s_m.abs() > s_lo.abs().min(s_hi.abs()) || distance_to_surface(pm, surface) >= tol.linear
+        {
+            continue;
+        }
+        contacts.push(Contact {
+            t: tm,
+            p: pm,
+            depth: s_m.abs(),
+            crossing: false,
+        });
+    }
+    contacts.sort_by(|a, b| a.t.total_cmp(&b.t));
+    // The most the distance reaches strictly between two parameters, read
+    // at the samples there and midway.
+    let rise = |a: f64, b: f64| {
+        ts.iter()
+            .copied()
+            .filter(|&t| a < t && t < b)
+            .chain(std::iter::once(f64::midpoint(a, b)))
+            .filter_map(|t| foot(t).map(|(_, s, _)| s.abs()))
+            .fold(0.0_f64, f64::max)
+    };
+    let mut kept: Vec<Contact> = Vec::new();
+    for c in contacts {
+        if let Some(last) = kept.last_mut()
+            && !(last.crossing && c.crossing)
+            && ((last.p - c.p).length() <= tol.linear
+                || rise(last.t, c.t) < last.depth.max(c.depth) + floor)
+        {
+            if !last.crossing && (c.crossing || c.depth < last.depth) {
+                *last = c;
+            }
+            continue;
+        }
+        kept.push(c);
+    }
+    kept.into_iter().map(|c| (c.t, c.p)).collect()
 }
 
 /// Points where a curve passes from one side of a surface to the other,
@@ -2759,6 +2864,132 @@ mod tests {
         assert_eq!(xs.len(), 2, "crossings at {xs:?}");
         for (x, want) in xs.iter().zip([-2001.0 * s, 2001.0 * s]) {
             assert!((x - want).abs() < 1e-9, "crossing at {x}, expected {want}");
+        }
+    }
+
+    /// Where the edge `(x, 0, k (x - r0)(x - r1)...)`, for `x` from -1 to 1
+    /// and its height a polynomial with the roots `roots`, meets the wall
+    /// of a rod of radius 1 along `x`, from `x = -2` to `x = 2`, whose top
+    /// lies at `z = 0`: the `x` of the vertices phase EF makes on the edge.
+    /// Along `y = 0` the edge's height is its signed distance from the wall.
+    fn contacts_with_a_wall(k: f64, roots: &[f64]) -> Vec<f64> {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        // The height in powers of `u`, with `x = 2u - 1`, then as a Bézier
+        // curve's control heights.
+        let mut power = vec![k];
+        for &r in roots {
+            let mut next = vec![0.0; power.len() + 1];
+            for (i, &c) in power.iter().enumerate() {
+                next[i] += c * (-1.0 - r);
+                next[i + 1] += c * 2.0;
+            }
+            power = next;
+        }
+        let n = roots.len();
+        let choose = |a: usize, b: usize| -> f64 {
+            (0..b).fold(1.0, |acc, i| acc * (a - i) as f64 / (i + 1) as f64)
+        };
+        let points: Vec<Point3> = (0..=n)
+            .map(|j| {
+                let z = (0..=j)
+                    .map(|i| choose(j, i) / choose(n, i) * power[i])
+                    .sum();
+                Point3::new(2.0f64.madd(j as f64 / n as f64, -1.0), 0.0, z)
+            })
+            .collect();
+        let knots = [vec![0.0; n + 1], vec![1.0; n + 1]].concat();
+        let (first, last) = (points[0], points[n]);
+        let curve = NurbsCurve::new(n, knots, points, vec![1.0; n + 1]).unwrap();
+
+        let mut topo = Topology::new();
+        let x_axis = Vec3::new(1.0, 0.0, 0.0);
+        let wall = CylindricalSurface::with_ref_dir(
+            Point3::new(-2.0, 0.0, -1.0),
+            x_axis,
+            1.0,
+            Vec3::new(0.0, 0.0, -1.0),
+        )
+        .unwrap();
+        let rim = |topo: &mut Topology, x: f64| {
+            let v = topo.add_vertex(Vertex::new(Point3::new(x, 0.0, -2.0), 1e-7));
+            let circle = Circle3D::new(Point3::new(x, 0.0, -1.0), x_axis, 1.0).unwrap();
+            (v, topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle))))
+        };
+        let ((v_lo, e_lo), (v_hi, e_hi)) = (rim(&mut topo, -2.0), rim(&mut topo, 2.0));
+        let seam = topo.add_edge(Edge::new(v_lo, v_hi, EdgeCurve::Line));
+        let outer = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(e_lo, true),
+                    OrientedEdge::new(seam, true),
+                    OrientedEdge::new(e_hi, false),
+                    OrientedEdge::new(seam, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let face = topo.add_face(Face::new(outer, vec![], FaceSurface::Cylinder(wall)));
+        let (a, b) = (
+            topo.add_vertex(Vertex::new(first, 1e-7)),
+            topo.add_vertex(Vertex::new(last, 1e-7)),
+        );
+        let edge = topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(curve)));
+        let mut arena = GfaArena::new();
+        check_edge_face_pairs(
+            &mut topo,
+            &[edge],
+            (&[], &[]),
+            &[face],
+            &[HashSet::new()],
+            Tolerance::new(),
+            &mut arena,
+        )
+        .unwrap();
+        let mut xs: Vec<f64> = arena
+            .interference
+            .ef
+            .iter()
+            .filter_map(|i| match i {
+                Interference::EF {
+                    new_vertex: Some(v),
+                    ..
+                } => topo.vertex(*v).ok().map(|v| v.point().x()),
+                _ => None,
+            })
+            .collect();
+        xs.sort_by(f64::total_cmp);
+        xs
+    }
+
+    /// An edge whose samples lie within the tolerance of a wall from
+    /// `x = -0.62` to `x = 0.48`, touching it at `x = -0.3` and crossing it
+    /// at `x = 0.3`: each takes a vertex.
+    #[test]
+    fn a_run_that_touches_and_crosses_a_wall_keeps_both() {
+        let xs = contacts_with_a_wall(1e-6, &[-0.3, -0.3, 0.3]);
+        assert_eq!(xs.len(), 2, "contacts at {xs:?}");
+        for (x, want) in xs.iter().zip([-0.3, 0.3]) {
+            assert!((x - want).abs() < 1e-9, "contact at {x}, expected {want}");
+        }
+    }
+
+    /// An edge whose samples lie within the tolerance of a wall from
+    /// `x = -0.65` to `x = 0.65`, touching it at `x = -0.3` and `x = 0.3`
+    /// and 8.1e-9 off it between: each touch takes a vertex.
+    #[test]
+    fn a_run_that_touches_a_wall_twice_keeps_both_touches() {
+        let xs = contacts_with_a_wall(1e-6, &[-0.3, -0.3, 0.3, 0.3]);
+        assert_eq!(xs.len(), 2, "contacts at {xs:?}");
+        for (x, want) in xs.iter().zip([-0.3, 0.3]) {
+            assert!((x - want).abs() < 1e-9, "contact at {x}, expected {want}");
         }
     }
 
