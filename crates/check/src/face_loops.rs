@@ -479,6 +479,23 @@ fn common_factor(mut a: u64, mut b: u64) -> u64 {
 /// bounded.
 const MOST_TURN_HALVINGS: u32 = 24;
 
+/// The most pieces of edges a wire's turns are read in, cut or not: a curve
+/// that runs along or through an axis is cut at every depth and could take
+/// `2^MOST_TURN_HALVINGS` of them. It is more than ten times the most that
+/// any wire of the test suite is read in.
+pub(crate) const MOST_TURN_PIECES: usize = 16384;
+
+/// How near the centre of a ring's tube, as a fraction of the tube's radius,
+/// a wire may come and still be read: there its turn round the tube has no
+/// bound.
+const TUBE_CLEAR: f64 = 1e-6;
+
+#[cfg(test)]
+thread_local! {
+    /// The pieces the last wire's turns were read in, so far.
+    pub(crate) static PIECES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The most two points read as one place along a wire (where one edge ends
 /// and the next starts) may lie apart round the surface, in turns.
 const JOIN_TURN: f64 = 1.0 / 16.0;
@@ -496,6 +513,7 @@ enum Winding {
         axis: Vec3,
         across: Vec3,
         major: f64,
+        minor: f64,
     },
 }
 
@@ -521,14 +539,23 @@ impl Winding {
         })
     }
 
-    fn ring_of(center: Point3, axis: Vec3, major: f64) -> Option<Self> {
+    fn ring_of(center: Point3, axis: Vec3, major: f64, minor: f64) -> Option<Self> {
         let axis = axis.normalize().ok()?;
         Some(Self::Ring {
             center,
             axis,
             across: square_to(axis)?,
             major,
+            minor,
         })
+    }
+
+    /// Whether `p` lies next to a ring's tube's centre.
+    fn at_tube_centre(self, p: Point3) -> bool {
+        match (self, self.in_tube(p)) {
+            (Self::Ring { minor, .. }, Some(place)) => place.length() <= TUBE_CLEAR * minor,
+            _ => false,
+        }
     }
 
     /// `p` in the plane square to the axis through its origin or centre.
@@ -653,31 +680,29 @@ fn piece_hull(
         EdgeCurve::NurbsCurve(n) => {
             let (d0, d1) = n.domain();
             let near = 1e-9 * (d1 - d0).abs();
-            // A piece that ends within `near` of a knot is read inside the
-            // span its middle lies in.
-            let span = |t: f64| {
-                let knots = n.knots();
-                let mid = 0.5 * (a + b);
-                let lo = knots
-                    .iter()
-                    .copied()
-                    .filter(|&k| k <= mid)
-                    .fold(d0, f64::max);
-                let hi = knots
-                    .iter()
-                    .copied()
-                    .filter(|&k| k > mid)
-                    .fold(d1, f64::min);
-                if (t - lo).abs() <= near {
+            // The knot span the piece's middle lies in. An end that lies
+            // just outside it, by rounding, is read at its knot; an end
+            // inside it is read where it is, however short the span.
+            let knots = n.knots();
+            let i = brepkit_math::nurbs::basis::find_span(
+                n.control_points().len(),
+                n.degree(),
+                f64::midpoint(a, b),
+                knots,
+            );
+            let (lo, hi) = (*knots.get(i)?, *knots.get(i + 1)?);
+            let inside = |t: f64| {
+                if t < lo && lo - t <= near {
                     lo
-                } else if (t - hi).abs() <= near {
+                } else if t > hi && t - hi <= near {
                     hi
                 } else {
                     t
                 }
             };
             let hull =
-                brepkit_math::nurbs::decompose::curve_bezier_between(n, span(a), span(b)).ok()?;
+                brepkit_math::nurbs::decompose::curve_bezier_between(n, inside(a), inside(b))
+                    .ok()?;
             hull.iter()
                 .map(|&[x, y, z, w]| (w > 0.0).then(|| Point3::new(x / w, y / w, z / w)))
                 .collect()
@@ -740,9 +765,14 @@ fn turns_of(wire: &[BoundaryEdge<'_>], winding: Winding) -> Option<(i64, i64)> {
         total[1] += turn[1];
     };
     let (mut first, mut last): (Option<Point3>, Option<Point3>) = (None, None);
+    let mut pieces = 0_usize;
     for edge in wire {
         let at = |t: f64| edge.curve.evaluate_with_endpoints(t, edge.start, edge.end);
-        for (ta, tb) in edge_pieces(edge) {
+        let spans = edge_pieces(edge);
+        if pieces.saturating_add(spans.len()) > MOST_TURN_PIECES {
+            return None;
+        }
+        for (ta, tb) in spans {
             let start = at(ta);
             if let Some(end) = last {
                 add(winding.join(end, start)?);
@@ -750,6 +780,15 @@ fn turns_of(wire: &[BoundaryEdge<'_>], winding: Winding) -> Option<(i64, i64)> {
             first.get_or_insert(start);
             let mut pending = vec![(ta, tb, 0_u32)];
             while let Some((a, b, depth)) = pending.pop() {
+                if pieces >= MOST_TURN_PIECES
+                    || winding.at_tube_centre(at(a))
+                    || winding.at_tube_centre(at(b))
+                {
+                    return None;
+                }
+                pieces += 1;
+                #[cfg(test)]
+                PIECES_READ.with(|read| read.set(pieces));
                 if let Some(turn) = piece_turn(edge.curve, (a, b), &at, winding) {
                     add(turn);
                     continue;
@@ -779,7 +818,10 @@ fn turns_of(wire: &[BoundaryEdge<'_>], winding: Winding) -> Option<(i64, i64)> {
 /// closes on itself is read as the cylinder, cone, sphere or torus it
 /// matches, where each of its lines of constant parameter that closes runs
 /// once round that one's axis or tube. `None` for any other surface.
-fn winding_of(surface: &FaceSurface, samples: &[Point3]) -> Option<(Winding, Reading)> {
+fn winding_of(
+    surface: &FaceSurface,
+    samples: &dyn Fn() -> Vec<Point3>,
+) -> Option<(Winding, Reading)> {
     use brepkit_geometry::convert::recognize_surface::{RecognizedSurface, recognize_surface};
     let round = |w: Option<Winding>| w.map(|w| (w, Reading::Round));
     match surface {
@@ -788,10 +830,11 @@ fn winding_of(surface: &FaceSurface, samples: &[Point3]) -> Option<(Winding, Rea
         FaceSurface::Cone(s) => round(Winding::axis_of(s.apex(), s.axis())),
         FaceSurface::Sphere(s) => round(Winding::axis_of(
             s.center(),
-            clear_direction(samples, s.center())?,
+            clear_direction(&samples(), s.center())?,
         )),
         FaceSurface::Torus(t) => {
-            Winding::ring_of(t.center(), t.z_axis(), t.major_radius()).map(|w| (w, Reading::Both))
+            Winding::ring_of(t.center(), t.z_axis(), t.major_radius(), t.minor_radius())
+                .map(|w| (w, Reading::Both))
         }
         FaceSurface::Nurbs(s) => {
             let (closed_u, closed_v) = (s.is_periodic_u(), s.is_periodic_v());
@@ -803,14 +846,14 @@ fn winding_of(surface: &FaceSurface, samples: &[Point3]) -> Option<(Winding, Rea
                 RecognizedSurface::Cylinder { origin, axis, .. } => Winding::axis_of(origin, axis)?,
                 RecognizedSurface::Cone { apex, axis, .. } => Winding::axis_of(apex, axis)?,
                 RecognizedSurface::Sphere { center, .. } => {
-                    Winding::axis_of(center, clear_direction(samples, center)?)?
+                    Winding::axis_of(center, clear_direction(&samples(), center)?)?
                 }
                 RecognizedSurface::Torus {
                     center,
                     axis,
                     major_radius,
-                    ..
-                } => Winding::ring_of(center, axis, major_radius)?,
+                    minor_radius,
+                } => Winding::ring_of(center, axis, major_radius, minor_radius)?,
                 RecognizedSurface::Plane { .. } | RecognizedSurface::NotRecognized => {
                     return None;
                 }
@@ -924,6 +967,11 @@ pub fn wire_turns(
     face_id: FaceId,
 ) -> Result<Option<Vec<Option<Turns>>>, CheckError> {
     let face = topo.face(face_id)?;
+    match face.surface() {
+        FaceSurface::Plane { .. } => return Ok(None),
+        FaceSurface::Nurbs(s) if !s.is_periodic_u() && !s.is_periodic_v() => return Ok(None),
+        _ => {}
+    }
     let wire_ids: Vec<WireId> = std::iter::once(face.outer_wire())
         .chain(face.inner_wires().iter().copied())
         .collect();
@@ -931,10 +979,10 @@ pub fn wire_turns(
     for &wid in &wire_ids {
         wires.push(wires_of(topo, &[wid])?.and_then(|mut w| w.pop()));
     }
-    let all: Vec<Point3> = wires.iter().flatten().flat_map(|w| samples(w)).collect();
-    if all.is_empty() {
+    if wires.iter().flatten().all(Vec::is_empty) {
         return Ok(None);
     }
+    let all = || -> Vec<Point3> { wires.iter().flatten().flat_map(|w| samples(w)).collect() };
     let Some((winding, reading)) = winding_of(face.surface(), &all) else {
         return Ok(None);
     };

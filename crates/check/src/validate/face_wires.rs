@@ -3008,4 +3008,100 @@ mod tests {
             assert_eq!(turns(&topo, face).is_some(), want > 1, "{times}");
         }
     }
+
+    /// A circle round the z axis at height 5, radius 3, run twice as a
+    /// rational B-spline of quarter arcs: the first turn's four arcs on knot
+    /// spans of width `1e-10`, the second's on spans of a quarter.
+    fn twice_on_short_spans(topo: &mut Topology) -> EdgeId {
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        let corners = [
+            (3.0, 0.0),
+            (3.0, 3.0),
+            (0.0, 3.0),
+            (-3.0, 3.0),
+            (-3.0, 0.0),
+            (-3.0, -3.0),
+            (0.0, -3.0),
+            (3.0, -3.0),
+        ];
+        let mut points: Vec<Point3> = Vec::new();
+        let mut weights = Vec::new();
+        for _ in 0..2 {
+            for (k, &(x, y)) in corners.iter().enumerate() {
+                points.push(Point3::new(x, y, 5.0));
+                weights.push(if k % 2 == 1 { s } else { 1.0 });
+            }
+        }
+        points.push(Point3::new(3.0, 0.0, 5.0));
+        weights.push(1.0);
+        let mut knots = vec![0.0; 3];
+        for k in [1e-10, 2e-10, 3e-10, 4e-10, 0.25, 0.5, 0.75] {
+            knots.extend([k, k]);
+        }
+        knots.extend([1.0; 3]);
+        let curve = brepkit_math::nurbs::curve::NurbsCurve::new(2, knots, points, weights).unwrap();
+        let v = vertex(topo, [3.0, 0.0, 5.0]);
+        topo.add_edge(Edge::new(v, v, EdgeCurve::NurbsCurve(curve)))
+    }
+
+    /// A closed edge that runs twice round a cylinder, its first turn on
+    /// knot spans far shorter than the rounding a piece's ends are read
+    /// within, reads as twice round and is reported.
+    #[test]
+    fn a_turn_on_short_knot_spans_is_counted() {
+        let mut topo = Topology::default();
+        let edge = twice_on_short_spans(&mut topo);
+        let wire = alone(&mut topo, edge);
+        let face = topo.add_face(Face::new(wire, vec![], cylinder()));
+        assert_eq!(
+            crate::face_loops::wire_turns(&topo, face).unwrap(),
+            Some(vec![Some(Turns::Round(2))])
+        );
+        assert!(turns(&topo, face).is_some_and(|d| d.contains("2 times")));
+    }
+
+    /// An edge along a cylinder's axis turns no way round it that a hull can
+    /// bound: every piece of it is cut again. Its wire is left unread
+    /// within the budget of pieces.
+    #[test]
+    fn an_edge_along_the_axis_is_left_unread_within_the_budget() {
+        let mut topo = Topology::default();
+        let corners = points(
+            &mut topo,
+            &[[0.0, 0.0, 0.0], [0.0, 0.0, 10.0], [3.0, 0.0, 10.0]],
+        );
+        let wire = polygon(&mut topo, &corners);
+        let face = topo.add_face(Face::new(wire, vec![], cylinder()));
+        crate::face_loops::PIECES_READ.with(|read| read.set(0));
+        assert_eq!(
+            crate::face_loops::wire_turns(&topo, face).unwrap(),
+            Some(vec![None])
+        );
+        let read = crate::face_loops::PIECES_READ.with(std::cell::Cell::get);
+        assert!(read <= crate::face_loops::MOST_TURN_PIECES, "{read} pieces");
+    }
+
+    /// A wire along the centre of a ring torus's tube has no turn round the
+    /// tube: it is left unread before a piece of it is cut.
+    #[test]
+    fn a_wire_along_the_tube_centre_is_left_unread() {
+        use brepkit_math::surfaces::ToroidalSurface;
+        let mut topo = Topology::default();
+        let centre_line = ring(0.0, 5.0);
+        let wire = closed(
+            &mut topo,
+            EdgeCurve::Circle(centre_line.clone()),
+            centre_line.evaluate(0.0),
+            true,
+        );
+        let surface =
+            FaceSurface::Torus(ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 5.0, 1.0).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], surface));
+        crate::face_loops::PIECES_READ.with(|read| read.set(0));
+        assert_eq!(
+            crate::face_loops::wire_turns(&topo, face).unwrap(),
+            Some(vec![None])
+        );
+        assert_eq!(crate::face_loops::PIECES_READ.with(std::cell::Cell::get), 0);
+    }
 }
