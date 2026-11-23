@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795392280709,
+  "lastUpdate": 1795393514926,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -75869,6 +75869,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25470414,
             "range": "± 208636",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "da0211affa40a8542373e847379710223431a874",
+          "message": "fix(blend,operations): refuse an open fillet_variable rebuild, retry a variable round across flat seams, and speed the run-up planner (#2719)\n\n## Summary\n\nOn main, four faults remain around the walking fillet's gate:\n\n- When `fillet_v2_variable` refuses its walking result, the deprecated\n`fillet_variable` returns an open solid as a success (#2708). The\ngrouped scoop has 44 free edges, and the depth step 72.\n- `fillet_v2_variable` has the gate but not the flat-seam retry, so a\nvariable round of a fused L block's rim fails with `CornerFailure`\n(#2702).\n- `fillet_v2` of an L block's rim takes about 19 ms, almost all of it in\nthe run-up planner (#2703).\n- Three build paths pick among ties in the order of a std `HashMap`, so\ntheir result can change from run to run (#2690).\n\nWith this change, `fillet_variable` refuses what it cannot close.\n`fillet_v2_variable` rounds the fused L's rim as the extruded L's. The L\nrim takes 1.4 ms, and the three paths give one result on every run. The\npose sweep and the truth audit give the same output as main.\n\nFixes #2708, fixes #2703, fixes #2690. For #2702, `chamfer_v2` still\nrefuses the fused L's rim, as it refuses the extruded L's.\n\n## The change\n\n- **`fillet_variable` (#2708).** After a refused walking retry, it\nreturned its planar rebuild without a check. An open rebuild now returns\n`InvalidInput` with the walking engine's reason, and a closed rebuild\nmust pass `validate_solid`. This PR removes the `BK_FORCE_V2` override,\nwhich also let an open walking result through. The wasm\n`try_fillet_variable` already refused these results, and now gets a\nclearer error.\n- **`fillet_v2_variable` (#2702).** It now takes the flat-seam retry of\n`fillet_v2`, through the shared `without_flat_seams`. A custom radius\nlaw has no clone, so the two attempts share each law through an `Arc`.\n- **`FilletBuilder` and `ChamferBuilder` (#2702).** brepkit-blend may\nnot depend on brepkit-check, and the gate's checks need check's B-spline\nface loops. Their docs now say that they are unchecked, and send callers\nto the gated wrappers in `blend_ops`. In the library, each path that\nruns them is checked, and wasm calls only `blend_ops`.\n- **The run-up planner (#2703).** Each of 8 `crossing` calls read the\ncontact at 258 points. Each read searched a B-spline edge from scratch,\nwith 65 samples and 160 golden-section steps. The new `EdgeReads`\nsamples the edge once. Each read starts at the nearest sample and takes\nGauss-Newton steps, and reads lines and arcs in closed form.\n- A step can stop at a peak of the distance, or at an end with no speed.\nThere a bounded golden-section search of the span takes over. A read is\nnever farther than its seed.\n- **Ties in hash order (#2690).**\n- `separate_touching_pieces` now makes its copies in the order that the\nshell's faces first use the edges.\n- In the trimmer, a tie on the smallest covering span goes to the least\nowner, then the least edge.\n  - `fillet_contact_map` is a `BTreeMap`, read by range on the vertex.\n\n## Tests\n\n- The four scoop captures in `scoop_fillet_variable_inmem.rs` and\n`groupedscoop_fillet_cut_inmem.rs` check that `fillet_variable` refuses.\nEach returned an open solid on main.\n- `the_rim_of_a_fused_l_rounds_by_law_as_the_extruded_one` runs r 0.5\nand 1, upright, turned and mirrored. It reads 189.9044885478146 at r\n0.5, as the extruded L. On main it fails with `CornerFailure`.\n- `the_nearest_point_of_a_line_or_arc_is_the_nearest_sample` and\n`the_nearest_point_of_a_spline_edge_is_the_nearest_sample` check the new\nreads against 200001 samples.\n`a_read_from_a_sample_where_the_distance_peaks_finds_the_curve` and\n`a_read_from_a_spline_end_at_no_speed_finds_the_nearest_point` pin the\nstalls. `bench_l_rim_fillet` times the rim.\n- `touching_pieces_take_their_copies_in_one_order` (24 runs) and\n`fused_l_rim_fillet_variable` in `blend_determinism.rs` fail on main.\n- `chamfer_over_flat_seams.rs` checks that `chamfer_v2` of the fused L's\nrim gives an error or a valid solid of the right volume, in three poses.\nIt also holds three ignored ready repros.\n- Times in a profiling build, `fillet_v2` at r 0.5, median of 31 runs:\n\n| Case | main | this PR |\n|---|---|---|\n| Fused L rim | 19.2 ms | 1.4 ms |\n| Extruded L rim | 18.7 ms | 1.0 ms |\n\n- brepkit-blend (223) and the brepkit-operations lib tests for boolean\n(224), fillet (66), chamfer (22) and validate (53) pass.\n- 107 operations integration test files for fillets, chamfers, blends,\nrounds, corners and determinism pass (518 tests). So do 31 io files that\ncall the blend (83 tests).\n- The pose sweep and the truth audit give the same output as main.\n\n## Still open\n\n- `chamfer_v2` refuses two chamfers that meet in a mitre, on the\nextruded L too, and `chamfer_v2_refuses_edges_meeting_at_a_vertex` pins\nthat refusal. With `chamfer_chain` open to straight chains, the extruded\nL's rim chamfers exactly to the closed form. That change reverses a\npinned refusal, so it needs a decision.\n- `chamfer::chamfer` returns an open solid on the fused L's rim with no\nerror: 3 boundary edges, and 186.75 against 187.1667.",
+          "timestamp": "2026-11-23T00:21:11Z",
+          "tree_id": "b6e605c64b9c8d101318a176aaf10f1f343ebf38",
+          "url": "https://github.com/andymai/brepkit/commit/da0211affa40a8542373e847379710223431a874"
+        },
+        "date": 1795393503986,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1206818,
+            "range": "± 19583",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1278477,
+            "range": "± 21752",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13710,
+            "range": "± 62",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 793959,
+            "range": "± 5187",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27251031,
+            "range": "± 79357",
             "unit": "ns/iter"
           }
         ]
