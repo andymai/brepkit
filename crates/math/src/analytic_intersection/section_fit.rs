@@ -338,38 +338,17 @@ pub(super) fn settle_on_section(a: &impl Carrier, b: &impl Carrier, p: Point3) -
     None
 }
 
-/// How far a section point at `p` can be told from a touch: a point whose
-/// place across the section its own rounding leaves less certain than this
-/// is not read as a crossing.
-const CROSSING_RESOLUTION: f64 = 1e-8;
-
-/// Whether `a` and `b` cross at `p`, a point on both.
-///
-/// Their normals there lie more than about 1e-6 from parallel, as the Newton
-/// steps of [`settle_on_section`] need, and `p`'s place across the section
-/// is certain to within [`CROSSING_RESOLUTION`]. Each coordinate's float
-/// spacing moves each distance by that spacing times the gradient's part
-/// along it, the distances' own rounding adds to that, and the sum over the
-/// sine of the normals' angle is how far `p` can stray across the section.
-/// Far from the origin the spacing of one coordinate can leave a point a
-/// step from a touch reading as on both surfaces with its normals apart.
+/// Whether `a` and `b` cross at `p`, a point on both: their normals there lie
+/// more than about 1e-6 from parallel, as the Newton steps of
+/// [`settle_on_section`] need.
 pub(super) fn crosses_at(a: &impl Carrier, b: &impl Carrier, p: Point3) -> bool {
-    let (Some((_, ga)), Some((_, gb))) = (a.distance(p), b.distance(p)) else {
-        return false;
-    };
-    let c = ga.dot(gb);
-    let det = c.madd(-c, 1.0);
-    if det < 1e-12 {
-        return false;
+    match (a.distance(p), b.distance(p)) {
+        (Some((_, ga)), Some((_, gb))) => {
+            let c = ga.dot(gb);
+            c.madd(-c, 1.0) >= 1e-12
+        }
+        _ => false,
     }
-    let spread = |g: Vec3, scale: f64| {
-        [(g.x(), p.x()), (g.y(), p.y()), (g.z(), p.z())]
-            .into_iter()
-            .fold(8.0 * f64::EPSILON * scale, |sum, (part, at)| {
-                (f64::EPSILON * at.abs()).madd(part.abs(), sum)
-            })
-    };
-    (spread(ga, a.scale(p)) + spread(gb, b.scale(p))) / det.sqrt() <= CROSSING_RESOLUTION
 }
 
 /// The cubic Bezier from `t0` to `t1` of `curve`, one of its knot spans, a
