@@ -2883,6 +2883,7 @@ fn detect_trivial_relation(
                     .is_ok_and(|d| d.distance > tol.linear * 10.0)
             };
             let planes = outward_planes(topo, outer);
+            let rounds = round_faces(topo, outer);
             // Every edge is probed, the longest first: an edge that leaves the
             // outer solid can lie among sides split into many short collinear
             // edges, which a sample of the edges can skip over.
@@ -2937,7 +2938,33 @@ fn detect_trivial_relation(
                     reach.sort_by(|a, b| b.0.total_cmp(&a.0));
                     reach.dedup_by(|a, b| (a.1 - b.1).length() < tol.linear);
                     reach.into_iter().take(4).any(|(_, p)| clear_outside(p))
-                }
+                } || conic_center(e.curve()).is_some_and(|c| {
+                    // Past a curved face of the outer solid, a rim reaches
+                    // farthest straight out from the face's axis (or centre)
+                    // through its own centre: a short rod parallel to a
+                    // drum's axis pokes out of the wall only over an arc of
+                    // its rims that the samples above can miss. The deepest
+                    // few past their faces are probed.
+                    let radial = |origin: Point3, axis: Option<Vec3>, p: Point3| {
+                        let w = p - origin;
+                        axis.map_or(w, |a| w - a * w.dot(a)).length()
+                    };
+                    let mut reach: Vec<(f64, Point3)> = rounds
+                        .iter()
+                        .filter_map(|&(origin, axis, surface)| {
+                            let w = c - origin;
+                            let out = axis.map_or(w, |a| w - a * w.dot(a));
+                            let p = rim_reach(e.curve(), (t0, t1), out.normalize().ok()?)?;
+                            let (u, v) = surface.project_point(p)?;
+                            let depth = radial(origin, axis, p)
+                                - radial(origin, axis, surface.evaluate(u, v)?);
+                            (depth > tol.linear * 10.0).then_some((depth, p))
+                        })
+                        .collect();
+                    reach.sort_by(|a, b| b.0.total_cmp(&a.0));
+                    reach.dedup_by(|a, b| (a.1 - b.1).length() < tol.linear);
+                    reach.into_iter().take(4).any(|(_, p)| clear_outside(p))
+                })
             }) || round_of(topo, inner).is_some_and(|round| {
                 // A ball whose centre lies nearer the outer solid's boundary
                 // than its radius holds a boundary point inside it, so it
@@ -3223,6 +3250,37 @@ fn round_of(topo: &Topology, solid: SolidId) -> Option<Round> {
         }
     }
     round
+}
+
+/// The centre of a circle or ellipse edge; `None` for other curves.
+fn conic_center(curve: &brepkit_topology::edge::EdgeCurve) -> Option<Point3> {
+    use brepkit_topology::edge::EdgeCurve;
+    match curve {
+        EdgeCurve::Circle(c) => Some(c.center()),
+        EdgeCurve::Ellipse(e) => Some(e.center()),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+    }
+}
+
+/// The cylinder, cone, torus and sphere faces of `solid`, each with the
+/// axis it turns about (a point on it and its unit direction) or, for a
+/// sphere, its centre and no direction.
+fn round_faces(topo: &Topology, solid: SolidId) -> Vec<(Point3, Option<Vec3>, &FaceSurface)> {
+    brepkit_topology::explorer::solid_faces(topo, solid)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|fid| {
+            let surface = topo.face(fid).ok()?.surface();
+            let (origin, axis) = match surface {
+                FaceSurface::Cylinder(c) => (c.origin(), Some(c.axis())),
+                FaceSurface::Cone(c) => (c.apex(), Some(c.axis())),
+                FaceSurface::Torus(t) => (t.center(), Some(t.z_axis())),
+                FaceSurface::Sphere(s) => (s.center(), None),
+                FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => return None,
+            };
+            Some((origin, axis, surface))
+        })
+        .collect()
 }
 
 /// A solid's planar faces as outward unit normals `n` with offsets `d`, the
