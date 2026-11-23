@@ -1056,11 +1056,12 @@ fn boolean_inner(
     // more complex interaction semantics so we leave those to mesh.
     if op == BooleanOp::Cut {
         let components = crate::boolean::assembly::face_components(topo, a);
-        if components.len() >= 2
-            && components_are_disjoint_pieces(topo, &components)
-            && let Ok(result) = cut_multi_region_input(topo, a, b, components.len())
-        {
-            return Ok(result);
+        if components.len() >= 2 && components_are_disjoint_pieces(topo, &components) {
+            match cut_multi_region_input(topo, a, b, components.len()) {
+                Ok(result) => return Ok(result),
+                Err(e @ crate::OperationsError::EmptyResult { .. }) => return Err(e),
+                Err(_) => {}
+            }
         }
     }
 
@@ -4682,12 +4683,8 @@ fn cut_multi_region_input(
         let comp_solid = crate::copy::copy_solid(topo, comp_solid_raw)?;
         match boolean(topo, BooleanOp::Cut, comp_solid, b) {
             Ok(r) => per_component_results.push(r),
-            Err(
-                crate::OperationsError::EmptyResult { .. }
-                | crate::OperationsError::InvalidInput { .. },
-            ) => {
-                per_component_results.push(comp_solid);
-            }
+            // The piece lies wholly inside the tool: none of it remains.
+            Err(crate::OperationsError::EmptyResult { .. }) => {}
             Err(e) => return Err(e),
         }
     }
@@ -4708,6 +4705,11 @@ fn cut_multi_region_input(
         for &shell in r_data.inner_shells() {
             cavity_faces.push(topo.shell(shell)?.faces().to_vec());
         }
+    }
+    if all_faces.is_empty() {
+        return Err(crate::OperationsError::EmptyResult {
+            reason: "Cut with every piece of the target inside the tool".into(),
+        });
     }
     let combined = make_solid_from_face_subset(topo, &all_faces)?;
     for faces in cavity_faces {

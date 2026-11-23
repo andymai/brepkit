@@ -10415,3 +10415,53 @@ fn a_chain_goes_on_past_an_empty_step() {
         }
     }
 }
+
+/// A solid in two separate pieces, a ball and a box, cut by a tool that
+/// holds the box whole and takes a slice off the ball: only the ball less
+/// its slice remains, by the public cut and by the cut per piece.
+#[test]
+fn cut_per_piece_drops_a_piece_inside_the_tool() {
+    use brepkit_math::mat::Mat4;
+
+    let (r, h) = (1.0_f64, 0.5_f64);
+    let truth = 4.0 / 3.0 * std::f64::consts::PI * r.powi(3)
+        - std::f64::consts::PI * h * h * (3.0 * r - h) / 3.0;
+    for (name, pose) in five_poses() {
+        for per_piece in [false, true] {
+            let case = format!("{name} per_piece={per_piece}");
+            let mut topo = Topology::new();
+            let ball = crate::primitives::make_sphere(&mut topo, r, 32).unwrap();
+            let block = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+            let place = Mat4::translation(1.5, -0.5, -0.5);
+            crate::transform::transform_solid(&mut topo, block, &place).unwrap();
+            let tool = crate::primitives::make_box(&mut topo, 2.5, 3.0, 3.0).unwrap();
+            let place = Mat4::translation(r - h, -1.5, -1.5);
+            crate::transform::transform_solid(&mut topo, tool, &place).unwrap();
+            for s in [ball, block, tool] {
+                crate::transform::transform_solid(&mut topo, s, &pose).unwrap();
+            }
+            let both = boolean(&mut topo, BooleanOp::Fuse, ball, block).unwrap();
+            assert_eq!(assembly::face_components(&topo, both).len(), 2, "{case}");
+
+            let cut = if per_piece {
+                cut_multi_region_input(&mut topo, both, tool, 2).unwrap()
+            } else {
+                boolean(&mut topo, BooleanOp::Cut, both, tool).unwrap()
+            };
+            assert_eq!(
+                assembly::face_components(&topo, cut).len(),
+                1,
+                "{case}: pieces"
+            );
+            let report = crate::validate::validate_solid(&topo, cut).unwrap();
+            assert!(report.is_valid(), "{case}: {:?}", report.issues);
+            let mesh = crate::tessellate::tessellate_solid(&topo, cut, 0.01).unwrap();
+            assert_eq!(crate::tessellate::boundary_edge_count(&mesh), 0, "{case}");
+            let volume = crate::measure::solid_volume(&topo, cut, 0.0005).unwrap();
+            assert!(
+                ((volume - truth) / truth).abs() < 1e-6,
+                "{case}: volume {volume} against {truth}"
+            );
+        }
+    }
+}
