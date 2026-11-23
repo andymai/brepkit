@@ -15,7 +15,8 @@
 //! face's wire that crosses itself in each case, and plane faces over one
 //! area in two (the base case's mesh has 12 open edges at deflection 0.01,
 //! the depth step's 43). `fillet_v2_variable` refuses that tool, naming each
-//! planned edge.
+//! planned edge. The planar rebuild of `fillet_variable` is open, so
+//! `fillet_variable` refuses the round too.
 //!
 //! Replay tooling: `crates/io/examples/replay_fillet_variable.rs` (matches
 //! spec edges by captured endpoint pairs; tool-side midpoint params are not
@@ -31,6 +32,7 @@ use brepkit_blend::radius_law::RadiusLaw;
 use brepkit_io::arena_io::deserialize_solid;
 use brepkit_math::vec::Point3;
 use brepkit_operations::blend_ops::fillet_v2_variable;
+use brepkit_operations::fillet::{FilletRadiusLaw, fillet_variable};
 use brepkit_topology::Topology;
 use brepkit_topology::solid::SolidId;
 
@@ -137,7 +139,7 @@ fn same_sense_pair_count(topo: &Topology, solid: SolidId) -> usize {
 /// The walking engine's tool, built as `fillet_v2_variable` builds it (the
 /// edges of one radius in one set), is closed by edge count with each edge
 /// used both ways; `fillet_v2_variable` refuses it for a face whose wire
-/// crosses itself.
+/// crosses itself, and `fillet_variable` refuses its open planar rebuild.
 fn assert_watertight(input: &str, spec: &str) {
     let mut topo = Topology::new();
     let (solid, picks) = load_named_case(&mut topo, input, spec);
@@ -171,6 +173,10 @@ fn assert_watertight(input: &str, spec: &str) {
         "fillet must emit orientation-consistent faces, got {ss} same-sense edge pairs"
     );
 
+    let planar_laws: Vec<_> = picks
+        .iter()
+        .map(|&(e, r)| (e, FilletRadiusLaw::Constant(r)))
+        .collect();
     let laws = picks
         .into_iter()
         .map(|(e, r)| (e, RadiusLaw::Constant(r)))
@@ -185,6 +191,15 @@ fn assert_watertight(input: &str, spec: &str) {
             .all(|(_, e)| e.to_string().contains("crosses itself")),
         "{:?}",
         refused.failed
+    );
+
+    // The planar rebuild leaves the walls unstitched, so with the walking
+    // tool refused, `fillet_variable` has no closed, valid solid to give.
+    let planar = fillet_variable(&mut topo, solid, &planar_laws);
+    assert!(
+        planar.is_err(),
+        "fillet_variable gave a solid with {} free edges",
+        planar.map_or(0, |open| free_edge_count(&topo, open))
     );
 }
 

@@ -21,10 +21,9 @@
 //! reversed lobe, and the horn-torus patch spans the cube a third time.
 //! `validate_solid` reads two faces whose wires cross themselves and two
 //! pairs of plane faces over one area, and the tool's mesh has 12 open
-//! edges at deflection 0.01. `fillet_v2_variable` refuses that tool, and
-//! `fillet_variable` then returns its planar rebuild, which is open (44 edge
-//! uses unpaired) and holds more than its input (2416.2 against 2237.9), so
-//! the cut of the bin falls back to a mesh. The ignored tests pin what a
+//! edges at deflection 0.01. `fillet_v2_variable` refuses that tool. The
+//! planar rebuild of `fillet_variable` is open (44 edge uses unpaired), so
+//! `fillet_variable` refuses the round too. The ignored tests pin what a
 //! built corner must give; 3.3.9 had the same model, with a cut that
 //! removed 2.1x the tool's volume and exported 144 open mesh edges.
 //!
@@ -308,6 +307,23 @@ fn groupedscoop_walking_tool_has_no_twin_edges_and_is_refused() {
     );
 }
 
+/// With the walking tool refused, the planar rebuild is all that is left,
+/// and it leaves the walls unstitched: `fillet_variable` refuses the round.
+#[test]
+fn groupedscoop_fillet_variable_refuses_its_open_rebuild() {
+    let mut topo = Topology::new();
+    let (base, laws) = load_case(&mut topo);
+    let tool = fillet_variable(&mut topo, base, &laws);
+    assert!(
+        tool.is_err(),
+        "fillet_variable gave a solid with {} free edges",
+        tool.map_or(0, |open| edge_use_counts(&topo, open)
+            .values()
+            .filter(|&&c| c == 1)
+            .count())
+    );
+}
+
 /// Fillet the tool and cut the bin body with it: `(body, tool, result)`.
 /// Asserts the cut stayed on the exact path.
 fn cut_case(topo: &mut Topology) -> (SolidId, SolidId, SolidId) {
@@ -329,7 +345,7 @@ fn cut_case(topo: &mut Topology) -> (SolidId, SolidId, SolidId) {
 }
 
 #[test]
-#[ignore = "ready repro: the two-stripe convex corner closure is not a solid, so the walking tool is refused and the planar rebuild comes back open"]
+#[ignore = "ready repro: the two-stripe convex corner closure is not a solid, so the walking tool is refused and fillet_variable refuses its open planar rebuild"]
 fn groupedscoop_cut_stays_exact() {
     let mut topo = Topology::new();
     let (_, _, result) = cut_case(&mut topo);

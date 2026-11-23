@@ -1098,8 +1098,12 @@ pub(super) fn separate_touching_pieces(
         .to_vec();
     let n = face_ids.len();
     // Each face's wires, and each edge's uses by face (a seam counts twice).
+    // The edges are kept in the order the faces first use them, and the
+    // copies are made in that order, so their ids do not hang on the order
+    // of a hash map.
     let mut face_wires: Vec<Vec<WireId>> = Vec::with_capacity(n);
     let mut uses: HashMap<EdgeId, Vec<usize>> = HashMap::new();
+    let mut edge_order: Vec<EdgeId> = Vec::new();
     for (fi, &fid) in face_ids.iter().enumerate() {
         let face = topo.face(fid)?;
         let wires: Vec<WireId> = std::iter::once(face.outer_wire())
@@ -1107,7 +1111,12 @@ pub(super) fn separate_touching_pieces(
             .collect();
         for &wid in &wires {
             for oe in topo.wire(wid)?.edges() {
-                uses.entry(oe.edge()).or_default().push(fi);
+                uses.entry(oe.edge())
+                    .or_insert_with(|| {
+                        edge_order.push(oe.edge());
+                        Vec::new()
+                    })
+                    .push(fi);
             }
         }
         face_wires.push(wires);
@@ -1116,19 +1125,27 @@ pub(super) fn separate_touching_pieces(
     if pieces < 2 {
         return Ok(pieces);
     }
-    // The pieces using each edge and each vertex.
-    let mut edge_pieces: HashMap<EdgeId, Vec<usize>> = HashMap::new();
-    for (&eid, faces) in &uses {
+    // The pieces using each edge and each vertex, in the edges' order.
+    let mut edge_pieces: Vec<(EdgeId, Vec<usize>)> = Vec::with_capacity(edge_order.len());
+    for &eid in &edge_order {
+        let Some(faces) = uses.get(&eid) else {
+            continue;
+        };
         let mut ps: Vec<usize> = faces.iter().map(|&fi| piece_of[fi]).collect();
         ps.sort_unstable();
         ps.dedup();
-        edge_pieces.insert(eid, ps);
+        edge_pieces.push((eid, ps));
     }
-    let mut vertex_pieces: HashMap<VertexId, Vec<usize>> = HashMap::new();
-    for (&eid, ps) in &edge_pieces {
-        let edge = topo.edge(eid)?;
+    let mut vertex_pieces: Vec<(VertexId, Vec<usize>)> = Vec::new();
+    let mut vertex_at: HashMap<VertexId, usize> = HashMap::new();
+    for (eid, ps) in &edge_pieces {
+        let edge = topo.edge(*eid)?;
         for vid in [edge.start(), edge.end()] {
-            let entry = vertex_pieces.entry(vid).or_default();
+            let at = *vertex_at.entry(vid).or_insert_with(|| {
+                vertex_pieces.push((vid, Vec::new()));
+                vertex_pieces.len() - 1
+            });
+            let entry = &mut vertex_pieces[at].1;
             entry.extend(ps.iter().copied());
             entry.sort_unstable();
             entry.dedup();
@@ -1136,17 +1153,15 @@ pub(super) fn separate_touching_pieces(
     }
     // Copies for every piece after the first a shared entity reaches.
     let mut vertex_copy: HashMap<(VertexId, usize), VertexId> = HashMap::new();
-    for (&vid, ps) in &vertex_pieces {
-        let vertex = topo.vertex(vid)?;
+    for (vid, ps) in &vertex_pieces {
+        let vertex = topo.vertex(*vid)?;
         let (point, tolerance) = (vertex.point(), vertex.tolerance());
         for &p in ps.iter().skip(1) {
-            vertex_copy.insert((vid, p), topo.add_vertex(Vertex::new(point, tolerance)));
+            vertex_copy.insert((*vid, p), topo.add_vertex(Vertex::new(point, tolerance)));
         }
     }
     let mut edge_copy: HashMap<(EdgeId, usize), EdgeId> = HashMap::new();
-    let edge_list: Vec<(EdgeId, Vec<usize>)> =
-        edge_pieces.iter().map(|(&e, ps)| (e, ps.clone())).collect();
-    for (eid, ps) in edge_list {
+    for (eid, ps) in edge_pieces {
         let edge = topo.edge(eid)?.clone();
         for &p in &ps {
             let remap = |v: VertexId| vertex_copy.get(&(v, p)).copied().unwrap_or(v);

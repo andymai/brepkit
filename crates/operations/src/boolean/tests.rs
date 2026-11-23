@@ -10116,3 +10116,105 @@ fn the_strict_gate_rejects_a_hole_outside_its_face() {
     let err = super::assembly::validate_boolean_result(&topo, cube).unwrap_err();
     assert!(err.to_string().contains("misplaced hole"), "{err}");
 }
+
+/// Two unit boxes on one shell that share the edge from (1, 1, 0) to
+/// (1, 1, 1) and its two vertices by id, as a union of boxes touching edge
+/// to edge can: the second box's edges and wires are moved on to the first
+/// box's edge and vertices there. The ids of each face's edges and their
+/// vertices once the pieces are separated, in the faces' order.
+fn touching_boxes_separated() -> Vec<(usize, usize, usize)> {
+    let mut topo = Topology::new();
+    let a = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+    let b = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+    crate::transform::transform_solid(
+        &mut topo,
+        b,
+        &brepkit_math::mat::Mat4::translation(1.0, 1.0, 0.0),
+    )
+    .unwrap();
+    let corner = |z: f64| Point3::new(1.0, 1.0, z);
+    let near = |p: Point3, q: Point3| (p - q).length() < 1e-9;
+    let vertex_at = |topo: &Topology, solid: SolidId, at: Point3| {
+        brepkit_topology::explorer::solid_vertices(topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&v| near(topo.vertex(v).unwrap().point(), at))
+            .unwrap()
+    };
+    let (a0, a1) = (
+        vertex_at(&topo, a, corner(0.0)),
+        vertex_at(&topo, a, corner(1.0)),
+    );
+    let (b0, b1) = (
+        vertex_at(&topo, b, corner(0.0)),
+        vertex_at(&topo, b, corner(1.0)),
+    );
+    let joining = |topo: &Topology, solid: SolidId, v0, v1| {
+        brepkit_topology::explorer::solid_edges(topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                [edge.start(), edge.end()] == [v0, v1] || [edge.start(), edge.end()] == [v1, v0]
+            })
+            .unwrap()
+    };
+    let (shared, gone) = (joining(&topo, a, a0, a1), joining(&topo, b, b0, b1));
+    let shared_start = topo.edge(shared).unwrap().start();
+    for e in brepkit_topology::explorer::solid_edges(&topo, b).unwrap() {
+        let edge = topo.edge_mut(e).unwrap();
+        for (from, to) in [(b0, a0), (b1, a1)] {
+            if edge.start() == from {
+                edge.set_start(to);
+            }
+            if edge.end() == from {
+                edge.set_end(to);
+            }
+        }
+    }
+    let gone_start = topo.edge(gone).unwrap().start();
+    let b_faces = brepkit_topology::explorer::solid_faces(&topo, b).unwrap();
+    for &f in &b_faces {
+        let wire = topo.face(f).unwrap().outer_wire();
+        for oe in topo.wire_mut(wire).unwrap().edges_mut() {
+            if oe.edge() == gone {
+                let forward = oe.is_forward() == (gone_start == shared_start);
+                *oe = OrientedEdge::new(shared, forward);
+            }
+        }
+    }
+    let mut faces = brepkit_topology::explorer::solid_faces(&topo, a).unwrap();
+    faces.extend(b_faces);
+    let shell = topo.add_shell(brepkit_topology::shell::Shell::new(faces).unwrap());
+    let both = topo.add_solid(brepkit_topology::solid::Solid::new(shell, vec![]));
+    assert_eq!(
+        assembly::separate_touching_pieces(&mut topo, both).unwrap(),
+        2
+    );
+    let mut uses: std::collections::HashMap<EdgeId, usize> = std::collections::HashMap::new();
+    let mut ids = Vec::new();
+    for f in brepkit_topology::explorer::solid_faces(&topo, both).unwrap() {
+        let wire = topo.face(f).unwrap().outer_wire();
+        for oe in topo.wire(wire).unwrap().edges() {
+            *uses.entry(oe.edge()).or_default() += 1;
+            let edge = topo.edge(oe.edge()).unwrap();
+            ids.push((oe.edge().index(), edge.start().index(), edge.end().index()));
+        }
+    }
+    assert!(uses.values().all(|&n| n == 2), "an edge without two uses");
+    ids
+}
+
+/// Pieces of one shell that share an edge by id come apart with their own
+/// copies of it and of the edges and vertices round it, made in the same
+/// order on every run.
+#[test]
+fn touching_pieces_take_their_copies_in_one_order() {
+    let first = touching_boxes_separated();
+    for run in 1..24 {
+        assert!(
+            touching_boxes_separated() == first,
+            "run {run} gives other ids than run 0"
+        );
+    }
+}
