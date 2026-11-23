@@ -17,13 +17,14 @@ use std::collections::HashSet;
 use std::f64::consts::{PI, TAU};
 
 use brepkit_blend::chamfer_builder::ChamferBuilder;
+use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_point};
 use brepkit_check::validate::{CheckId, ValidateOptions};
 use brepkit_math::curves::Circle3D;
 use brepkit_math::mat::Mat4;
 use brepkit_math::quadrature::gauss_legendre_points;
 use brepkit_math::surfaces::SphericalSurface;
 use brepkit_math::vec::{Point3, Vec3};
-use brepkit_operations::blend_ops::chamfer_v2;
+use brepkit_operations::blend_ops::{chamfer_distance_angle, chamfer_v2, chamfer_v2_on};
 use brepkit_operations::boolean::{BooleanOp, boolean};
 use brepkit_operations::chamfer::chamfer;
 use brepkit_operations::extrude::extrude;
@@ -908,5 +909,210 @@ fn a_lens_ridge_takes_a_plane_chamfer() {
         assert!(built.failed.is_empty(), "{name}: {:?}", built.failed);
         let both = 2.0 * height * lens_ridge_section(0.3, 0.3);
         assert_removed(&topo, built.solid, before, both, name);
+    }
+}
+
+/// The union of the two cylinders of [`lens`], placed by `pose`, and its two
+/// ridges, each with the sign of its `y` before the pose.
+fn rods_fused(topo: &mut Topology, pose: &Mat4) -> (SolidId, Vec<(EdgeId, f64)>) {
+    let a = make_cylinder(topo, 2.0, 4.0).unwrap();
+    let b = make_cylinder(topo, 2.0, 4.0).unwrap();
+    transform_solid(topo, b, &Mat4::translation(3.0, 0.0, 0.0)).unwrap();
+    let union = boolean(topo, BooleanOp::Fuse, a, b).unwrap();
+    let ridges: Vec<(EdgeId, f64)> = solid_edges(topo, union)
+        .unwrap()
+        .into_iter()
+        .filter_map(|e| {
+            let edge = topo.edge(e).unwrap();
+            let ends = [edge.start(), edge.end()].map(|v| topo.vertex(v).unwrap().point());
+            ends.iter()
+                .all(|p| (p.x() - 1.5).abs() < 1e-6)
+                .then(|| (e, ends[0].y().signum()))
+        })
+        .collect();
+    transform_solid(topo, union, pose).unwrap();
+    (union, ridges)
+}
+
+/// The section a chamfer of chord `on_a` along the cylinder about the axis
+/// and `on_b` along the one about `x = 3` adds at a ridge of the union: the
+/// triangle between the ridge and the two contacts, less each wall's
+/// segment past its chord, which bulges into the triangle.
+fn union_ridge_section(on_a: f64, on_b: f64) -> f64 {
+    let r = 2.0_f64;
+    let ridge = (1.5, (r * r - 2.25).sqrt());
+    let turn = |c: f64| 2.0 * (0.5 * c / r).asin();
+    let segment = |c: f64| 0.5 * r * r * (turn(c) - turn(c).sin());
+    // Each contact turns from the ridge away from the line through both axes.
+    let to_a = ridge.1.atan2(ridge.0) + turn(on_a);
+    let to_b = ridge.1.atan2(ridge.0 - 3.0) - turn(on_b);
+    let a = (r * to_a.cos(), r * to_a.sin());
+    let b = (r.mul_add(to_b.cos(), 3.0), r * to_b.sin());
+    let triangle =
+        0.5 * ((a.0 - ridge.0) * (b.1 - ridge.1) - (a.1 - ridge.1) * (b.0 - ridge.0)).abs();
+    triangle - segment(on_a) - segment(on_b)
+}
+
+/// Valid, watertight, `added` more than `before` to `1e-6` of what it
+/// added, and with material at `filled`, which `source` lacks, and none at
+/// `beyond`, past the chamfer.
+fn assert_filled(
+    topo: &Topology,
+    (source, result): (SolidId, SolidId),
+    (before, added): (f64, f64),
+    (filled, beyond): (Point3, Point3),
+    what: &str,
+) {
+    let report = validate_solid(topo, result).unwrap();
+    assert!(report.is_valid(), "{what}: {:?}", report.issues);
+    assert!(
+        is_watertight(&tessellate_solid(topo, result, 0.01).unwrap()),
+        "{what}: its mesh is open"
+    );
+    let gained = solid_volume(topo, result, 0.001).unwrap() - before;
+    assert!(
+        (gained - added).abs() < 1e-6 * added,
+        "{what}: added {gained}, expected {added}"
+    );
+    let at = |solid: SolidId, p: Point3| {
+        classify_point(topo, solid, p, &ClassifyOptions::default()).unwrap()
+    };
+    assert_eq!(at(source, filled), PointClassification::Outside, "{what}");
+    assert_eq!(at(result, filled), PointClassification::Inside, "{what}");
+    assert_eq!(at(result, beyond), PointClassification::Outside, "{what}");
+}
+
+/// The chord from the ridge whose foot is `ridge` (before the pose, in `z =
+/// 0`) to the chamfer's contact on the wall about the axis and on the wall
+/// about `x = 3`: the edges of `result` that run straight along `z` (ends
+/// and middle over one point of the plane), read back through `undo`, on
+/// each wall within 1 of the ridge.
+fn contact_chords(
+    topo: &Topology,
+    result: SolidId,
+    undo: &Mat4,
+    ridge: (f64, f64),
+) -> (Vec<f64>, Vec<f64>) {
+    let (mut on_a, mut on_b) = (Vec::new(), Vec::new());
+    for e in solid_edges(topo, result).unwrap() {
+        let edge = topo.edge(e).unwrap();
+        let (a, b) = (
+            topo.vertex(edge.start()).unwrap().point(),
+            topo.vertex(edge.end()).unwrap().point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+        let middle = edge
+            .curve()
+            .evaluate_with_endpoints(f64::midpoint(t0, t1), a, b);
+        let [p, m, q] = [a, middle, b].map(|point| undo.mul_point(point));
+        let apart = |u: Point3, w: Point3| (u.x() - w.x()).hypot(u.y() - w.y());
+        if apart(p, q) > 1e-6 || apart(p, m) > 1e-6 || (p.z() - q.z()).abs() < 1.0 {
+            continue;
+        }
+        let chord = (p.x() - ridge.0).hypot(p.y() - ridge.1);
+        if chord > 1.0 {
+            continue;
+        }
+        if (p.x().hypot(p.y()) - 2.0).abs() < 1e-6 {
+            on_a.push(chord);
+        } else if ((p.x() - 3.0).hypot(p.y()) - 2.0).abs() < 1e-6 {
+            on_b.push(chord);
+        }
+    }
+    (on_a, on_b)
+}
+
+/// The chamfer's contacts in `result` lie `on_a` along the wall about the
+/// axis and `on_b` along the wall about `x = 3` from the ridge at `ridge`.
+fn assert_chords(
+    topo: &Topology,
+    result: SolidId,
+    undo: &Mat4,
+    ridge: (f64, f64),
+    (on_a, on_b): (f64, f64),
+    what: &str,
+) {
+    let (a, b) = contact_chords(topo, result, undo, ridge);
+    let one = |found: &[f64], want: f64| matches!(found, [c] if (c - want).abs() < 1e-9);
+    assert!(
+        one(&a, on_a) && one(&b, on_b),
+        "{what}: chords {a:?} on the wall about the axis and {b:?} on the other, expected {on_a} and {on_b}"
+    );
+}
+
+/// A ridge where two parallel cylinders meet on their union, a concave
+/// edge, takes a plane chamfer that adds the section between the ridge and
+/// its chord along the height, with one distance and with two, by
+/// `chamfer_v2`, `chamfer_v2_on` and `chamfer_distance_angle`, each ridge
+/// alone and both together. The union's caps are each three faces of one
+/// plane that meet at the ridge's ends. The walls have one radius, so the
+/// volume does not tell which wall takes which distance: each contact's
+/// chord from the ridge along its own wall does.
+#[test]
+fn a_union_ridge_takes_a_plane_chamfer() {
+    let height = 4.0;
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let (solid, ridges) = rods_fused(&mut topo, &pose);
+        assert_eq!(ridges.len(), 2);
+        let before = solid_volume(&topo, solid, 0.001).unwrap();
+        let undo = pose.inverse().unwrap();
+        for &(ridge, side) in &ridges {
+            let what = format!("{name} {ridge:?}");
+            let probes = (
+                pose.mul_point(Point3::new(1.5, 1.45 * side, 2.0)),
+                pose.mul_point(Point3::new(1.5, 1.6 * side, 2.0)),
+            );
+            let foot = (1.5, side * 1.75_f64.sqrt());
+            let built = chamfer_v2(&mut topo, solid, &[ridge], 0.3, 0.3).unwrap();
+            assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
+            let one = height * union_ridge_section(0.3, 0.3);
+            assert_filled(&topo, (solid, built.solid), (before, one), probes, &what);
+            assert_chords(&topo, built.solid, &undo, foot, (0.3, 0.3), &what);
+
+            // The first face along the ridge takes 0.3, the other 0.2.
+            let around = AdjacencyIndex::build(&topo, solid)
+                .unwrap()
+                .faces_for_edge(ridge)
+                .to_vec();
+            let first_about_a = {
+                let FaceSurface::Cylinder(wall) = topo.face(around[0]).unwrap().surface() else {
+                    panic!("{what}: a ridge between cylinders");
+                };
+                undo.mul_point(wall.origin()).x().abs() < 1.0
+            };
+            let (on_a, on_b) = if first_about_a {
+                (0.3, 0.2)
+            } else {
+                (0.2, 0.3)
+            };
+            let two = height * union_ridge_section(on_a, on_b);
+            let built = chamfer_v2(&mut topo, solid, &[ridge], 0.3, 0.2).unwrap();
+            assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
+            assert_filled(&topo, (solid, built.solid), (before, two), probes, &what);
+            assert_chords(&topo, built.solid, &undo, foot, (on_a, on_b), &what);
+            let angle = (2.0_f64 / 3.0).atan();
+            let built = chamfer_distance_angle(&mut topo, solid, &[ridge], 0.3, angle).unwrap();
+            assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
+            assert_filled(&topo, (solid, built.solid), (before, two), probes, &what);
+            assert_chords(&topo, built.solid, &undo, foot, (on_a, on_b), &what);
+
+            // Measured from the wall about `x = 3`.
+            let wall_b = if first_about_a { around[1] } else { around[0] };
+            let built = chamfer_v2_on(&mut topo, solid, &[(ridge, wall_b)], 0.3, 0.2).unwrap();
+            assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
+            let on_b = height * union_ridge_section(0.2, 0.3);
+            assert_filled(&topo, (solid, built.solid), (before, on_b), probes, &what);
+            assert_chords(&topo, built.solid, &undo, foot, (0.2, 0.3), &what);
+        }
+        let both: Vec<EdgeId> = ridges.iter().map(|&(ridge, _)| ridge).collect();
+        let built = chamfer_v2(&mut topo, solid, &both, 0.3, 0.3).unwrap();
+        assert!(built.failed.is_empty(), "{name}: {:?}", built.failed);
+        let added = 2.0 * height * union_ridge_section(0.3, 0.3);
+        let probes = (
+            pose.mul_point(Point3::new(1.5, -1.45, 2.0)),
+            pose.mul_point(Point3::new(1.5, 1.6, 2.0)),
+        );
+        assert_filled(&topo, (solid, built.solid), (before, added), probes, name);
     }
 }

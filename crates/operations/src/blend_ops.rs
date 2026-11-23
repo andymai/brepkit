@@ -238,6 +238,9 @@ pub(crate) struct WithoutFlatSeams {
     pub(crate) picks: Vec<EdgeId>,
     /// The copy's edge for each of `picks`.
     pub(crate) targets: Vec<EdgeId>,
+    /// The copy's face for each face of the solid, before the merge: a
+    /// merged face's entry names a face that the copy no longer has.
+    pub(crate) faces: HashMap<FaceId, FaceId>,
 }
 
 impl WithoutFlatSeams {
@@ -376,6 +379,7 @@ pub(crate) fn without_flat_seams(
         copy,
         picks,
         targets,
+        faces: face_map,
     }))
 }
 
@@ -1401,7 +1405,10 @@ pub fn fillet_v2_with_corners(
 ///
 /// A pick of closed circular rims, or of chains of lines and arcs (see
 /// [`crate::chamfer_chain::chamfer_tangent_chains`]), is cut exactly by
-/// those paths first; any other pick goes to the walking engine.
+/// those paths first; any other pick goes to the walking engine. Where the
+/// walking chamfer fails on a solid that keeps flat seams at the picked
+/// edges (faces of one plane left in pieces by a boolean), it is made again
+/// on a copy with those faces merged.
 ///
 /// # Errors
 /// Returns `OperationsError` if distances are non-positive, edges are empty,
@@ -1432,7 +1439,9 @@ pub fn chamfer_v2(
     chamfer_v2_walking(topo, solid, edges, d1, d2)
 }
 
-/// [`chamfer_v2`] by the walking engine alone.
+/// [`chamfer_v2`] by the walking engine alone. Where it fails on a solid
+/// that keeps flat seams at the picked edges, it is made again on a copy
+/// with those faces merged, as in [`chamfer_across_flat_seams`].
 pub(crate) fn chamfer_v2_walking(
     topo: &mut Topology,
     solid: SolidId,
@@ -1442,14 +1451,144 @@ pub(crate) fn chamfer_v2_walking(
 ) -> Result<BlendResult, OperationsError> {
     let mut builder = ChamferBuilder::new(topo, solid);
     builder.add_edges_asymmetric(edges, d1, d2);
-    let built = builder.build()?;
-    valid_chamfer(topo, solid, built)
+    let direct = builder
+        .build()
+        .map_err(OperationsError::from)
+        .and_then(|built| valid_chamfer(topo, solid, built));
+    let pairs = on_first_faces(topo, solid, edges)?;
+    or_across_flat_seams(topo, solid, direct, pairs.as_deref(), d1, d2)
+}
+
+/// `direct` where it chamfered every edge, else the chamfer of `pairs`
+/// across the flat seams at them where that one chamfers every edge
+/// ([`chamfer_across_flat_seams`]), else `direct`.
+fn or_across_flat_seams(
+    topo: &mut Topology,
+    solid: SolidId,
+    direct: Result<BlendResult, OperationsError>,
+    pairs: Option<&[(EdgeId, FaceId)]>,
+    d1: f64,
+    d2: f64,
+) -> Result<BlendResult, OperationsError> {
+    if direct.as_ref().is_ok_and(|result| result.failed.is_empty()) {
+        return direct;
+    }
+    let Some(pairs) = pairs else {
+        return direct;
+    };
+    match chamfer_across_flat_seams(topo, solid, pairs, d1, d2) {
+        Ok(Some(result)) => Ok(result),
+        Ok(None) => direct,
+        Err(e) => {
+            log::debug!("chamfer across flat seams: {e}");
+            direct
+        }
+    }
+}
+
+/// The walking chamfer of `pairs` (each edge with the face its `d1` is
+/// read from) on a copy of `solid` with the flat seams at the edges gone
+/// (see [`without_flat_seams`]). A chamfer's end closes on the one face
+/// through each end of its edge, which a seam there leaves in pieces.
+/// `None` where there is no such copy, or where the chamfer of the copy
+/// fails, leaves an edge out, or leaves an invalid solid.
+fn chamfer_across_flat_seams(
+    topo: &mut Topology,
+    solid: SolidId,
+    pairs: &[(EdgeId, FaceId)],
+    d1: f64,
+    d2: f64,
+) -> Result<Option<BlendResult>, OperationsError> {
+    let edges: Vec<EdgeId> = pairs.iter().map(|&(edge, _)| edge).collect();
+    let Some(merged) = without_flat_seams(topo, solid, &edges)? else {
+        return Ok(None);
+    };
+    let original = topo.build_adjacency(solid)?;
+    let copied = topo.build_adjacency(merged.copy)?;
+    let mut on_copy: Vec<(EdgeId, FaceId)> = Vec::with_capacity(merged.picks.len());
+    for (&pick, &target) in merged.picks.iter().zip(&merged.targets) {
+        let Some(&(_, reference)) = pairs.iter().find(|&&(edge, _)| edge == pick) else {
+            return Ok(None);
+        };
+        let Some(face) = reference_on_copy(
+            topo,
+            &merged.faces,
+            original.faces_for_edge(pick),
+            copied.faces_for_edge(target),
+            reference,
+        )?
+        else {
+            return Ok(None);
+        };
+        on_copy.push((target, face));
+    }
+    let mut builder = ChamferBuilder::new(topo, merged.copy);
+    builder.add_edges_asymmetric_on(&on_copy, d1, d2);
+    let result = match builder
+        .build()
+        .map_err(OperationsError::from)
+        .and_then(|built| valid_chamfer(topo, merged.copy, built))
+    {
+        Ok(result) => result,
+        Err(e) => {
+            log::debug!("chamfer across flat seams: the joined solid's chamfer fails: {e}");
+            return Ok(None);
+        }
+    };
+    Ok(merged.whole(result))
+}
+
+/// The copy's face on a pick that stands for `reference`, one of the pick's
+/// two faces `around` on the solid; `beside` are the copy's two faces on the
+/// pick. A face the merge kept is its own copy. Where the merge took
+/// `reference` into a larger face, that face is the one of `beside` that is
+/// not the copy of the pick's other face; where it took both, the one whose
+/// plane faces the way `reference` faces. `None` where none of these holds.
+fn reference_on_copy(
+    topo: &Topology,
+    faces: &HashMap<FaceId, FaceId>,
+    around: &[FaceId],
+    beside: &[FaceId],
+    reference: FaceId,
+) -> Result<Option<FaceId>, OperationsError> {
+    let ([a, b], [g, h]) = (around, beside) else {
+        return Ok(None);
+    };
+    let other = match (*a == reference, *b == reference) {
+        (true, false) => *b,
+        (false, true) => *a,
+        _ => return Ok(None),
+    };
+    if let Some(&copy) = faces.get(&reference)
+        && (copy == *g || copy == *h)
+    {
+        return Ok(Some(copy));
+    }
+    if let Some(&copy) = faces.get(&other)
+        && (copy == *g || copy == *h)
+    {
+        return Ok(Some(if copy == *g { *h } else { *g }));
+    }
+    let Some(normal) = topo.face(reference)?.effective_plane_normal() else {
+        return Ok(None);
+    };
+    for &face in [g, h] {
+        if topo
+            .face(face)?
+            .effective_plane_normal()
+            .is_some_and(|n| n.dot(normal) > 1.0 - 1e-9)
+        {
+            return Ok(Some(face));
+        }
+    }
+    Ok(None)
 }
 
 /// Chamfer edges with two distances (v2 engine), `d1` on each edge's
 /// reference face and `d2` on its other face.
 ///
-/// Rims and chains of lines and arcs are cut exactly first, as in
+/// Rims and chains of lines and arcs are cut exactly first, and flat seams
+/// are merged where the walking chamfer fails at them, as in
 /// [`chamfer_v2`].
 ///
 /// # Errors
@@ -1500,8 +1639,12 @@ pub fn chamfer_v2_on(
     }
     let mut builder = ChamferBuilder::new(topo, solid);
     builder.add_edges_asymmetric_on(edges, d1, d2);
-    let built = builder.build()?;
-    valid_chamfer(topo, solid, built)
+    let direct = builder
+        .build()
+        .map_err(OperationsError::from)
+        .and_then(|built| valid_chamfer(topo, solid, built));
+    let pairs = bordered.then_some(pairs.as_slice());
+    or_across_flat_seams(topo, solid, direct, pairs, d1, d2)
 }
 
 /// Chamfer edges with distance and angle (v2 engine): `distance` on each
@@ -1535,16 +1678,20 @@ pub fn chamfer_distance_angle(
         });
     }
     let other = distance * angle.tan();
-    if let Some(pairs) = on_first_faces(topo, solid, edges)?
+    let pairs = on_first_faces(topo, solid, edges)?;
+    if let Some(pairs) = &pairs
         && let Some(result) =
-            crate::chamfer::chamfer_exactly_on(topo, solid, &pairs, distance, other)?
+            crate::chamfer::chamfer_exactly_on(topo, solid, pairs, distance, other)?
     {
-        return Ok(chamfered_whole(result, &pairs));
+        return Ok(chamfered_whole(result, pairs));
     }
     let mut builder = ChamferBuilder::new(topo, solid);
     builder.add_edges_distance_angle(edges, distance, angle);
-    let built = builder.build()?;
-    valid_chamfer(topo, solid, built)
+    let direct = builder
+        .build()
+        .map_err(OperationsError::from)
+        .and_then(|built| valid_chamfer(topo, solid, built));
+    or_across_flat_seams(topo, solid, direct, pairs.as_deref(), distance, other)
 }
 
 /// Each edge, once, with its first face in the outer shell's face order,

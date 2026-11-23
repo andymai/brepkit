@@ -62,7 +62,7 @@ fn edge_through(topo: &Topology, solid: SolidId, p: Point3) -> EdgeId {
 /// edge itself stands off that pcurve's face: the same-parameter check of
 /// each edge and face, read at 11 points along the edge, at 1e-4 past the
 /// farthest of 201 points of the edge from that face's surface. (A walked
-/// contact is a fit, and stands off its wall by up to 8.7e-4 on this part;
+/// contact is a fit, and stands off its wall by up to 5.3e-5 on this part;
 /// the band it bounds follows it exactly.)
 fn pcurves_off_their_edges(topo: &Topology, solid: SolidId) -> Vec<String> {
     use brepkit_check::validate::check_edge_same_parameter;
@@ -171,9 +171,10 @@ fn a_contact_across_a_small_wall_s_seam_is_cut_there() {
 }
 
 /// The check above reads each face on its own. The wall's contact stands
-/// 8.7e-4 off the wall; the band follows the same edge within 1e-7 (and
-/// has no pcurve along it). Given one moved 5e-4 off the edge, the band's
-/// pcurve is caught, though it is within the wall's allowance.
+/// off the wall (5.3e-5 at most); the band follows the same edge within
+/// 1e-7 (and has no pcurve along it). Given one moved off the edge past the
+/// band's allowance, half way to the wall's, the band's pcurve is caught,
+/// though it is within the wall's allowance.
 #[test]
 fn a_band_s_pcurve_off_its_edge_is_caught_beside_a_wall_it_stands_off() {
     use brepkit_math::curves2d::{Curve2D, Line2D};
@@ -212,21 +213,29 @@ fn a_band_s_pcurve_off_its_edge_is_caught_beside_a_wall_it_stands_off() {
             .fold(0.0_f64, f64::max)
     };
     let adjacency = brepkit_topology::adjacency::AdjacencyIndex::build(&topo, solid).unwrap();
-    let (edge_id, band) = solid_edges(&topo, solid)
+    // The contact the wall stands farthest off, of those the band follows.
+    let (edge_id, band, wall_off) = solid_edges(&topo, solid)
         .unwrap()
         .into_iter()
-        .find_map(|e| {
+        .filter_map(|e| {
             let faces = adjacency.faces_for_edge(e);
             let wall = faces
                 .iter()
-                .any(|&f| topo.pcurves().get(e, f).is_some() && stands_off(&topo, e, f) > 6e-4);
+                .filter(|&&f| topo.pcurves().get(e, f).is_some())
+                .map(|&f| stands_off(&topo, e, f))
+                .fold(0.0_f64, f64::max);
             let band = faces
                 .iter()
                 .copied()
                 .find(|&f| stands_off(&topo, e, f) < 1e-6);
-            band.filter(|_| wall).map(|band| (e, band))
+            band.map(|band| (e, band, wall))
         })
-        .expect("a contact the wall stands off and the band follows");
+        .max_by(|a, b| a.2.total_cmp(&b.2))
+        .expect("a contact the band follows");
+    assert!(
+        wall_off > 1e-5,
+        "the wall stands {wall_off:e} off its contact"
+    );
     let edge = topo.edge(edge_id).unwrap().clone();
     let ends = (
         topo.vertex(edge.start()).unwrap().point(),
@@ -254,7 +263,7 @@ fn a_band_s_pcurve_off_its_edge_is_caught_beside_a_wall_it_stands_off() {
         - surface.evaluate(middle.x(), middle.y()).unwrap())
     .length()
         / h;
-    let shift = Vec2::new(5e-4 / speed, 0.0);
+    let shift = Vec2::new(0.5f64.mul_add(wall_off, 1e-4) / speed, 0.0);
     let moved = Curve2D::Line(
         Line2D::new(
             brepkit_math::vec::Point2::new(start.0, start.1) + shift,
