@@ -10238,3 +10238,52 @@ fn touching_pieces_take_their_copies_in_one_order() {
         );
     }
 }
+
+/// The cut per piece of a solid in separate pieces keeps the cavity of its
+/// input and the cavity its cut makes as inner shells: a ball with a cavity
+/// off its centre, beside a box, less a small ball at the ball's centre.
+#[test]
+fn cut_per_piece_keeps_the_cavities() {
+    use brepkit_math::mat::Mat4;
+
+    let ball_volume = |r: f64| 4.0 / 3.0 * std::f64::consts::PI * r.powi(3);
+    let truth = ball_volume(1.0) - ball_volume(0.25) - ball_volume(0.2) + 1.0;
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1);
+    for (name, pose) in [
+        ("upright", Mat4::identity()),
+        ("turned", turn),
+        ("mirrored", Mat4::scale(1.0, -1.0, 1.0)),
+    ] {
+        let mut topo = Topology::new();
+        let ball = crate::primitives::make_sphere(&mut topo, 1.0, 32).unwrap();
+        let cavity = crate::primitives::make_sphere(&mut topo, 0.25, 32).unwrap();
+        let place = Mat4::translation(0.5, 0.1, 0.0);
+        crate::transform::transform_solid(&mut topo, cavity, &place).unwrap();
+        let block = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let place = Mat4::translation(1.5, -0.5, -0.5);
+        crate::transform::transform_solid(&mut topo, block, &place).unwrap();
+        let tool = crate::primitives::make_sphere(&mut topo, 0.2, 32).unwrap();
+        for s in [ball, cavity, block, tool] {
+            crate::transform::transform_solid(&mut topo, s, &pose).unwrap();
+        }
+        let hollow = boolean(&mut topo, BooleanOp::Cut, ball, cavity).unwrap();
+        let both = boolean(&mut topo, BooleanOp::Fuse, hollow, block).unwrap();
+        assert_eq!(topo.solid(both).unwrap().inner_shells().len(), 1, "{name}");
+
+        let cut = cut_multi_region_input(&mut topo, both, tool, 2).unwrap();
+        assert_eq!(
+            topo.solid(cut).unwrap().inner_shells().len(),
+            2,
+            "{name}: cavities"
+        );
+        let report = crate::validate::validate_solid(&topo, cut).unwrap();
+        assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        let mesh = crate::tessellate::tessellate_solid(&topo, cut, 0.01).unwrap();
+        assert_eq!(crate::tessellate::boundary_edge_count(&mesh), 0, "{name}");
+        let volume = crate::measure::solid_volume(&topo, cut, 0.0005).unwrap();
+        assert!(
+            ((volume - truth) / truth).abs() < 1e-5,
+            "{name}: volume {volume} against {truth}"
+        );
+    }
+}

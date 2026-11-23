@@ -844,7 +844,9 @@ fn boolean_inner(
                 // raw Euler here rejected every pocketed piece. This mirrors the
                 // `euler_balanced` correction the single-component gate above
                 // applies — which is why the bound below is `2 * components`
-                // rather than an equality against it.
+                // rather than an equality against it. A cavity's shell adds 2
+                // to the count, as it does for one piece, so the bound takes
+                // `euler_eff`.
                 let components_vec = crate::boolean::assembly::face_components(topo, result);
                 let components = components_vec.len();
                 // For Cut, also verify no component is a "B-interior piece" —
@@ -908,12 +910,12 @@ fn boolean_inner(
                 if matches!(op, BooleanOp::Cut | BooleanOp::Fuse | BooleanOp::Intersect)
                     && components >= 2
                     && (euler_balanced(
-                        euler,
+                        euler_eff,
                         inner_wire_count,
                         i64::try_from(components).unwrap_or(i64::MAX),
                     ) || (extra_fans > 0
                         && euler_balanced(
-                            euler + extra_fans,
+                            euler_eff + extra_fans,
                             inner_wire_count,
                             i64::try_from(components).unwrap_or(i64::MAX),
                         )
@@ -1017,11 +1019,11 @@ fn boolean_inner(
                      cut_safe={cut_safe} intersect_safe={intersect_safe} \
                      euler_multi_ok={} surplus={} bound={} disjoint={}",
                     euler_balanced(
-                        euler,
+                        euler_eff,
                         inner_wire_count,
                         i64::try_from(components).unwrap_or(i64::MAX)
                     ),
-                    euler - inner_wire_count,
+                    euler_eff - inner_wire_count,
                     i64::try_from(components)
                         .unwrap_or(i64::MAX)
                         .saturating_mul(2),
@@ -2881,6 +2883,7 @@ fn detect_trivial_relation(
                     .is_ok_and(|d| d.distance > tol.linear * 10.0)
             };
             let planes = outward_planes(topo, outer);
+            let rounds = round_faces(topo, outer);
             // Every edge is probed, the longest first: an edge that leaves the
             // outer solid can lie among sides split into many short collinear
             // edges, which a sample of the edges can skip over.
@@ -2935,7 +2938,33 @@ fn detect_trivial_relation(
                     reach.sort_by(|a, b| b.0.total_cmp(&a.0));
                     reach.dedup_by(|a, b| (a.1 - b.1).length() < tol.linear);
                     reach.into_iter().take(4).any(|(_, p)| clear_outside(p))
-                }
+                } || conic_center(e.curve()).is_some_and(|c| {
+                    // Past a curved face of the outer solid, a rim reaches
+                    // farthest straight out from the face's axis (or centre)
+                    // through its own centre: a short rod parallel to a
+                    // drum's axis pokes out of the wall only over an arc of
+                    // its rims that the samples above can miss. The deepest
+                    // few past their faces are probed.
+                    let radial = |origin: Point3, axis: Option<Vec3>, p: Point3| {
+                        let w = p - origin;
+                        axis.map_or(w, |a| w - a * w.dot(a)).length()
+                    };
+                    let mut reach: Vec<(f64, Point3)> = rounds
+                        .iter()
+                        .filter_map(|&(origin, axis, surface)| {
+                            let w = c - origin;
+                            let out = axis.map_or(w, |a| w - a * w.dot(a));
+                            let p = rim_reach(e.curve(), (t0, t1), out.normalize().ok()?)?;
+                            let (u, v) = surface.project_point(p)?;
+                            let depth = radial(origin, axis, p)
+                                - radial(origin, axis, surface.evaluate(u, v)?);
+                            (depth > tol.linear * 10.0).then_some((depth, p))
+                        })
+                        .collect();
+                    reach.sort_by(|a, b| b.0.total_cmp(&a.0));
+                    reach.dedup_by(|a, b| (a.1 - b.1).length() < tol.linear);
+                    reach.into_iter().take(4).any(|(_, p)| clear_outside(p))
+                })
             }) || round_of(topo, inner).is_some_and(|round| {
                 // A ball whose centre lies nearer the outer solid's boundary
                 // than its radius holds a boundary point inside it, so it
@@ -3221,6 +3250,37 @@ fn round_of(topo: &Topology, solid: SolidId) -> Option<Round> {
         }
     }
     round
+}
+
+/// The centre of a circle or ellipse edge; `None` for other curves.
+fn conic_center(curve: &brepkit_topology::edge::EdgeCurve) -> Option<Point3> {
+    use brepkit_topology::edge::EdgeCurve;
+    match curve {
+        EdgeCurve::Circle(c) => Some(c.center()),
+        EdgeCurve::Ellipse(e) => Some(e.center()),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+    }
+}
+
+/// The cylinder, cone, torus and sphere faces of `solid`, each with the
+/// axis it turns about (a point on it and its unit direction) or, for a
+/// sphere, its centre and no direction.
+fn round_faces(topo: &Topology, solid: SolidId) -> Vec<(Point3, Option<Vec3>, &FaceSurface)> {
+    brepkit_topology::explorer::solid_faces(topo, solid)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|fid| {
+            let surface = topo.face(fid).ok()?.surface();
+            let (origin, axis) = match surface {
+                FaceSurface::Cylinder(c) => (c.origin(), Some(c.axis())),
+                FaceSurface::Cone(c) => (c.apex(), Some(c.axis())),
+                FaceSurface::Torus(t) => (t.center(), Some(t.z_axis())),
+                FaceSurface::Sphere(s) => (s.center(), None),
+                FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => return None,
+            };
+            Some((origin, axis, surface))
+        })
+        .collect()
 }
 
 /// A solid's planar faces as outward unit normals `n` with offsets `d`, the
@@ -4566,14 +4626,22 @@ fn cut_multi_region_input(
     b: SolidId,
     comp_count: usize,
 ) -> Result<SolidId, crate::OperationsError> {
+    use brepkit_topology::shell::Shell;
+
     let components = crate::boolean::assembly::face_components(topo, a);
     debug_assert_eq!(components.len(), comp_count);
+    let cavities = component_cavities(topo, a, &components)?;
 
     let mut per_component_results: Vec<SolidId> = Vec::with_capacity(components.len());
-    for comp_faces in components {
+    for (comp_faces, comp_cavities) in components.iter().zip(cavities) {
         // Copy the component's faces into a fresh single-component solid
         // so the boolean engine sees a connected manifold.
-        let comp_solid_raw = make_solid_from_face_subset(topo, &comp_faces)?;
+        let comp_solid_raw = make_solid_from_face_subset(topo, comp_faces)?;
+        for faces in comp_cavities {
+            let shell = Shell::new(faces).map_err(crate::OperationsError::Topology)?;
+            let shell = topo.add_shell(shell);
+            topo.solid_mut(comp_solid_raw)?.add_inner_shell(shell);
+        }
         // Deep-copy the component into a fresh solid so its faces/edges/
         // vertices have fresh IDs disjoint from the original multi-region
         // input — GFA's pavefiller can stumble on shared vertex IDs across
@@ -4595,15 +4663,61 @@ fn cut_multi_region_input(
     // Collect every face from every result into one outer shell. The
     // results are pairwise disjoint by construction (each came from a
     // disjoint input component cut by the same tool), so a single shell
-    // containing all their faces is a valid manifold representation.
+    // containing all their faces is a valid manifold representation. Each
+    // result's cavities stay inner shells.
     let mut all_faces: Vec<brepkit_topology::face::FaceId> = Vec::new();
+    let mut cavity_faces: Vec<Vec<brepkit_topology::face::FaceId>> = Vec::new();
     for &r in &per_component_results {
         let r_data = topo.solid(r)?;
         for &fid in topo.shell(r_data.outer_shell())?.faces() {
             all_faces.push(fid);
         }
+        for &shell in r_data.inner_shells() {
+            cavity_faces.push(topo.shell(shell)?.faces().to_vec());
+        }
     }
-    make_solid_from_face_subset(topo, &all_faces)
+    let combined = make_solid_from_face_subset(topo, &all_faces)?;
+    for faces in cavity_faces {
+        let shell = Shell::new(faces).map_err(crate::OperationsError::Topology)?;
+        let shell = topo.add_shell(shell);
+        topo.solid_mut(combined)?.add_inner_shell(shell);
+    }
+    Ok(combined)
+}
+
+/// The faces of each cavity of `solid`, given to the piece of `components`
+/// (the sets of its outer shell's faces) that holds it. A cavity that no
+/// piece holds, or a piece inside a cavity, is an error.
+fn component_cavities(
+    topo: &mut Topology,
+    solid: SolidId,
+    components: &[Vec<FaceId>],
+) -> Result<Vec<Vec<Vec<FaceId>>>, crate::OperationsError> {
+    let mut out: Vec<Vec<Vec<FaceId>>> = vec![Vec::new(); components.len()];
+    let count = topo.solid(solid)?.inner_shells().len();
+    if count == 0 {
+        return Ok(out);
+    }
+    let unplaced = || crate::OperationsError::InvalidInput {
+        reason: "a cavity of a solid in separate pieces lies in none of them".into(),
+    };
+    let mut placed = 0;
+    for piece in crate::compound_ops::solid_pieces(topo, solid)? {
+        let data = topo.solid(piece)?;
+        let first = topo.shell(data.outer_shell())?.faces().first().copied();
+        let k = first
+            .and_then(|f| components.iter().position(|c| c.contains(&f)))
+            .ok_or_else(unplaced)?;
+        for &shell in data.inner_shells() {
+            out[k].push(topo.shell(shell)?.faces().to_vec());
+            placed += 1;
+        }
+    }
+    if placed == count {
+        Ok(out)
+    } else {
+        Err(unplaced())
+    }
 }
 
 /// Build a new solid whose outer shell consists exactly of the given

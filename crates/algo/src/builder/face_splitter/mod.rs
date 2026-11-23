@@ -1161,9 +1161,16 @@ fn attach_whole_holes(sub_faces: &mut [SplitSubFace], holes: &[Vec<OrientedPCurv
     if sub_faces.is_empty() || holes.is_empty() {
         return;
     }
+    // On a periodic surface each loop is read unwrapped: a loop across the
+    // parameter's cut read with a jump of a turn spans the whole period and
+    // takes in every hole.
+    let periods = |sf: &SplitSubFace| super::pcurve_compute::surface_periods(&sf.surface);
     let sub_outer_uv: Vec<Vec<Point2>> = sub_faces
         .iter()
-        .map(|sf| sample_wire_loop_uv(&sf.outer_wire))
+        .map(|sf| {
+            let (u, v) = periods(sf);
+            sample_wire_loop_uv_periodic(&sf.outer_wire, u, v)
+        })
         .collect();
     let sub_interior: Vec<Point2> = sub_outer_uv
         .iter()
@@ -1182,7 +1189,8 @@ fn attach_whole_holes(sub_faces: &mut [SplitSubFace], holes: &[Vec<OrientedPCurv
             .map(|(i, _)| i)
     };
     for hole in holes {
-        let hole_pts = sample_wire_loop_uv(hole);
+        let (u, v) = periods(&sub_faces[0]);
+        let hole_pts = sample_wire_loop_uv_periodic(hole, u, v);
         if hole_pts.len() >= 3 {
             let probe = super::classify_2d::sample_interior_point(&hole_pts);
             let containing: Vec<usize> = (0..sub_faces.len())
@@ -8430,10 +8438,19 @@ fn split_face_2d_impl(
         return bands;
     }
 
+    // The face's own holes go whole to the pieces that hold them when no
+    // section ends on one: a wall with a tunnel's two holes, crossed above
+    // them by a rod whose footprint straddles the seam on one side and lies
+    // clear of it on the other. The generic paths dropped the clear loop.
     if u_periodic
         && !is_plane
-        && original_inner_wires.is_empty()
-        && let Some(pieces) = split_periodic_face_around_seam_holes(
+        && sections.iter().all(|s| {
+            original_inner_wires.iter().flatten().all(|e| {
+                !point_on_oriented_edge(e, s.start, tol.linear * 100.0)
+                    && !point_on_oriented_edge(e, s.end, tol.linear * 100.0)
+            })
+        })
+        && let Some(mut pieces) = split_periodic_face_around_seam_holes(
             &surface,
             &boundary_edges,
             sections,
@@ -8443,6 +8460,15 @@ fn split_face_2d_impl(
             tol.linear,
         )
     {
+        let held: Vec<usize> = pieces.iter().map(|p| p.inner_wires.len()).collect();
+        attach_whole_holes(&mut pieces, &original_inner_wires);
+        // Each piece's cached interior point was found clear of the section
+        // loops alone, and can lie in a hole it now holds.
+        for (piece, held) in pieces.iter_mut().zip(held) {
+            if piece.inner_wires.len() > held {
+                piece.precomputed_interior = None;
+            }
+        }
         return pieces;
     }
 
