@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795450383563,
+  "lastUpdate": 1795455181643,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -76841,6 +76841,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18732293,
             "range": "± 431232",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b3e0949ad6b8aeb8e2ed1f93ad64b34d932cf867",
+          "message": "fix(operations): bound a torus face along its axis by one point per extreme circle, and drop a lone sample beside an edge's end before the mesh weld (#2767)\n\n## Summary\n\nOn main:\n\n- an intersect of `make_torus(4, 1.5)` with a box upright takes 4.43 ms,\nagainst 2.78 ms turned. The bounding box in the result's validation\ntakes 1.71 ms upright and 0.13 ms turned (#2751);\n- the exact fuse of two rods at a ball from #2759 meshes with a hole at\nthe ball's top (#2760). In 6 poses at deflection 0.005, the hole has 3\nedges and is about 1.6e-6 across.\n\nWith this change, the upright intersect takes 2.95 ms, and the 6 poses\nmesh closed. Face counts and volumes match main, and the pose sweep and\nthe truth audit give the same output.\n\nFixes #2751, fixes #2760.\n\n## The change\n\n- **A torus face's box along its axis (#2751).** A world axis can run\nalong the torus axis. There `torus_extremes` sampled the tube's top and\nbottom circles at each whole degree. That gave 720 candidates, and\nalmost all went through `face_contains_each`. Now each circle gives one\npoint. Take a face that holds an arc of the circle but not its farthest\npoint along the axis. That arc ends on the face's boundary, and the\nexact edge bounds already reach there.\n- **A lone sample beside an end vertex (#2760).** Two rims cross at 2.4\ndegrees at the ball's top. Their shared vertex sits 7.3e-7 past the\ncrossing, within 3e-8 of both curves.\n- Halving the crossing chords put samples 8e-8 to 6e-6 from that vertex.\nThe splice that copies one edge's samples into another skips those\nwithin 1e-6 of its end. So one rim kept a sample 8.1e-7 from the vertex\nthat the other lacked.\n- The face outline then held a three-point sliver wound the wrong way,\nand the triangulation meshed it inverted.\n- Now an edge drops its inner samples within that 1e-6 of its own end\nvertices, unless another edge holds the same point. Every face of the\nedge drops the sample together.\n\n## Tests\n\n- `torus_extremes_along_the_axis_are_one_point_per_circle` asks for 2\npoints where main gives 720.\n`a_ring_band_round_the_tubes_top_reaches_it` and\n`a_quarter_ring_reaches_the_tubes_top_at_its_edges` check that the box\nstill reaches the tube's top.\n- `rods_at_a_ball_mesh_inmem.rs` meshes the 6 exact fuses, saved as\narena files, at deflections 0.005, 0.01 and 0.05. Each mesh is closed\nand manifold, and its volume is within 2% of the solid's. It fails with\nmain's mesher.\n- Over 2720 fuses of #2759's sweep, the 1946 that return a solid all\nmesh closed at all three deflections. Before, 4 meshed open at 0.005.\n- Intersect times, mean of 30 runs in a profiling build, alternated with\nmain: upright 4.43 to 2.95 ms, turned 2.78 to 2.82 ms.\n- All brepkit-operations and brepkit-io tests pass (3272, 26 skipped).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes a slow torus bounding box and a meshing hole in exact fuses where\nedges' rims cross at a shared vertex.\n\n- A torus face's box along (or a hair off) its axis now takes one point\nper extreme circle instead of 360 samples each, so a torus–box intersect\nthat took 4.43 ms upright now takes 2.95 ms; the turned case is\nunchanged at 2.78 ms. An arc of such a circle that misses the farthest\npoint is bounded at the arc's ends, where the exact edge bounds already\nreach.\n- The mesher now drops an edge's inner samples within 1e-6 of its own\nend vertices before the mesh weld, unless another edge holds the same\npoint. Previously those samples could survive on one rim and not the\nother, forming a three-point sliver wound the wrong way that meshed as a\nhole about 1.6e-6 across. The six captured rod–ball fuse poses now mesh\nclosed and manifold at deflections 0.005, 0.01, and 0.05. A closed edge\nor one whose ends lie within 2e-6 of each other keeps all its samples,\nso a tiny closed rim of radius 4e-7 (as on a small cylinder or cone) no\nlonger meshes with non-manifold edges.\n\nNew tests cover the one-point-per-circle extremes, the sample dropping,\nthe tiny closed rim, and the six fuse poses; all brepkit-operations and\nbrepkit-io tests pass.\n\n<sup>Written for commit 984613474408ba3cd837f06ad4666309089655a0.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2767?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2767?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2767&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-23T17:29:10Z",
+          "tree_id": "1baae0794b9107a8edff4bb554bb88842f180d66",
+          "url": "https://github.com/andymai/brepkit/commit/b3e0949ad6b8aeb8e2ed1f93ad64b34d932cf867"
+        },
+        "date": 1795455172135,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 853035,
+            "range": "± 30387",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 947897,
+            "range": "± 84356",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9912,
+            "range": "± 75",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 573133,
+            "range": "± 7026",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19372711,
+            "range": "± 28669",
             "unit": "ns/iter"
           }
         ]
