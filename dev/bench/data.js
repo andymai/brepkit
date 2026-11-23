@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795447909424,
+  "lastUpdate": 1795450383563,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -76787,6 +76787,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19570004,
             "range": "± 60968",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "46aa4279d14805f90b799d15c3d29c29605689e9",
+          "message": "fix(algo): fuse nearly opposite rods at a ball exactly or refuse, and cut sections where three faces meet in fuse_n (#2759)\n\n## Summary\n\nOn main:\n\n- a fuse of two rods that end at one ball, 6 degrees from opposite,\nreturns a valid solid that is wrong (#2742). It reads 50.9573 against\n50.8938, has a wall face larger than its whole wall, and meshes with 90\nopen edges. Over 1280 nearby fuses, 11 solids have an edge up to 7.8e-4\noff a face it bounds;\n- `gfa::fuse_n` of three or four struts that end at one point gives 6 to\n10 free edges. Three struts read 149952.044 against 153934.309 (#2593).\n\nWith this change, every nearly opposite pose is exact or refused: over\n13,600 fuses, none is wrong. The struts fuse exactly in one pass. The\npose sweep and the truth audit give the same output as main.\n\nFixes #2742, fixes #2593.\n\n## The change\n\n- **A cap ellipse that touches its rim (#2742).** Rod A's cap disc meets\nrod B's wall in an ellipse. The ellipse touches the cap's rim only at\nthe two poles. `trim_ellipse_to_boundary_crossings` found both arcs off\nthe cap and returned `None`, so the sampled restriction kept the whole\nellipse. Now, where the plane face's outline has arcs and is read\nexactly, an ellipse with every arc off it gives no arcs.\n- **Edges near a wall, but off it (#2742).** Beside the poles, a rod's\nrim arc and seam stand 3e-4 to 8e-4 off the other wall. `fill_ef_in`\nkept them as sections in that face, because the weld band is 1e-3. A\nline, circle or ellipse on a quadric now counts as in the face only\nwhere its whole curve stays on the surface. A conic must stay within\n1e-5, and a line within the leaf band.\n- **Three faces at one point (#2593).** Where three solids' faces meet\ninside all three, their three sections cross at one point. A pairwise\nboolean finds that point as an edge crossing of its first result, but\nthe n-way pave filler never intersected sections with each other. The\nnew `split_sections_at_triple_points` cuts each section at one shared\nvertex where it crosses a section of another solid on the same face. It\nruns in `fuse_n` only, because imprint and split by faces need the\nsections whole. Its prefilter uses a proven box for each section, and\neach piece keeps the extra faces that share its section. A whole circle\nor ellipse is cut at its crossings too, and a crossing counts only where\nboth curves meet within 1e-7 after refinement.\n- **A ruling through a cone's apex (#2742).** The whole-curve check\nmeasures a line against both halves of a cone. So a ruling whose edge\nruns on past the apex stays in its face.\n\n## Tests\n\n- `two_nearly_opposite_rods_with_their_caps_at_a_ball_fuse_exactly` pins\nrolls 0.3 and 1.0 at yaw 3.05 in four placements. The issue's pose now\nreads 50.89377, 9.7e-9 off, with a closed mesh.\n`two_nearly_opposite_rods_at_a_ball_fuse_exactly_or_refuse` holds 8 more\nposes to the exact solid or an error. Both fail on main.\n- The helper `two_rods_at_one_ball` now also requires each edge within\n1e-9 of each face it bounds, and the volume within 1e-6, from 1e-4.\nEvery earlier pose passes.\n- Over yaw 2.9 to 3.14, 17 rolls, both orders, four end flags and four\nplacements, 12,465 fuses are exact and 1,135 refuse. The 256 poses of\n#2578 stay exact, plain and mirrored.\n- `struts_that_end_at_one_point_fuse_in_one_pass` fuses four sets of\nthree struts and all four through `gfa::fuse_n`, in three poses. Each is\nvalid, meshes closed and manifold, and reads the oracle within 2e-5, the\nsame in every pose. It fails on main.\n`a_triple_point_cuts_each_section_and_keeps_its_extra_faces` checks the\nshared vertex and the extra faces. Three more tests pin a ruling through\na cone's apex, two crossing circles, and two concentric arcs 3e-5 apart\nthat stay whole. The whole truss of 20 struts already fuses exactly on\nmain.\n- brepkit-algo (578) passes, and so do all brepkit-operations and\nbrepkit-io tests (3263, 26 skipped). Random sweep seeds 1 to 3 give the\nsame verdict as main for every case.\n\n## Still open\n\n- Main refuses 6 poses at roll 5 and yaw 3.1. They now return an exact\nB-Rep whose mesh has a 3-edge hole about 1.6e-6 across at the ball's\nnorth pole. The volume reads 1.7e-8 off, and every edge lies on its\nfaces.\n- The corner of struts 4, 6 and 16 falls back to the mesh when fused one\nstrut at a time. It does so in all 6 orders, as on main.",
+          "timestamp": "2026-11-23T16:09:15Z",
+          "tree_id": "6efe6899dbb074e2c2607d9ff9efd9698edadf2a",
+          "url": "https://github.com/andymai/brepkit/commit/46aa4279d14805f90b799d15c3d29c29605689e9"
+        },
+        "date": 1795450369886,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 928739,
+            "range": "± 21987",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 933476,
+            "range": "± 16155",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9362,
+            "range": "± 101",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 594157,
+            "range": "± 17016",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 18732293,
+            "range": "± 431232",
             "unit": "ns/iter"
           }
         ]
