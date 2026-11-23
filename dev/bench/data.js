@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795430414039,
+  "lastUpdate": 1795433647732,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -76571,6 +76571,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26867944,
             "range": "± 156986",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "dc041e9ee079cc70be54301db922791e0a17be55",
+          "message": "fix(operations,blend): chamfer a union's ridge across a cap left in pieces, and round a ring's cut rim on its torus (#2744)\n\n## Summary\n\nOn main:\n\n- `chamfer_v2` refuses the ridge where two parallel cylinders meet on\ntheir union, with `UnsupportedSurface` (#2666);\n- a round of a two-face ring's rim, cut level by a slab, fails with\n\"blend: trimming failure\". On a one-face ring the same round builds, but\nreads 0.957165242 against 0.957122072 from an integral of the rolling\nballs, 4.3e-5 high (#2730);\n- a round of a ring's rim cut at a tilt near its outside fails to walk\nat t = 0.124 (#2730).\n\nWith this change, the ridge chamfers to its closed form, and both rounds\nread within 2e-7 of the integral on one-face and two-face rings. The\npose sweep and the truth audit give the same output as main.\n\nFixes #2666, fixes #2730.\n\n## The change\n\n- **The union's ridge (#2666).** The fuse leaves each cap as three faces\nof one plane: two crescents and the lens. All three meet at each end of\nthe ridge. The walking chamfer closes a curved chamfer's end only on a\nsingle face through the end vertex (`end_plane_holds`), so it refused\nthe ridge. `chamfer_v2`, `chamfer_v2_on` and `chamfer_distance_angle`\nnow retry a failed walking chamfer on a copy with the flat seams at the\npicks merged (`without_flat_seams`), as `fillet_v2` does. Each pick\nkeeps its `d1` face on the copy.\n- **A band that leaves its torus (#2730, level cut).** The walker\nlimited a step only by how far the spine turns. Over the top of the tube\nthe rim runs straight while the contact on the torus bends. So the\nband's cubic through steps 0.37 apart left the torus by 4.5e-4.\n`Walker::refined` now solves the section at the middle of each step. It\nadds that section wherever a contact's cubic strays from it by more than\nthe tolerance, for at most 8 rounds.\n- **Stations that fold (#2730, tilted cut).** Each walk station is a\nplane square to the rim. At the narrow ends the rim's radius of\ncurvature (0.198) is less than the ball centres' distance from it (0.39\nto 0.52). So a station plane stands tangent to the curve of the centres.\nA closed round of constant radius whose walk fails now walks again with\n`Walker::walk_by_centres`, each station square to the curve of the\ncentres. That walk closes only where its tangent runs as at the start\nand it lands back on the start's section.\n\n## Tests\n\n- `a_union_ridge_takes_a_plane_chamfer` chamfers the ridge in four\nposes: with one distance and two, by distance and angle, through\n`chamfer_v2_on`, and both ridges in one call. Each result is valid with\na closed mesh and point classification as expected. Each contact lies at\nits own distance from the ridge along its own wall, so a swap of the\ndistances fails the test. Each reads within 1e-6 of the closed form, 4 ×\n0.042732339272 for one distance, and a grid integral agrees with it. It\nfails on main.\n- `a_level_rim_on_a_split_ring_rounds_to_the_integrated_volume` and\n`a_rim_cut_close_to_a_rings_outside_rounds_to_the_integrated_volume` run\nthree poses each, with the tube in one face and in two. Each is valid\nwith a closed mesh and within 2e-7 of an integral of the union of the\nrolling balls (0.957122072 and 0.0895633436). The two-face ring reads\nwithin 1e-7 relative of the one-face ring. Both fail on main.\n`a_walk_by_centres_goes_round_a_thin_loop_past_its_far_side` walks a\nball of radius 0.01 round a thin ring. It checks that the walk does not\nclose on the far side.\n- `a_band_s_pcurve_off_its_edge_is_caught_beside_a_wall_it_stands_off`\nneeded a wall contact 8.7e-4 off its wall, which the refinement brings\nwithin 5.3e-5. It now moves the band's pcurve off by hand, half way from\nthe band's allowance to the wall's.\n- brepkit-blend (228) passes, and so do all brepkit-operations and\nbrepkit-io tests (3250, 26 skipped).\n\n## Still open\n\n- `walk_by_centres` covers closed rounds of constant radius only. An\nopen round, a variable-radius round or a walked chamfer whose stations\nfold the same way still fails to walk.\n- About 6e-8 of the rounds' volume error remains, from the band's rows\nbetween sections. The refinement checks only the contacts.",
+          "timestamp": "2026-11-23T11:30:23Z",
+          "tree_id": "7e2900025a33dd61556b4639be171eabd09197f1",
+          "url": "https://github.com/andymai/brepkit/commit/dc041e9ee079cc70be54301db922791e0a17be55"
+        },
+        "date": 1795433633773,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 961901,
+            "range": "± 2217",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1017521,
+            "range": "± 2213",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11412,
+            "range": "± 164",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 635060,
+            "range": "± 5378",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21504285,
+            "range": "± 251134",
             "unit": "ns/iter"
           }
         ]
