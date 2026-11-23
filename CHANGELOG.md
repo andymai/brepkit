@@ -1,5 +1,14 @@
 # Changelog
 
+## [4.11.41](https://github.com/andymai/brepkit/compare/v4.11.40...v4.11.41) (2026-11-23)
+
+
+### Bug Fixes
+
+* **algo,operations:** score every step of the random sweep, and fix the three wrong results it finds ([#2731](https://github.com/andymai/brepkit/issues/2731)) ([6a07a49](https://github.com/andymai/brepkit/commit/6a07a49a0e9feb3043fbb591f98d5fe0978c381b))
+* **math,algo,operations:** cut a taper pin's hole exactly in every pose, keep crossings and touches apart, and put a long ellipse's crossings on their plane ([#2735](https://github.com/andymai/brepkit/issues/2735)) ([0f032a2](https://github.com/andymai/brepkit/commit/0f032a2fb9cd0d4e6c626ca9757667485e596798))
+* **operations,blend:** chamfer a fused L's rim across its flat seams, and round a rim whose contact crosses between two faces of one surface ([#2729](https://github.com/andymai/brepkit/issues/2729)) ([3ae95d8](https://github.com/andymai/brepkit/commit/3ae95d818f907c0408f418b1beb38e2220dfd27c))
+
 ## [4.11.40](https://github.com/andymai/brepkit/compare/v4.11.39...v4.11.40) (2026-11-23)
 
 
