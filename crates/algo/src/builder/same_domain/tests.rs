@@ -1740,3 +1740,39 @@ fn a_patch_crossing_another_along_sample_lines_does_not_lie_on_it() {
     let part = flat_patch(0.2, 0.7);
     assert!(nurbs_patch_lies_on(&flat, &part, &bf, &part.aabb()));
 }
+
+/// A half of the unit circle's cylinder, `side` 1 the upper and -1 the
+/// lower, one unit tall: the two halves of one closed wall.
+fn half_cylinder(side: f64) -> brepkit_math::nurbs::surface::NurbsSurface {
+    let w = std::f64::consts::FRAC_1_SQRT_2;
+    let profile = [
+        (1.0, 0.0, 1.0),
+        (1.0, side, w),
+        (0.0, side, 1.0),
+        (-1.0, side, w),
+        (-1.0, 0.0, 1.0),
+    ];
+    brepkit_math::nurbs::surface::NurbsSurface::new(
+        2,
+        1,
+        vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        profile
+            .iter()
+            .map(|&(x, y, _)| vec![Point3::new(x, y, 0.0), Point3::new(x, y, 1.0)])
+            .collect(),
+        profile.iter().map(|&(_, _, w)| vec![w, w]).collect(),
+    )
+    .unwrap()
+}
+
+/// The two halves of a closed wall meet only along their two edges, where
+/// the surfaces run on into each other: each holds the other's edge rows
+/// and no cell of the grid, and the two lie on one surface.
+#[test]
+fn the_halves_of_a_closed_wall_lie_on_one_surface() {
+    let (upper, lower) = (half_cylinder(1.0), half_cylinder(-1.0));
+    let (bu, bl) = (upper.aabb(), lower.aabb());
+    assert!(nurbs_patch_lies_on(&upper, &lower, &bu, &bl));
+    assert!(nurbs_patch_lies_on(&lower, &upper, &bl, &bu));
+}
