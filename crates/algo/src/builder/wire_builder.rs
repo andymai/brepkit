@@ -796,7 +796,7 @@ fn edge_angle_at_vertex_periodic(
     v_period: Option<f64>,
 ) -> f64 {
     let (mut dx, mut dy) = long_pcurve_tangent(edge, at_start, u_period, v_period)
-        .unwrap_or_else(|| pcurve_tangent_at_endpoint(edge, at_start));
+        .unwrap_or_else(|| pcurve_tangent_at_endpoint(edge, at_start, (u_period, v_period)));
     // A step of exactly half a period reads the same either way round (a
     // rim cut in halves, as files write circles), so only a step past the
     // half by more than rounding wraps; at the half the edge keeps its
@@ -906,14 +906,17 @@ fn nurbs_endpoint(
 ///
 /// For `Line2D` pcurves, returns the chord direction (exact).
 /// For `NurbsCurve2D` pcurves, evaluates the pcurve near the endpoint
-/// to approximate the true tangent -- important for half-circle arcs where
-/// the chord direction can be perpendicular to the actual tangent.
-fn pcurve_tangent_at_endpoint(edge: &OrientedPCurveEdge, at_start: bool) -> (f64, f64) {
+/// to approximate the true tangent ([`pcurve_heading`]) -- important for
+/// half-circle arcs where the chord direction can be perpendicular to the
+/// actual tangent. `periods` are the surface's periods in `u` and `v`.
+fn pcurve_tangent_at_endpoint(
+    edge: &OrientedPCurveEdge,
+    at_start: bool,
+    periods: (Option<f64>, Option<f64>),
+) -> (f64, f64) {
     // For NURBS pcurves, sample near the endpoint for tangent direction.
     if let Some((nurbs, t, inward, span)) = nurbs_endpoint(edge, at_start) {
-        let p0 = nurbs.evaluate(t);
-        let p1 = nurbs.evaluate(inward.madd(span * 0.01, t));
-        return (p1.x() - p0.x(), p1.y() - p0.y());
+        return pcurve_heading(nurbs, (t, inward.madd(span, t)), periods);
     }
 
     // For Line2D and fallback: use chord direction.
@@ -952,10 +955,34 @@ fn long_pcurve_tangent(
     if !long(run.x(), u_period) && !long(run.y(), v_period) {
         return None;
     }
-    let (t, toward) = if at_start { (from, to) } else { (to, from) };
-    let p0 = nurbs.evaluate(t);
-    let p1 = nurbs.evaluate((toward - t).madd(0.01, t));
-    Some((p1.x() - p0.x(), p1.y() - p0.y()))
+    let ends = if at_start { (from, to) } else { (to, from) };
+    Some(pcurve_heading(nurbs, ends, (u_period, v_period)))
+}
+
+/// The heading of a NURBS pcurve at its parameter `t`, into its span toward
+/// its parameter `toward`: the chord to a hundredth of the way along, or,
+/// where that chord runs a quarter period or more, the derivative at `t`,
+/// signed into the span and of unit length.
+///
+/// A pcurve that packs most of a turn into its first knots runs that far
+/// within the hundredth: folded the short way round, as the heading is
+/// read, the chord pointed against the pcurve. The pcurve itself has no
+/// copies to fold between, and its derivative heads the way it leaves `t`.
+fn pcurve_heading(
+    nurbs: &brepkit_math::curves2d::NurbsCurve2D,
+    (t, toward): (f64, f64),
+    (u_period, v_period): (Option<f64>, Option<f64>),
+) -> (f64, f64) {
+    let chord = nurbs.evaluate((toward - t).madd(0.01, t)) - nurbs.evaluate(t);
+    let packed = |c: f64, period: Option<f64>| period.is_some_and(|p| c.abs() >= 0.25 * p);
+    if packed(chord.x(), u_period) || packed(chord.y(), v_period) {
+        let d = nurbs.tangent(t) * (toward - t).signum();
+        let len = d.length();
+        if len.is_finite() && len > 0.0 {
+            return (d.x() / len, d.y() / len);
+        }
+    }
+    (chord.x(), chord.y())
 }
 
 /// The angle in \[0, 2pi) of a NURBS pcurve's derivative at an edge
@@ -1871,6 +1898,48 @@ mod tests {
                 "ring {ring_z}: reversed area {}",
                 lift.area
             );
+        }
+    }
+
+    /// A half whose pcurve packs 4.5 of its 5 radians of `u` into the first
+    /// five hundredths of a percent of its knots, with its ends stored on
+    /// the pcurve's own copy and a period off it, run each way. It leaves
+    /// its start, and its twin reaches its end, heading `+u` as the pcurve
+    /// does there. A chord a hundredth of the pcurve long ran 4.5 in `u`,
+    /// and folded the short way round it pointed `-u`.
+    #[test]
+    fn a_packed_pcurve_leaves_its_end_along_its_derivative() {
+        use brepkit_math::curves2d::NurbsCurve2D;
+        let pcurve = Curve2D::Nurbs(
+            NurbsCurve2D::new(
+                1,
+                vec![0.0, 0.0, 0.0005, 1.0, 1.0],
+                vec![
+                    Point2::new(0.0, 0.0),
+                    Point2::new(4.5, 0.1),
+                    Point2::new(5.0, 1.0),
+                ],
+                vec![1.0; 3],
+            )
+            .unwrap(),
+        );
+        let heading = 0.1_f64.atan2(4.5);
+        for shift in [0.0, TAU] {
+            let mut half = make_line_edge(Point2::new(shift, 0.0), Point2::new(5.0 + shift, 1.0));
+            half.pcurve = pcurve.clone();
+            let mut twin = half.clone();
+            std::mem::swap(&mut twin.start_uv, &mut twin.end_uv);
+            std::mem::swap(&mut twin.start_3d, &mut twin.end_3d);
+            twin.forward = false;
+            for (what, edge, at_start) in [("half", &half, true), ("twin", &twin, false)] {
+                let angle = edge_angle_at_vertex_periodic(edge, at_start, Some(TAU), None);
+                let off =
+                    (angle - heading + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI;
+                assert!(
+                    off.abs() < 1e-9,
+                    "{what} stored {shift} off: heads {angle}, the pcurve {heading}"
+                );
+            }
         }
     }
 
