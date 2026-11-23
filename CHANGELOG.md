@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.11.43](https://github.com/andymai/brepkit/compare/v4.11.42...v4.11.43) (2026-11-23)
+
+
+### Bug Fixes
+
+* **algo:** fuse two rods that end at one ball's centre exactly in every pose of their sweep ([#2743](https://github.com/andymai/brepkit/issues/2743)) ([983826f](https://github.com/andymai/brepkit/commit/983826f72aceb6fdb9bbc17d03eb21d65e62343b))
+* **operations,blend:** chamfer a union's ridge across a cap left in pieces, and round a ring's cut rim on its torus ([#2744](https://github.com/andymai/brepkit/issues/2744)) ([dc041e9](https://github.com/andymai/brepkit/commit/dc041e9ee079cc70be54301db922791e0a17be55))
+
 ## [4.11.42](https://github.com/andymai/brepkit/compare/v4.11.41...v4.11.42) (2026-11-23)
 
 
