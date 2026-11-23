@@ -1777,27 +1777,26 @@ pub fn revolve(
         });
     }
 
-    // A profile on a curved surface sweeps its boundary alone. A boundary in
-    // one plane sweeps that plane's region, which is read as above; any
-    // other is read in a full turn by the drawing of its points' distance
-    // from the axis and height along it.
+    // A profile on a curved surface sweeps its boundary alone. A boundary
+    // shown to lie in one plane sweeps that plane's region, which is read as
+    // above; any other is read in a full turn by the drawing of its points'
+    // distance from the axis and height along it. A few samples in one
+    // plane do not show that: a spline can leave it between them.
     if stored_plane_normal.is_none() {
         let oriented = topo.wire(input_wire_id)?.edges().to_vec();
         let samples = traversal_samples(topo, &oriented)?;
-        let flat = crate::winding::newell_normal(&samples)
-            .normalize()
-            .ok()
-            .filter(|n| {
-                let (o, scale) = (
-                    samples[0],
-                    samples
-                        .iter()
-                        .fold(0.0_f64, |m, p| m.max((*p - samples[0]).length())),
-                );
-                samples
-                    .iter()
-                    .all(|p| (*p - o).dot(*n).abs() <= PLANARITY_REL_TOL * scale)
-            });
+        let mut flat = None;
+        if let (Ok(normal), Some(&origin)) = (
+            crate::winding::newell_normal(&samples).normalize(),
+            samples.first(),
+        ) {
+            let scale = samples
+                .iter()
+                .fold(0.0_f64, |m, p| m.max((*p - origin).length()));
+            if boundary_in_plane(topo, &oriented, (origin, normal), PLANARITY_REL_TOL * scale)? {
+                flat = Some(normal);
+            }
+        }
         let crosses = match flat {
             Some(normal) => {
                 normal.cross(axis).length() >= 1e-9
@@ -2388,6 +2387,45 @@ fn profile_reaches_across_axis(
         Ok(false)
     };
     Ok(past(1.0)? && past(-1.0)?)
+}
+
+/// Whether each edge of a boundary lies within `slack` of the plane through
+/// `origin` square to `normal`: a line by its ends, a circle or an ellipse
+/// by its own plane, and a B-spline whose weights are all of one sign by its
+/// control points, whose hull holds it. Any other edge is not shown to.
+fn boundary_in_plane(
+    topo: &Topology,
+    oriented: &[OrientedEdge],
+    (origin, normal): (Point3, Vec3),
+    slack: f64,
+) -> Result<bool, crate::OperationsError> {
+    let off = |p: Point3| (p - origin).dot(normal).abs();
+    for oe in oriented {
+        let edge = topo.edge(oe.edge())?;
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let held = match edge.curve() {
+            EdgeCurve::Line => off(a) <= slack && off(b) <= slack,
+            EdgeCurve::Circle(c) => {
+                off(c.center()) <= slack && c.normal().cross(normal).length() * c.radius() <= slack
+            }
+            EdgeCurve::Ellipse(e) => {
+                off(e.center()) <= slack
+                    && e.normal().cross(normal).length() * e.semi_major() <= slack
+            }
+            EdgeCurve::NurbsCurve(spline) => {
+                let weights = spline.weights();
+                (weights.iter().all(|&w| w > 0.0) || weights.iter().all(|&w| w < 0.0))
+                    && spline.control_points().iter().all(|&p| off(p) <= slack)
+            }
+        };
+        if !held {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 /// Whether a profile boundary in no one plane sweeps through itself in a

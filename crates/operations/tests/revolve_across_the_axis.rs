@@ -654,4 +654,36 @@ mod tests {
             assert!(report.is_valid(), "{name}: {:?}", report.issues);
         }
     }
+
+    /// The same loop as one closed B-spline of degree 1 through 64 of its
+    /// points, evenly in its parameter. Read at a quarter, a half and three
+    /// quarters of its span, and at its vertex, it lies in the plane
+    /// `axis = side / 3`, though it leaves that plane between; it revolves
+    /// into a valid solid.
+    #[test]
+    fn a_closed_spline_round_the_axis_through_points_of_one_plane_revolves() {
+        const N: u32 = 64;
+        let mut knots = vec![0.0];
+        knots.extend((0..=N).map(|k| f64::from(k) / f64::from(N)));
+        knots.push(1.0);
+        for (name, f) in frames() {
+            let points: Vec<Point3> = (0..=N)
+                .map(|k| {
+                    let t = TAU * f64::from(k % N) / f64::from(N);
+                    let r = 3.0 + t.cos();
+                    f.origin + f.out * (r * t.cos()) + f.side * (r * t.sin()) + f.axis * t.sin()
+                })
+                .collect();
+            let mut topo = Topology::new();
+            let v = topo.add_vertex(Vertex::new(points[0], 1e-7));
+            let curve =
+                NurbsCurve::new(1, knots.clone(), points, vec![1.0; N as usize + 1]).unwrap();
+            let edge = topo.add_edge(Edge::new(v, v, EdgeCurve::NurbsCurve(curve)));
+            let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+            let face = topo.add_face(Face::new(wire, vec![], wall()));
+            let solid = revolve(&mut topo, face, f.origin, f.axis, TAU).unwrap();
+            let report = validate_solid(&topo, solid).unwrap();
+            assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        }
+    }
 }
