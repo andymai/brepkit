@@ -2598,12 +2598,18 @@ fn marched_sections_near(
             (q - surf_a(ua, va)).length() <= march_step
                 && (q - surf_b(ub, vb)).length() <= march_step
         };
-        on.filter(|&on| {
+        let Some(on) = on.filter(|&on| {
             crosses_at(&a, &b, on)
                 && near_patches(on)
                 && region.is_none_or(|r| r.contains_point(on))
-        })
-        .and_then(|on| station(&a, &b, on, Vec3::new(0.0, 0.0, 0.0)))
+        }) else {
+            return Ok(None);
+        };
+        // A crossing whose curvature cannot be read cannot be marched; the
+        // section is refused, not traced without it.
+        station(&a, &b, on, Vec3::new(0.0, 0.0, 0.0))
+            .map(Some)
+            .ok_or(MathError::ConvergenceFailure { iterations: 0 })
     };
     let off_patch = |q: Point3| {
         let (ua, va) = project_analytic(&a, q, u_range_a, v_range_a);
@@ -2628,7 +2634,7 @@ fn marched_sections_near(
         let seed = if k < candidates.len() {
             let mid = candidates[k].1;
             k += 1;
-            let Some(seed) = settle(mid) else {
+            let Some(seed) = settle(mid)? else {
                 continue;
             };
             if off_patch(seed.p) {
@@ -10726,6 +10732,82 @@ mod tests {
                     assert!(worst <= lin, "{label}: off by {worst:.2e}");
                     let (first, last) = (c.points[0].point, c.points[c.points.len() - 1].point);
                     assert!((first - last).length() < 1e-9, "{label}: open");
+                }
+                for &t in &truth {
+                    let near = curves
+                        .iter()
+                        .map(|c| {
+                            crate::nurbs::projection::project_point_to_curve(&c.curve, t, 1e-12)
+                                .unwrap()
+                                .distance
+                        })
+                        .fold(f64::INFINITY, f64::min);
+                    assert!(near < 1e-5, "{label}: {t:?} lies {near:.1e} off");
+                }
+            }
+        }
+    }
+
+    /// A cone lying 1e-14 off its radial plane, its apex at the origin, and a
+    /// rod of radius 1 along z through (3, 0, 0) cross square to each other
+    /// in a circle. Every point of the cone lies within 64 float steps of its
+    /// apex's plane, where its curvature was not read: each seed on the
+    /// crossing found no station and was dropped, and the pair traced
+    /// nothing with no error. A seed on a crossing whose curvature cannot be
+    /// read now refuses the section. The pair refuses or traces the circle,
+    /// in three poses and either way round, and never returns empty.
+    #[test]
+    fn a_crossing_on_a_nearly_flat_cone_is_traced_or_refused() {
+        let lin = Tolerance::new().linear;
+        for (k, pose) in three_poses().iter().enumerate() {
+            let o = Point3::new(0.0, 0.0, 0.0);
+            let along = |v: Vec3| pose.mul_point(o + v) - pose.mul_point(o);
+            let cone =
+                ConicalSurface::new(pose.mul_point(o), along(Vec3::new(0.0, 0.0, 1.0)), 1e-14)
+                    .unwrap();
+            let rod = CylindricalSurface::new(
+                pose.mul_point(Point3::new(3.0, 0.0, 0.0)),
+                along(Vec3::new(0.0, 0.0, 1.0)),
+                1.0,
+            )
+            .unwrap();
+            let truth: Vec<Point3> = (0..72)
+                .map(|j| {
+                    let t = TAU * f64::from(j) / 72.0;
+                    let (x, y) = (3.0 + t.cos(), t.sin());
+                    pose.mul_point(Point3::new(x, y, 1e-14_f64.tan() * x.hypot(y)))
+                })
+                .collect();
+            let off_rod = |p: Point3| {
+                let (w, ax) = (p - rod.origin(), rod.axis());
+                ((w - ax * ax.dot(w)).length() - 1.0).abs()
+            };
+            for cone_first in [true, false] {
+                let label = format!("pose {k} cone first {cone_first}");
+                let (a, b, va, vb) = if cone_first {
+                    (
+                        AnalyticSurface::Cone(&cone),
+                        AnalyticSurface::Cylinder(&rod),
+                        Some((1.0, 5.0)),
+                        Some((-1.0, 1.0)),
+                    )
+                } else {
+                    (
+                        AnalyticSurface::Cylinder(&rod),
+                        AnalyticSurface::Cone(&cone),
+                        Some((-1.0, 1.0)),
+                        Some((1.0, 5.0)),
+                    )
+                };
+                let Ok(curves) = marched_sections(a, b, 32, va, vb, None) else {
+                    continue;
+                };
+                assert!(!curves.is_empty(), "{label}: no section and no refusal");
+                for c in &curves {
+                    let worst = farthest_along(&c.curve, 4000, |p| {
+                        off_double_cone(&cone, p).max(off_rod(p))
+                    });
+                    assert!(worst <= lin, "{label}: off by {worst:.2e}");
                 }
                 for &t in &truth {
                     let near = curves
