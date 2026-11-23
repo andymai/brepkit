@@ -45,6 +45,165 @@ impl Curved {
     }
 }
 
+/// Points along a face's wires in their order, each edge from where its
+/// wire enters it: the outer wire's, and every wire's.
+#[derive(Clone)]
+struct Outline {
+    outer: Vec<Point3>,
+    all: Vec<Point3>,
+}
+
+impl Outline {
+    fn of(topo: &Topology, face_id: FaceId) -> Result<Self, CheckError> {
+        const STEPS: u32 = 16;
+        let face = topo.face(face_id)?;
+        let (mut outer, mut all) = (Vec::new(), Vec::new());
+        for (k, wid) in std::iter::once(face.outer_wire())
+            .chain(face.inner_wires().iter().copied())
+            .enumerate()
+        {
+            let mut points = Vec::new();
+            for oe in topo.wire(wid)?.edges() {
+                let edge = topo.edge(oe.edge())?;
+                let (a, b) = (
+                    topo.vertex(edge.start())?.point(),
+                    topo.vertex(edge.end())?.point(),
+                );
+                let curve = edge.curve();
+                let (mut t0, mut t1) = curve.domain_with_endpoints(a, b);
+                let head = curve.evaluate_with_endpoints(t0, a, b);
+                if (head - a).length() > (head - b).length() {
+                    std::mem::swap(&mut t0, &mut t1);
+                }
+                if !oe.is_forward() {
+                    std::mem::swap(&mut t0, &mut t1);
+                }
+                points.extend((0..STEPS).map(|s| {
+                    curve.evaluate_with_endpoints(
+                        (t1 - t0).madd(f64::from(s) / f64::from(STEPS), t0),
+                        a,
+                        b,
+                    )
+                }));
+            }
+            if k == 0 {
+                outer.clone_from(&points);
+            }
+            all.extend(points);
+        }
+        Ok(Self { outer, all })
+    }
+}
+
+/// The span of one of a surface's parameters that a face covers, as read
+/// along its outline: `None` for all of it.
+type Span = Option<(f64, f64)>;
+
+/// The spans of a surface's two parameters that a face whose outline is
+/// `outline` covers. Along a closed loop that does not wind round an angle,
+/// the region it bounds keeps within the angle's span along the loop,
+/// unwrapped; one that winds round holds a whole turn of it, and on a cone
+/// its apex, on a sphere a pole, so the other span too. A wall's band
+/// between two loops round it spans the heights of both. Each span is
+/// widened by half its largest step, as an edge can bulge between samples.
+fn spans(surface: &FaceSurface, outline: &Outline) -> [Span; 2] {
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+    let angular = [true, matches!(surface, FaceSurface::Torus(_))];
+    let read = |p: Point3| {
+        if let FaceSurface::Torus(t) = surface {
+            Some(t.project_point(p))
+        } else {
+            surface.project_point(p)
+        }
+    };
+    let wrap = |x: f64| (x + PI).rem_euclid(TAU) - PI;
+    let Some(first) = outline.outer.first().and_then(|&p| read(p)) else {
+        return [None, None];
+    };
+    let (mut lo, mut hi) = ([first.0, first.1], [first.0, first.1]);
+    let (mut at, mut raw, mut step) = ([first.0, first.1], [first.0, first.1], [0.0_f64; 2]);
+    let mut near_pole = false;
+    for &p in outline.outer.iter().skip(1).chain(outline.outer.first()) {
+        let Some((u, v)) = read(p) else {
+            return [None, None];
+        };
+        near_pole |= matches!(surface, FaceSurface::Sphere(_)) && v.abs() > FRAC_PI_2 - 1e-3;
+        for (c, x) in [u, v].into_iter().enumerate() {
+            let d = if angular[c] {
+                wrap(x - raw[c])
+            } else {
+                x - raw[c]
+            };
+            raw[c] = x;
+            at[c] += d;
+            step[c] = step[c].max(d.abs());
+            lo[c] = lo[c].min(at[c]);
+            hi[c] = hi[c].max(at[c]);
+        }
+    }
+    let winds = (0..2).any(|c| angular[c] && (at[c] - [first.0, first.1][c]).abs() > PI);
+    let widened = |c: usize| Some((lo[c] - 0.5 * step[c], hi[c] + 0.5 * step[c]));
+    match surface {
+        _ if near_pole => [None, None],
+        FaceSurface::Cylinder(_) if winds => {
+            let heights: Vec<f64> = outline
+                .all
+                .iter()
+                .filter_map(|&p| read(p).map(|(_, v)| v))
+                .collect();
+            let (low, high) = heights
+                .iter()
+                .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), &v| {
+                    (l.min(v), h.max(v))
+                });
+            [None, Some((low - 0.5 * step[1], high + 0.5 * step[1]))]
+        }
+        _ if winds => [None, None],
+        _ => [widened(0), widened(1)],
+    }
+}
+
+/// Whether two faces on `surface`, each with its outline and its spans of
+/// the surface's parameters, cover overlapping spans of both, by more than
+/// the tolerance.
+fn spans_meet(
+    surface: &FaceSurface,
+    (a, of_a): &(Outline, [Span; 2]),
+    (b, of_b): &(Outline, [Span; 2]),
+    tolerance: f64,
+) -> bool {
+    use std::f64::consts::TAU;
+    let scale = a
+        .outer
+        .iter()
+        .chain(&b.outer)
+        .fold((0.0_f64, None::<Point3>), |(m, first), &p| {
+            first.map_or((m, Some(p)), |f| (m.max((p - f).length()), Some(f)))
+        })
+        .0
+        .max(tolerance);
+    let angular = [true, matches!(surface, FaceSurface::Torus(_))];
+    (0..2).all(|c| {
+        let (Some((lo_a, hi_a)), Some((lo_b, hi_b))) = (of_a[c], of_b[c]) else {
+            return true;
+        };
+        let (slack, shifts) = if angular[c] {
+            (tolerance / scale, [-TAU, 0.0, TAU])
+        } else {
+            (tolerance, [0.0; 3])
+        };
+        let shift = if angular[c] {
+            ((lo_a - lo_b) / TAU).round() * TAU
+        } else {
+            0.0
+        };
+        shifts.iter().any(|&turn| {
+            let (lo, hi) = (lo_b + shift + turn, hi_b + shift + turn);
+            hi_a.min(hi) - lo_a.max(lo) > slack
+        })
+    })
+}
+
 /// Whether two surfaces are one within `tol`, over a part `size` across.
 fn one_surface(a: &FaceSurface, b: &FaceSurface, tol: f64, size: f64) -> bool {
     let parallel = |u: Vec3, v: Vec3| u.cross(v).length() * size <= tol;
@@ -264,8 +423,14 @@ pub fn check_curved_faces_overlap(
         });
     }
     curved.sort_by(|a, b| a.kind.cmp(&b.kind).then(a.key.total_cmp(&b.key)));
-    // The pairs on one surface whose boxes meet.
+    // The pairs on one surface whose boxes meet and whose spans of the
+    // surface's parameters overlap: a face's box can be its whole surface's
+    // (a cap's is its sphere's), and many patches of one wall all meet.
+    // Each face's spans are read once, in the parameters of the first face
+    // it was found on one surface with.
     let mut pairs: Vec<(usize, usize)> = Vec::new();
+    let mut reference: Vec<Option<usize>> = vec![None; curved.len()];
+    let mut read: Vec<Option<(Outline, [Span; 2])>> = vec![None; curved.len()];
     for (i, a) in curved.iter().enumerate() {
         // A cone's key is an angle, which parts across the faces: by no more
         // than the tolerance over the larger face, and so over this one.
@@ -279,8 +444,26 @@ pub fn check_curved_faces_overlap(
                 break;
             }
             let size = a.size().max(b.size());
-            if a.bounds.expanded(tolerance).intersects(b.bounds)
-                && one_surface(&a.surface, &b.surface, tolerance, size)
+            if !a.bounds.expanded(tolerance).intersects(b.bounds)
+                || !one_surface(&a.surface, &b.surface, tolerance, size)
+            {
+                continue;
+            }
+            let root = *reference[i].get_or_insert(i);
+            if *reference[j].get_or_insert(root) != root {
+                // Found on one surface with two faces apart: kept unread.
+                pairs.push((i, j));
+                continue;
+            }
+            for k in [i, j] {
+                if read[k].is_none() {
+                    let outline = Outline::of(topo, curved[k].face)?;
+                    let spans = spans(&curved[root].surface, &outline);
+                    read[k] = Some((outline, spans));
+                }
+            }
+            if let (Some(of_a), Some(of_b)) = (&read[i], &read[j])
+                && spans_meet(&a.surface, of_a, of_b, tolerance)
             {
                 pairs.push((i, j));
             }
@@ -490,6 +673,43 @@ mod tests {
         let pair = solid(&mut topo, faces);
         let got = found(&topo, pair);
         assert!(got.is_empty(), "{got:?}");
+    }
+
+    /// Caps of two spheres of one radius whose centres stand 0.5 apart, each
+    /// past 5 above its own centre: their boxes meet, and a point beside the
+    /// rim of one reads inside the other's half-space, but they lie on two
+    /// surfaces and are not paired. Nor are caps of two coaxial cylinders of
+    /// two radii.
+    #[test]
+    fn faces_on_two_surfaces_of_one_radius_are_not_paired() {
+        let mut topo = Topology::new();
+        let shifted = |dz: f64| {
+            FaceSurface::Sphere(SphericalSurface::new(Point3::new(0.0, 0.0, dz), R).unwrap())
+        };
+        let mut faces = Vec::new();
+        for dz in [0.0, 0.5] {
+            let centre = Point3::new(0.0, 0.0, dz + 5.0);
+            let circle = Circle3D::new(centre, z(), 75f64.sqrt()).unwrap();
+            let v = topo.add_vertex(Vertex::new(circle.evaluate(0.0), 1e-7));
+            let edge = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+            let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+            faces.push(topo.add_face(Face::new(wire, vec![], shifted(dz))));
+        }
+        let pair = solid(&mut topo, faces);
+        assert!(found(&topo, pair).is_empty());
+
+        let mut topo = Topology::new();
+        let inner = wall(&mut topo, 0.0, PI);
+        let outer = wall(&mut topo, 0.0, PI);
+        let FaceSurface::Cylinder(c) = topo.face(outer).unwrap().surface().clone() else {
+            unreachable!()
+        };
+        let wider = CylindricalSurface::new(c.origin(), c.axis(), 5.5).unwrap();
+        topo.face_mut(outer)
+            .unwrap()
+            .set_surface(FaceSurface::Cylinder(wider));
+        let pair = solid(&mut topo, vec![inner, outer]);
+        assert!(found(&topo, pair).is_empty());
     }
 
     /// The caps past `z = 5` and past `x = 5` share the part of the sphere
