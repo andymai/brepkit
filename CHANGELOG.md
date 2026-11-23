@@ -1,5 +1,14 @@
 # Changelog
 
+## [4.11.40](https://github.com/andymai/brepkit/compare/v4.11.39...v4.11.40) (2026-11-23)
+
+
+### Bug Fixes
+
+* **algo:** read a long piece's run in u along it in the face trace and the seam split, a torus section's run in v, and a spline walk by proof ([#2722](https://github.com/andymai/brepkit/issues/2722)) ([861fff4](https://github.com/andymai/brepkit/commit/861fff4cae7250db2785a8a52921002762882b1e))
+* **check,operations:** mesh a plane face by its whole area's winding, close the boundary integral's loops, and check overlap and revolve on curved surfaces ([#2725](https://github.com/andymai/brepkit/issues/2725)) ([a51fe32](https://github.com/andymai/brepkit/commit/a51fe326fe337897609d4a57d4d95610b08fc01c))
+* **math,algo,operations:** fuse a hang tab through a funnel's torus lip, and a lip that leans off its axis, exactly ([#2716](https://github.com/andymai/brepkit/issues/2716)) ([5719c39](https://github.com/andymai/brepkit/commit/5719c390f6bbce91da41779eb80e96a7eb29d50d))
+
 ## [4.11.39](https://github.com/andymai/brepkit/compare/v4.11.38...v4.11.39) (2026-11-23)
 
 
