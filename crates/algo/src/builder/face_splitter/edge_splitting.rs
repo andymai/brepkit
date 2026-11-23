@@ -26,7 +26,19 @@ pub(super) fn split_boundary_edges_at_3d_points(
     surface: &FaceSurface,
     tol: f64,
 ) -> Vec<OrientedPCurveEdge> {
-    split_edges_at_3d_points(edges, split_pts_3d, frame, surface, tol, false)
+    split_edges_at_3d_points(edges, split_pts_3d, frame, surface, tol, false, false)
+}
+
+/// [`split_boundary_edges_at_3d_points`] for a ball face charted clear of its
+/// poles: an arc of a circle split there reads its split's `u` on the copy
+/// the arc reaches it on from its start.
+pub(super) fn split_clear_ball_edges_at_3d_points(
+    edges: Vec<OrientedPCurveEdge>,
+    split_pts_3d: &[Point3],
+    surface: &FaceSurface,
+    tol: f64,
+) -> Vec<OrientedPCurveEdge> {
+    split_edges_at_3d_points(edges, split_pts_3d, None, surface, tol, false, true)
 }
 
 /// [`split_boundary_edges_at_3d_points`] for a hole woven into a curved
@@ -42,7 +54,7 @@ pub(super) fn split_hole_edges_at_3d_points(
     surface: &FaceSurface,
     tol: f64,
 ) -> Vec<OrientedPCurveEdge> {
-    split_edges_at_3d_points(edges, split_pts_3d, frame, surface, tol, true)
+    split_edges_at_3d_points(edges, split_pts_3d, frame, surface, tol, true, false)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -53,6 +65,7 @@ fn split_edges_at_3d_points(
     surface: &FaceSurface,
     tol: f64,
     nurbs_by_projection: bool,
+    clear_ball: bool,
 ) -> Vec<OrientedPCurveEdge> {
     let conic_band = if nurbs_by_projection {
         tol * 100.0
@@ -322,11 +335,25 @@ fn split_edges_at_3d_points(
                     EdgeCurve::Line | EdgeCurve::Circle(_) => None,
                 };
                 on_copy_near(split_uv, near.unwrap_or(along), periods)
+            } else if let (EdgeCurve::Circle(circle), FaceSurface::Sphere(sphere)) =
+                (&edge.curve_3d, surface)
+                && clear_ball
+                && closed_ring_dir.is_none()
+                && let Some(run) =
+                    ball_arc_u_run(circle, (edge.start_3d, edge.forward), split_3d, sphere, tol)
+            {
+                // Projected, the point took the principal copy, which can be
+                // a turn off the arc's own run.
+                on_copy_near(
+                    split_uv,
+                    brepkit_math::vec::Point2::new(edge.start_uv.x() + run, split_uv.y()),
+                    periods,
+                )
             } else {
                 split_uv
             };
             let mut pcurve = boundary_piece_pcurve(&edge, prev_3d, split_3d, surface, frame);
-            if nurbs_by_projection {
+            if nurbs_by_projection || clear_ball {
                 pcurve = on_copy_of(pcurve, prev_uv, periods);
             }
             result.push(OrientedPCurveEdge {
@@ -344,18 +371,30 @@ fn split_edges_at_3d_points(
             prev_3d = split_3d;
         }
         let mut pcurve = boundary_piece_pcurve(&edge, prev_3d, edge.end_3d, surface, frame);
-        if nurbs_by_projection {
+        if nurbs_by_projection || clear_ball {
             pcurve = on_copy_of(pcurve, prev_uv, periods);
         }
         // The stored `end_uv` of a closed rim follows the CURVE's direction
         // (`sample_edge_to_uv` ignores orientation), so a reverse-traversed ring
         // would close a period on the wrong side of its own start.
-        let tail_end_uv = match closed_ring_dir {
-            Some(dir) => brepkit_math::vec::Point2::new(
+        let tail_end_uv = match (closed_ring_dir, &edge.curve_3d, surface) {
+            (Some(dir), _, _) => brepkit_math::vec::Point2::new(
                 std::f64::consts::TAU.madd(dir, edge.start_uv.x()),
                 edge.start_uv.y(),
             ),
-            None => edge.end_uv,
+            // A closed rim of a ball face runs back to its start, but its
+            // stored end reads the circle's own sense, which a rim walked
+            // against its circle turns the other way round: the run from
+            // the last split to the start places it.
+            (None, EdgeCurve::Circle(circle), FaceSurface::Sphere(sphere))
+                if clear_ball && (edge.start_3d - edge.end_3d).length() < tol =>
+            {
+                ball_arc_u_run(circle, (prev_3d, edge.forward), edge.end_3d, sphere, tol)
+                    .map_or(edge.end_uv, |run| {
+                        brepkit_math::vec::Point2::new(prev_uv.x() + run, edge.end_uv.y())
+                    })
+            }
+            _ => edge.end_uv,
         };
         result.push(OrientedPCurveEdge {
             curve_3d: edge.curve_3d.clone(),
@@ -788,6 +827,75 @@ fn ellipse_split_u(
     ellipse_u_after(ellipse, surface, (edge.start_uv.x(), u), run)
 }
 
+/// The run in `u` along an arc of `circle` from `from` to `to`, two points on
+/// it, about `sphere`'s axis. The arc runs counter-clockwise about the
+/// circle's normal when `forward`, and clockwise otherwise, as a boundary
+/// edge that runs that way does.
+///
+/// Seen along the axis, the arc's points lie on a conic `A + B cos t +
+/// C sin t` in each of the chart's `x` and `y`, so each is zero at no more
+/// than two angles, found in closed form. Between two such angles the arc
+/// keeps to one quarter of the plane about the axis and turns by the wrapped
+/// difference of its ends' `u`, which is less than a quarter turn. `None`
+/// when the arc comes within `tol` of the axis at one of those angles or at
+/// an end: there `u` has no value.
+fn ball_arc_u_run(
+    circle: &brepkit_math::curves::Circle3D,
+    (from, forward): (Point3, bool),
+    to: Point3,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    tol: f64,
+) -> Option<f64> {
+    use std::f64::consts::{PI, TAU};
+    let (o, x, y) = (sphere.center(), sphere.x_axis(), sphere.y_axis());
+    let r = circle.radius();
+    let c = circle.center() - o;
+    let (ua, va) = (circle.u_axis(), circle.v_axis());
+    // Each chart axis's coordinate along the arc: `k0 + k1 cos t + k2 sin t`.
+    let coeffs = |axis: brepkit_math::vec::Vec3| (c.dot(axis), r * ua.dot(axis), r * va.dot(axis));
+    let (cx, cy) = (coeffs(x), coeffs(y));
+    let at = |(k0, k1, k2): (f64, f64, f64), t: f64| {
+        let (s, co) = t.sin_cos();
+        k2.madd(s, k1.madd(co, k0))
+    };
+    let seen = |t: f64| (at(cx, t), at(cy, t));
+    let from = circle.project(from);
+    let dir = if forward { 1.0 } else { -1.0 };
+    let sweep = dir * (dir * (circle.project(to) - from)).rem_euclid(TAU);
+    let mut cuts: Vec<f64> = Vec::new();
+    for (k, other) in [(cx, cy), (cy, cx)] {
+        let amp = k.1.hypot(k.2);
+        if amp <= 0.0 || k.0.abs() > amp {
+            continue;
+        }
+        let phase = k.2.atan2(k.1);
+        let half = (-k.0 / amp).clamp(-1.0, 1.0).acos();
+        for root in [phase + half, phase - half] {
+            let ahead = (dir * (root - from)).rem_euclid(TAU);
+            if ahead > 0.0 && ahead < dir * sweep {
+                if at(other, root).abs() <= tol {
+                    return None;
+                }
+                cuts.push(ahead);
+            }
+        }
+    }
+    cuts.sort_by(f64::total_cmp);
+    let angle = |t: f64| {
+        let (px, py) = seen(t);
+        (px.hypot(py) > tol).then(|| py.atan2(px))
+    };
+    let mut run = 0.0;
+    let mut last = angle(from)?;
+    for ahead in cuts.into_iter().chain(std::iter::once(dir * sweep)) {
+        let next = angle(dir.madd(ahead, from))?;
+        let step = (next - last + PI).rem_euclid(TAU) - PI;
+        run += step;
+        last = next;
+    }
+    Some(run)
+}
+
 /// `uv` moved by whole periods to the copy nearest `near`.
 fn on_copy_near(
     uv: brepkit_math::vec::Point2,
@@ -805,7 +913,9 @@ fn on_copy_near(
 }
 
 /// The whole periods that bring `pcurve` onto the copy where `uv` lies:
-/// of the copies a few periods either way, the one nearest `uv`.
+/// of the copies a few periods either way, the one nearest `uv`. A line is
+/// read at its start, which a piece's line pcurve takes from the piece's
+/// start: every copy of a line along a period lies on the line itself.
 fn pcurve_shift_to(
     pcurve: &brepkit_math::curves2d::Curve2D,
     uv: brepkit_math::vec::Point2,
@@ -813,7 +923,7 @@ fn pcurve_shift_to(
 ) -> (f64, f64) {
     use brepkit_math::curves2d::Curve2D;
     let distance = |p: brepkit_math::vec::Point2| match pcurve {
-        Curve2D::Line(line) => line.distance_to_point(p),
+        Curve2D::Line(line) => (line.evaluate(0.0) - p).length(),
         Curve2D::Circle(circle) => (circle.evaluate(circle.project(p)) - p).length(),
         Curve2D::Ellipse(ellipse) => (0..=64)
             .map(|k| (ellipse.evaluate(std::f64::consts::TAU * f64::from(k) / 64.0) - p).length())
@@ -1951,6 +2061,79 @@ mod tests {
         assert!((pieces[0].end_3d - between).length() < 1e-9);
         assert!((pieces[1].start_3d - between).length() < 1e-9);
         assert!((pieces[1].end_3d - equator).length() < 1e-9);
+    }
+
+    /// A latitude rim of a ball face charted clear of its poles, its circle
+    /// turning with `u` or against it, walked either way round and split at
+    /// two points: the pieces run one turn of `u` from the start the way the
+    /// walk runs, the last back to the start, and each piece's pcurve lies
+    /// on the copy its start lies on. The rim's stored end reads its circle's
+    /// own sense, a turn the other way for a rim walked against it.
+    #[test]
+    fn a_ball_rim_split_runs_one_turn_the_way_it_is_walked() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_math::vec::Vec3;
+        use std::f64::consts::TAU;
+
+        let surface =
+            FaceSurface::Sphere(SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0).unwrap());
+        let (height, rho) = (0.3_f64, (1.0_f64 - 0.09).sqrt());
+        let at = |a: f64| Point3::new(rho * a.cos(), rho * a.sin(), height);
+        let uv = |p: Point3| {
+            let (u, v) = surface.project_point(p).unwrap();
+            Point2::new(u, v)
+        };
+        let periods = crate::builder::pcurve_compute::surface_periods(&surface);
+        for sense in [1.0_f64, -1.0] {
+            let circle = Circle3D::new(
+                Point3::new(0.0, 0.0, height),
+                Vec3::new(0.0, 0.0, sense),
+                rho,
+            )
+            .unwrap();
+            for forward in [true, false] {
+                let what = format!("circle sense {sense}, forward {forward}");
+                let start = at(1.0);
+                let start_uv = uv(start);
+                let edge = OrientedPCurveEdge {
+                    curve_3d: EdgeCurve::Circle(circle.clone()),
+                    pcurve: Curve2D::Line(Line2D::new(start_uv, Vec2::new(sense, 0.0)).unwrap()),
+                    start_uv,
+                    end_uv: Point2::new(TAU.madd(sense, start_uv.x()), start_uv.y()),
+                    start_3d: start,
+                    end_3d: start,
+                    forward,
+                    source_edge_idx: None,
+                    pave_block_id: None,
+                };
+                let pieces = split_clear_ball_edges_at_3d_points(
+                    vec![edge],
+                    &[at(2.5), at(4.0)],
+                    &surface,
+                    1e-7,
+                );
+                assert_eq!(pieces.len(), 3, "{what}");
+                let walk = if forward { sense } else { -sense };
+                for w in pieces.windows(2) {
+                    assert!((w[0].end_uv - w[1].start_uv).length() < 1e-12, "{what}");
+                }
+                for p in &pieces {
+                    let step = p.end_uv.x() - p.start_uv.x();
+                    assert!(step * walk > 0.0 && step.abs() < TAU, "{what}: step {step}");
+                    assert_eq!(
+                        pcurve_shift_to(&p.pcurve, p.start_uv, periods),
+                        (0.0, 0.0),
+                        "{what}"
+                    );
+                }
+                let last = pieces[2].end_uv.x();
+                assert!(
+                    (last - TAU.madd(walk, start_uv.x())).abs() < 1e-9,
+                    "{what}: the rim closes at u {last}"
+                );
+            }
+        }
     }
 }
 

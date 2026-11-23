@@ -123,11 +123,11 @@ fn a_rod_ending_at_a_balls_centre_fuses_onto_it() {
     }
 }
 
-/// The volume two rods of radius `RADIUS` and length `length`, both from the
-/// origin along `a` and `b`, share: each line along `a` through the first
-/// rod's cross-section meets the second rod in one stretch, read exactly,
-/// summed over the cross-section in polar steps.
-fn rods_overlap(a: Vec3, b: Vec3, length: f64) -> f64 {
+/// The volume two rods of radius `radius`, both from the origin along unit
+/// `a` for `la` and unit `b` for `lb`, share: each line along `a` through the
+/// first rod's cross-section meets the second rod in one stretch, read
+/// exactly, summed over the cross-section in polar steps.
+fn rods_overlap(radius: f64, (a, la): (Vec3, f64), (b, lb): (Vec3, f64)) -> f64 {
     let e1 = if a.x().abs() < 0.9 {
         a.cross(Vec3::new(1.0, 0.0, 0.0))
     } else {
@@ -137,7 +137,7 @@ fn rods_overlap(a: Vec3, b: Vec3, length: f64) -> f64 {
     let e2 = a.cross(e1);
     let c = a.dot(b);
     let n = 2000;
-    let (dr, dphi) = (RADIUS / f64::from(n), 2.0 * PI / f64::from(n));
+    let (dr, dphi) = (radius / f64::from(n), 2.0 * PI / f64::from(n));
     let mut sum = 0.0;
     for i in 0..n {
         let rho = (f64::from(i) + 0.5) * dr;
@@ -148,17 +148,17 @@ fn rods_overlap(a: Vec3, b: Vec3, length: f64) -> f64 {
             // Within the second rod's radius: s^2 (1 - c^2) - 2 s qb c
             // + |q|^2 - qb^2 - R^2 <= 0.
             let (qa2, qb2) = (1.0 - c * c, -2.0 * qb * c);
-            let q0 = q.dot(q) - qb * qb - RADIUS * RADIUS;
+            let q0 = q.dot(q) - qb * qb - radius * radius;
             let disc = qb2 * qb2 - 4.0 * qa2 * q0;
             if disc <= 0.0 {
                 continue;
             }
             let root = disc.sqrt();
             let (mut lo, mut hi) = ((-qb2 - root) / (2.0 * qa2), (-qb2 + root) / (2.0 * qa2));
-            // Between the second rod's ends: 0 <= qb + s c <= length.
-            let (s0, s1) = ((0.0 - qb) / c, (length - qb) / c);
+            // Between the second rod's ends: 0 <= qb + s c <= lb.
+            let (s0, s1) = ((0.0 - qb) / c, (lb - qb) / c);
             lo = lo.max(s0.min(s1)).max(0.0);
-            hi = hi.min(s0.max(s1)).min(length);
+            hi = hi.min(s0.max(s1)).min(la);
             if hi > lo {
                 sum += (hi - lo) * rho;
             }
@@ -171,13 +171,12 @@ fn rods_overlap(a: Vec3, b: Vec3, length: f64) -> f64 {
 fn two_rods_ending_at_one_balls_centre_fuse_onto_it() {
     // A wire guard's two struts meeting at one ball: each rod's end cap
     // lies in a great circle of the ball.
-    let length = 10.0;
     // The first rod lies along -x and the second at (yaw, pitch) from it,
     // each built from the ball's centre, or from its far end where its flag
     // is set (its end cap at the ball). With `swap` the second rod meets the
     // ball first.
     // `mirror_too` adds the scene mirrored in `y`.
-    for (roll, yaw, pitch, swap, (first_far, second_far), mirror_too) in [
+    for (roll, yaw, pitch, swap, far_ends, mirror_too) in [
         (0.3, 2.2, 0.4, false, (false, false), true),
         (0.0, 2.2, 0.4, false, (false, false), true),
         (1.1, 1.3, -0.7, false, (false, false), true),
@@ -192,91 +191,257 @@ fn two_rods_ending_at_one_balls_centre_fuse_onto_it() {
         // The second rod's cap crosses the ball's upper quarter along a
         // short arc of its rim, by the first rod's cap.
         (0.0, 2.9, 1.0, false, (false, false), true),
-        (0.3, 2.9, 1.0, false, (true, true), true),
+        (0.3, 2.9, 1.0, true, (true, true), true),
         (0.0, 2.9, 1.0, true, (false, true), true),
     ] {
-        let poses = [
-            (Point3::new(0.0, 0.0, 0.0), false),
-            (Point3::new(28.638, -8.1, 2.65), false),
-            (Point3::new(28.638, -8.1, 2.65), true),
+        for (at, mirrored) in poses().into_iter().filter(|&(_, m)| mirror_too || !m) {
+            two_rods_at_one_ball(roll, yaw, pitch, swap, far_ends, at, mirrored);
+        }
+    }
+}
+
+#[test]
+fn two_rods_whose_caps_meet_at_a_balls_poles_fuse_onto_it() {
+    // Each section of the ball ends at a pole of its first chart, or at the
+    // rim of the cap fused first: the ball's faces are charted clear of the
+    // poles, and the pieces either side of a section run across that chart's
+    // seam.
+    for (roll, yaw, pitch, swap, far_ends) in [
+        (0.0, 2.2, 0.0, true, (true, false)),
+        (0.3, 2.2, 0.0, true, (true, true)),
+        (0.0, 2.9, 1.0, true, (true, true)),
+        (0.3, 2.9, 1.0, true, (true, false)),
+        (0.0, PI, -0.41, false, (false, true)),
+        (0.3, PI, -0.41, false, (true, true)),
+        (0.0, PI, 1.0, true, (true, false)),
+        (0.0, 2.9, 0.4, true, (true, false)),
+        // A thin lune of the ball, between two caps 0.24 radians apart.
+        (0.3, 2.9, 0.0, false, (false, true)),
+        // The second rod's cap rides the arcs that cut it from its rim.
+        (0.3, 2.9, 0.4, false, (false, true)),
+        (0.3, 2.9, 0.4, false, (true, true)),
+        (0.0, 1.0, 0.0, false, (false, false)),
+        (0.0, 2.2, 1.0, true, (true, false)),
+    ] {
+        for (at, mirrored) in poses() {
+            two_rods_at_one_ball(roll, yaw, pitch, swap, far_ends, at, mirrored);
+        }
+        two_rods_at_one_ball(
+            roll,
+            yaw,
+            pitch,
+            swap,
+            far_ends,
+            Point3::new(0.0, 0.0, 0.0),
+            true,
+        );
+    }
+}
+
+/// The ball's centre, and whether the scene is mirrored in `y` about the
+/// origin once placed.
+fn poses() -> [(Point3, bool); 3] {
+    [
+        (Point3::new(0.0, 0.0, 0.0), false),
+        (Point3::new(28.638, -8.1, 2.65), false),
+        (Point3::new(28.638, -8.1, 2.65), true),
+    ]
+}
+
+/// Two rods of length 10 from the centre of a ball of their radius at `at`,
+/// the first along -x and the second at (`yaw`, `pitch`) from it, each
+/// turned `roll` about its own axis and built from its far end where its
+/// flag is set; fused exactly, the second rod first with `swap`.
+#[allow(clippy::too_many_lines)]
+fn two_rods_at_one_ball(
+    roll: f64,
+    yaw: f64,
+    pitch: f64,
+    swap: bool,
+    (first_far, second_far): (bool, bool),
+    at: Point3,
+    mirrored: bool,
+) {
+    let length = 10.0;
+    let name = format!(
+        "roll {roll}, yaw {yaw}, pitch {pitch}, swap {swap}, far ends {first_far} {second_far}, at {at:?}, mirrored {mirrored}"
+    );
+    let pose = if mirrored {
+        Mat4::scale(1.0, -1.0, 1.0)
+    } else {
+        Mat4::identity()
+    };
+    let lay = |yaw: f64, pitch: f64, far_end: bool| {
+        let base = Mat4::translation(at.x(), at.y(), at.z())
+            * Mat4::rotation_z(yaw)
+            * Mat4::rotation_y(pitch)
+            * Mat4::rotation_y(-FRAC_PI_2);
+        if far_end {
+            base * Mat4::translation(0.0, 0.0, length)
+                * Mat4::rotation_x(PI)
+                * Mat4::rotation_z(roll)
+        } else {
+            base * Mat4::rotation_z(roll)
+        }
+    };
+    let along = |yaw: f64, pitch: f64| {
+        let p = (Mat4::rotation_z(yaw) * Mat4::rotation_y(pitch))
+            .mul_point(Point3::new(-1.0, 0.0, 0.0));
+        Vec3::new(p.x(), p.y(), p.z())
+    };
+    let (a, b) = (along(0.0, 0.0), along(yaw, pitch));
+    let mut topo = Topology::new();
+    let rod = make_cylinder(&mut topo, RADIUS, length).unwrap();
+    transform_solid(&mut topo, rod, &lay(0.0, 0.0, first_far)).unwrap();
+    let ball = make_sphere(&mut topo, RADIUS, 32).unwrap();
+    transform_solid(&mut topo, ball, &Mat4::translation(at.x(), at.y(), at.z())).unwrap();
+    let other = make_cylinder(&mut topo, RADIUS, length).unwrap();
+    transform_solid(&mut topo, other, &lay(yaw, pitch, second_far)).unwrap();
+    if mirrored {
+        for solid in [rod, ball, other] {
+            transform_solid(&mut topo, solid, &pose).unwrap();
+        }
+    }
+    let (one, two) = if swap { (other, rod) } else { (rod, other) };
+    let first = exact_fuse(&mut topo, one, ball, &name);
+    let fused = exact_fuse(&mut topo, first, two, &name);
+    let report = validate_solid(&topo, fused).unwrap();
+    assert!(report.is_valid(), "{name}: {:?}", report.issues);
+    let kinds = census(&topo, fused);
+    assert_eq!(kinds.get("cylinder"), Some(&2), "{name}: {kinds:?}");
+    assert_eq!(kinds.get("plane"), Some(&2), "{name}: {kinds:?}");
+    assert!(kinds.contains_key("sphere"), "{name}: {kinds:?}");
+    assert_eq!(edges_not_used_twice(&topo, fused), 0, "{name}");
+    let mesh = tessellate_solid(&topo, fused, 0.005).unwrap();
+    assert_eq!(boundary_edge_count(&mesh), 0, "{name}: open mesh");
+    // The rods, less their overlap, and the wedge of the ball outside both:
+    // its two planes meet at the angle between the rods' axes.
+    let wedge = 2.0 / 3.0 * (PI - a.dot(b).acos()) * RADIUS.powi(3);
+    let expected = 2.0 * PI * RADIUS * RADIUS * length
+        - rods_overlap(RADIUS, (a, length), (b, length))
+        + wedge;
+    let volume = solid_volume(&topo, fused, 0.0005).unwrap();
+    assert!(
+        (volume - expected).abs() < 1e-4 * expected,
+        "{name}: volume {volume} should be {expected}"
+    );
+    let class = |v: Vec3| classify_point(&topo, fused, pose.mul_point(at + v), 0.01, 1e-7).unwrap();
+    let away = -(a + b) * (1.0 / (a + b).length());
+    let side = a.cross(b) * (1.0 / a.cross(b).length());
+    for (v, want) in [
+        (a * 5.0, PointClassification::Inside),
+        (b * 5.0, PointClassification::Inside),
+        (away * 0.6, PointClassification::Inside),
+        (away * 0.6 + side * 0.4, PointClassification::Inside),
+        (away * 0.95, PointClassification::Outside),
+        (a * 5.0 + side * 1.0, PointClassification::Outside),
+        (b * 5.0 - side * 1.0, PointClassification::Outside),
+    ] {
+        assert_eq!(class(v), want, "{name} at {v:?}");
+    }
+}
+
+/// A turn by `angle` about `axis` through the origin.
+fn turn_about(axis: Vec3, angle: f64) -> Mat4 {
+    let u = axis * (1.0 / axis.length());
+    let (ux, uy, uz) = (u.x(), u.y(), u.z());
+    let (s, c) = angle.sin_cos();
+    let t = 1.0 - c;
+    Mat4([
+        [
+            t * ux * ux + c,
+            t * ux * uy - s * uz,
+            t * ux * uz + s * uy,
+            0.0,
+        ],
+        [
+            t * uy * ux + s * uz,
+            t * uy * uy + c,
+            t * uy * uz - s * ux,
+            0.0,
+        ],
+        [
+            t * uz * ux - s * uy,
+            t * uz * uy + s * ux,
+            t * uz * uz + c,
+            0.0,
+        ],
+        [0.0, 0.0, 0.0, 1.0],
+    ])
+}
+
+#[test]
+fn cable_cores_bent_at_balls_fuse_exactly() {
+    // The cable cores of a junction box: each a strand of three rods of
+    // radius 1 with a ball at each bend, its middle rod a few degrees off
+    // level. Each rod stands up from its start and turns about the
+    // horizontal axis across its direction.
+    let r = 1.0;
+    for (n, k) in [(0, 0), (1, 2), (2, 2), (2, 0), (1, 1)] {
+        let name = format!("gland {n} core {k}");
+        let from = Point3::new(
+            31.0,
+            f64::from(n - 1) * 36.0 + f64::from(k - 1) * 2.1,
+            if k == 1 { 26.4 } else { 22.8 },
+        );
+        let to = Point3::new(10.0, f64::from(3 * n + k - 4) * 6.2, 20.5);
+        let pts = [
+            from,
+            Point3::new(from.x() - 2.0, from.y(), from.z()),
+            Point3::new(to.x() + 3.0, to.y(), to.z()),
+            Point3::new(to.x() - 7.0, to.y(), to.z()),
         ];
-        for (at, mirrored) in poses.into_iter().filter(|&(_, m)| mirror_too || !m) {
-            let name = format!(
-                "roll {roll}, yaw {yaw}, pitch {pitch}, swap {swap}, far ends {first_far} {second_far}, at {at:?}, mirrored {mirrored}"
-            );
-            let pose = if mirrored {
-                Mat4::scale(1.0, -1.0, 1.0)
-            } else {
-                Mat4::identity()
-            };
-            let lay = |yaw: f64, pitch: f64, far_end: bool| {
-                let base = Mat4::translation(at.x(), at.y(), at.z())
-                    * Mat4::rotation_z(yaw)
-                    * Mat4::rotation_y(pitch)
-                    * Mat4::rotation_y(-FRAC_PI_2);
-                if far_end {
-                    base * Mat4::translation(0.0, 0.0, length)
-                        * Mat4::rotation_x(PI)
-                        * Mat4::rotation_z(roll)
-                } else {
-                    base * Mat4::rotation_z(roll)
-                }
-            };
-            let along = |yaw: f64, pitch: f64| {
-                let p = (Mat4::rotation_z(yaw) * Mat4::rotation_y(pitch))
-                    .mul_point(Point3::new(-1.0, 0.0, 0.0));
-                Vec3::new(p.x(), p.y(), p.z())
-            };
-            let (a, b) = (along(0.0, 0.0), along(yaw, pitch));
-            let mut topo = Topology::new();
-            let rod = make_cylinder(&mut topo, RADIUS, length).unwrap();
-            transform_solid(&mut topo, rod, &lay(0.0, 0.0, first_far)).unwrap();
-            let ball = make_sphere(&mut topo, RADIUS, 32).unwrap();
-            transform_solid(&mut topo, ball, &Mat4::translation(at.x(), at.y(), at.z())).unwrap();
-            let other = make_cylinder(&mut topo, RADIUS, length).unwrap();
-            transform_solid(&mut topo, other, &lay(yaw, pitch, second_far)).unwrap();
-            if mirrored {
-                for solid in [rod, ball, other] {
-                    transform_solid(&mut topo, solid, &pose).unwrap();
-                }
-            }
-            let (one, two) = if swap { (other, rod) } else { (rod, other) };
-            let first = exact_fuse(&mut topo, one, ball, &name);
-            let fused = exact_fuse(&mut topo, first, two, &name);
-            let report = validate_solid(&topo, fused).unwrap();
-            assert!(report.is_valid(), "{name}: {:?}", report.issues);
-            let kinds = census(&topo, fused);
-            assert_eq!(kinds.get("cylinder"), Some(&2), "{name}: {kinds:?}");
-            assert_eq!(kinds.get("plane"), Some(&2), "{name}: {kinds:?}");
-            assert!(kinds.contains_key("sphere"), "{name}: {kinds:?}");
-            assert_eq!(edges_not_used_twice(&topo, fused), 0, "{name}");
-            let mesh = tessellate_solid(&topo, fused, 0.005).unwrap();
-            assert_eq!(boundary_edge_count(&mesh), 0, "{name}: open mesh");
-            // The rods, less their overlap, and the wedge of the ball
-            // outside both: its two planes meet at the angle between the
-            // rods' axes.
-            let wedge = 2.0 / 3.0 * (PI - a.dot(b).acos()) * RADIUS.powi(3);
-            let expected = 2.0 * PI * RADIUS * RADIUS * length - rods_overlap(a, b, length) + wedge;
-            let volume = solid_volume(&topo, fused, 0.0005).unwrap();
-            assert!(
-                (volume - expected).abs() < 1e-4 * expected,
-                "{name}: volume {volume} should be {expected}"
-            );
-            let class =
-                |v: Vec3| classify_point(&topo, fused, pose.mul_point(at + v), 0.01, 1e-7).unwrap();
-            let away = -(a + b) * (1.0 / (a + b).length());
-            let side = a.cross(b) * (1.0 / a.cross(b).length());
-            for (v, want) in [
-                (a * 5.0, PointClassification::Inside),
-                (b * 5.0, PointClassification::Inside),
-                (away * 0.6, PointClassification::Inside),
-                (away * 0.6 + side * 0.4, PointClassification::Inside),
-                (away * 0.95, PointClassification::Outside),
-                (a * 5.0 + side * 1.0, PointClassification::Outside),
-                (b * 5.0 - side * 1.0, PointClassification::Outside),
-            ] {
-                assert_eq!(class(v), want, "{name} at {v:?}");
+        let mut topo = Topology::new();
+        let mut parts = Vec::new();
+        for i in 1..pts.len() {
+            let d = pts[i] - pts[i - 1];
+            let rod = make_cylinder(&mut topo, r, d.length()).unwrap();
+            let n = d * (1.0 / d.length());
+            let turn = turn_about(Vec3::new(-n.y(), n.x(), 0.0), n.z().clamp(-1.0, 1.0).acos());
+            let at = pts[i - 1];
+            transform_solid(
+                &mut topo,
+                rod,
+                &(Mat4::translation(at.x(), at.y(), at.z()) * turn),
+            )
+            .unwrap();
+            parts.push(rod);
+            if i < pts.len() - 1 {
+                let ball = make_sphere(&mut topo, r, 32).unwrap();
+                let at = pts[i];
+                transform_solid(&mut topo, ball, &Mat4::translation(at.x(), at.y(), at.z()))
+                    .unwrap();
+                parts.push(ball);
             }
         }
+        let fused = parts[1..]
+            .iter()
+            .fold(parts[0], |acc, &p| exact_fuse(&mut topo, acc, p, &name));
+        let report = validate_solid(&topo, fused).unwrap();
+        assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        assert_eq!(edges_not_used_twice(&topo, fused), 0, "{name}");
+        let kinds = census(&topo, fused);
+        assert_eq!(kinds.get("cylinder"), Some(&3), "{name}: {kinds:?}");
+        assert_eq!(kinds.get("plane"), Some(&2), "{name}: {kinds:?}");
+        let mesh = tessellate_solid(&topo, fused, 0.005).unwrap();
+        assert_eq!(boundary_edge_count(&mesh), 0, "{name}: open mesh");
+        // The rods, less each two that meet at a bend share there, and the
+        // wedge of each ball outside the two rods that meet in it.
+        let mut expected = 0.0;
+        for i in 1..pts.len() {
+            expected += PI * r * r * (pts[i] - pts[i - 1]).length();
+        }
+        for j in 1..pts.len() - 1 {
+            let (a, b) = (pts[j - 1] - pts[j], pts[j + 1] - pts[j]);
+            let (la, lb) = (a.length(), b.length());
+            let (a, b) = (a * (1.0 / la), b * (1.0 / lb));
+            expected +=
+                2.0 / 3.0 * (PI - a.dot(b).acos()) * r.powi(3) - rods_overlap(r, (a, la), (b, lb));
+        }
+        let volume = solid_volume(&topo, fused, 0.0005).unwrap();
+        assert!(
+            (volume - expected).abs() < 1e-5 * expected,
+            "{name}: volume {volume} should be {expected}"
+        );
     }
 }

@@ -826,3 +826,68 @@ fn a_wall_through_a_bore_by_the_pole_is_never_silently_wrong() {
         );
     }
 }
+
+/// A cap of the ball round its pole, cut again by a plane parallel to the
+/// axis, off it. The cap's face holds a pole of the ball's own chart, so its
+/// rim winds that chart, one way round for the cap above and the other way
+/// for the cap below; the second cut splits the rim twice. The piece holds
+/// the cap's slices across `x` up to the plane, each a circular segment.
+#[test]
+fn a_cap_round_the_pole_cut_by_a_plane_off_the_axis_is_exact() {
+    use brepkit_operations::boolean::{BooleanOptions, boolean_with_options};
+    use brepkit_operations::tessellate::boundary_edge_count;
+
+    let (r, c, x0) = (0.9_f64, 0.3_f64, 0.4_f64);
+    let segment = |x: f64| {
+        let r2 = r.mul_add(r, -x * x);
+        if r2 <= c * c {
+            0.0
+        } else {
+            r2 * (c / r2.sqrt()).acos() - c * c.mul_add(-c, r2).sqrt()
+        }
+    };
+    let truth = gauss(-c.mul_add(-c, r * r).sqrt(), x0, 400, &segment);
+    let opts = BooleanOptions {
+        mesh_fallback: false,
+        ..BooleanOptions::default()
+    };
+    for above in [true, false] {
+        for turn in [0.0_f64, 0.7, 2.5] {
+            for mirrored in [false, true] {
+                let label = format!("above {above}, turned {turn}, mirrored {mirrored}");
+                let mut topo = Topology::new();
+                let ball = make_sphere(&mut topo, r, 32).unwrap();
+                transform_solid(&mut topo, ball, &Mat4::rotation_z(turn)).unwrap();
+                let lid = make_box(&mut topo, 4.0, 4.0, 2.0).unwrap();
+                let lid_z = if above { c - 2.0 } else { -c };
+                transform_solid(&mut topo, lid, &Mat4::translation(-2.0, -2.0, lid_z)).unwrap();
+                let slab = make_box(&mut topo, 2.0, 4.0, 4.0).unwrap();
+                transform_solid(&mut topo, slab, &Mat4::translation(x0, -2.0, -2.0)).unwrap();
+                if mirrored {
+                    for s in [ball, lid, slab] {
+                        transform_solid(&mut topo, s, &Mat4::scale(1.0, -1.0, 1.0)).unwrap();
+                    }
+                }
+                let cap = boolean_with_options(&mut topo, BooleanOp::Cut, ball, lid, opts)
+                    .unwrap_or_else(|e| panic!("{label}: cap: {e}"));
+                let piece = boolean_with_options(&mut topo, BooleanOp::Cut, cap, slab, opts)
+                    .unwrap_or_else(|e| panic!("{label}: second cut: {e}"));
+                let report = validate_solid(&topo, piece).unwrap();
+                assert!(report.is_valid(), "{label}: {:?}", report.issues);
+                let spheres = solid_faces(&topo, piece)
+                    .unwrap()
+                    .iter()
+                    .filter(|&&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Sphere(_)))
+                    .count();
+                assert_eq!(spheres, 1, "{label}");
+                let mesh = tessellate_solid(&topo, piece, 0.002).unwrap();
+                assert_eq!(boundary_edge_count(&mesh), 0, "{label}: open mesh");
+                let volume = solid_volume(&topo, piece, 0.0005).unwrap();
+                assert!(
+                    (volume - truth).abs() < 1e-6 * truth,
+                    "{label}: volume {volume}, truth {truth}"
+                );
+            }
+        }
+    }
+}
