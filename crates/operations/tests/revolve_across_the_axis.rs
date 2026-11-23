@@ -540,25 +540,6 @@ mod tests {
         )
     }
 
-    /// A curved profile's boundary in no one plane that winds round the
-    /// axis: any surface it bounds meets the axis, and a full turn is
-    /// refused.
-    #[test]
-    fn a_boundary_round_the_axis_is_refused() {
-        for (name, f) in frames() {
-            let mut topo = Topology::new();
-            let corners = [
-                [2.0, 0.0, 0.0],
-                [0.0, 2.0, 1.0],
-                [-2.0, 0.0, 0.0],
-                [0.0, -2.0, 1.0],
-            ];
-            let face = quad(&mut topo, &f, corners, Some(wall()));
-            let result = revolve(&mut topo, face, f.origin, f.axis, TAU);
-            assert!(refused_at_the_axis(&result), "{name}: {result:?}");
-        }
-    }
-
     /// A curved profile's boundary in no one plane whose drawing in distance
     /// from the axis and height along it crosses itself: two of its points
     /// lie on one circle about the axis, and a full turn is refused. Its
@@ -592,6 +573,82 @@ mod tests {
                 [2.0, 0.6, 3.0],
             ];
             let face = quad(&mut topo, &f, corners, Some(wall()));
+            let solid = revolve(&mut topo, face, f.origin, f.axis, TAU).unwrap();
+            let report = validate_solid(&topo, solid).unwrap();
+            assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        }
+    }
+
+    /// A closed polygon through `points` in the frame's `(out, side, axis)`
+    /// coordinates, each side drawn by `side`, on `surface`, which the
+    /// polygon need not lie on.
+    fn polygon(
+        topo: &mut Topology,
+        f: &Frame,
+        points: &[[f64; 3]],
+        side: impl Fn(Point3, Point3) -> EdgeCurve,
+    ) -> FaceId {
+        let at: Vec<Point3> = points
+            .iter()
+            .map(|&[o, s, a]| f.origin + f.out * o + f.side * s + f.axis * a)
+            .collect();
+        let vertices: Vec<_> = at
+            .iter()
+            .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+            .collect();
+        let n = at.len();
+        let edges: Vec<OrientedEdge> = (0..n)
+            .map(|i| {
+                let j = (i + 1) % n;
+                let edge = Edge::new(vertices[i], vertices[j], side(at[i], at[j]));
+                OrientedEdge::new(topo.add_edge(edge), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        topo.add_face(Face::new(wire, vec![], wall()))
+    }
+
+    /// The bow-tie boundary above, each side a line in B-spline form whose
+    /// weights are both -1: read as the line it is, its drawing crosses
+    /// itself, and a full turn is refused.
+    #[test]
+    fn a_boundary_of_lines_with_weights_of_minus_one_is_read_as_lines() {
+        let corners = [
+            [2.0, 0.0, 0.0],
+            [0.0, 4.0, 2.0],
+            [4.0, 0.0, 0.0],
+            [0.0, -2.0, 2.0],
+        ];
+        let line = |a: Point3, b: Point3| {
+            EdgeCurve::NurbsCurve(
+                NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![a, b], vec![-1.0, -1.0]).unwrap(),
+            )
+        };
+        for (name, f) in frames() {
+            let mut topo = Topology::new();
+            let face = polygon(&mut topo, &f, &corners, line);
+            let result = revolve(&mut topo, face, f.origin, f.axis, TAU);
+            assert!(refused_at_the_axis(&result), "{name}: {result:?}");
+        }
+    }
+
+    /// A boundary in no one plane that winds once round the axis, though its
+    /// drawing in distance from the axis and height along it is a simple
+    /// loop: the chords of `((3 + cos t) cos t, (3 + cos t) sin t, sin t)`,
+    /// whose full turn covers a ring torus once. It revolves into a valid
+    /// solid.
+    #[test]
+    fn a_boundary_round_the_axis_whose_drawing_is_simple_revolves() {
+        let points: Vec<[f64; 3]> = (0..64)
+            .map(|k| {
+                let t = TAU * f64::from(k) / 64.0;
+                let r = 3.0 + t.cos();
+                [r * t.cos(), r * t.sin(), t.sin()]
+            })
+            .collect();
+        for (name, f) in frames() {
+            let mut topo = Topology::new();
+            let face = polygon(&mut topo, &f, &points, |_, _| EdgeCurve::Line);
             let solid = revolve(&mut topo, face, f.origin, f.axis, TAU).unwrap();
             let report = validate_solid(&topo, solid).unwrap();
             assert!(report.is_valid(), "{name}: {:?}", report.issues);

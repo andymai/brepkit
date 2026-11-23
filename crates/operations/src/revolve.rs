@@ -1705,10 +1705,9 @@ fn profile_chart_is_ccw(
 ///
 /// Returns an error if the axis is zero-length, the angle is out of range, the
 /// profile's sweep is shown to pass through itself (a planar profile across
-/// the axis's shadow on its plane, or a boundary in no one plane that winds
-/// round the axis or whose drawing in distance from the axis and height
-/// along it crosses itself), or a partial revolution is requested for a
-/// non-planar profile boundary.
+/// the axis's shadow on its plane, or a boundary in no one plane whose
+/// drawing in distance from the axis and height along it crosses itself),
+/// or a partial revolution is requested for a non-planar profile boundary.
 #[allow(clippy::too_many_lines)]
 pub fn revolve(
     topo: &mut Topology,
@@ -2397,7 +2396,8 @@ fn profile_reaches_across_axis(
 /// The boundary is cut into pieces, each with a bound on how far it strays
 /// from its chord: nothing for a line, the sag of a conic's arc (an
 /// ellipse's no more than its major circle's), and the farthest control
-/// point from the chord for a B-spline piece whose weights are positive. The
+/// point from the chord for a B-spline piece whose weights are all of one
+/// sign (the same curve as with each weight turned). The
 /// drawing of a point in the half-plane of distance from the axis and height
 /// along it moves no two points farther apart than they are, and the drawing
 /// of a chord strays from the chord drawn straight by no more than its
@@ -2406,18 +2406,17 @@ fn profile_reaches_across_axis(
 /// than that. A piece's drawing lies within the sum of the two of its
 /// straight chord.
 ///
-/// Two cases show that the sweep meets itself:
-/// - The boundary winds round the axis, so any surface it bounds meets the
-///   axis. Each piece is read farther from the axis than it strays from its
-///   chord, so its turn about the axis is its chord's.
-/// - Two pieces not next to each other cross in the drawing: the ends of each
-///   straight chord lie on the two sides of the other's line, beyond the
-///   other piece's bound. Two points of the boundary then lie at one
-///   distance from the axis and at one height, and the turn carries one onto
-///   the other.
+/// The sweep meets itself where two pieces not next to each other cross in
+/// the drawing: the ends of each straight chord lie on the two sides of the
+/// other's line, beyond the other piece's bound. Two points of the boundary
+/// then lie at one distance from the axis and at one height, and the turn
+/// carries one onto the other. A boundary that winds round the axis with a
+/// simple drawing sweeps a ring once and is kept.
 ///
-/// A boundary that comes near the axis, or whose pieces come within their
-/// bounds of each other in the drawing without such a crossing, is kept.
+/// What cannot be shown is kept: a boundary with a B-spline piece whose
+/// weights differ in sign, one whose pieces come within their bounds of
+/// each other in the drawing without such a crossing, or one whose drawing
+/// takes more than [`MOST_CHORD_PAIRS`] pairs of chords to read.
 #[allow(clippy::too_many_lines)]
 fn boundary_sweep_meets_itself(
     topo: &Topology,
@@ -2439,7 +2438,6 @@ fn boundary_sweep_meets_itself(
     });
     let size = (hi - lo).length();
     let (step, sag) = (1e-2 * size, 1e-4 * size);
-    let reach = 1e-6f64.madd(size, Tolerance::new().linear);
     // Each piece's start, in the wire's order, and how far it strays from
     // its chord.
     let mut pieces: Vec<(Point3, f64)> = Vec::new();
@@ -2494,7 +2492,7 @@ fn boundary_sweep_meets_itself(
             let (p, q) = (at(from), at(to));
             brepkit_math::nurbs::decompose::curve_bezier_between(spline, from, to)
                 .ok()
-                .filter(|hull| hull.iter().all(|c| c[3] > 0.0))
+                .filter(|hull| hull.iter().all(|c| c[3] > 0.0) || hull.iter().all(|c| c[3] < 0.0))
                 .map_or(f64::INFINITY, |hull| {
                     hull.iter()
                         .map(|&[x, y, z, w]| off_segment(Point3::new(x / w, y / w, z / w), p, q))
@@ -2505,6 +2503,10 @@ fn boundary_sweep_meets_itself(
             let mut pending = vec![(from, to, 0_u32)];
             while let Some((p, q, depth)) = pending.pop() {
                 let e = strays(p, q);
+                // No hull bounds the piece, and halving it gives none.
+                if !e.is_finite() {
+                    return Ok(false);
+                }
                 if e > sag && depth < NURBS_HALVINGS {
                     let mid = f64::midpoint(p, q);
                     pending.push((mid, q, depth + 1));
@@ -2535,21 +2537,6 @@ fn boundary_sweep_meets_itself(
         };
         (rp + d * s).length()
     };
-    // The boundary's turn about the axis.
-    let mut turn = 0.0;
-    let mut clear = true;
-    for i in 0..n {
-        let ((p, e), (q, _)) = (pieces[i], pieces[(i + 1) % n]);
-        if nearest(p, q) <= e + reach {
-            clear = false;
-            break;
-        }
-        let (rp, rq) = (radial(p), radial(q));
-        turn += axis.dot(rp.cross(rq)).atan2(rp.dot(rq));
-    }
-    if clear && turn.abs() > PI {
-        return Ok(true);
-    }
     let drawn: Vec<(f64, f64)> = pieces
         .iter()
         .map(|&(p, _)| (radial(p).length(), (p - axis_origin).dot(axis)))
@@ -2578,6 +2565,7 @@ fn boundary_sweep_meets_itself(
     // The chords of single pieces, and of each two pieces in a row, which
     // hold within them a crossing at the point between the two: each its
     // first piece, how many pieces, its ends in the drawing and its bound.
+    // A chord with no bound (one through the axis) shows nothing.
     let mut chords: Vec<Chord> = Vec::with_capacity(2 * n);
     for i in 0..n {
         chords.push((i, 1, drawn[i], drawn[(i + 1) % n], single[i]));
@@ -2585,6 +2573,7 @@ fn boundary_sweep_meets_itself(
         let middle = side(a, b, m).map_or(f64::INFINITY, f64::abs);
         chords.push((i, 2, a, b, single[i].max(single[(i + 1) % n]) + middle));
     }
+    chords.retain(|chord| chord.4.is_finite());
     // The side of the line `x` lies on, where it lies beyond `bound` of it.
     let beyond = |d: Option<f64>, bound: f64| {
         d.map_or(0.0, |d| if d.abs() > bound { d.signum() } else { 0.0 })
@@ -2610,11 +2599,16 @@ fn boundary_sweep_meets_itself(
     };
     let mut order: Vec<usize> = (0..chords.len()).collect();
     order.sort_by(|&x, &y| span(x).0.total_cmp(&span(y).0));
+    let mut read = 0_usize;
     for (k, &x) in order.iter().enumerate() {
         let top = span(x).1;
         for &y in &order[k + 1..] {
             if span(y).0 > top {
                 break;
+            }
+            read += 1;
+            if read > MOST_CHORD_PAIRS {
+                return Ok(false);
             }
             if crosses(x, y) {
                 return Ok(true);
@@ -2623,6 +2617,9 @@ fn boundary_sweep_meets_itself(
     }
     Ok(false)
 }
+
+/// The most pairs of chords [`boundary_sweep_meets_itself`] reads.
+const MOST_CHORD_PAIRS: usize = 2_000_000;
 
 /// A chord of pieces of a profile's boundary in its drawing: its first
 /// piece, how many pieces, its ends and how far the pieces' drawing strays
