@@ -20,12 +20,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use brepkit_math::aabb::Aabb3;
-use brepkit_math::madd::Madd;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
-use brepkit_topology::edge::EdgeId;
+use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
 use brepkit_topology::shell::Shell;
 use brepkit_topology::solid::SolidId;
@@ -34,6 +32,10 @@ use brepkit_topology::wire::{OrientedEdge, Wire};
 
 use crate::BlendError;
 use crate::fillet_plan::faces_tangent_along_edge;
+
+/// For two faces on one surface: whether it is a sphere, and the edges
+/// their outer wires share.
+type PairData = (bool, Vec<EdgeId>);
 
 /// Joins, in place, each two faces of `solid`'s outer shell that lie on one
 /// sphere, cylinder, cone or torus where a run of the `picked` edges passes
@@ -59,6 +61,7 @@ pub(super) fn join_sphere_faces_the_rim_crosses(
         let adjacency = topo.build_adjacency(solid)?;
         let mut effective: HashSet<EdgeId> = HashSet::new();
         let mut at_vertex: HashMap<VertexId, Vec<EdgeId>> = HashMap::new();
+        let mut pair_data: HashMap<(FaceId, FaceId), Option<PairData>> = HashMap::new();
         for &edge_id in picked {
             let Ok(edge) = topo.edge(edge_id) else {
                 continue;
@@ -104,14 +107,27 @@ pub(super) fn join_sphere_faces_the_rim_crosses(
             if a == b {
                 continue;
             }
-            let (fa, fb) = (topo.face(a)?, topo.face(b)?);
-            if fa.is_reversed() != fb.is_reversed() || !one_surface(topo, a, b)? {
+            // Each pair is read once, however many times the rim crosses
+            // between its faces.
+            let found = match pair_data.entry((a, b)) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let (fa, fb) = (topo.face(a)?, topo.face(b)?);
+                    let data = if fa.is_reversed() == fb.is_reversed() && one_surface(topo, a, b)? {
+                        let sphere = matches!(fa.surface(), FaceSurface::Sphere(_));
+                        Some((sphere, shared_edges(topo, a, b)?))
+                    } else {
+                        None
+                    };
+                    entry.insert(data)
+                }
+            };
+            let Some((sphere, between)) = found else {
                 continue;
-            }
-            let sphere = matches!(fa.surface(), FaceSurface::Sphere(_));
-            let between = shared_edges(topo, a, b)?;
+            };
+            let sphere = *sphere;
             let mut meets_here = None;
-            for &edge_id in &between {
+            for &edge_id in between.iter() {
                 let edge = topo.edge(edge_id)?;
                 if !picked.contains(&edge_id) && (edge.start() == vertex || edge.end() == vertex) {
                     meets_here = Some(edge_id);
@@ -369,41 +385,48 @@ fn same_surface(topo: &Topology, a: FaceId, b: FaceId) -> Result<bool, BlendErro
     Ok(read_alike(sa, sb, reach))
 }
 
-/// The farthest corner from `from` of the box round the wires of `faces`,
-/// read at points along each edge.
+/// A bound on how far any point of the wires of `faces` lies from `from`:
+/// a line by its ends, a circle or an ellipse by its centre's distance plus
+/// its larger radius, and a NURBS curve by its farthest control point, as a
+/// curve with positive weights lies in their hull. A NURBS curve with a
+/// weight that is not positive has no such bound, and the reach is infinite.
 fn reach_from(topo: &Topology, faces: &[FaceId], from: Point3) -> Result<f64, BlendError> {
-    const STEPS: u32 = 8;
-    let mut points = Vec::new();
+    let mut reach = 0.0_f64;
     for &face in faces {
         let data = topo.face(face)?;
         for wire in std::iter::once(data.outer_wire()).chain(data.inner_wires().iter().copied()) {
             for oe in topo.wire(wire)?.edges() {
                 let edge = topo.edge(oe.edge())?;
-                let (p, q) = (
-                    topo.vertex(edge.start())?.point(),
-                    topo.vertex(edge.end())?.point(),
-                );
-                let (t0, t1) = edge.curve().domain_with_endpoints(p, q);
-                points.extend((0..=STEPS).map(|k| {
-                    let t = (t1 - t0).madd(f64::from(k) / f64::from(STEPS), t0);
-                    edge.curve().evaluate_with_endpoints(t, p, q)
-                }));
+                let bound = match edge.curve() {
+                    EdgeCurve::Line => {
+                        let (p, q) = (
+                            topo.vertex(edge.start())?.point(),
+                            topo.vertex(edge.end())?.point(),
+                        );
+                        (p - from).length().max((q - from).length())
+                    }
+                    EdgeCurve::Circle(circle) => {
+                        (circle.center() - from).length() + circle.radius()
+                    }
+                    EdgeCurve::Ellipse(ellipse) => {
+                        (ellipse.center() - from).length()
+                            + ellipse.semi_major().max(ellipse.semi_minor())
+                    }
+                    EdgeCurve::NurbsCurve(curve) => {
+                        if curve.weights().iter().any(|&w| w <= 0.0) {
+                            f64::INFINITY
+                        } else {
+                            curve
+                                .control_points()
+                                .iter()
+                                .map(|&p| (p - from).length())
+                                .fold(0.0, f64::max)
+                        }
+                    }
+                };
+                reach = reach.max(bound);
             }
         }
-    }
-    if points.is_empty() {
-        return Ok(0.0);
-    }
-    let bounds = Aabb3::from_points(points.iter().copied());
-    let (lo, hi) = (bounds.min, bounds.max);
-    let mut reach = 0.0_f64;
-    for k in 0..8 {
-        let corner = Point3::new(
-            if k & 1 == 0 { lo.x() } else { hi.x() },
-            if k & 2 == 0 { lo.y() } else { hi.y() },
-            if k & 4 == 0 { lo.z() } else { hi.z() },
-        );
-        reach = reach.max((corner - from).length());
     }
     Ok(reach)
 }
@@ -613,7 +636,7 @@ mod tests {
     use brepkit_topology::vertex::Vertex;
     use brepkit_topology::wire::{OrientedEdge, Wire};
 
-    use super::{one_surface, read_alike};
+    use super::{one_surface, reach_from, read_alike};
 
     const PLACES: [f64; 2] = [0.0, 1e6];
 
@@ -690,5 +713,42 @@ mod tests {
             assert_eq!(one_surface(&topo, a, b).unwrap(), one, "{length} long");
             assert!(one_surface(&topo, a, a).unwrap(), "{length} long, one face");
         }
+    }
+
+    /// A face bounded by a line and a spline that runs from `(1, 0, 0)` up
+    /// to `(0, 0, 40)` and down to `(-1, 0, 0)`, its corner a third of the way
+    /// along, between points read at even steps. The reach from the origin is
+    /// at least 40.
+    #[test]
+    fn the_reach_bounds_a_spline_between_its_samples() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let mut topo = Topology::new();
+        let (a, b) = (Point3::new(1.0, 0.0, 0.0), Point3::new(-1.0, 0.0, 0.0));
+        let spline = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 0.3, 1.0, 1.0],
+            vec![a, Point3::new(0.0, 0.0, 40.0), b],
+            vec![1.0, 1.0, 1.0],
+        )
+        .unwrap();
+        let (va, vb) = (
+            topo.add_vertex(Vertex::new(a, 1e-7)),
+            topo.add_vertex(Vertex::new(b, 1e-7)),
+        );
+        let up = topo.add_edge(Edge::new(va, vb, EdgeCurve::NurbsCurve(spline)));
+        let back = topo.add_edge(Edge::new(vb, va, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![OrientedEdge::new(up, true), OrientedEdge::new(back, true)],
+            true,
+        )
+        .unwrap();
+        let wire = topo.add_wire(wire);
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 1.0, 0.0),
+            d: 0.0,
+        };
+        let face = topo.add_face(Face::new(wire, vec![], plane));
+        let reach = reach_from(&topo, &[face], Point3::new(0.0, 0.0, 0.0)).unwrap();
+        assert!(reach >= 40.0, "reach {reach}");
     }
 }
