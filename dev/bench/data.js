@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795426211258,
+  "lastUpdate": 1795430414039,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -76517,6 +76517,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19323551,
             "range": "± 20577",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "983826f72aceb6fdb9bbc17d03eb21d65e62343b",
+          "message": "fix(algo): fuse two rods that end at one ball's centre exactly in every pose of their sweep (#2743)\n\n## Summary\n\nOn main, two rods that end at the centre of one ball fuse to a mesh in\n17 of the 256 poses of #2578. Mirrored, 40 of them do. Through\n`fuse_all`, the path brepjs's `fuseAll` takes, 9 of 240 poses fall back,\nand 30 mirrored.\n\nWith this change, all 256 poses fuse exactly, upright and mirrored, and\n`fuse_all` falls back in none. Over a wider sweep of 2200 poses, the\nexact count goes from 2027 to 2184, and no pose that was exact on main\nis lost. The pose sweep and the truth audit give the same output as\nmain.\n\nFixes #2578, fixes #2577. For #2520, `fuse_all` is now exact, and two\nother paths still fail (see Still open).\n\n## The change\n\nFour faults on ball faces, in the face splitter and phase FF:\n\n- A boundary arc that a section split took the principal copy of its\n`u`, one turn off the arc's own run. For example, it read u 5.934 where\nthe arc runs from -1.037 to -0.349. The trace then closed only one of\nthe two pieces. The new `ball_arc_u_run` gives the arc's run in `u` in\nclosed form, on faces charted clear of the poles.\n- A section could sit one turn off the vertices it ends on. The\nwhole-turn shift that cylinders already get now applies to ball faces\ncharted clear of the poles.\n- A thin lune piece, 0.24 rad wide, took its interior point from the\ncentroid of its sampled outline. That point fell 0.0016 rad over the\nsection's arc, so the piece read Inside and dropped out. The point is\nnow checked against `SphereFaceTrim`, and a new one comes from a chart\nclear of the poles when the check fails.\n- A whole-turn shift of a split piece or a section now moves its pcurve\nwith its ends, on ball and cylinder faces. Before, the wire builder\ncould read the pcurve as stale and take the chord's heading.\n- A piece whose interior point the trim rejects, with no new point\nfound, now counts as unclear and does not take that point's class.\n- A closed rim split on a ball face now ends its last piece one turn\nfrom its start in the way it is walked. A line pcurve's shift reads it\nat its start.\n- A ball face that holds a pole of its own chart now takes another chart\nwhere one exists. That chart's poles lie off the face and clear of its\nwires. So a cap round the pole, cut by a plane off its axis, is exact.\nOn main it falls back in every pose.\n- Phase FF's filter of arcs on a closed circle used a rim band of\nchord²/8r, which is less than the true sagitta. So it dropped arcs whose\nmidpoint lay near a chord's middle. The band is now the exact sagitta\nplus 1e-6.\n\n## Tests\n\n- `two_rods_whose_caps_meet_at_a_balls_poles_fuse_onto_it` runs 13\nposes, each at the origin, moved, moved and mirrored, and mirrored. It\nchecks validity, every edge used twice, a closed mesh, the volume\nagainst the rods-overlap and wedge oracle within 1e-4, and point\nclassification. It fails on main at its first pose. The existing pose\ntest now uses the same helper, `two_rods_at_one_ball`.\n- `a_cap_round_the_pole_cut_by_a_plane_off_the_axis_is_exact` cuts a\npolar cap in 12 poses, against an exact slice integral within 1e-6.\n`a_ball_rim_split_runs_one_turn_the_way_it_is_walked` splits a rim\nwalked both ways.\n- `cable_cores_bent_at_balls_fuse_exactly` fuses 5 cores of the junction\nbox example, the two that #2577 names among them, within 1e-5 of the\noracle. It passes on main too: the fault in #2577 does not reproduce\nthere.\n- brepkit-algo (574) passes, and so do all brepkit-operations and\nbrepkit-io tests (3250, 26 skipped). Random sweep seeds 1 to 3 give the\nsame verdict as main for every case.\n\n## Still open\n\n- 15 poses of the wider sweep still fall back, mostly with the rods\nwithin 6 degrees of opposite.\n- One pose gives a wrong solid that passes validation, as on main\n(#2742).\n- With `unify_faces` on, 2 of 16 poses with the rods in one line now\nfall back, upright and mirrored. On main their interior point lay off\nthe ball face, and the result was right by chance.\n- #2520: a fuse of rod, ball and rod through `gfa::fuse_n` fails in 192\nof 240 poses, with the issue's message. `fuse_all` then fuses pair by\npair, exactly. The reason is that `make_sphere`'s hemispheres end at 32\nchords of the equator (#2739).\n- #2520: with `unify_faces` on, the default and brepjs `simplify`, the\nsecond fuse falls back in 234 of 240 poses. The first fuse leaves one\nhemisphere bounded by one great circle, so every axis has a pole on that\nface. The roadmap row records the next step.",
+          "timestamp": "2026-11-23T10:36:11Z",
+          "tree_id": "8676970a5f8eebdfd57ebd3ff7ade3b4052bbb6e",
+          "url": "https://github.com/andymai/brepkit/commit/983826f72aceb6fdb9bbc17d03eb21d65e62343b"
+        },
+        "date": 1795430402648,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1193976,
+            "range": "± 2781",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1258655,
+            "range": "± 14753",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13457,
+            "range": "± 134",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 796694,
+            "range": "± 2857",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26867944,
+            "range": "± 156986",
             "unit": "ns/iter"
           }
         ]
