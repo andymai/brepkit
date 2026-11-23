@@ -99,14 +99,26 @@ impl Outline {
 /// along its outline: `None` for all of it.
 type Span = Option<(f64, f64)>;
 
-/// The spans of a surface's two parameters that a face whose outline is
-/// `outline` covers. Along a closed loop that does not wind round an angle,
-/// the region it bounds keeps within the angle's span along the loop,
-/// unwrapped; one that winds round holds a whole turn of it, and on a cone
-/// its apex, on a sphere a pole, so the other span too. A wall's band
-/// between two loops round it spans the heights of both. Each span is
-/// widened by half its largest step, as an edge can bulge between samples.
-fn spans(surface: &FaceSurface, outline: &Outline) -> [Span; 2] {
+/// The spans of a surface's two parameters that the face `face`, whose
+/// outline is `outline`, covers, read in the parameters of `surface`.
+///
+/// A loop that does not wind round an angle bounds two regions, one within
+/// its span of each parameter, unwrapped, and the other all the rest. Only
+/// where the face is shown to be the one within does its span shrink to
+/// the loop's: on a cylinder or a cone, where the rest reaches without end,
+/// a face whose holes all lie within; on a sphere or a torus, a face with
+/// no holes whose surface's point opposite the loop lies off it. Any other
+/// face covers the whole surface, as does one whose outline nears a pole. A
+/// loop that winds round holds a whole turn, and on a cone its apex, on a
+/// sphere a pole, so the other span too; a wall's band between two loops
+/// round it spans the heights of both. Each span is widened by half its
+/// largest step, as an edge can bulge between samples.
+fn spans(
+    topo: &Topology,
+    face: FaceId,
+    surface: &FaceSurface,
+    outline: &Outline,
+) -> Result<[Span; 2], CheckError> {
     use std::f64::consts::{FRAC_PI_2, PI, TAU};
     let angular = [true, matches!(surface, FaceSurface::Torus(_))];
     let read = |p: Point3| {
@@ -118,14 +130,14 @@ fn spans(surface: &FaceSurface, outline: &Outline) -> [Span; 2] {
     };
     let wrap = |x: f64| (x + PI).rem_euclid(TAU) - PI;
     let Some(first) = outline.outer.first().and_then(|&p| read(p)) else {
-        return [None, None];
+        return Ok([None, None]);
     };
     let (mut lo, mut hi) = ([first.0, first.1], [first.0, first.1]);
     let (mut at, mut raw, mut step) = ([first.0, first.1], [first.0, first.1], [0.0_f64; 2]);
     let mut near_pole = false;
     for &p in outline.outer.iter().skip(1).chain(outline.outer.first()) {
         let Some((u, v)) = read(p) else {
-            return [None, None];
+            return Ok([None, None]);
         };
         near_pole |= matches!(surface, FaceSurface::Sphere(_)) && v.abs() > FRAC_PI_2 - 1e-3;
         for (c, x) in [u, v].into_iter().enumerate() {
@@ -142,64 +154,122 @@ fn spans(surface: &FaceSurface, outline: &Outline) -> [Span; 2] {
         }
     }
     let winds = (0..2).any(|c| angular[c] && (at[c] - [first.0, first.1][c]).abs() > PI);
-    let widened = |c: usize| Some((lo[c] - 0.5 * step[c], hi[c] + 0.5 * step[c]));
-    match surface {
-        _ if near_pole => [None, None],
-        FaceSurface::Cylinder(_) if winds => {
-            let heights: Vec<f64> = outline
-                .all
-                .iter()
-                .filter_map(|&p| read(p).map(|(_, v)| v))
-                .collect();
-            let (low, high) = heights
-                .iter()
-                .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), &v| {
-                    (l.min(v), h.max(v))
-                });
-            [None, Some((low - 0.5 * step[1], high + 0.5 * step[1]))]
-        }
-        _ if winds => [None, None],
-        _ => [widened(0), widened(1)],
+    if near_pole {
+        return Ok([None, None]);
     }
+    if winds {
+        if !matches!(surface, FaceSurface::Cylinder(_)) {
+            return Ok([None, None]);
+        }
+        let (low, high) = outline
+            .all
+            .iter()
+            .filter_map(|&p| read(p).map(|(_, v)| v))
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), v| {
+                (l.min(v), h.max(v))
+            });
+        return Ok([None, Some((low - 0.5 * step[1], high + 0.5 * step[1]))]);
+    }
+    let widened: [(f64, f64); 2] = [0, 1].map(|c| (lo[c] - 0.5 * step[c], hi[c] + 0.5 * step[c]));
+    // Whether a point's parameters lie within the widened spans.
+    let within = |(u, v): (f64, f64)| {
+        [u, v].into_iter().enumerate().all(|(c, x)| {
+            let (l, h) = widened[c];
+            let x = if angular[c] {
+                l + (x - l).rem_euclid(TAU)
+            } else {
+                x
+            };
+            x >= l && x <= h
+        })
+    };
+    if !outline.all.iter().all(|&p| read(p).is_some_and(within)) {
+        return Ok([None, None]);
+    }
+    let opposite = match surface {
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => None,
+        _ if !topo.face(face)?.inner_wires().is_empty() => return Ok([None, None]),
+        FaceSurface::Sphere(ball) => {
+            let toward = outline
+                .outer
+                .iter()
+                .fold(Vec3::new(0.0, 0.0, 0.0), |m, &p| m + (p - ball.center()));
+            let Ok(toward) = toward.normalize() else {
+                return Ok([None, None]);
+            };
+            Some(ball.center() - toward * ball.radius())
+        }
+        FaceSurface::Torus(ring) => Some(ring.evaluate(
+            0.5f64.madd(lo[0] + hi[0], PI),
+            0.5f64.madd(lo[1] + hi[1], PI),
+        )),
+        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => return Ok([None, None]),
+    };
+    if let Some(far) = opposite
+        && (read(far).is_none_or(within)
+            || crate::classify::boundary::face_contains(topo, face, far)?)
+    {
+        return Ok([None, None]);
+    }
+    Ok(widened.map(Some))
 }
 
-/// Whether two faces on `surface`, each with its outline and its spans of
-/// the surface's parameters, cover overlapping spans of both, by more than
-/// the tolerance.
+/// The least distance of an outline from the line the surface's angle
+/// round its axis turns about, or nothing for a surface with no axis.
+fn nearest_to_axis(surface: &FaceSurface, outline: &Outline) -> f64 {
+    let axis = match surface {
+        FaceSurface::Sphere(s) => (s.center(), s.z_axis()),
+        FaceSurface::Cylinder(c) => (c.origin(), c.axis()),
+        FaceSurface::Cone(c) => (c.apex(), c.axis()),
+        FaceSurface::Torus(t) => (t.center(), t.z_axis()),
+        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => return 0.0,
+    };
+    outline.outer.iter().fold(f64::INFINITY, |m, &p| {
+        let w = p - axis.0;
+        m.min((w - axis.1 * w.dot(axis.1)).length())
+    })
+}
+
+/// A face's outline, its spans of the surface's parameters, and the least
+/// distance of its outline from the surface's axis.
+type Spread = (Outline, [Span; 2], f64);
+
+/// Whether two faces on `surface` may share an area: their spans of each
+/// parameter are not apart by more than the tolerance, read for an angle
+/// over the least distance of the outlines from the line it turns about
+/// (for a torus's tube angle, its minor radius). The faces' own reads
+/// settle the rest.
 fn spans_meet(
     surface: &FaceSurface,
-    (a, of_a): &(Outline, [Span; 2]),
-    (b, of_b): &(Outline, [Span; 2]),
+    (_, of_a, near_a): &Spread,
+    (_, of_b, near_b): &Spread,
     tolerance: f64,
 ) -> bool {
     use std::f64::consts::TAU;
-    let scale = a
-        .outer
-        .iter()
-        .chain(&b.outer)
-        .fold((0.0_f64, None::<Point3>), |(m, first), &p| {
-            first.map_or((m, Some(p)), |f| (m.max((p - f).length()), Some(f)))
-        })
-        .0
-        .max(tolerance);
     let angular = [true, matches!(surface, FaceSurface::Torus(_))];
+    let radius = [
+        near_a.min(*near_b),
+        if let FaceSurface::Torus(t) = surface {
+            t.minor_radius()
+        } else {
+            1.0
+        },
+    ];
     (0..2).all(|c| {
         let (Some((lo_a, hi_a)), Some((lo_b, hi_b))) = (of_a[c], of_b[c]) else {
             return true;
         };
-        let (slack, shifts) = if angular[c] {
-            (tolerance / scale, [-TAU, 0.0, TAU])
-        } else {
-            (tolerance, [0.0; 3])
-        };
-        let shift = if angular[c] {
-            ((lo_a - lo_b) / TAU).round() * TAU
-        } else {
-            0.0
-        };
-        shifts.iter().any(|&turn| {
+        if !angular[c] {
+            return hi_a.min(hi_b) - lo_a.max(lo_b) > -tolerance;
+        }
+        if radius[c] <= tolerance {
+            return true;
+        }
+        let margin = tolerance / radius[c];
+        let shift = ((lo_a - lo_b) / TAU).round() * TAU;
+        [-TAU, 0.0, TAU].iter().any(|&turn| {
             let (lo, hi) = (lo_b + shift + turn, hi_b + shift + turn);
-            hi_a.min(hi) - lo_a.max(lo) > slack
+            hi_a.min(hi) - lo_a.max(lo) > -margin
         })
     })
 }
@@ -430,7 +500,7 @@ pub fn check_curved_faces_overlap(
     // it was found on one surface with.
     let mut pairs: Vec<(usize, usize)> = Vec::new();
     let mut reference: Vec<Option<usize>> = vec![None; curved.len()];
-    let mut read: Vec<Option<(Outline, [Span; 2])>> = vec![None; curved.len()];
+    let mut read: Vec<Option<Spread>> = vec![None; curved.len()];
     for (i, a) in curved.iter().enumerate() {
         // A cone's key is an angle, which parts across the faces: by no more
         // than the tolerance over the larger face, and so over this one.
@@ -458,8 +528,10 @@ pub fn check_curved_faces_overlap(
             for k in [i, j] {
                 if read[k].is_none() {
                     let outline = Outline::of(topo, curved[k].face)?;
-                    let spans = spans(&curved[root].surface, &outline);
-                    read[k] = Some((outline, spans));
+                    let reference = &curved[root].surface;
+                    let spans = spans(topo, curved[k].face, reference, &outline)?;
+                    let nearest = nearest_to_axis(reference, &outline);
+                    read[k] = Some((outline, spans, nearest));
                 }
             }
             if let (Some(of_a), Some(of_b)) = (&read[i], &read[j])
@@ -710,6 +782,77 @@ mod tests {
             .set_surface(FaceSurface::Cylinder(wider));
         let pair = solid(&mut topo, vec![inner, outer]);
         assert!(found(&topo, pair).is_empty());
+    }
+
+    /// The rest of the sphere past each of the rims at `x = 9` and
+    /// `x = -9`: each rim keeps to a small span of the sphere's angles, the
+    /// two far apart, but each face is the sphere's large side of its rim,
+    /// and the two share most of the sphere.
+    #[test]
+    fn faces_on_the_large_sides_of_two_far_rims_are_reported() {
+        let mut topo = Topology::new();
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        let east = rim(&mut topo, x, 9.0);
+        let west = rim(&mut topo, -x, 9.0);
+        let faces = vec![
+            on_sphere(&mut topo, east, false),
+            on_sphere(&mut topo, west, false),
+        ];
+        let pair = solid(&mut topo, faces);
+        assert_eq!(found(&topo, pair).len(), 1);
+    }
+
+    /// Two faces of one patch 0.2 wide and 0.2 high on a cylinder of radius
+    /// 1e6: its span round the axis is 2e-7, far below the tolerance over
+    /// the patch's size, but the two share all of it.
+    #[test]
+    fn a_small_patch_on_a_large_wall_and_its_copy_are_reported() {
+        let radius = 1e6;
+        let span = 0.2 / radius;
+        let mut topo = Topology::new();
+        let at = |t: f64, h: f64| Point3::new(radius * t.cos(), radius * t.sin(), h);
+        let cylinder = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z(), radius).unwrap(),
+        );
+        let arc = |topo: &mut Topology, h: f64| {
+            let circle = Circle3D::new_with_ref(
+                Point3::new(0.0, 0.0, h),
+                z(),
+                radius,
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap();
+            let a = topo.add_vertex(Vertex::new(at(0.0, h), 1e-7));
+            let b = topo.add_vertex(Vertex::new(at(span, h), 1e-7));
+            (
+                a,
+                b,
+                topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle))),
+            )
+        };
+        let (a0, b0, low) = arc(&mut topo, 0.0);
+        let (a1, b1, high) = arc(&mut topo, 0.2);
+        let up = topo.add_edge(Edge::new(b0, b1, EdgeCurve::Line));
+        let down = topo.add_edge(Edge::new(a1, a0, EdgeCurve::Line));
+        let faces: Vec<FaceId> = (0..2)
+            .map(|_| {
+                let wire = topo.add_wire(
+                    Wire::new(
+                        vec![
+                            OrientedEdge::new(low, true),
+                            OrientedEdge::new(up, true),
+                            OrientedEdge::new(high, false),
+                            OrientedEdge::new(down, true),
+                        ],
+                        true,
+                    )
+                    .unwrap(),
+                );
+                topo.add_face(Face::new(wire, vec![], cylinder.clone()))
+            })
+            .collect();
+        let pair = solid(&mut topo, faces);
+        assert_eq!(found(&topo, pair).len(), 1);
     }
 
     /// The caps past `z = 5` and past `x = 5` share the part of the sphere
