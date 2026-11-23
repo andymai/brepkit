@@ -3488,13 +3488,38 @@ fn cdt_in_surface_frame(
     // outside both its outline and its hole, and no face covers it. They
     // are moved just inside for the triangulation only: each keeps its
     // shared point, so the wall's mesh closes on the rim's chord.
+    // A sphere's straight edges (a ball's equator) are chords, each within
+    // its sag of the sphere. A boolean finds where a section crosses such an
+    // edge on the chord, so a section that passes between a chord and the
+    // sphere does not split there, and its loop can reach past the outline.
+    // Samples past it by no more than the chords' sag, in latitude, are
+    // moved just inside as well: the face's mesh closes on the chord, and
+    // the sliver past it folds back over the face beyond the chord, as the
+    // loop's own area does.
+    let chord_reach = match face_data.surface() {
+        FaceSurface::Sphere(sphere) => {
+            let mut reach: f64 = 0.0;
+            for oe in wire.edges() {
+                let edge = topo.edge(oe.edge())?;
+                if matches!(edge.curve(), EdgeCurve::Line) {
+                    let a = topo.vertex(edge.start())?.point();
+                    let b = topo.vertex(edge.end())?.point();
+                    let middle = a + (b - a) * 0.5;
+                    let sag = sphere.radius() - (middle - sphere.center()).length();
+                    reach = reach.max(sag / sphere.radius());
+                }
+            }
+            reach
+        }
+        _ => 0.0,
+    };
     if matches!(
         face_data.surface(),
-        FaceSurface::Cylinder(_) | FaceSurface::Cone(_)
+        FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Sphere(_)
     ) && v_max > v_min
     {
         let span = v_max - v_min;
-        let (reach, inset) = (1e-6 * span, 1e-9 * span);
+        let (reach, inset) = ((1e-6 * span).max(chord_reach), 1e-9 * span);
         let on_outline: DetHashSet<u32> = boundary_3d.iter().map(|b| b.1).collect();
         for hole in &mut holes {
             for (_, v, gid) in hole.iter_mut() {
@@ -4555,6 +4580,7 @@ pub(super) fn tessellate_holed_face_local(
         }
     }
     // The face's outline is read in its (u, v) as the solid mesher reads it.
+    super::solid::sample_seam_vertices_on_rims(topo, &[face_id], &mut edge_points)?;
     super::solid::split_crossing_spline_chords(
         topo,
         &[face_id],

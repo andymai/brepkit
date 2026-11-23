@@ -1,7 +1,7 @@
 //! Solid-level tessellation orchestration.
 
 use brepkit_geometry::extrema::segment_segment_distance;
-use brepkit_math::det_hash::{DetHashMap, WordHashMap, WordHashSet, WordState};
+use brepkit_math::det_hash::{DetHashMap, DetHashSet, WordHashMap, WordHashSet, WordState};
 use brepkit_math::madd::Madd;
 use brepkit_math::traits::ParametricSurface;
 use brepkit_math::vec::{Point3, Vec3};
@@ -906,6 +906,80 @@ pub(super) fn split_crossing_spline_chords(
     Ok(halved)
 }
 
+/// Gives each closed circle or ellipse edge that a face's seam meets its
+/// vertex as a sample.
+///
+/// A closed edge's samples start where its curve's frame starts, which need
+/// not be its vertex. A face's mesher ends its seam on the rim's sample
+/// nearest the vertex, which moves the seam up to half a step round the
+/// wall, and across a hole that passes nearer the seam than that. With the
+/// vertex as a sample, the seam stays where the face has it. The faces on
+/// both sides of the rim take the same sample.
+pub(super) fn sample_seam_vertices_on_rims(
+    topo: &Topology,
+    faces: &[FaceId],
+    edge_points: &mut DetHashMap<usize, Vec<Point3>>,
+) -> Result<(), crate::OperationsError> {
+    let mut seam_vertices: DetHashSet<usize> = DetHashSet::default();
+    let mut rims = Vec::new();
+    for &face_id in faces {
+        let face = topo.face(face_id)?;
+        for &wire_id in std::iter::once(&face.outer_wire()).chain(face.inner_wires()) {
+            let edges = topo.wire(wire_id)?.edges();
+            for (i, oe) in edges.iter().enumerate() {
+                let edge = topo.edge(oe.edge())?;
+                if edge.is_closed() {
+                    if matches!(edge.curve(), EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) {
+                        rims.push(oe.edge());
+                    }
+                } else if edges[i + 1..].iter().any(|other| other.edge() == oe.edge()) {
+                    seam_vertices.extend([edge.start().index(), edge.end().index()]);
+                }
+            }
+        }
+    }
+    if seam_vertices.is_empty() {
+        return Ok(());
+    }
+    rims.sort_unstable_by_key(|e| e.index());
+    rims.dedup();
+    for rim in rims {
+        let edge = topo.edge(rim)?;
+        if !seam_vertices.contains(&edge.start().index()) {
+            continue;
+        }
+        let Some(points) = edge_points.get_mut(&rim.index()) else {
+            continue;
+        };
+        let vertex = topo.vertex(edge.start())?.point();
+        let key = point_merge_key(vertex, MERGE_GRID);
+        if points.len() < 2
+            || points
+                .iter()
+                .any(|&p| point_merge_key(p, MERGE_GRID) == key)
+        {
+            continue;
+        }
+        let param = |p: Point3| match edge.curve() {
+            EdgeCurve::Circle(circle) => circle.project(p),
+            EdgeCurve::Ellipse(ellipse) => ellipse.project(p),
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => 0.0,
+        };
+        let t0 = param(points[0]);
+        let along = |p: Point3| (param(p) - t0 + 1e-9).rem_euclid(std::f64::consts::TAU) - 1e-9;
+        // The samples run once round from the first, which the last repeats.
+        let last = points.len() - 1;
+        let rising = points[..last].windows(2).all(|w| along(w[1]) > along(w[0]));
+        if !rising {
+            continue;
+        }
+        let t = along(vertex);
+        let at = (1..last).find(|&i| along(points[i]) > t).unwrap_or(last);
+        points.insert(at, vertex);
+    }
+    Ok(())
+}
+
 /// [`split_crossing_spline_chords`], then the samples of edges that double
 /// back over each other shared again: a straight edge the split halved hands
 /// its new samples to the edge overlapping it, which a face across that edge
@@ -1224,6 +1298,7 @@ pub(super) fn tessellate_solid_core(
         }
     }
 
+    sample_seam_vertices_on_rims(topo, &all_faces, &mut edge_points)?;
     split_chords_and_share(topo, &all_faces, &mut edge_points, edge_params, deflection)?;
     phase("circle_sync", &mut phase_t);
     let mut merged = TriangleMesh::default();

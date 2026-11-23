@@ -9,6 +9,7 @@ use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{Edge, EdgeCurve};
 use brepkit_topology::face::{Face, FaceSurface};
+use brepkit_topology::solid::SolidId;
 use brepkit_topology::test_utils::{make_unit_square_face, make_unit_triangle_face};
 use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire};
@@ -6199,4 +6200,161 @@ fn a_narrow_sphere_patch_takes_triangles_for_its_area() {
             );
         }
     }
+}
+
+/// The five poses of the random boolean sweep.
+fn sweep_poses() -> [(&'static str, brepkit_math::mat::Mat4); 5] {
+    use brepkit_math::mat::Mat4;
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1);
+    [
+        ("upright", Mat4::identity()),
+        ("turned", turn),
+        ("mirrored", Mat4::scale(1.0, -1.0, 1.0)),
+        ("turned+mirrored", Mat4::scale(1.0, -1.0, 1.0) * turn),
+        ("rolled", Mat4::rotation_z(2.0)),
+    ]
+}
+
+/// A ball of radius `r` at `c`, turned by `spin` about x, then y, then z.
+fn spun_ball(topo: &mut Topology, c: [f64; 3], r: f64, spin: [f64; 3]) -> SolidId {
+    use brepkit_math::mat::Mat4;
+    let s = crate::primitives::make_sphere(topo, r, 32).unwrap();
+    let m = Mat4::translation(c[0], c[1], c[2])
+        * Mat4::rotation_z(spin[2])
+        * Mat4::rotation_y(spin[1])
+        * Mat4::rotation_x(spin[0]);
+    crate::transform::transform_solid(topo, s, &m).unwrap();
+    s
+}
+
+/// A rod of radius `r` along `axis` (0 x, 1 y, 2 z) through `pq` (the other
+/// two coordinates in cyclic order), from `t0` to `t1`, turned by `spin`
+/// about its axis.
+fn spun_rod(
+    topo: &mut Topology,
+    axis: usize,
+    pq: (f64, f64),
+    r: f64,
+    (t0, t1): (f64, f64),
+    spin: f64,
+) -> SolidId {
+    use brepkit_math::mat::Mat4;
+    use std::f64::consts::FRAC_PI_2;
+    let s = crate::primitives::make_cylinder(topo, r, t1 - t0).unwrap();
+    let along_z = Mat4::translation(pq.0, pq.1, t0) * Mat4::rotation_z(spin);
+    let m = match axis {
+        2 => along_z,
+        0 => Mat4::rotation_z(FRAC_PI_2) * Mat4::rotation_x(FRAC_PI_2) * along_z,
+        _ => Mat4::rotation_x(-FRAC_PI_2) * Mat4::rotation_z(-FRAC_PI_2) * along_z,
+    };
+    crate::transform::transform_solid(topo, s, &m).unwrap();
+    s
+}
+
+/// Runs `ops` on `solids` in turn with the mesh fallback off, in each pose,
+/// and checks that the result is valid and meshes closed at two deflections,
+/// with the mesh's volume near the solid's.
+fn assert_chain_meshes_closed(
+    build: impl Fn(&mut Topology) -> Vec<SolidId>,
+    ops: &[crate::boolean::BooleanOp],
+) {
+    let opts = crate::boolean::BooleanOptions {
+        mesh_fallback: false,
+        unify_faces: false,
+        ..crate::boolean::BooleanOptions::default()
+    };
+    for (name, pose) in sweep_poses() {
+        let mut topo = Topology::new();
+        let solids = build(&mut topo);
+        for &s in &solids {
+            crate::transform::transform_solid(&mut topo, s, &pose).unwrap();
+        }
+        let mut result = solids[0];
+        for (&op, &tool) in ops.iter().zip(&solids[1..]) {
+            result =
+                crate::boolean::boolean_with_options(&mut topo, op, result, tool, opts).unwrap();
+        }
+        let report = crate::validate::validate_solid(&topo, result).unwrap();
+        assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        let volume = crate::measure::solid_volume(&topo, result, 0.0005).unwrap();
+        for deflection in [0.01, 0.05] {
+            let mesh = tessellate_solid(&topo, result, deflection).unwrap();
+            assert_eq!(
+                boundary_edge_count(&mesh),
+                0,
+                "{name} at {deflection}: open"
+            );
+            assert_eq!(
+                non_manifold_edge_count(&mesh),
+                0,
+                "{name} at {deflection}: non-manifold"
+            );
+            let mesh_volume = signed_volume_raw(&mesh);
+            assert!(
+                ((mesh_volume - volume) / volume).abs() < 0.03,
+                "{name} at {deflection}: mesh volume {mesh_volume} against {volume}"
+            );
+        }
+    }
+}
+
+/// A ball less a ball through its top, less a blind rod along x whose
+/// footprint reaches past the ball's equator by 5e-4 in latitude: the
+/// boolean tests the footprint against the equator's chords, which the rod
+/// misses, so the whole footprint is a hole in the southern face. Its mesh
+/// closes on the chord.
+#[test]
+fn rod_footprint_past_a_balls_equator_meshes_closed() {
+    use crate::boolean::BooleanOp::Cut;
+    assert_chain_meshes_closed(
+        |topo| {
+            vec![
+                spun_ball(topo, [0.0; 3], 1.0, [0.278_691, 0.080_613, 5.167_053]),
+                spun_ball(
+                    topo,
+                    [0.005_691, -0.012_501, 0.805_764],
+                    0.541_239,
+                    [0.259_681, 0.161_073, 1.077_153],
+                ),
+                spun_rod(
+                    topo,
+                    0,
+                    (0.117_418, 0.033_100),
+                    0.202_387,
+                    (-0.193_258, 2.0),
+                    5.787_331,
+                ),
+            ]
+        },
+        &[Cut, Cut],
+    );
+}
+
+/// A drum fused with a box through its wall, less a rod across it along y
+/// whose footprint passes 6e-3 radians from the drum's seam, which the
+/// drum's rims do not sample: its mesh keeps the seam where the face has it,
+/// clear of the footprint, and closes.
+#[test]
+fn rod_footprint_beside_a_drums_seam_meshes_closed() {
+    use crate::boolean::BooleanOp::{Cut, Fuse};
+    assert_chain_meshes_closed(
+        |topo| {
+            let block = crate::primitives::make_box(topo, 1.424_038, 0.472_777, 1.218_242).unwrap();
+            let place = brepkit_math::mat::Mat4::translation(0.373_583, 0.312_583, 0.628_973);
+            crate::transform::transform_solid(topo, block, &place).unwrap();
+            vec![
+                spun_rod(topo, 2, (0.0, 0.0), 1.0, (0.0, 4.0), 5.664_003),
+                block,
+                spun_rod(
+                    topo,
+                    1,
+                    (3.042_230, 0.311_705),
+                    0.499_299,
+                    (-2.0, 2.0),
+                    1.456_284,
+                ),
+            ]
+        },
+        &[Fuse, Cut],
+    );
 }
