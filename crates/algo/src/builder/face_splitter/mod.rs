@@ -7084,6 +7084,61 @@ fn interior_loop_center(
 /// 0.12% of its radius.
 const OUTLINE_CURVE_SAMPLES: usize = 64;
 
+/// Whether a ball face holds one pole of its own chart, with its one wire
+/// running once round the chart's axis. The face's trim must hold one pole
+/// and not the other, and the wire's turn about the axis, read along its
+/// edges' own curves, must be one whole turn either way. A zone between two
+/// latitudes, bounded by a seam and two rims, holds neither pole and runs
+/// its rims round the axis both ways, for no net turn. A wire that comes
+/// near the axis, or whose samples step far round it, is not read.
+fn ball_face_round_a_pole(topo: &Topology, face_id: FaceId) -> bool {
+    use std::f64::consts::{FRAC_PI_2, TAU};
+    let Ok(face) = topo.face(face_id) else {
+        return false;
+    };
+    let FaceSurface::Sphere(sphere) = face.surface() else {
+        return false;
+    };
+    if !face.inner_wires().is_empty() {
+        return false;
+    }
+    let (center, radius) = (sphere.center(), sphere.radius());
+    let (x, y, z) = (sphere.x_axis(), sphere.y_axis(), sphere.z_axis());
+    let held = match crate::classifier::SphereFaceTrim::new(topo, face_id) {
+        Ok(Some(trim)) => [z, -z]
+            .iter()
+            .filter(|&&a| trim.holds(center + a * radius, 1e-6 * radius))
+            .count(),
+        _ => return false,
+    };
+    if held != 1 {
+        return false;
+    }
+    let pts = sample_wire_outline(topo, face.outer_wire());
+    if pts.len() < 3 {
+        return false;
+    }
+    let mut angles = Vec::with_capacity(pts.len());
+    for p in &pts {
+        let d = *p - center;
+        let (a, b) = (d.dot(x), d.dot(y));
+        if a.hypot(b) < 0.05 * radius {
+            return false;
+        }
+        angles.push(b.atan2(a));
+    }
+    let mut turn = 0.0;
+    for (k, &a) in angles.iter().enumerate() {
+        let next = angles[(k + 1) % angles.len()];
+        let step = (next - a + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI;
+        if step.abs() > FRAC_PI_2 {
+            return false;
+        }
+        turn += step;
+    }
+    (turn.abs() / TAU - 1.0).abs() < 1e-6
+}
+
 /// A wire's outline in traversal order: each line's start, and each curved
 /// edge sampled along its own span.
 fn sample_wire_outline(topo: &Topology, wire_id: brepkit_topology::wire::WireId) -> Vec<Point3> {
@@ -9908,7 +9963,8 @@ fn split_face_2d_impl(
     // outline runs one whole turn of u. A section that meets no vertex of
     // the outline keeps its points' own u, which can lie a turn off that
     // window, and its region then never closes. The region that holds the
-    // pole runs that turn too.
+    // pole runs that turn too. A zone between two latitudes spans a turn of
+    // u as well, but holds no pole: its seam closes its regions.
     let mut round_a_pole = false;
     if u_periodic
         && ball_chart_clear
@@ -9917,6 +9973,7 @@ fn split_face_2d_impl(
         && original_inner_wires.is_empty()
         && all_edges.len() > n_boundary_edges
         && let (Some(u_period), _) = super::pcurve_compute::surface_periods(&surface)
+        && ball_face_round_a_pole(topo, face_id)
     {
         let (lo, hi) = all_edges[..n_boundary_edges]
             .iter()
@@ -16035,5 +16092,77 @@ mod tests {
                 split[0].end
             );
         }
+    }
+
+    /// A ball face round its north pole, below which its one rim of three
+    /// arcs runs once round the axis, holds that pole. A zone between two
+    /// latitudes, bounded by a meridian seam and two rims of three arcs each,
+    /// spans a turn of `u` too, but holds no pole and turns its rims both
+    /// ways: the walk that closes a loop a turn round does not run on it.
+    #[test]
+    fn only_a_ball_face_round_a_pole_closes_its_loops_a_turn_round() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::edge::{Edge, EdgeId};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let axis = Vec3::new(0.0, 0.0, 1.0);
+        let rim = |topo: &mut Topology, h: f64| -> Vec<EdgeId> {
+            let w = (1.0 - h * h).sqrt();
+            let circle = Circle3D::new(Point3::new(0.0, 0.0, h), axis, w).unwrap();
+            let vs: Vec<_> = (0..3)
+                .map(|k| {
+                    let a = std::f64::consts::TAU * f64::from(k) / 3.0;
+                    topo.add_vertex(Vertex::new(Point3::new(w * a.cos(), w * a.sin(), h), 1e-7))
+                })
+                .collect();
+            (0..3)
+                .map(|k| {
+                    topo.add_edge(Edge::new(
+                        vs[k],
+                        vs[(k + 1) % 3],
+                        EdgeCurve::Circle(circle.clone()),
+                    ))
+                })
+                .collect()
+        };
+        let ball =
+            || FaceSurface::Sphere(SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0).unwrap());
+
+        let mut topo = Topology::new();
+        let low = rim(&mut topo, -0.4);
+        let cap = topo.add_wire(
+            Wire::new(
+                low.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+                true,
+            )
+            .unwrap(),
+        );
+        let cap = topo.add_face(Face::new(cap, vec![], ball()));
+        assert!(ball_face_round_a_pole(&topo, cap));
+
+        let high = rim(&mut topo, 0.6);
+        let (from, to) = (
+            topo.edge(low[0]).unwrap().start(),
+            topo.edge(high[0]).unwrap().start(),
+        );
+        let at = topo.vertex(from).unwrap().point();
+        let meridian = Circle3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, -1.0, 0.0),
+            1.0,
+            at - Point3::new(0.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let seam = topo.add_edge(Edge::new(from, to, EdgeCurve::Circle(meridian)));
+        let mut zone: Vec<OrientedEdge> = low.iter().map(|&e| OrientedEdge::new(e, true)).collect();
+        zone.push(OrientedEdge::new(seam, true));
+        zone.extend(high.iter().rev().map(|&e| OrientedEdge::new(e, false)));
+        zone.push(OrientedEdge::new(seam, false));
+        let zone = topo.add_wire(Wire::new(zone, true).unwrap());
+        let zone = topo.add_face(Face::new(zone, vec![], ball()));
+        assert!(!ball_face_round_a_pole(&topo, zone));
     }
 }
