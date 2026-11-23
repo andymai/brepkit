@@ -1847,6 +1847,101 @@ mod tests {
         );
     }
 
+    /// The patch `(u + v/2, v, (u + v/2)²)` over the unit square, whose
+    /// parameters are not square to each other, bounded by curves of the
+    /// same surface that run past its side `u = 1` to `u = 1 + 5e-7`. A point
+    /// past the side has its nearest point on the side, the parameter `u`
+    /// held at 1 while the point moves, so the face is the whole patch: its
+    /// term matches the patch's integral.
+    #[test]
+    fn a_patch_bounded_by_edges_past_its_side_reads_their_nearest_points() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let at = |u: f64, v: f64| {
+            let x = 0.5f64.madd(v, u);
+            Point3::new(x, v, x * x)
+        };
+        // The patch's control net: `x` and `y` are linear, and `z` has the
+        // coefficients of `u²`, `u v` and `v² / 4`.
+        let net: Vec<Vec<Point3>> = (0..3)
+            .map(|i| {
+                (0..3)
+                    .map(|j| {
+                        let (fi, fj) = (f64::from(i) / 2.0, f64::from(j) / 2.0);
+                        let square = |k: i32| if k == 2 { 1.0 } else { 0.0 };
+                        Point3::new(
+                            0.5f64.madd(fj, fi),
+                            fj,
+                            0.25f64.madd(square(j), fi.madd(fj, square(i))),
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let surface = brepkit_math::nurbs::surface::NurbsSurface::new(
+            2,
+            2,
+            knots.clone(),
+            knots.clone(),
+            net,
+            vec![vec![1.0; 3]; 3],
+        )
+        .unwrap();
+        // A quadratic curve of the surface from `p` to `q`, with the given
+        // speed at `p`.
+        let curve = |p: Point3, speed: brepkit_math::vec::Vec3, q: Point3| {
+            EdgeCurve::NurbsCurve(
+                NurbsCurve::new(2, knots.clone(), vec![p, p + speed * 0.5, q], vec![1.0; 3])
+                    .unwrap(),
+            )
+        };
+        let end = 1.0 + 5e-7;
+        let [p00, p10, p11, p01] = [at(0.0, 0.0), at(end, 0.0), at(end, 1.0), at(0.0, 1.0)];
+        let v3 = brepkit_math::vec::Vec3::new;
+        let mut topo = Topology::new();
+        let corner = |topo: &mut Topology, q: Point3| topo.add_vertex(Vertex::new(q, 1e-7));
+        let k = [
+            corner(&mut topo, p00),
+            corner(&mut topo, p10),
+            corner(&mut topo, p11),
+            corner(&mut topo, p01),
+        ];
+        let mut edge = |from, to, curve, forward| {
+            OrientedEdge::new(topo.add_edge(Edge::new(from, to, curve)), forward)
+        };
+        let edges = vec![
+            edge(k[0], k[1], curve(p00, v3(end, 0.0, 0.0), p10), true),
+            edge(k[1], k[2], curve(p10, v3(0.5, 1.0, end), p11), true),
+            edge(k[3], k[2], curve(p01, v3(end, 0.0, end), p11), false),
+            edge(k[0], k[3], curve(p00, v3(0.5, 1.0, 0.0), p01), false),
+        ];
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = Face::new(wire, vec![], FaceSurface::Nurbs(surface.clone()));
+        let rule = brepkit_math::quadrature::gauss_legendre_points(16);
+        let mut expected = 0.0;
+        for gu in rule {
+            let u = 0.5 * (gu.x + 1.0);
+            for gv in rule {
+                let v = 0.5 * (gv.x + 1.0);
+                let (p, s_u, s_v) = surface.first_derivatives(u, v);
+                expected += 0.25 * gu.w * gv.w * p.dot(s_u.cross(s_v)) / 3.0;
+            }
+        }
+        let read = boundary::nurbs_face_by_boundary(&topo, &face, 1.0, Vec3::new(0.0, 0.0, 0.0))
+            .unwrap()
+            .expect("read along its boundary");
+        assert!(
+            ((read.volume - expected) / expected).abs() < 1e-11,
+            "{}, expected {expected}, off {:e}",
+            read.volume,
+            (read.volume - expected) / expected
+        );
+    }
+
     /// A patch of a ball of radius 3 in B-spline form, between the
     /// longitudes 0.3 and 1.2 and the latitudes 0.2 and 0.9, its edges the
     /// patch's sides moved out from the ball by 2e-7 of its radius: each
