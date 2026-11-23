@@ -11,19 +11,29 @@ use brepkit_operations::boolean::{
     self, BooleanOp, BooleanOptions, boolean_with_options, mesh_fallback_count,
     mesh_fallback_declined_count,
 };
-use brepkit_operations::primitives::{make_box, make_cylinder, make_torus};
+use brepkit_operations::primitives::{make_box, make_cylinder};
 use brepkit_operations::transform::transform_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::solid::SolidId;
 
-/// A ring and a rod along y whose top rulings pass over the tube: the cut
-/// falls back to the mesh boolean (see `compound_cut_fallback_policy.rs`).
-fn ring_and_rod(topo: &mut Topology) -> (SolidId, SolidId) {
-    let ring = make_torus(topo, 4.0, 1.5, 32).unwrap();
-    let rod = make_cylinder(topo, 0.6, 20.0).unwrap();
-    let along_y = Mat4::translation(0.5, 10.0, 1.0) * Mat4::rotation_x(std::f64::consts::FRAC_PI_2);
-    transform_solid(topo, rod, &along_y).unwrap();
-    (ring, rod)
+/// A block (40 x 6 x 70) less a bore of radius 2.25 through it, its seam
+/// turned 270 degrees, and a pin of radius 1.7 standing across the bore's
+/// mouth, its seam turned 180 degrees: a cut that falls back to the mesh
+/// boolean (`a_pin_across_a_bores_mouth_with_both_seams_at_the_fold` in
+/// `pin_through_hole_mouth.rs`).
+fn bored_block_and_pin(topo: &mut Topology) -> (SolidId, SolidId) {
+    let block = make_box(topo, 40.0, 6.0, 70.0).unwrap();
+    transform_solid(topo, block, &Mat4::translation(-20.0, -360.0, 751.0)).unwrap();
+    let bore = make_cylinder(topo, 2.25, 10.0).unwrap();
+    let across = Mat4::translation(0.0, -352.0, 796.0)
+        * Mat4::rotation_x(std::f64::consts::FRAC_PI_2)
+        * Mat4::rotation_z(270f64.to_radians());
+    transform_solid(topo, bore, &across).unwrap();
+    let part = boolean::boolean(topo, BooleanOp::Cut, block, bore).unwrap();
+    let pin = make_cylinder(topo, 1.7, 444.0).unwrap();
+    let standing = Mat4::translation(0.0, -355.0, 706.2) * Mat4::rotation_z(180f64.to_radians());
+    transform_solid(topo, pin, &standing).unwrap();
+    (part, pin)
 }
 
 fn decline() -> BooleanOptions {
@@ -36,13 +46,13 @@ fn decline() -> BooleanOptions {
 #[test]
 fn a_declined_fallback_errors_and_is_counted() {
     let mut topo = Topology::new();
-    let (ring, rod) = ring_and_rod(&mut topo);
+    let (part, pin) = bored_block_and_pin(&mut topo);
     let before = mesh_fallback_count();
     boolean_with_options(
         &mut topo,
         BooleanOp::Cut,
-        ring,
-        rod,
+        part,
+        pin,
         BooleanOptions::default(),
     )
     .unwrap();
@@ -53,9 +63,9 @@ fn a_declined_fallback_errors_and_is_counted() {
     );
 
     let mut topo = Topology::new();
-    let (ring, rod) = ring_and_rod(&mut topo);
+    let (part, pin) = bored_block_and_pin(&mut topo);
     let (built, declined) = (mesh_fallback_count(), mesh_fallback_declined_count());
-    assert!(boolean_with_options(&mut topo, BooleanOp::Cut, ring, rod, decline()).is_err());
+    assert!(boolean_with_options(&mut topo, BooleanOp::Cut, part, pin, decline()).is_err());
     assert_eq!(mesh_fallback_declined_count() - declined, 1);
     assert_eq!(mesh_fallback_count(), built, "no mesh may be built");
 }

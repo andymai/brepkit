@@ -2561,47 +2561,72 @@ fn compound_cut_single_tool_matches_boolean() {
     assert_volume_near(&topo, result, box_vol - cyl_vol, 0.05);
 }
 
-/// One tool of two disjoint pieces, a dent in the tube's top whose cut stays
-/// exact and a rod through the ring off its tube's centre whose cut needs the
-/// mesh fallback, is cut piece by piece: the dent exactly, the rod last, and
-/// the result holds what cutting by the dent and then the rod leaves.
+/// A block (40 x 6 x 70) less a bore of radius 2.25 through it, its seam
+/// turned 270 degrees, and a pin of radius 1.7 standing across the bore's
+/// mouth, its seam turned 180 degrees: a pose whose cut still takes the mesh
+/// fallback (`a_pin_across_a_bores_mouth_with_both_seams_at_the_fold` in
+/// `tests/pin_through_hole_mouth.rs`).
+fn pin_across_a_bores_mouth(topo: &mut Topology) -> (SolidId, SolidId) {
+    use brepkit_math::mat::Mat4;
+    let block = crate::primitives::make_box(topo, 40.0, 6.0, 70.0).unwrap();
+    crate::transform::transform_solid(topo, block, &Mat4::translation(-20.0, -360.0, 751.0))
+        .unwrap();
+    let bore = crate::primitives::make_cylinder(topo, 2.25, 10.0).unwrap();
+    crate::transform::transform_solid(
+        topo,
+        bore,
+        &(Mat4::translation(0.0, -352.0, 796.0)
+            * Mat4::rotation_x(std::f64::consts::FRAC_PI_2)
+            * Mat4::rotation_z(270f64.to_radians())),
+    )
+    .unwrap();
+    let part = boolean(topo, BooleanOp::Cut, block, bore).unwrap();
+    let pin = crate::primitives::make_cylinder(topo, 1.7, 444.0).unwrap();
+    crate::transform::transform_solid(
+        topo,
+        pin,
+        &(Mat4::translation(0.0, -355.0, 706.2) * Mat4::rotation_z(180f64.to_radians())),
+    )
+    .unwrap();
+    (part, pin)
+}
+
+/// One tool of two disjoint pieces, a notch in the bored block's corner
+/// whose cut stays exact and a pin across the bore's mouth whose cut needs
+/// the mesh fallback, is cut piece by piece: the notch exactly, the pin
+/// last, and the result holds what cutting by the notch and then the pin
+/// leaves.
 #[test]
 fn compound_cut_cuts_the_exact_piece_and_defers_the_other() {
     use brepkit_math::mat::Mat4;
 
     let mut topo = Topology::new();
     let parts = |topo: &mut Topology| {
-        let torus = crate::primitives::make_torus(topo, 4.0, 1.5, 32).unwrap();
-        let dent = crate::primitives::make_box(topo, 1.0, 1.0, 1.0).unwrap();
-        crate::transform::transform_solid(topo, dent, &Mat4::translation(-4.5, -0.5, 1.0)).unwrap();
-        let rod = crate::primitives::make_cylinder(topo, 0.6, 20.0).unwrap();
-        crate::transform::transform_solid(
-            topo,
-            rod,
-            &(Mat4::translation(0.5, 10.0, 1.0) * Mat4::rotation_x(std::f64::consts::FRAC_PI_2)),
-        )
-        .unwrap();
-        (torus, dent, rod)
+        let (part, pin) = pin_across_a_bores_mouth(topo);
+        let notch = crate::primitives::make_box(topo, 2.0, 4.0, 10.0).unwrap();
+        crate::transform::transform_solid(topo, notch, &Mat4::translation(15.0, -356.0, 815.0))
+            .unwrap();
+        (part, notch, pin)
     };
 
-    let (torus, dent, rod) = parts(&mut topo);
-    let dented = boolean(&mut topo, BooleanOp::Cut, torus, dent).unwrap();
-    let torus_faces = brepkit_topology::explorer::solid_faces(&topo, dented)
+    let (part, notch, pin) = parts(&mut topo);
+    let notched = boolean(&mut topo, BooleanOp::Cut, part, notch).unwrap();
+    let bore_faces = brepkit_topology::explorer::solid_faces(&topo, notched)
         .unwrap()
         .into_iter()
-        .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Torus(_)))
+        .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
         .count();
-    assert!(torus_faces > 0, "the dent's cut stays exact");
-    let reference = boolean(&mut topo, BooleanOp::Cut, dented, rod).unwrap();
+    assert!(bore_faces > 0, "the notch's cut stays exact");
+    let reference = boolean(&mut topo, BooleanOp::Cut, notched, pin).unwrap();
     let expected = crate::measure::solid_volume(&topo, reference, 0.05).unwrap();
 
-    let (torus, dent, rod) = parts(&mut topo);
-    let tool = crate::compound_ops::merge_disjoint_solids(&mut topo, &[dent, rod]).unwrap();
+    let (part, notch, pin) = parts(&mut topo);
+    let tool = crate::compound_ops::merge_disjoint_solids(&mut topo, &[notch, pin]).unwrap();
     let before = super::mesh_fallback_count();
-    let result = compound_cut(&mut topo, torus, &[tool], BooleanOptions::default()).unwrap();
+    let result = compound_cut(&mut topo, part, &[tool], BooleanOptions::default()).unwrap();
     assert!(
         super::mesh_fallback_count() > before,
-        "the rod's cut takes the mesh fallback"
+        "the pin's cut takes the mesh fallback"
     );
     assert_volume_near(&topo, result, expected, 1e-3);
 }
@@ -8912,10 +8937,9 @@ fn mesh_fallback_counter_records_fallbacks() {
     // tolerate concurrent increments from unrelated tests; only the
     // ordering within this test is load-bearing.
     //
-    // Phase 1: a clean overlapping-box fuse stays analytic. Phase 2: a rod
-    // cut through a torus's wall takes the mesh fallback (see
-    // `compound_cut_cuts_the_exact_piece_and_defers_the_other`), and the
-    // counter must record it.
+    // Phase 1: a clean overlapping-box fuse stays analytic. Phase 2: a pin
+    // cut across a bore's mouth takes the mesh fallback (see
+    // `pin_across_a_bores_mouth`), and the counter must record it.
     let mut topo = Topology::new();
     let a = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
     let b = crate::primitives::make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
@@ -8924,16 +8948,12 @@ fn mesh_fallback_counter_records_fallbacks() {
     let clean = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
     assert!(crate::measure::solid_volume(&topo, clean, 0.1).unwrap() > 0.0);
 
-    let torus = crate::primitives::make_torus(&mut topo, 4.0, 1.5, 32).unwrap();
-    let rod = crate::primitives::make_cylinder(&mut topo, 0.6, 20.0).unwrap();
-    let m = brepkit_math::mat::Mat4::translation(0.5, 10.0, 1.0)
-        * brepkit_math::mat::Mat4::rotation_x(std::f64::consts::FRAC_PI_2);
-    crate::transform::transform_solid(&mut topo, rod, &m).unwrap();
+    let (part, pin) = pin_across_a_bores_mouth(&mut topo);
     let before = super::mesh_fallback_count();
-    let _ = boolean(&mut topo, BooleanOp::Cut, torus, rod);
+    let _ = boolean(&mut topo, BooleanOp::Cut, part, pin);
     assert!(
         super::mesh_fallback_count() > before,
-        "the rod's cut should route through the mesh fallback and increment the counter"
+        "the pin's cut should route through the mesh fallback and increment the counter"
     );
 }
 
