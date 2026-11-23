@@ -20,19 +20,21 @@
 //!
 //! Each step of a case is scored: the result of boolean `k` is held against
 //! the oracle for the solids and operations up to `k`. A step is `G` (good),
-//! `B` (bad), `E` (an error), `0` (the exact result is empty, so nothing is
-//! measured) or `P` (a panic).
+//! `B` (bad), `E` (an error), `0` (the exact result is empty, and so is the
+//! boolean's) or `P` (a panic).
 //!
 //! - `GOOD`: each step whose exact result is not empty is valid, its mesh
 //!   has no open edge, and its volume is within 2e-4 of the oracle's, or
 //!   within 1e-9 of it: the oracle's cells read a sliver of 1e-8 to some
-//!   parts in 1e4.
+//!   parts in 1e4. Each step whose exact result is empty gave a solid with
+//!   no faces or a volume within 1e-9 of zero.
 //! - `BAD`: a boolean gave an exact solid that fails one of these, at any
 //!   step. The line gives the step, `valid`, the faces by surface type,
 //!   `not2` (edges that two faces do not share), `open` (open mesh edges),
-//!   `rel` (the relative volume error) and the axes of the sphere faces.
+//!   `rel` (the relative volume error) and the axes of the sphere faces, or
+//!   for a step whose exact result is empty, `vol` (the solid's volume).
 //! - `ERR@<k>`: boolean `k` returned an error. `EMPTYEXP`: the exact final
-//!   result is empty, so nothing is measured. `PANIC`: a boolean panicked.
+//!   result is empty, and so is the boolean's. `PANIC`: a boolean panicked.
 //!
 //! `final=` gives the verdict on the final result alone. The run ends with a
 //! `SUMMARY` line that counts the verdicts of the cases, the verdicts on the
@@ -710,8 +712,27 @@ fn sweep() {
                 }
                 let expected = oracle(&prims[..k + 2], &ops[..=k]);
                 if expected < 1e-9 {
-                    codes.push('0');
-                    fin = Final::Empty;
+                    let faces = solid_faces(&topo, cur).map_or(usize::MAX, |f| f.len());
+                    let vol = if faces == 0 {
+                        0.0
+                    } else {
+                        solid_volume(&topo, cur, 0.0005).unwrap_or(f64::NAN)
+                    };
+                    if vol.abs() < 1e-9 {
+                        codes.push('0');
+                        fin = Final::Empty;
+                    } else {
+                        codes.push('B');
+                        let detail = format!(
+                            "empty exact result: faces={} vol={vol:.6e}",
+                            census(&topo, cur)
+                        );
+                        if first_bad.is_none() {
+                            first_bad = Some((k, detail.clone()));
+                        }
+                        fin = Final::Bad;
+                        last_detail = detail;
+                    }
                     continue;
                 }
                 let (good, detail) = score(&topo, cur, expected);
