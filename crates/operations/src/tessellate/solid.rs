@@ -1121,6 +1121,82 @@ pub(super) fn sample_seam_vertices_on_rims(
     Ok(())
 }
 
+/// Drops each edge's inner samples that lie nearer than `reach` to one of
+/// its own end vertices, where no other edge has a sample at that point.
+///
+/// The T-junction splice gives an arc each pool point within `reach` of it,
+/// except the points within `reach` of its ends, which it reads as the ends.
+/// Two edges of one face can run into their shared vertex almost together:
+/// the boolean can put the vertex a little past the point where the two
+/// curves cross, within its tolerance of both. The chords of both edges cross
+/// there, and are halved round by round. The splice then gives one edge the
+/// other's samples up to `reach` from the vertex, but not the samples nearer
+/// than that. A sample that one edge keeps beside the vertex is a sample the
+/// other edge lacks, and the face's outline holds a sliver of three points
+/// that runs the wrong way round, where the mesh opens. A sample that only
+/// its own edge holds serves only the faces of that edge, so all of them
+/// lose it together.
+fn drop_lone_samples_beside_end_vertices(
+    topo: &Topology,
+    edge_points: &mut DetHashMap<usize, Vec<Point3>>,
+    reach: f64,
+) -> Result<(), crate::OperationsError> {
+    let mut edges: Vec<usize> = edge_points.keys().copied().collect();
+    edges.sort_unstable();
+    let mut beside: Vec<(usize, Vec<usize>)> = Vec::new();
+    for &idx in &edges {
+        let Some(edge_id) = topo.edge_id_from_index(idx) else {
+            continue;
+        };
+        let edge = topo.edge(edge_id)?;
+        let ends = [
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        ];
+        // A closed edge, or one whose ends lie this near each other, can
+        // have every inner sample beside an end (a rim of radius under
+        // `reach`): it keeps them all, as it needs them to bound its faces.
+        if edge.start() == edge.end() || (ends[0] - ends[1]).length() < 2.0 * reach {
+            continue;
+        }
+        let points = &edge_points[&idx];
+        let near: Vec<usize> = (1..points.len().saturating_sub(1))
+            .filter(|&i| ends.iter().any(|&end| (points[i] - end).length() < reach))
+            .collect();
+        if !near.is_empty() {
+            beside.push((idx, near));
+        }
+    }
+    if beside.is_empty() {
+        return Ok(());
+    }
+    // The first edge to hold each weld cell, and whether another edge holds
+    // it too: a pass above shared such a point on purpose.
+    let mut holders: WordHashMap<(i64, i64, i64), (usize, bool)> = WordHashMap::default();
+    for &idx in &edges {
+        for &p in &edge_points[&idx] {
+            let holder = holders
+                .entry(point_merge_key(p, MERGE_GRID))
+                .or_insert((idx, false));
+            holder.1 |= holder.0 != idx;
+        }
+    }
+    for (idx, near) in beside {
+        let Some(points) = edge_points.get_mut(&idx) else {
+            continue;
+        };
+        for &i in near.iter().rev() {
+            if holders
+                .get(&point_merge_key(points[i], MERGE_GRID))
+                .is_some_and(|&(_, shared)| !shared)
+            {
+                points.remove(i);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// [`split_crossing_spline_chords`], then the samples of edges that double
 /// back over each other shared again: a straight edge the split halved hands
 /// its new samples to the edge overlapping it, which a face across that edge
@@ -1442,6 +1518,10 @@ pub(super) fn tessellate_solid_core(
     sample_seam_vertices_on_rims(topo, &all_faces, &mut edge_points)?;
     sample_holes_past_sphere_chords(topo, &all_faces, &mut edge_points)?;
     split_chords_and_share(topo, &all_faces, &mut edge_points, edge_params, deflection)?;
+    // The T-junction splice below reads a point this near an arc's end as
+    // that end.
+    let refine_tol = brepkit_math::tolerance::Tolerance::new().linear * 10.0;
+    drop_lone_samples_beside_end_vertices(topo, &mut edge_points, refine_tol)?;
     phase("circle_sync", &mut phase_t);
     let mut merged = TriangleMesh::default();
     // Room for the edges' samples and as many again inside the faces.
@@ -1470,9 +1550,6 @@ pub(super) fn tessellate_solid_core(
 
     phase("edge_weld_pool", &mut phase_t);
     {
-        let tol_linear = brepkit_math::tolerance::Tolerance::new().linear;
-        let refine_tol = tol_linear * 10.0;
-
         // Spatial hash over the shared edge-point pool. The T-junction splice
         // below must find every pool point lying ON each circle edge; scanning
         // the whole pool per circle is O(circle-edges × pool-points) and

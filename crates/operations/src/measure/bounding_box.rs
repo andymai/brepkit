@@ -298,10 +298,16 @@ fn expand_aabb_for_face(
 
 /// A torus's farthest points along `d` and against it. Along `d` it is the
 /// tube's farthest point on the ring circle farthest along `d`'s part across
-/// the axis; along the axis itself it is a whole circle, here sampled at whole
-/// degrees. Each point is built on the torus from `d`'s parts along and
+/// the axis. Each point is built on the torus from `d`'s parts along and
 /// across the axis, which rounding leaves a little off square when `d` runs
 /// nearly along it.
+///
+/// Along the axis, or a hair off it, each farthest set is a whole circle of
+/// the tube, and one point stands for it: the point farthest along `d`'s
+/// part across the axis, or any point when there is no such part. A face
+/// that holds an arc of the circle without that point has its boundary at
+/// the arc's ends, where the circle is farthest along `d` over the arc, and
+/// the exact bounds of the face's edges reach there.
 fn torus_extremes(t: &brepkit_math::surfaces::ToroidalSurface, d: Vec3) -> Vec<Point3> {
     let axis = t.z_axis();
     let (big, small) = (t.major_radius(), t.minor_radius());
@@ -318,15 +324,10 @@ fn torus_extremes(t: &brepkit_math::surfaces::ToroidalSurface, d: Vec3) -> Vec<P
             .map(|s| t.center() + (e * big + tube) * s)
             .collect();
     }
+    let e = flat.normalize().unwrap_or_else(|_| t.x_axis());
     [1.0, -1.0]
         .into_iter()
-        .flat_map(|s| {
-            let rise = axis * (s * up.signum() * small);
-            (0..360).map(move |deg| {
-                let (sin, cos) = f64::from(deg).to_radians().sin_cos();
-                t.center() + rise + (t.x_axis() * cos + t.y_axis() * sin) * big
-            })
-        })
+        .map(|s| t.center() + axis * (s * up.signum() * small) + e * (s * big))
         .collect()
 }
 
@@ -345,8 +346,7 @@ fn include_held(
     placement: Placement<'_>,
 ) {
     // A candidate the box already holds cannot grow it, held or not: only
-    // the others are read against the face (most of a torus band's circle
-    // of candidates along its axis, on a fillet).
+    // the others are read against the face.
     let outside: Vec<Point3> = candidates
         .iter()
         .copied()
@@ -1125,5 +1125,95 @@ mod tests {
         let mut aabb = Aabb3::try_from_points([inside]).unwrap();
         include_held(&topo, &mut aabb, face, &[p], Placement(None));
         assert!(aabb.min.x() <= x, "box from x = {}", aabb.min.x());
+    }
+
+    /// Along the axis, and a hair off it, a torus is farthest on a whole
+    /// circle each way. One point of each comes back, on the torus and as
+    /// far along `d` as the circle gets.
+    #[test]
+    fn torus_extremes_along_the_axis_are_one_point_per_circle() {
+        let axis = Vec3::new(1.0, 2.0, 3.0).normalize().unwrap();
+        let center = Point3::new(0.5, -1.0, 2.0);
+        let t = brepkit_math::surfaces::ToroidalSurface::with_axis(center, 3.0, 1.0, axis).unwrap();
+        let side = axis.cross(Vec3::new(1.0, 0.0, 0.0)).normalize().unwrap();
+        for tilt in [0.0, 1e-15, 1e-12, 1e-10] {
+            for sign in [1.0, -1.0] {
+                let d = (axis * sign + side * tilt).normalize().unwrap();
+                let points = torus_extremes(&t, d);
+                assert_eq!(points.len(), 2, "tilt {tilt}");
+                // The torus's support along d: the ring's radius times d's
+                // part across the axis plus the tube's radius.
+                let across = (d - axis * d.dot(axis)).length();
+                let support = 3.0f64.madd(across, 1.0);
+                let reach = |p: Point3| (p - center).dot(d);
+                let (far, near) = (reach(points[0]), reach(points[1]));
+                assert!(
+                    (far - support).abs() < 1e-12,
+                    "tilt {tilt}: {far} of {support}"
+                );
+                assert!(
+                    (near + support).abs() < 1e-12,
+                    "tilt {tilt}: {near} of {support}"
+                );
+            }
+        }
+    }
+
+    /// The band of a ring above `z = 0.5` holds the whole circle along the
+    /// top of the tube, which no edge of the band reaches.
+    #[test]
+    fn a_ring_band_round_the_tubes_top_reaches_it() {
+        use crate::primitives::make_torus;
+
+        let mut topo = Topology::new();
+        let ring = make_torus(&mut topo, 4.0, 1.5, 32).unwrap();
+        let slab = make_box(&mut topo, 12.0, 12.0, 2.5).unwrap();
+        transform_solid(&mut topo, slab, &Mat4::translation(-6.0, -6.0, 0.5)).unwrap();
+        let band = boolean::boolean(&mut topo, BooleanOp::Intersect, ring, slab).unwrap();
+        // The band's edges at z = 0.5 lie sqrt(1.5^2 - 0.5^2) either side of
+        // the ring's circle.
+        let r = 4.0 + 2.0f64.sqrt();
+        let want = Aabb3 {
+            min: Point3::new(-r, -r, 0.5),
+            max: Point3::new(r, r, 1.5),
+        };
+        let got = solid_bounding_box(&topo, band).unwrap();
+        assert_boxes_match(got, want, 1e-9, "upright band");
+        // A quarter turn about y puts the ring's axis a rounding off x.
+        let turned = Mat4::rotation_y(std::f64::consts::FRAC_PI_2);
+        let want = Aabb3 {
+            min: Point3::new(0.5, -r, -r),
+            max: Point3::new(1.5, r, r),
+        };
+        let got = solid_bounding_box_transformed(&topo, band, &turned).unwrap();
+        assert_boxes_match(got, want, 1e-9, "turned band");
+    }
+
+    /// A quarter of a ring between the planes `x = 0` and `y = 0` holds an
+    /// arc of the circle along the top of the tube, not the arc's point at
+    /// `+x`. Its edges on those planes are circles across the tube that reach
+    /// the top at the arc's ends.
+    #[test]
+    fn a_quarter_ring_reaches_the_tubes_top_at_its_edges() {
+        use crate::primitives::make_torus;
+
+        let mut topo = Topology::new();
+        let ring = make_torus(&mut topo, 4.0, 1.5, 32).unwrap();
+        let block = make_box(&mut topo, 7.0, 7.0, 4.0).unwrap();
+        transform_solid(&mut topo, block, &Mat4::translation(-7.0, 0.0, -2.0)).unwrap();
+        let quarter = boolean::boolean(&mut topo, BooleanOp::Intersect, ring, block).unwrap();
+        let want = Aabb3 {
+            min: Point3::new(-5.5, 0.0, -1.5),
+            max: Point3::new(0.0, 5.5, 1.5),
+        };
+        let got = solid_bounding_box(&topo, quarter).unwrap();
+        assert_boxes_match(got, want, 1e-9, "upright quarter");
+        let turned = Mat4::rotation_y(std::f64::consts::FRAC_PI_2);
+        let want = Aabb3 {
+            min: Point3::new(-1.5, 0.0, 0.0),
+            max: Point3::new(1.5, 5.5, 5.5),
+        };
+        let got = solid_bounding_box_transformed(&topo, quarter, &turned).unwrap();
+        assert_boxes_match(got, want, 1e-9, "turned quarter");
     }
 }
