@@ -1,6 +1,6 @@
 //! A round of a tilted rim on a wall that is two faces of one surface: a
-//! rod's wall extruded from a circle in two arcs, or a ring revolved from a
-//! circle in two arcs. The rim crosses from one face to the other, and the
+//! rod's wall extruded from a circle in two arcs, that wall drafted to a
+//! frustum, or a ring revolved from a circle in two arcs. The rim crosses from one face to the other, and the
 //! round's contact crosses between them away from where the rim does. The
 //! round must be that of the same wall in one face: the same volume, valid,
 //! with a closed mesh.
@@ -24,6 +24,7 @@ mod tests {
     use brepkit_math::vec::{Point3, Vec3};
     use brepkit_operations::blend_ops::fillet_v2;
     use brepkit_operations::boolean::{BooleanOp, boolean};
+    use brepkit_operations::draft::draft;
     use brepkit_operations::extrude::extrude;
     use brepkit_operations::measure::solid_volume;
     use brepkit_operations::primitives::{make_box, make_cylinder, make_torus};
@@ -216,6 +217,49 @@ mod tests {
                 assert!(
                     (volume - volumes[0]).abs() < 1e-9 * volumes[0],
                     "{name}: the split rods {volumes:?}"
+                );
+            }
+        }
+    }
+
+    /// The rod of [`rod`] with its wall drafted 0.1 radians in toward `+z`
+    /// about `z = 0`: a frustum, its wall in one cone face or two.
+    fn frustum(topo: &mut Topology, seam: Option<f64>) -> SolidId {
+        let solid = rod(topo, seam);
+        let walls: Vec<_> = solid_faces(topo, solid)
+            .unwrap()
+            .into_iter()
+            .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .collect();
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let drafted = draft(topo, solid, &walls, up, Point3::new(0.0, 0.0, 0.0), 0.1).unwrap();
+        let cones = solid_faces(topo, drafted)
+            .unwrap()
+            .into_iter()
+            .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cone(_)))
+            .count();
+        assert_eq!(cones, walls.len(), "the drafted walls");
+        drafted
+    }
+
+    /// The tilted rim of a frustum whose wall is two cone faces rounds as
+    /// the rim of the frustum whose wall is one.
+    #[test]
+    fn a_tilted_rim_on_a_split_frustum_rounds_as_on_a_whole_frustum() {
+        let (t, r) = (0.3, 0.15);
+        for (name, pose) in poses() {
+            let mut volumes = Vec::new();
+            for seam in [None, Some(0.0), Some(1.2)] {
+                let label = format!("seam {seam:?}, {name}");
+                let mut topo = Topology::new();
+                let solid = frustum(&mut topo, seam);
+                let (cut, rims) = cut_and_rims(&mut topo, solid, &above_the_top(t), &pose);
+                volumes.push(round(&label, &mut topo, cut, &rims, r));
+            }
+            for volume in &volumes[1..] {
+                assert!(
+                    (volume - volumes[0]).abs() < 1e-9 * volumes[0],
+                    "{name}: the whole frustum and the split ones {volumes:?}"
                 );
             }
         }
