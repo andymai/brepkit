@@ -141,6 +141,24 @@ pub(super) fn edge_crossings(
     find_edge_edge_crossings(topo, a, data_a, b, data_b, tol)
 }
 
+/// A box that holds an edge's curve between its ends: the exact box of a
+/// line, circle or ellipse arc, and the box of a B-spline's Bezier poles.
+/// `None` where a B-spline's poles cannot be read.
+pub(super) fn proven_span_box(
+    curve: &EdgeCurve,
+    start: Point3,
+    end: Point3,
+) -> Option<brepkit_math::aabb::Aabb3> {
+    match curve {
+        EdgeCurve::NurbsCurve(nurbs) => {
+            nurbs_pole_box(nurbs, curve.domain_with_endpoints(start, end))
+        }
+        EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+            Some(super::helpers::edge_span_box(curve, start, end, 0))
+        }
+    }
+}
+
 /// Pre-computed edge data for fast intersection checks.
 struct EdgeData {
     /// Start vertex position.

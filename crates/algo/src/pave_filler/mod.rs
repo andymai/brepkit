@@ -675,7 +675,8 @@ fn split_sections_at_triple_points(
         end: Point3,
         params: (f64, f64),
         reading: Reading,
-        bbox: brepkit_math::aabb::Aabb3,
+        /// A box proven to hold the section, where one can be read.
+        bbox: Option<brepkit_math::aabb::Aabb3>,
     }
 
     if sources.len() < 3 {
@@ -716,7 +717,7 @@ fn split_sections_at_triple_points(
             end,
             params: (pb.start.parameter, pb.end.parameter),
             reading,
-            bbox: helpers::edge_span_box(edge.curve(), start, end, 16).expanded(WELD),
+            bbox: phase_ee::proven_span_box(edge.curve(), start, end).map(|b| b.expanded(WELD)),
         });
         for face in [curve.face_a, curve.face_b] {
             on_face.entry(face).or_default().push(k);
@@ -761,7 +762,9 @@ fn split_sections_at_triple_points(
                     continue;
                 }
                 let (a, b) = (&sections[i], &sections[j]);
-                if !a.bbox.intersects(b.bbox) {
+                if let (Some(box_a), Some(box_b)) = (a.bbox, b.bbox)
+                    && !box_a.intersects(box_b)
+                {
                     continue;
                 }
                 for (ta, tb, p) in phase_ee::edge_crossings(topo, a.edge, b.edge, tol)? {
@@ -837,6 +840,9 @@ fn split_sections_at_triple_points(
             });
             if let Some(skipped) = arena.curve_skip_faces.get(&index).cloned() {
                 arena.curve_skip_faces.insert(next, skipped);
+            }
+            if let Some(extra) = arena.curve_extra_faces.get(&index).cloned() {
+                arena.curve_extra_faces.insert(next, extra);
             }
         }
     }

@@ -2594,3 +2594,106 @@ fn a_rim_section_divides_at_the_vertex_a_rim_keeps_across_its_wrap() {
         "the section's cut {cut:?} is not a vertex of the rim's pieces {rim_vertices:?}"
     );
 }
+
+/// Three solids' sections that cross on one face are cut at one shared
+/// vertex, and a piece of a section that also splits a third face (an arc a
+/// ball's two halves share with a box's face) splits that face as well.
+#[test]
+fn a_triple_point_cuts_each_section_and_keeps_its_extra_faces() {
+    use brepkit_topology::explorer::solid_faces;
+
+    use crate::ds::{Interference, IntersectionCurveDS, Pave, PaveBlock};
+
+    let mut topo = Topology::new();
+    let a = make_box(&mut topo, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+    let b = make_box(&mut topo, [0.2, 0.4, 0.5], [0.8, 0.6, 1.5]);
+    let c = make_box(&mut topo, [0.4, 0.2, 0.5], [0.6, 0.8, 1.5]);
+    let face = |solid| solid_faces(&topo, solid).unwrap();
+    let (fa, fb, fc) = (face(a)[0], face(b)[0], face(c)[0]);
+    let also = face(a)[1];
+
+    // Two lines on `fa`, from its pairs with `fb` and `fc`, crossing at
+    // (0.5, 0.5, 1).
+    let mut arena = GfaArena::new();
+    let mut section = |topo: &mut Topology, other, from: Point3, to: Point3| {
+        let (v0, v1) = (
+            topo.add_vertex(Vertex::new(from, 1e-7)),
+            topo.add_vertex(Vertex::new(to, 1e-7)),
+        );
+        let edge = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Line));
+        let length = (to - from).length();
+        let pb = arena.pave_blocks.alloc(PaveBlock::new(
+            edge,
+            Pave::new(v0, 0.0),
+            Pave::new(v1, length),
+        ));
+        let index = arena.curves.len();
+        arena.curves.push(IntersectionCurveDS {
+            curve: EdgeCurve::Line,
+            face_a: fa,
+            face_b: other,
+            bbox: brepkit_math::aabb::Aabb3::from_points([from, to]),
+            pave_blocks: vec![pb],
+            t_range: (0.0, length),
+        });
+        arena.interference.ff.push(Interference::FF {
+            f1: fa,
+            f2: other,
+            curve_index: index,
+        });
+        index
+    };
+    let first = section(
+        &mut topo,
+        fb,
+        Point3::new(0.2, 0.5, 1.0),
+        Point3::new(0.8, 0.5, 1.0),
+    );
+    section(
+        &mut topo,
+        fc,
+        Point3::new(0.5, 0.2, 1.0),
+        Point3::new(0.5, 0.8, 1.0),
+    );
+    arena.curve_extra_faces.insert(first, vec![also]);
+
+    super::split_sections_at_triple_points(
+        &mut topo,
+        &[a, b, c],
+        brepkit_math::tolerance::Tolerance::new(),
+        &mut arena,
+    )
+    .unwrap();
+
+    assert_eq!(arena.curves.len(), 4, "each section is cut once");
+    let ends = |index: usize| {
+        let pb = arena
+            .pave_blocks
+            .get(arena.curves[index].pave_blocks[0])
+            .unwrap();
+        [pb.start.vertex, pb.end.vertex]
+    };
+    let at_cross = |index: usize| {
+        ends(index).into_iter().find(|&v| {
+            (topo.vertex(v).unwrap().point() - Point3::new(0.5, 0.5, 1.0)).length() < 1e-9
+        })
+    };
+    let cuts: Vec<_> = (0..4).map(|i| at_cross(i).unwrap()).collect();
+    assert!(
+        cuts.iter().all(|&v| v == cuts[0]),
+        "one vertex at the crossing: {cuts:?}"
+    );
+    for index in 0..4 {
+        let pair = (arena.curves[index].face_a, arena.curves[index].face_b);
+        let extra = arena.curve_extra_faces.get(&index);
+        if pair == (fa, fb) {
+            assert_eq!(
+                extra,
+                Some(&vec![also]),
+                "piece {index} of the first section"
+            );
+        } else {
+            assert_eq!(extra, None, "piece {index} of the second section");
+        }
+    }
+}
