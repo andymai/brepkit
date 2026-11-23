@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795471648611,
+  "lastUpdate": 1795471882685,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -77111,6 +77111,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26072946,
             "range": "± 385932",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "53dc48d05256943b79eaf5b047f0becc07e86462",
+          "message": "fix(math): march each section branch by its curvature and close loops only from the seed's side, and place the fit's first points by its miss (#2777)\n\n## Summary\n\nOn main, the general marcher refuses thin section loops on slender and\nflat cones, and on a rod dipping into a ring. It also loses a whole loop\nwith no error (#2755). A rod of radius 0.2 across a slender cone traces\none of its two loops and misses the other. Marched booleans are 11% to\n33% slower than before #2749 (#2750).\n\nWith this change, all of those loops are traced and proved within 1e-7\nof both surfaces. A rod dipping into a ring is cut exactly. The three\nmarched booleans take 2% to 8% less time than on main. The pose sweep is\nunchanged, and the truth audit changes one line, toward the truth.\n\nFixes #2755. For #2750, the booleans are still slower than before #2749.\n\n## The change\n\n- **Steps and closure (#2755).**\n- The march stepped up to 4 times its step and halved only after it took\na turn. Each step is now limited by the section's exact curvature and by\nan estimate of the gap to the next branch. Both come from the new\n`Carrier::bend`.\n- Each guess moves onto the section by Newton steps. It is taken again\nat half length if it leaves its branch, turns more than 0.4 rad, or goes\nbackward.\n- A loop closed at any point within 5 steps of the seed, so on loops 0.1\nwide it joined the far side. It now closes only where the seed lies\nwithin the next step, ahead, from the seed's own side.\n- Seeds were merged within 3.8 before they settled, so a second loop\nnear the first lost its only seed. Seeds now come from the grid cells of\nboth patches, and a seed drops out only if it settles on a curve already\nmarched.\n- Each step must land on the same sheet as its seed: a cone's nappe, or\na torus's near or far tube (`Carrier::sheet`). A seed joins a marched\ncurve only where Newton steps along the section from the nearest chord\nreach it within 1e-7, on the same sheets.\n- A march that stalls ends there only on a proved singular point.\nGauss-Newton steps must reach a point on both surfaces with parallel\nnormals, within their rounding. Any other stall, or a march past 4096\nsteps, is refused.\n- The seeding's early exit, which compared the nearest cell middle with\n3 cells of the smaller patch, is gone. On a slender cone with cells 4900\nacross it reported no crossing, so a real section was dropped with no\nerror. Only the exact reach test remains. A cell whose reading fails,\nfor example one centred on a ball's centre, is now kept and seeded, not\ndropped.\n- **The fit's first points (#2750).** The fit's first pass reads how far\na cubic through the marched points misses the surfaces. It places points\nto aim at a quarter of the tolerance, and declines past 8192 points\nbefore it allocates. On the ring and rod, 0 to 5 of 40 spans then fail\nthe bound, where 38 did. The fit takes 2 passes, not 3. Seeding reads\neach cell's reach in closed form and reads the second patch only near\nthe first patch's seeds.\n\n## Tests\n\n- `thin_loops_on_flat_and_slender_cones_are_marched_round` runs a flat\ncone with a rod of radius 0.05, and a slender cone with rods of radius\n0.05 and 0.2. It runs three poses, both ways round. Each gives two\nclosed loops, fitted within 1e-7 of both surfaces, and within 1e-5 of\nevery true section point. On main three are refused and one loses a\nloop.\n- `sections_on_both_nappes_of_a_flat_cone_are_each_marched` runs a rod\nthrough a flat cone's apex, in three poses, both orders, and needs four\ncurves. Without the sheet check the march hopped nappes, and without the\nnew merge test two curves dropped with no error.\n- `a_shallow_crossing_too_tight_to_march_is_refused_not_dropped` refuses\na cone of half-angle 2e-6 with a rod through its apex, where the earlier\ncommit returned no curves.\n`a_marched_branch_that_runs_into_a_touch_ends_on_it` ends a leg-and-bend\nbranch within 1e-5 of its touch points, where it stopped 0.011 short.\n`a_section_that_crosses_itself_is_traced_through_the_node` traces both\nlobes of a figure eight. `cells_centred_on_a_balls_centre_are_kept`\ntraces both circles of a cone and a ball centred on its apex, where the\nearlier commit traced none.\n- `each_surface_bends_as_its_distance_does` checks the new curvature\nagainst finite differences.\n- `rod_dipping_into_a_ring` now requires all 16 cases near the origin\nand 1e6 out to carve the dips, with probes and volume checks. The poses\n1e9 out still refuse.\n- Mean of 30 runs in a profiling build, in ms, upright / turned /\nmirrored:\n\n| Boolean | before #2749 | main | this branch |\n|---|---|---|---|\n| ring ∩ rod | 20.27 / 9.63 / 9.57 | 22.47 / 11.97 / 11.98 | 21.58 /\n11.33 / 11.43 |\n| ring − rod | 7.09 / 6.98 / 6.78 | 8.37 / 8.41 / 8.33 | 7.69 / 7.98 /\n7.90 |\n| cone tip − rod | 1.55 / 1.71 / 1.47 | 1.90 / 1.92 / 1.95 | 1.74 / 1.89\n/ 1.79 |\n\n- brepkit-math and brepkit-algo (1354) and brepkit-offset (41) pass, and\nso do all brepkit-operations and brepkit-io tests (3269, 26 skipped).\n- In the truth audit, the ring ∩ rod line goes from up to 8e-8 off to\n6e-8.\n\n## Still open\n\n- At 1e-7 a cubic needs about 250 points on a ring and rod loop, against\nabout 50 before #2749. Of the 2.6 ms that remain, about 1.3 ms is the\nacceptance checks after a two-piece intersect, whose cost grows with the\ncurve's control points.\n- Without the early exit, face pairs that it skipped now run the reach\ntest. The pose sweep and the truth audit take the same time as main, but\nthe gridfinity boolean pairs are not timed.\n- Seeds still come from a grid, so a loop smaller than a cell on both\npatches can be missed.",
+          "timestamp": "2026-11-23T22:04:16Z",
+          "tree_id": "56f5a0f15f4f23b39401cf142e977dff76a30bac",
+          "url": "https://github.com/andymai/brepkit/commit/53dc48d05256943b79eaf5b047f0becc07e86462"
+        },
+        "date": 1795471872348,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 872270,
+            "range": "± 31825",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 941786,
+            "range": "± 19703",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10128,
+            "range": "± 32",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 573399,
+            "range": "± 7981",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19533033,
+            "range": "± 93405",
             "unit": "ns/iter"
           }
         ]
