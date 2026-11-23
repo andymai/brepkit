@@ -123,11 +123,11 @@ fn a_rod_ending_at_a_balls_centre_fuses_onto_it() {
     }
 }
 
-/// The volume two rods of radius `RADIUS` and length `length`, both from the
-/// origin along `a` and `b`, share: each line along `a` through the first
-/// rod's cross-section meets the second rod in one stretch, read exactly,
-/// summed over the cross-section in polar steps.
-fn rods_overlap(a: Vec3, b: Vec3, length: f64) -> f64 {
+/// The volume two rods of radius `radius`, both from the origin along unit
+/// `a` for `la` and unit `b` for `lb`, share: each line along `a` through the
+/// first rod's cross-section meets the second rod in one stretch, read
+/// exactly, summed over the cross-section in polar steps.
+fn rods_overlap(radius: f64, (a, la): (Vec3, f64), (b, lb): (Vec3, f64)) -> f64 {
     let e1 = if a.x().abs() < 0.9 {
         a.cross(Vec3::new(1.0, 0.0, 0.0))
     } else {
@@ -137,7 +137,7 @@ fn rods_overlap(a: Vec3, b: Vec3, length: f64) -> f64 {
     let e2 = a.cross(e1);
     let c = a.dot(b);
     let n = 2000;
-    let (dr, dphi) = (RADIUS / f64::from(n), 2.0 * PI / f64::from(n));
+    let (dr, dphi) = (radius / f64::from(n), 2.0 * PI / f64::from(n));
     let mut sum = 0.0;
     for i in 0..n {
         let rho = (f64::from(i) + 0.5) * dr;
@@ -148,17 +148,17 @@ fn rods_overlap(a: Vec3, b: Vec3, length: f64) -> f64 {
             // Within the second rod's radius: s^2 (1 - c^2) - 2 s qb c
             // + |q|^2 - qb^2 - R^2 <= 0.
             let (qa2, qb2) = (1.0 - c * c, -2.0 * qb * c);
-            let q0 = q.dot(q) - qb * qb - RADIUS * RADIUS;
+            let q0 = q.dot(q) - qb * qb - radius * radius;
             let disc = qb2 * qb2 - 4.0 * qa2 * q0;
             if disc <= 0.0 {
                 continue;
             }
             let root = disc.sqrt();
             let (mut lo, mut hi) = ((-qb2 - root) / (2.0 * qa2), (-qb2 + root) / (2.0 * qa2));
-            // Between the second rod's ends: 0 <= qb + s c <= length.
-            let (s0, s1) = ((0.0 - qb) / c, (length - qb) / c);
+            // Between the second rod's ends: 0 <= qb + s c <= lb.
+            let (s0, s1) = ((0.0 - qb) / c, (lb - qb) / c);
             lo = lo.max(s0.min(s1)).max(0.0);
-            hi = hi.min(s0.max(s1)).min(length);
+            hi = hi.min(s0.max(s1)).min(la);
             if hi > lo {
                 sum += (hi - lo) * rho;
             }
@@ -317,7 +317,9 @@ fn two_rods_at_one_ball(
     // The rods, less their overlap, and the wedge of the ball outside both:
     // its two planes meet at the angle between the rods' axes.
     let wedge = 2.0 / 3.0 * (PI - a.dot(b).acos()) * RADIUS.powi(3);
-    let expected = 2.0 * PI * RADIUS * RADIUS * length - rods_overlap(a, b, length) + wedge;
+    let expected = 2.0 * PI * RADIUS * RADIUS * length
+        - rods_overlap(RADIUS, (a, length), (b, length))
+        + wedge;
     let volume = solid_volume(&topo, fused, 0.0005).unwrap();
     assert!(
         (volume - expected).abs() < 1e-4 * expected,
@@ -336,5 +338,110 @@ fn two_rods_at_one_ball(
         (b * 5.0 - side * 1.0, PointClassification::Outside),
     ] {
         assert_eq!(class(v), want, "{name} at {v:?}");
+    }
+}
+
+/// A turn by `angle` about `axis` through the origin.
+fn turn_about(axis: Vec3, angle: f64) -> Mat4 {
+    let u = axis * (1.0 / axis.length());
+    let (ux, uy, uz) = (u.x(), u.y(), u.z());
+    let (s, c) = angle.sin_cos();
+    let t = 1.0 - c;
+    Mat4([
+        [
+            t * ux * ux + c,
+            t * ux * uy - s * uz,
+            t * ux * uz + s * uy,
+            0.0,
+        ],
+        [
+            t * uy * ux + s * uz,
+            t * uy * uy + c,
+            t * uy * uz - s * ux,
+            0.0,
+        ],
+        [
+            t * uz * ux - s * uy,
+            t * uz * uy + s * ux,
+            t * uz * uz + c,
+            0.0,
+        ],
+        [0.0, 0.0, 0.0, 1.0],
+    ])
+}
+
+#[test]
+fn cable_cores_bent_at_balls_fuse_exactly() {
+    // The cable cores of a junction box: each a strand of three rods of
+    // radius 1 with a ball at each bend, its middle rod a few degrees off
+    // level. Each rod stands up from its start and turns about the
+    // horizontal axis across its direction.
+    let r = 1.0;
+    for (n, k) in [(0, 0), (1, 2), (2, 2), (2, 0), (1, 1)] {
+        let name = format!("gland {n} core {k}");
+        let from = Point3::new(
+            31.0,
+            f64::from(n - 1) * 36.0 + f64::from(k - 1) * 2.1,
+            if k == 1 { 26.4 } else { 22.8 },
+        );
+        let to = Point3::new(10.0, f64::from(3 * n + k - 4) * 6.2, 20.5);
+        let pts = [
+            from,
+            Point3::new(from.x() - 2.0, from.y(), from.z()),
+            Point3::new(to.x() + 3.0, to.y(), to.z()),
+            Point3::new(to.x() - 7.0, to.y(), to.z()),
+        ];
+        let mut topo = Topology::new();
+        let mut parts = Vec::new();
+        for i in 1..pts.len() {
+            let d = pts[i] - pts[i - 1];
+            let rod = make_cylinder(&mut topo, r, d.length()).unwrap();
+            let n = d * (1.0 / d.length());
+            let turn = turn_about(Vec3::new(-n.y(), n.x(), 0.0), n.z().clamp(-1.0, 1.0).acos());
+            let at = pts[i - 1];
+            transform_solid(
+                &mut topo,
+                rod,
+                &(Mat4::translation(at.x(), at.y(), at.z()) * turn),
+            )
+            .unwrap();
+            parts.push(rod);
+            if i < pts.len() - 1 {
+                let ball = make_sphere(&mut topo, r, 32).unwrap();
+                let at = pts[i];
+                transform_solid(&mut topo, ball, &Mat4::translation(at.x(), at.y(), at.z()))
+                    .unwrap();
+                parts.push(ball);
+            }
+        }
+        let fused = parts[1..]
+            .iter()
+            .fold(parts[0], |acc, &p| exact_fuse(&mut topo, acc, p, &name));
+        let report = validate_solid(&topo, fused).unwrap();
+        assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        assert_eq!(edges_not_used_twice(&topo, fused), 0, "{name}");
+        let kinds = census(&topo, fused);
+        assert_eq!(kinds.get("cylinder"), Some(&3), "{name}: {kinds:?}");
+        assert_eq!(kinds.get("plane"), Some(&2), "{name}: {kinds:?}");
+        let mesh = tessellate_solid(&topo, fused, 0.005).unwrap();
+        assert_eq!(boundary_edge_count(&mesh), 0, "{name}: open mesh");
+        // The rods, less each two that meet at a bend share there, and the
+        // wedge of each ball outside the two rods that meet in it.
+        let mut expected = 0.0;
+        for i in 1..pts.len() {
+            expected += PI * r * r * (pts[i] - pts[i - 1]).length();
+        }
+        for j in 1..pts.len() - 1 {
+            let (a, b) = (pts[j - 1] - pts[j], pts[j + 1] - pts[j]);
+            let (la, lb) = (a.length(), b.length());
+            let (a, b) = (a * (1.0 / la), b * (1.0 / lb));
+            expected +=
+                2.0 / 3.0 * (PI - a.dot(b).acos()) * r.powi(3) - rods_overlap(r, (a, la), (b, lb));
+        }
+        let volume = solid_volume(&topo, fused, 0.0005).unwrap();
+        assert!(
+            (volume - expected).abs() < 1e-5 * expected,
+            "{name}: volume {volume} should be {expected}"
+        );
     }
 }
