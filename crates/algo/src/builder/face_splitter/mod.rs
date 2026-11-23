@@ -6881,23 +6881,44 @@ pub fn split_face_2d(
     distribute_cap_circles(topo, face_id, base, &cap_sections, &cap_points, rank, frame)
 }
 
+/// How a face's ball is charted for its split.
+enum BallChart {
+    /// Another surface, or a ball face no chart is read for: one with no
+    /// sections, one whose outline is all chords (a hemisphere of
+    /// `make_sphere`, whose own paths read its poles), or one that holds a
+    /// pole of every axis tried.
+    Unclear,
+    /// The face's own chart, whose poles keep clear of its wires and
+    /// sections.
+    Own,
+    /// A chart whose poles lie off the face, as far from its wires and
+    /// sections as a spread of axes allows; `clear` when that is as far as
+    /// the face's own chart must keep them to be read as it lies.
+    Turned { chart: FaceSurface, clear: bool },
+}
+
 /// The face's ball in a chart whose poles lie off the face and clear of its
 /// wires and sections. At a pole every `u` names one point: a wire or a
 /// section that reaches one jumps in `u` there, and the traces cannot follow
-/// it. A pole inside the face would make its outline wind the chart. `None`
-/// for any other surface, for a face with no sections, for a face whose
-/// outline is all chords (a hemisphere of `make_sphere`, whose own paths
-/// read its poles), and for a face whose edges keep clear of its poles.
+/// it. A pole inside the face would make its outline wind the chart.
 fn pole_clear_sphere(
     topo: &Topology,
     face_id: FaceId,
     face: &brepkit_topology::face::Face,
     sections: &[SectionEdge],
-) -> Option<FaceSurface> {
+) -> BallChart {
+    pole_clear_chart(topo, face_id, face, sections).unwrap_or(BallChart::Unclear)
+}
+
+fn pole_clear_chart(
+    topo: &Topology,
+    face_id: FaceId,
+    face: &brepkit_topology::face::Face,
+    sections: &[SectionEdge],
+) -> Option<BallChart> {
     // Samples per edge: a half turn of a great circle is read every 2.8
     // degrees, inside the 5.7 degrees that counts as near a pole.
     const SAMPLES: u32 = 64;
-    const CANDIDATES: u32 = 256;
     let FaceSurface::Sphere(sphere) = face.surface() else {
         return None;
     };
@@ -6944,17 +6965,40 @@ fn pole_clear_sphere(
     // nearest sample.
     let nearest = |axis: Vec3| dirs.iter().fold(0.0_f64, |m, d| m.max(d.dot(axis).abs()));
     if nearest(sphere.z_axis()) < 0.1_f64.cos() {
-        return None;
+        return Some(BallChart::Own);
     }
     let trim = crate::classifier::SphereFaceTrim::new(topo, face_id).ok()??;
     let radius = sphere.radius();
+    let best = clear_ball_axis(center, radius, &dirs, &trim)?;
+    brepkit_math::surfaces::SphericalSurface::with_axis(center, radius, best)
+        .ok()
+        .map(|chart| BallChart::Turned {
+            chart: FaceSurface::Sphere(chart),
+            clear: nearest(best) < 0.1_f64.cos(),
+        })
+}
+
+/// Of a spread of axes through `center`, the one whose poles keep farthest
+/// from the unit directions `dirs` (a face's wires and sections seen from
+/// its ball's centre), each pole off the face that `trim` reads. `None`
+/// when every axis has a pole on the face.
+fn clear_ball_axis(
+    center: Point3,
+    radius: f64,
+    dirs: &[Vec3],
+    trim: &crate::classifier::SphereFaceTrim,
+) -> Option<Vec3> {
+    const CANDIDATES: u32 = 256;
+    // The cosine of the angle from the nearer pole about `axis` to the
+    // nearest direction.
+    let nearest = |axis: Vec3| dirs.iter().fold(0.0_f64, |m, d| m.max(d.dot(axis).abs()));
     let off_face = |axis: Vec3| {
         [axis, -axis]
             .iter()
             .all(|&a| !trim.holds(center + a * radius, 1e-6 * radius))
     };
     let golden = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
-    let best = (0..CANDIDATES)
+    (0..CANDIDATES)
         .map(|i| {
             let z = 1.0 - (2.0 * f64::from(i) + 1.0) / f64::from(CANDIDATES);
             let r = (1.0 - z * z).max(0.0).sqrt();
@@ -6963,11 +7007,8 @@ fn pole_clear_sphere(
         })
         .filter(|&axis| off_face(axis))
         .map(|axis| (nearest(axis), axis))
-        .min_by(|a, b| a.0.total_cmp(&b.0))?
-        .1;
-    brepkit_math::surfaces::SphericalSurface::with_axis(center, radius, best)
-        .ok()
-        .map(FaceSurface::Sphere)
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, axis)| axis)
 }
 
 /// The centroid of a closed curved section's samples when every sample
@@ -7803,7 +7844,11 @@ fn split_face_2d_impl(
     let sections: &[SectionEdge] = deduped_sections.as_deref().unwrap_or(sections);
     let trace_split =
         std::env::var("BK_SPLIT_TRACE").is_ok_and(|v| v == format!("{}", face_id.index()));
-    let rechart = pole_clear_sphere(topo, face_id, face, sections);
+    let (rechart, ball_chart_clear) = match pole_clear_sphere(topo, face_id, face, sections) {
+        BallChart::Unclear => (None, false),
+        BallChart::Own => (None, true),
+        BallChart::Turned { chart, clear } => (Some(chart), clear),
+    };
     // The sections' pcurves and end hints read the face's own chart.
     let recharted_sections: Vec<SectionEdge>;
     let sections: &[SectionEdge] = match &rechart {
@@ -8832,13 +8877,22 @@ fn split_face_2d_impl(
             Vec::new()
         };
 
-    let boundary_edges = split_boundary_edges_at_3d_points(
-        boundary_edges,
-        &split_pts_3d,
-        if is_plane { Some(frame) } else { None },
-        &surface,
-        tol.linear,
-    );
+    let boundary_edges = if ball_chart_clear {
+        edge_splitting::split_clear_ball_edges_at_3d_points(
+            boundary_edges,
+            &split_pts_3d,
+            &surface,
+            tol.linear,
+        )
+    } else {
+        split_boundary_edges_at_3d_points(
+            boundary_edges,
+            &split_pts_3d,
+            if is_plane { Some(frame) } else { None },
+            &surface,
+            tol.linear,
+        )
+    };
 
     // Reorder boundary edges: Line (seam) edges first, then curved (circle)
     // edges. This ensures the wire builder starts loops from seam edges,
@@ -9697,11 +9751,13 @@ fn split_face_2d_impl(
 
     // A section on a cylinder sits at its points' own u, which can be whole
     // turns off the boundary it ends on (an arc leaving u = 0 on a wall laid
-    // out around 2pi). When an end meets a boundary vertex in 3D but no copy
-    // of it in UV, move the section by the one whole-turn shift that joins
-    // every such end.
+    // out around 2pi). So can a section on a ball face charted clear of its
+    // poles, whose wires run across the chart's seam. When an end meets a
+    // boundary vertex in 3D but no copy of it in UV, move the section by the
+    // one whole-turn shift that joins every such end.
     if u_periodic
-        && matches!(surface, FaceSurface::Cylinder(_))
+        && (matches!(surface, FaceSurface::Cylinder(_))
+            || ball_chart_clear && matches!(surface, FaceSurface::Sphere(_)))
         && all_edges.len() > n_boundary_edges
         && let (Some(u_period), _) = super::pcurve_compute::surface_periods(&surface)
     {
@@ -12557,6 +12613,77 @@ fn torus_loop_uv(sub_face: &SplitSubFace) -> Option<Vec<Point2>> {
     let closes = (nearest(last.x(), first.x()) - first.x()).abs() < 1e-9
         && (nearest(last.y(), first.y()) - first.y()).abs() < 1e-9;
     (pts.len() >= 3 && closes).then_some(pts)
+}
+
+/// A point of ball piece `sub_face` that its face's `trim` holds farther than
+/// `near` from its wires, found among the candidates [`interior_point_3d`]
+/// reads across the piece's outline in `(u, v)`. The outline is read in a
+/// chart whose poles lie off the piece and as far from its wires as a spread
+/// of axes allows: through a pole, its `u` jumps. `None` for a piece of
+/// another surface, when no such chart is found or its loop is not read
+/// ([`sphere_loop_uv`]), and when no candidate passes.
+pub fn ball_interior_point_clear(
+    sub_face: &SplitSubFace,
+    trim: &crate::classifier::SphereFaceTrim,
+    near: f64,
+) -> Option<Point3> {
+    const SAMPLES: u32 = 64;
+    let FaceSurface::Sphere(sphere) = &sub_face.surface else {
+        return None;
+    };
+    let (center, radius) = (sphere.center(), sphere.radius());
+    let mut dirs: Vec<Vec3> = Vec::new();
+    for e in sub_face
+        .outer_wire
+        .iter()
+        .chain(sub_face.inner_wires.iter().flatten())
+    {
+        let (start, end) = if e.forward {
+            (e.start_3d, e.end_3d)
+        } else {
+            (e.end_3d, e.start_3d)
+        };
+        let (t0, t1) = e.curve_3d.domain_with_endpoints(start, end);
+        for k in 0..=SAMPLES {
+            let t = (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0);
+            if let Ok(d) = (e.curve_3d.evaluate_with_endpoints(t, start, end) - center).normalize()
+            {
+                dirs.push(d);
+            }
+        }
+    }
+    let axis = clear_ball_axis(center, radius, &dirs, trim)?;
+    let chart = FaceSurface::Sphere(
+        brepkit_math::surfaces::SphericalSurface::with_axis(center, radius, axis).ok()?,
+    );
+    let relaid = |wire: &[OrientedPCurveEdge]| -> Option<Vec<OrientedPCurveEdge>> {
+        wire.iter()
+            .map(|e| {
+                let (su, sv) = chart.project_point(e.start_3d)?;
+                let (eu, ev) = chart.project_point(e.end_3d)?;
+                Some(OrientedPCurveEdge {
+                    start_uv: Point2::new(su, sv),
+                    end_uv: Point2::new(eu, ev),
+                    ..e.clone()
+                })
+            })
+            .collect()
+    };
+    let piece = SplitSubFace {
+        outer_wire: relaid(&sub_face.outer_wire)?,
+        inner_wires: sub_face
+            .inner_wires
+            .iter()
+            .map(|w| relaid(w))
+            .collect::<Option<_>>()?,
+        surface: chart,
+        ..sub_face.clone()
+    };
+    let pts = sphere_loop_uv(&piece)?;
+    let at = |uv: Point2| piece.surface.evaluate(uv.x(), uv.y());
+    let uv =
+        sample_interior_point_where(&pts, |uv| at(uv).is_some_and(|p| trim.holds_clear(p, near)))?;
+    at(uv)
 }
 
 /// A sphere piece's outer loop in `(u, v)`, sampled on its edges' own curves

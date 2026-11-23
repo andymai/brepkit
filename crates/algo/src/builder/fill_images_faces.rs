@@ -668,7 +668,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             // interior unset so the classifier aborts the analytic split (→ mesh
             // fallback) instead of classifying the wall from inside the lens.
             let mut interior_unclear = false;
-            let interior_point = match split.precomputed_interior {
+            let mut interior_point = match split.precomputed_interior {
                 Some(pt) => Some(pt),
                 None if super::face_splitter::face_has_curved_lens_holes(
                     topo,
@@ -693,6 +693,26 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                     pt
                 }
             };
+            // A ball piece's point is read on the piece's own wires. Its
+            // outline in `(u, v)` runs on chords, and the middle of a thin
+            // piece can lie between a section's arc and its chords, on the
+            // neighbouring piece. A point that is not clear inside it gives
+            // way to another candidate the wires accept. A piece with no
+            // such candidate (one with no area between its wires) keeps it.
+            if let Some(p) = interior_point
+                && new_face_id.is_some()
+                && matches!(split.surface, FaceSurface::Sphere(_))
+                && let Ok(Some(trim)) =
+                    crate::classifier::SphereFaceTrim::new(topo, resolved_face_id)
+            {
+                let near = tol.linear * 10.0;
+                if !trim.holds_clear(p, near)
+                    && let Some(clear) =
+                        super::face_splitter::ball_interior_point_clear(split, &trim, near)
+                {
+                    interior_point = Some(clear);
+                }
+            }
 
             // A piece with no clear interior whose wires run out and back
             // along the same curves (two coincident rims split alike, the

@@ -9888,7 +9888,12 @@ fn emit_split_circle_arcs(
                                 }
                                 let f = ((q - *a).dot(d) / (chord * chord)).clamp(0.0, 1.0);
                                 let foot = *a + d * f;
-                                (q - foot).length() <= chord * chord / (8.0 * radius)
+                                // The whole sagitta: `chord^2 / 8r` falls
+                                // short of it, and an arc's point near the
+                                // middle of a chord lies beyond that.
+                                let half = 0.5 * chord;
+                                let sagitta = radius - radius.madd(radius, -half * half).sqrt();
+                                (q - foot).length() <= sagitta + side_eps
                             })
                     })
             })

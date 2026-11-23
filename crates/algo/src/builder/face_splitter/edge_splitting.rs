@@ -26,7 +26,19 @@ pub(super) fn split_boundary_edges_at_3d_points(
     surface: &FaceSurface,
     tol: f64,
 ) -> Vec<OrientedPCurveEdge> {
-    split_edges_at_3d_points(edges, split_pts_3d, frame, surface, tol, false)
+    split_edges_at_3d_points(edges, split_pts_3d, frame, surface, tol, false, false)
+}
+
+/// [`split_boundary_edges_at_3d_points`] for a ball face charted clear of its
+/// poles: an arc of a circle split there reads its split's `u` on the copy
+/// the arc reaches it on from its start.
+pub(super) fn split_clear_ball_edges_at_3d_points(
+    edges: Vec<OrientedPCurveEdge>,
+    split_pts_3d: &[Point3],
+    surface: &FaceSurface,
+    tol: f64,
+) -> Vec<OrientedPCurveEdge> {
+    split_edges_at_3d_points(edges, split_pts_3d, None, surface, tol, false, true)
 }
 
 /// [`split_boundary_edges_at_3d_points`] for a hole woven into a curved
@@ -42,7 +54,7 @@ pub(super) fn split_hole_edges_at_3d_points(
     surface: &FaceSurface,
     tol: f64,
 ) -> Vec<OrientedPCurveEdge> {
-    split_edges_at_3d_points(edges, split_pts_3d, frame, surface, tol, true)
+    split_edges_at_3d_points(edges, split_pts_3d, frame, surface, tol, true, false)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -53,6 +65,7 @@ fn split_edges_at_3d_points(
     surface: &FaceSurface,
     tol: f64,
     nurbs_by_projection: bool,
+    clear_ball: bool,
 ) -> Vec<OrientedPCurveEdge> {
     let conic_band = if nurbs_by_projection {
         tol * 100.0
@@ -322,6 +335,19 @@ fn split_edges_at_3d_points(
                     EdgeCurve::Line | EdgeCurve::Circle(_) => None,
                 };
                 on_copy_near(split_uv, near.unwrap_or(along), periods)
+            } else if let (EdgeCurve::Circle(circle), FaceSurface::Sphere(sphere)) =
+                (&edge.curve_3d, surface)
+                && clear_ball
+                && closed_ring_dir.is_none()
+                && let Some(run) = ball_arc_u_run(circle, &edge, split_3d, sphere, tol)
+            {
+                // Projected, the point took the principal copy, which can be
+                // a turn off the arc's own run.
+                on_copy_near(
+                    split_uv,
+                    brepkit_math::vec::Point2::new(edge.start_uv.x() + run, split_uv.y()),
+                    periods,
+                )
             } else {
                 split_uv
             };
@@ -786,6 +812,75 @@ fn ellipse_split_u(
     let run = (t1 - t0) * t;
     let run = if edge.forward { run } else { -run };
     ellipse_u_after(ellipse, surface, (edge.start_uv.x(), u), run)
+}
+
+/// The run in `u` along the arc of `circle` that boundary edge `edge` traces
+/// from its start to `to`, a point on it, about `sphere`'s axis. The edge
+/// runs counter-clockwise about the circle's normal when forward, and
+/// clockwise when reversed.
+///
+/// Seen along the axis, the arc's points lie on a conic `A + B cos t +
+/// C sin t` in each of the chart's `x` and `y`, so each is zero at no more
+/// than two angles, found in closed form. Between two such angles the arc
+/// keeps to one quarter of the plane about the axis and turns by the wrapped
+/// difference of its ends' `u`, which is less than a quarter turn. `None`
+/// when the arc comes within `tol` of the axis at one of those angles or at
+/// an end: there `u` has no value.
+fn ball_arc_u_run(
+    circle: &brepkit_math::curves::Circle3D,
+    edge: &OrientedPCurveEdge,
+    to: Point3,
+    sphere: &brepkit_math::surfaces::SphericalSurface,
+    tol: f64,
+) -> Option<f64> {
+    use std::f64::consts::{PI, TAU};
+    let (o, x, y) = (sphere.center(), sphere.x_axis(), sphere.y_axis());
+    let r = circle.radius();
+    let c = circle.center() - o;
+    let (ua, va) = (circle.u_axis(), circle.v_axis());
+    // Each chart axis's coordinate along the arc: `k0 + k1 cos t + k2 sin t`.
+    let coeffs = |axis: brepkit_math::vec::Vec3| (c.dot(axis), r * ua.dot(axis), r * va.dot(axis));
+    let (cx, cy) = (coeffs(x), coeffs(y));
+    let at = |(k0, k1, k2): (f64, f64, f64), t: f64| {
+        let (s, co) = t.sin_cos();
+        k2.madd(s, k1.madd(co, k0))
+    };
+    let seen = |t: f64| (at(cx, t), at(cy, t));
+    let from = circle.project(edge.start_3d);
+    let dir = if edge.forward { 1.0 } else { -1.0 };
+    let sweep = dir * (dir * (circle.project(to) - from)).rem_euclid(TAU);
+    let mut cuts: Vec<f64> = Vec::new();
+    for (k, other) in [(cx, cy), (cy, cx)] {
+        let amp = k.1.hypot(k.2);
+        if amp <= 0.0 || k.0.abs() > amp {
+            continue;
+        }
+        let phase = k.2.atan2(k.1);
+        let half = (-k.0 / amp).clamp(-1.0, 1.0).acos();
+        for root in [phase + half, phase - half] {
+            let ahead = (dir * (root - from)).rem_euclid(TAU);
+            if ahead > 0.0 && ahead < dir * sweep {
+                if at(other, root).abs() <= tol {
+                    return None;
+                }
+                cuts.push(ahead);
+            }
+        }
+    }
+    cuts.sort_by(f64::total_cmp);
+    let angle = |t: f64| {
+        let (px, py) = seen(t);
+        (px.hypot(py) > tol).then(|| py.atan2(px))
+    };
+    let mut run = 0.0;
+    let mut last = angle(from)?;
+    for ahead in cuts.into_iter().chain(std::iter::once(dir * sweep)) {
+        let next = angle(dir.madd(ahead, from))?;
+        let step = (next - last + PI).rem_euclid(TAU) - PI;
+        run += step;
+        last = next;
+    }
+    Some(run)
 }
 
 /// `uv` moved by whole periods to the copy nearest `near`.
