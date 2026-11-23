@@ -400,6 +400,9 @@ fn piece_issues(
 ///     another hole
 /// 13. **Wire turns**: no wire of a face on a closed surface runs round it
 ///     more than once
+/// 14. **Pcurves**: each pcurve of an edge on a curved face, read through
+///     the face's surface, gives the edge's points at eleven fractions of
+///     its span, within a tolerance that grows with the solid's size
 ///
 /// # Errors
 ///
@@ -973,6 +976,7 @@ pub fn validate_solid_with_options(
 
     issues.extend(wires_apart_issues(topo, &faces, scale)?);
     issues.extend(faces_overlap_issues(topo, solid, scale)?);
+    issues.extend(pcurve_issues(topo, solid, &faces, scale)?);
 
     {
         let mut face_counts = std::collections::HashMap::new();
@@ -1078,6 +1082,67 @@ fn wires_apart_issues(
                 severity: Severity::Error,
                 description: format!("face {}: {}", fid.index(), issue.description),
             });
+        }
+    }
+    Ok(issues)
+}
+
+/// An error for each pcurve of an edge on a curved face that does not follow
+/// the edge.
+///
+/// A pcurve read at a fraction of its span, through its face's surface,
+/// gives its edge's point at that fraction of the edge's span. It is read at
+/// eleven fractions, and each reading that lies farther than the tolerance
+/// from its point of the edge is a fault: a hundred times the fit the blend
+/// engine builds a pcurve to (`1e-7` of the solid's size), and not less than
+/// `1e-4`, each times `scale`. A pcurve that passes is not proven to follow
+/// its edge between its readings. A plane face's pcurves are not read: a
+/// plane has no parameters of its own.
+fn pcurve_issues(
+    topo: &Topology,
+    solid: SolidId,
+    faces: &[brepkit_topology::face::FaceId],
+    scale: f64,
+) -> Result<Vec<ValidationIssue>, crate::OperationsError> {
+    let mut issues = Vec::new();
+    let mut tolerance = None;
+    let mut read = std::collections::HashSet::new();
+    for &fid in faces {
+        let face = topo.face(fid)?;
+        if face.surface().is_planar() || topo.pcurves().pcurves_for_face(fid).is_empty() {
+            continue;
+        }
+        let tolerance = if let Some(t) = tolerance {
+            t
+        } else {
+            let size = crate::measure::solid_bounding_box(topo, solid)
+                .map_or(0.0, |aabb| (aabb.max - aabb.min).length());
+            *tolerance.insert(1e-5_f64.madd(size, 1e-5).max(1e-4) * scale)
+        };
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                if !read.insert((oe.edge(), fid)) {
+                    continue;
+                }
+                let found = brepkit_check::validate::check_edge_same_parameter(
+                    topo,
+                    oe.edge(),
+                    fid,
+                    tolerance,
+                )
+                .map_err(|e| crate::OperationsError::InvalidInput {
+                    reason: e.to_string(),
+                })?;
+                issues.extend(found.into_iter().map(|issue| ValidationIssue {
+                    severity: Severity::Error,
+                    description: format!(
+                        "the pcurve of edge {} on face {}: {}",
+                        oe.edge().index(),
+                        fid.index(),
+                        issue.description
+                    ),
+                }));
+            }
         }
     }
     Ok(issues)

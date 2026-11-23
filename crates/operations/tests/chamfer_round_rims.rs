@@ -358,7 +358,9 @@ fn untouched(topo: &Topology, solid: SolidId) -> Vec<brepkit_topology::face::Fac
 /// A rim chamfer keeps the trims of the faces it does not touch, the
 /// cavity's and the bottom cap's, and drops the trims of the edge uses it
 /// replaces: every pcurve left on a face lies on an edge the face uses.
-/// Through `chamfer`, and through `chamfer_v2` with two distances.
+/// Through `chamfer`, and through `chamfer_v2` with two distances. The
+/// trims are markers that do not follow their edges, so each chamfer is
+/// validated as it is made without them.
 #[test]
 fn a_rim_chamfer_keeps_the_trims_it_does_not_replace() {
     let mut topo = Topology::new();
@@ -380,7 +382,15 @@ fn a_rim_chamfer_keeps_the_trims_it_does_not_replace() {
                 assert!(used.contains(&edge), "{face:?} keeps a trim of {edge:?}");
             }
         }
-        let report = validate_solid(&topo, result).unwrap();
+    }
+
+    let mut plain = Topology::new();
+    let hollow = rod_with_a_cavity(&mut plain);
+    let rim = rims_at(&plain, hollow, 10.0)[0];
+    let equal = chamfer(&mut plain, hollow, &[rim], 0.5).unwrap();
+    let two = chamfer_v2(&mut plain, hollow, &[rim], 0.5, 0.3).unwrap();
+    for result in [equal, two.solid] {
+        let report = validate_solid(&plain, result).unwrap();
         assert!(report.is_valid(), "{:?}", report.issues);
     }
 }
