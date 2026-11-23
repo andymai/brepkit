@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795400258530,
+  "lastUpdate": 1795401180981,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -76031,6 +76031,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 25422504,
             "range": "± 97728",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5719c390f6bbce91da41779eb80e96a7eb29d50d",
+          "message": "fix(math,algo,operations): fuse a hang tab through a funnel's torus lip, and a lip that leans off its axis, exactly (#2716)\n\n## Summary\n\nOn main, two fuses of the brepjs playground funnel fall back to a mesh:\n\n- the hang tab plate fused through the funnel's torus lip (#2598);\n- the torus lip leaning 0.0001 or 0.001 rad off the funnel's axis\n(#2600).\n\nWith this change, both are exact, valid and watertight in three poses. A\nrib fused across the funnel's seam (#2599) is exact on main already, and\na test now pins it. The whole moulding (shell, lip, plate, round and 6\nribs) fuses exactly through `compound_ops::fuse_all`: 57 faces,\n61250.1324. The pose sweep gives the same output as main. In the truth\naudit, a ring's cut and intersect by a rod along y fell back on main.\nThey are now exact (2e-8 and 6e-7).\n\nFixes #2598, fixes #2599. For #2600, a tilt of 0.01 rad still falls\nback.\n\n## The change\n\n- **The box of a torus patch (#2598).** Phase FF gave a torus face that\nis not a whole ring the box of its edges. The lipped band reaches the\nouter equator only along its seam at x > 0, so its box missed the\nplate's sections near x = -83.5. The new `ToroidalSurface::patch_aabb`\nbounds the patch over its ring and tube angle windows.\n`compute_face_bbox` and `emit_split_circle_arcs` use it through\n`torus_patch_box`.\n- `torus_patch_box` reads the outer wire alone, so holes never shrink\nthe box. It reads a seam placeholder or a circle along one torus angle\nexactly. It leaves out an angle gap only where those exact steps prove\nthat the outer wire bounds the face as a disc. A face whose outer wire\nhas any other edge, such as a marched spline, takes the whole turn at\nonce.\n- **A point near a large rim (#2598, #2600).** `is_point_on_boundary_uv`\ntested a point against a circle rim in 3D within 0.01 of the radius.\nThat is 0.8 on a rim of radius 80. On a cylinder, cone or torus, the\ntest now reads a conic rim by the distance to its foot in the surface's\nparameters alone. Neither the 3D gate scaled by radius nor the UV-chord\nfallback applies to it. So a section end 0.59 from the rim read as on\nthe boundary, and the band split into nothing. On a cylinder, cone or\ntorus, the step from the point to the rim is now read in the surface's\n(u, v).\n- **A ring drilled twice.** The ray classifier's `TorusTrim` read a ring\nwhose outer wire is only its seam placeholders as the inside of its\nholes. So a second drill lost its wall. The new `holes_only` flag counts\na hit on such a face when it lies outside every hole.\n- **A closed march (#2600).** `march_analytic_intersection` closed the\nforward march on its seed, then marched backward round the loop again.\nEach cone loop wound the axis twice, and `split_torus_by_ring_loops`\nrefused it. The marcher now stops when the forward march closes. It also\nfills the last gap to the seed in steps no longer than the last step,\neach brought onto the intersection. Before, the fitted loop left both\nsurfaces by up to 0.022 across that gap.\n- **A loop off a plane face (#2600).** The rim plane's loop lies 0.07\ninside the ring's hole, within the plane's margin of 1.6. So it split\nthe torus band. The new `plane_face_clear_of_loop` drops a closed spline\nor ellipse section that lies wholly off a plane face bounded by lines\nand conic arcs.\n- It proves the loop clear piece by piece. A spline span lies in a disc\nround the mean of its control points. An ellipse arc lies in a disc\nround its middle point.\n- A piece is clear when its disc's centre lies outside the face, farther\nfrom the exact boundary than the disc's radius. It halves any other\npiece, and keeps the section when a piece does not clear.\n- **The seam in a band's mesh (#2600).** The band's seam and loop read\ntheir shared vertex through their own pcurves, 2e-5 apart.\n`cdt_in_surface_frame` allowed only 1e-9. The seam-span check now allows\nhalf the gap that the rims leave.\n\n## Tests\n\n- `rod_through_a_ring_off_its_tube.rs` cuts a ring by a rod off its\ntube's centre, plain and dented, in three poses. Main falls back. Both\nare now exact and valid, within 1e-6 of closed-form integrals (dented:\n172.5191719 against 172.519172).\n`a_marched_loop_closes_on_both_surfaces` holds 1e-4, where the loop\nstood 0.0073 off.\n- Four tests used that rod as a case that needs the mesh fallback: the\ncompound-cut deferral, `mesh_fallback_counter_records_fallbacks`,\n`boolean_fallback_declined.rs` and `compound_cut_fallback_policy.rs`.\nThey now use the pin across a bored block's mouth at seams 270 and 180,\nwhich still falls back.\n\n- `revolved_rim_fuses.rs`, each in three poses:\n- `a_hang_tab_fuses_through_a_funnels_lip`: 17 faces, valid and\nwatertight, 59382.8705, within 1e-6 of an integral of the plate's\noverlap with the lipped body.\n- `a_rib_fuses_onto_a_funnel_across_its_seam`: 16 faces, 52906.6519\nagainst 52906.65190 from closed forms.\n- `a_torus_lip_leaning_off_a_funnels_axis_fuses_onto_its_rim`: tilts\n0.0001 and 0.001, 10 faces. It reads 58091.8774 and 58092.3059 against\n58091.8780 and 58092.3064 from a section integral of the tilted tube.\n- `torus_patch_aabb_of_an_outer_band`,\n`torus_patch_aabb_holds_its_patch`,\n`a_marched_loop_round_an_axis_runs_round_it_once` and\n`a_spline_loop_in_a_thin_rings_hole_is_off_it` pin the parts.\n`a_loop_into_a_thin_ring_between_its_samples_is_not_off_it` and\n`an_ellipse_in_a_thin_rings_hole_is_off_it` pin the proof.\n`a_clockwise_spline_loop_with_clustered_knots_keeps_the_whole_box` and\n`a_torus_band_between_circles_keeps_a_tight_box` pin the box.\n`a_point_under_an_oblique_rim_on_its_chord_is_off_it` and\n`a_point_beside_a_small_or_large_rim_reads_by_the_surfaces_parameters`\npin the rim test, at radii 0.1 and 100.\n`ring_drilled_on_both_sides_clear_of_its_seam` and\n`ring_drilled_on_both_sides_across_its_seam` drill a ring and then drill\nit on the opposite side, against closed forms.\n`a_torus_band_with_skewed_spline_rims_keeps_its_whole_box` checks a band\nwhose rational rims pack three quarters into 0.003 of their knots.\n- brepkit-algo (548), brepkit-math (759) and the brepkit-operations lib\ntests (1210) pass.\n- 90 integration test files for funnels, tori, rings, cones, revolves,\nlips, ribs and seams pass (247 tests). So does\n`playground_example_repros_inmem` (11).\n\n## Still open\n\n- At tilt 0.01 the rim's inner edge leaves the tube, and the fuse falls\nback: \"whole ring has a hole winding around it\". Phase FF does not cut\nthe ring plane's closed loop where it crosses the ring's edges. An arc\noff the ring stays inside the plane's margin. The inner cone gets two\ncopies of one window.\n- The general face trace still reads a torus loop made only of boundary\nedges as a hole. This fuse no longer reaches that path.",
+          "timestamp": "2026-11-23T02:29:13Z",
+          "tree_id": "a5c53538139e09a57cefa5aa11fa2a925ce2f9f5",
+          "url": "https://github.com/andymai/brepkit/commit/5719c390f6bbce91da41779eb80e96a7eb29d50d"
+        },
+        "date": 1795401166805,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 884139,
+            "range": "± 23125",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 940924,
+            "range": "± 4351",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9937,
+            "range": "± 284",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 572875,
+            "range": "± 2347",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19393780,
+            "range": "± 109077",
             "unit": "ns/iter"
           }
         ]
