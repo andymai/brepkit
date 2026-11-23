@@ -135,6 +135,16 @@ impl CylindricalSurface {
         }
     }
 
+    /// This cylinder with its frame at `origin`, the same surface where
+    /// `origin` lies on its axis: its `v` then counts from there.
+    #[must_use]
+    pub(crate) fn framed_at(&self, origin: Point3) -> Self {
+        Self {
+            origin,
+            ..self.clone()
+        }
+    }
+
     /// This surface with its `u` origin turned `angle` about the axis: the
     /// same points, its `evaluate(u, v)` being this one's
     /// `evaluate(u + angle, v)`.

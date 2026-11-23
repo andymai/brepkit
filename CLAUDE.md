@@ -84,6 +84,7 @@ Quick reference — find the right file for any task:
 | Analytic surfaces (Cylinder, Cone, Sphere, Torus) | `surfaces.rs` |
 | Surface-surface intersection | `nurbs/intersection/` (mod, surface_marching, surface_seeding, curve_surface, plane, line, chaining, tests) |
 | Analytic-analytic intersection | `analytic_intersection.rs` |
+| Fits of a section of two analytic surfaces, bounded off both along their whole length | `analytic_intersection/section_fit.rs` |
 | AABB / bounding boxes | `aabb.rs` |
 | BVH (bounding volume hierarchy) | `bvh.rs` |
 | CDT (constrained Delaunay) | `cdt/` (mod, insert, locate, constraints, adjacency, tests) |
