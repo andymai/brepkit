@@ -1,5 +1,15 @@
 # Changelog
 
+## [4.11.44](https://github.com/andymai/brepkit/compare/v4.11.43...v4.11.44) (2026-11-23)
+
+
+### Bug Fixes
+
+* **algo:** fuse nearly opposite rods at a ball exactly or refuse, and cut sections where three faces meet in fuse_n ([#2759](https://github.com/andymai/brepkit/issues/2759)) ([46aa427](https://github.com/andymai/brepkit/commit/46aa4279d14805f90b799d15c3d29c29605689e9))
+* **check,blend:** report a face wire that runs twice round its surface, and cap a round's corner below a right angle ([#2756](https://github.com/andymai/brepkit/issues/2756)) ([df69ed2](https://github.com/andymai/brepkit/commit/df69ed2412df9d6f25808933944cca080fdb58cd))
+* **math:** bound a marched section's fit off both surfaces, start each march on the curve, and fit plane-torus sections faster ([#2749](https://github.com/andymai/brepkit/issues/2749)) ([c1cf9e4](https://github.com/andymai/brepkit/commit/c1cf9e44790b287f134284d8ec9bd9f3f8523eec))
+* **operations:** bound a torus face along its axis by one point per extreme circle, and drop a lone sample beside an edge's end before the mesh weld ([#2767](https://github.com/andymai/brepkit/issues/2767)) ([b3e0949](https://github.com/andymai/brepkit/commit/b3e0949ad6b8aeb8e2ed1f93ad64b34d932cf867))
+
 ## [4.11.43](https://github.com/andymai/brepkit/compare/v4.11.42...v4.11.43) (2026-11-23)
 
 
