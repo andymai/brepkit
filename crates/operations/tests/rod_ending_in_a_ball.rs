@@ -23,6 +23,7 @@ use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
 use brepkit_topology::explorer::solid_faces;
+use brepkit_topology::face::FaceSurface;
 use brepkit_topology::solid::SolidId;
 
 const RADIUS: f64 = 0.9;
@@ -60,6 +61,41 @@ fn edges_not_used_twice(topo: &Topology, solid: SolidId) -> usize {
         }
     }
     uses.values().filter(|&&n| n != 2).count()
+}
+
+/// How far the edges of the solid's faces stray from the surfaces of the
+/// faces they bound, read at points along each edge.
+fn edges_off_their_faces(topo: &Topology, solid: SolidId) -> f64 {
+    let mut worst = 0.0_f64;
+    for f in solid_faces(topo, solid).unwrap() {
+        let face = topo.face(f).unwrap();
+        let surface = face.surface();
+        for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wire).unwrap().edges() {
+                let edge = topo.edge(oe.edge()).unwrap();
+                let (p0, p1) = (
+                    topo.vertex(edge.start()).unwrap().point(),
+                    topo.vertex(edge.end()).unwrap().point(),
+                );
+                let (t0, t1) = edge.curve().domain_with_endpoints(p0, p1);
+                for k in 1..8 {
+                    let t = t0 + (t1 - t0) * f64::from(k) / 8.0;
+                    let p = edge.curve().evaluate_with_endpoints(t, p0, p1);
+                    let off = match surface {
+                        FaceSurface::Plane { normal, d } => {
+                            (normal.dot(p - Point3::new(0.0, 0.0, 0.0)) - d).abs()
+                        }
+                        s => {
+                            let (u, v) = s.project_point(p).unwrap();
+                            (s.evaluate(u, v).unwrap() - p).length()
+                        }
+                    };
+                    worst = worst.max(off);
+                }
+            }
+        }
+    }
+    worst
 }
 
 #[test]
@@ -238,6 +274,47 @@ fn two_rods_whose_caps_meet_at_a_balls_poles_fuse_onto_it() {
     }
 }
 
+#[test]
+fn two_nearly_opposite_rods_with_their_caps_at_a_ball_fuse_exactly() {
+    // The rods lie a few degrees from opposite, so their walls touch at the
+    // ball's poles, and each rod's cap rim and seam stay within a thousandth
+    // of the other rod's wall along a long arc there. Neither lies on that
+    // wall, and the first rod's cap meets it at the poles only.
+    for roll in [0.3, 1.0] {
+        for (at, mirrored) in poses()
+            .into_iter()
+            .chain([(Point3::new(0.0, 0.0, 0.0), true)])
+        {
+            two_rods_at_one_ball(roll, 3.05, 0.0, true, (true, true), at, mirrored);
+        }
+    }
+}
+
+#[test]
+fn two_nearly_opposite_rods_at_a_ball_fuse_exactly_or_refuse() {
+    // Rods a few degrees from opposite, in poses where a rim or a seam runs
+    // within a thousandth of the other rod's wall: each fuse returns the
+    // exact solid or an error, never a solid with an edge off a face it
+    // bounds.
+    for (roll, yaw, swap, far_ends) in [
+        (0.3, 3.0, true, (true, true)),
+        (0.3, 3.05, true, (true, true)),
+        (1.0, 3.1, true, (true, false)),
+        (2.0, 3.1, true, (false, false)),
+        (3.0, 3.1, true, (false, false)),
+        (4.0, 3.1, true, (true, true)),
+        (5.0, 3.1, true, (true, true)),
+        (5.0, 3.1, false, (false, false)),
+    ] {
+        for (at, mirrored) in poses()
+            .into_iter()
+            .chain([(Point3::new(0.0, 0.0, 0.0), true)])
+        {
+            two_rods_at_one_ball_or_refused(roll, yaw, 0.0, swap, far_ends, at, mirrored);
+        }
+    }
+}
+
 /// The ball's centre, and whether the scene is mirrored in `y` about the
 /// origin once placed.
 fn poses() -> [(Point3, bool); 3] {
@@ -252,8 +329,26 @@ fn poses() -> [(Point3, bool); 3] {
 /// the first along -x and the second at (`yaw`, `pitch`) from it, each
 /// turned `roll` about its own axis and built from its far end where its
 /// flag is set; fused exactly, the second rod first with `swap`.
-#[allow(clippy::too_many_lines)]
 fn two_rods_at_one_ball(
+    roll: f64,
+    yaw: f64,
+    pitch: f64,
+    swap: bool,
+    far_ends: (bool, bool),
+    at: Point3,
+    mirrored: bool,
+) {
+    assert!(
+        two_rods_at_one_ball_or_refused(roll, yaw, pitch, swap, far_ends, at, mirrored),
+        "roll {roll}, yaw {yaw}, pitch {pitch}, swap {swap}, far ends {far_ends:?}, at {at:?}, mirrored {mirrored}: refused"
+    );
+}
+
+/// As [`two_rods_at_one_ball`], but a fuse that refuses passes: `false`
+/// where the second fuse returns an error. A fuse that returns a solid must
+/// return the exact one.
+#[allow(clippy::too_many_lines)]
+fn two_rods_at_one_ball_or_refused(
     roll: f64,
     yaw: f64,
     pitch: f64,
@@ -261,7 +356,7 @@ fn two_rods_at_one_ball(
     (first_far, second_far): (bool, bool),
     at: Point3,
     mirrored: bool,
-) {
+) -> bool {
     let length = 10.0;
     let name = format!(
         "roll {roll}, yaw {yaw}, pitch {pitch}, swap {swap}, far ends {first_far} {second_far}, at {at:?}, mirrored {mirrored}"
@@ -304,7 +399,15 @@ fn two_rods_at_one_ball(
     }
     let (one, two) = if swap { (other, rod) } else { (rod, other) };
     let first = exact_fuse(&mut topo, one, ball, &name);
-    let fused = exact_fuse(&mut topo, first, two, &name);
+    let opts = BooleanOptions {
+        mesh_fallback: false,
+        unify_faces: false,
+        ..BooleanOptions::default()
+    };
+    let Ok(fused) = boolean::boolean_with_options(&mut topo, BooleanOp::Fuse, first, two, opts)
+    else {
+        return false;
+    };
     let report = validate_solid(&topo, fused).unwrap();
     assert!(report.is_valid(), "{name}: {:?}", report.issues);
     let kinds = census(&topo, fused);
@@ -312,6 +415,11 @@ fn two_rods_at_one_ball(
     assert_eq!(kinds.get("plane"), Some(&2), "{name}: {kinds:?}");
     assert!(kinds.contains_key("sphere"), "{name}: {kinds:?}");
     assert_eq!(edges_not_used_twice(&topo, fused), 0, "{name}");
+    let off = edges_off_their_faces(&topo, fused);
+    assert!(
+        off < 1e-9,
+        "{name}: an edge stands {off:e} off a face it bounds"
+    );
     let mesh = tessellate_solid(&topo, fused, 0.005).unwrap();
     assert_eq!(boundary_edge_count(&mesh), 0, "{name}: open mesh");
     // The rods, less their overlap, and the wedge of the ball outside both:
@@ -322,7 +430,7 @@ fn two_rods_at_one_ball(
         + wedge;
     let volume = solid_volume(&topo, fused, 0.0005).unwrap();
     assert!(
-        (volume - expected).abs() < 1e-4 * expected,
+        (volume - expected).abs() < 1e-6 * expected,
         "{name}: volume {volume} should be {expected}"
     );
     let class = |v: Vec3| classify_point(&topo, fused, pose.mul_point(at + v), 0.01, 1e-7).unwrap();
@@ -339,6 +447,7 @@ fn two_rods_at_one_ball(
     ] {
         assert_eq!(class(v), want, "{name} at {v:?}");
     }
+    true
 }
 
 /// A turn by `angle` about `axis` through the origin.

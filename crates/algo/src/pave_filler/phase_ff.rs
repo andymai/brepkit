@@ -4277,9 +4277,10 @@ fn trim_closed_curve_to_inboth_arc(
 /// (solved for straight edges, refined by sign change for curved ones),
 /// rather than uniform-t sampling.
 ///
-/// Returns `Some(arcs)` only when the pair is exactly {planar face} ×
+/// Returns `Some(arcs)` when the pair is exactly {planar face} ×
 /// {cylinder or cone}, the curve is a closed ellipse, and at least one
-/// in-both arc with a real angular span is found.
+/// in-both arc with a real angular span is found, or every arc lies off a
+/// plane face whose outline has arcs (then `arcs` is empty).
 /// Returns `None` for any other configuration so the caller falls back to the
 /// uniform-t restriction. The exact crossings are SHARED between treads that
 /// share a boundary line, so consecutive arcs chain through one vertex (the
@@ -4720,6 +4721,7 @@ fn trim_ellipse_to_boundary_crossings(
     // Walk consecutive crossing pairs (including the wrap-around segment).
     // Emit an arc for each interval whose midpoint lies inside BOTH faces.
     let mut arcs = Vec::new();
+    let mut every_arc_off_the_plane = true;
     let m = t_pts.len();
     for i in 0..m {
         let (t0, p0, ref src0) = t_pts[i];
@@ -4730,6 +4732,7 @@ fn trim_ellipse_to_boundary_crossings(
         }
         let t_mid = 0.5 * (t0 + t1);
         let mid = sec.evaluate(t_mid);
+        every_arc_off_the_plane &= !plane_contains(mid);
         if !(ext_a.contains(mid)
             && ext_b.contains(mid)
             && plane_contains(mid)
@@ -4779,7 +4782,18 @@ fn trim_ellipse_to_boundary_crossings(
         }
     }
 
-    if arcs.is_empty() { None } else { Some(arcs) }
+    // Between two crossings the section stays on one side of the plane
+    // face's outline, so an arc whose middle lies off the face, read on the
+    // outline's own arcs, lies off it whole. With every arc off, the section
+    // meets the face only at the crossings (a cap whose rim touches a second
+    // rod's wall at two points). The sampled restriction cannot see that:
+    // the face's box holds the near miss, and it keeps the whole closed
+    // curve. A face of lines alone is read on its corners only, and a
+    // section with no arc on it goes to the sampled restriction.
+    if arcs.is_empty() && !(exact_region.is_some() && every_arc_off_the_plane) {
+        return None;
+    }
+    Some(arcs)
 }
 
 /// Whether the arc of `ellipse` from `t0` to `t1` is shorter than a

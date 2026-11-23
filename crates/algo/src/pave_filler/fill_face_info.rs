@@ -200,6 +200,33 @@ fn dist_to_surface(
     }
 }
 
+/// How far an edge's whole curve strays from `surface`: a line between the
+/// edge's ends, a circle or an ellipse over its whole turn. `None` for a
+/// NURBS curve or a surface that cannot be measured.
+fn whole_curve_off_surface(
+    curve: &brepkit_topology::edge::EdgeCurve,
+    start: brepkit_math::vec::Point3,
+    end: brepkit_math::vec::Point3,
+    surface: &FaceSurface,
+) -> Option<f64> {
+    use brepkit_topology::edge::EdgeCurve;
+    const SAMPLES: u32 = 32;
+    let at = |k: u32| {
+        let f = f64::from(k) / f64::from(SAMPLES);
+        match curve {
+            EdgeCurve::Line => Some(start + (end - start) * f),
+            EdgeCurve::Circle(c) => Some(c.evaluate(std::f64::consts::TAU * f)),
+            EdgeCurve::Ellipse(e) => Some(e.evaluate(std::f64::consts::TAU * f)),
+            EdgeCurve::NurbsCurve(_) => None,
+        }
+    };
+    let mut worst = 0.0_f64;
+    for k in 0..=SAMPLES {
+        worst = worst.max(dist_to_surface(surface, at(k)?)?);
+    }
+    Some(worst)
+}
+
 /// A planar face's boundary in its own plane, read on its lines and arcs.
 pub(super) struct PlaneRegion {
     origin: brepkit_math::vec::Point3,
@@ -522,7 +549,22 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
                     } else {
                         IN_FACE_MAX_DEVIATION_RATIO * chord
                     };
-                    dev <= on_band.max(band)
+                    let band = on_band.max(band);
+                    if dev > band {
+                        return false;
+                    }
+                    // A line, circle or ellipse lies on a quadric along its
+                    // whole length or meets it at a few points only. A leaf
+                    // hugging the face beside such a point (a rod's rim or
+                    // seam by a second rod's wall, where the two walls touch)
+                    // lies in no face, though it stays within the band. A
+                    // circle or ellipse is exact over its whole turn; a line
+                    // runs between its vertices, which stand off by as much
+                    // as a leaf's ends.
+                    let whole_band = if straight { band } else { on_band };
+                    !quadric
+                        || whole_curve_off_surface(edge.curve(), osp, oep, &surface)
+                            .is_none_or(|off| off <= whole_band)
                 })
                 .collect();
             let fi = arena.face_info_mut(face_id);
