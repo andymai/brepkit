@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.11.45](https://github.com/andymai/brepkit/compare/v4.11.44...v4.11.45) (2026-11-23)
+
+
+### Bug Fixes
+
+* **algo:** trace crossing circles on a plane face, cut sections at a notched wall's edge, and split a ball face round a pole ([#2775](https://github.com/andymai/brepkit/issues/2775)) ([07356e9](https://github.com/andymai/brepkit/commit/07356e9808f87e0e8dfefae525f880565bd1a3b6))
+* **check,operations:** report a wire's self-crossing only where it crosses, check pcurves against their edges, and report a malformed pcurve ([#2769](https://github.com/andymai/brepkit/issues/2769)) ([698785d](https://github.com/andymai/brepkit/commit/698785d2676e82135d031f61df95d3100e6e2b31))
+
 ## [4.11.44](https://github.com/andymai/brepkit/compare/v4.11.43...v4.11.44) (2026-11-23)
 
 
