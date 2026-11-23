@@ -3,17 +3,20 @@
 //! An extruded profile's wall `C` meets its end plane `P` and a flat side
 //! `Q` at a corner. The edge where `P` meets `C` is rounded, and so is the
 //! extrusion's edge where `C` meets `Q`; the edge where `P` meets `Q` is
-//! left sharp, and the wall meets `Q` at more than a right angle.
+//! left sharp.
 //!
 //! At depth `t` below `P` the round along `P` is the wall's trace inset by
 //! `w = r - sqrt(r^2 - (r - t)^2)`, and the extrusion's round is one
 //! circle. So the part's section there is the profile with its wall inset
 //! by `w` and the corner cut by that circle. The two rounds meet along a
 //! crease from where their contacts on the wall cross round the
-//! extrusion round's quarter to `Q`, and from there the round along `P`
-//! runs on to `Q`, notching it, up to the sharp edge. Neither round ends
-//! on its own section at the corner, and no patch closes it. The crease
-//! and the notch are ellipses, so every edge lies on the faces it bounds.
+//! extrusion round's quarter. Where the wall meets `Q` at more than a right
+//! angle, the crease runs to `Q`, and from there the round along `P` runs
+//! on to `Q`, notching it, up to the sharp edge. Neither round ends on its
+//! own section at the corner, and no patch closes it. Where they meet at
+//! less, the crease runs to `P`, and the extrusion's round ends on its own
+//! section from there to `Q`. The crease and the notch are ellipses, so
+//! every edge lies on the faces it bounds.
 //!
 //! The volumes are integrated over those sections, each in closed form.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -304,5 +307,45 @@ fn a_trapezoid_s_slant_a_hair_off_square_meets_the_same() {
             (r, 8, trapezoid::volume(s, r)),
             1e-6,
         );
+    }
+}
+
+/// The wall meeting the slanted side at 30, 60, 80 and 87 deg, less than a
+/// right angle: the extrusion round's quarter runs on past the cap round's
+/// contact on the top, so the crease ends on the top, and the extrusion
+/// round ends on its own section from there down to the slanted side. The
+/// sections are as above: the corner's circle reaches down past the
+/// round's middle, to where it touches the slanted side. Upright, turned
+/// and mirrored.
+#[test]
+fn a_trapezoid_s_slant_leaning_in_ends_the_crease_on_the_top() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_operations::transform::transform_solid;
+    let poses = [
+        ("upright", Mat4::identity()),
+        (
+            "turned",
+            Mat4::translation(3.5, -7.0, 2.25) * Mat4::rotation_x(0.8) * Mat4::rotation_z(-1.3),
+        ),
+        ("mirrored", Mat4::scale(1.0, -1.0, 1.0)),
+    ];
+    for alpha in [30.0, 60.0, 80.0, 87.0] {
+        let s = trapezoid::run_for(alpha);
+        for r in [1.0, 3.0] {
+            for (name, pose) in &poses {
+                let mut topo = Topology::new();
+                let solid = trapezoid::solid(&mut topo, s);
+                let edges = trapezoid::rounded(&topo, solid, 1e-9);
+                assert_eq!(edges.len(), 2, "{name}");
+                transform_solid(&mut topo, solid, pose).unwrap();
+                check(
+                    &mut topo,
+                    solid,
+                    &edges,
+                    (r, 8, trapezoid::volume(s, r)),
+                    1e-7,
+                );
+            }
+        }
     }
 }
