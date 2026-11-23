@@ -110,46 +110,63 @@ mod tests {
         (cap, rims)
     }
 
+    /// Rounds the rim of the cap `tilt` off level at `c` by `r` in each
+    /// pose, and checks the round is that of the same cut level, turned: the
+    /// same volume, valid, with a closed mesh. The cap is left as it was.
+    fn rounds_as_the_level_cap_turned(c: f64, tilt: f64, r: f64) {
+        for (name, pose) in poses() {
+            let what = format!("c = {c}, tilt = {tilt}, r = {r}, {name}");
+            let mut topo = Topology::new();
+            let (solid, rims) = tilted_cap(&mut topo, c, tilt, &pose);
+            let faces_before = solid_faces(&topo, solid).unwrap();
+            let volume_before = solid_volume(&topo, solid, 1e-4).unwrap();
+            let round = fillet_v2(&mut topo, solid, &rims, r).unwrap();
+            assert!(round.failed.is_empty(), "{what}: {:?}", round.failed);
+            assert!(
+                validate_solid(&topo, round.solid).unwrap().is_valid(),
+                "{what}: not valid"
+            );
+            let h = 1.0 - c;
+            let expected = PI * h * h * (3.0 - h) / 3.0 - removed(c, r);
+            let volume = solid_volume(&topo, round.solid, 1e-4).unwrap();
+            assert!(
+                (volume - expected).abs() < 1e-6 * expected,
+                "{what}: volume {volume}, expected {expected}"
+            );
+            for deflection in [0.01, 0.002] {
+                let mesh = tessellate_solid(&topo, round.solid, deflection).unwrap();
+                assert!(is_watertight(&mesh), "{what}: open mesh at {deflection}");
+            }
+            assert_eq!(
+                solid_faces(&topo, solid).unwrap(),
+                faces_before,
+                "{what}: the cap's faces"
+            );
+            let after = solid_volume(&topo, solid, 1e-4).unwrap();
+            assert!(
+                (after - volume_before).abs() < 1e-9 * volume_before,
+                "{what}: the cap's volume {after}, before {volume_before}"
+            );
+        }
+    }
+
     /// The round of a rim that crosses the ball's equator is the round of
-    /// the same cut level, turned: the same volume, valid, with a closed
-    /// mesh. The cap is left as it was.
+    /// the same cut level, turned.
     #[test]
     fn a_round_of_a_tilted_caps_rim_across_the_equator_is_the_level_round_turned() {
         for (c, tilt, r) in [(-0.1, 0.3, 0.2), (-0.15, 0.2, 0.1), (0.1, 0.25, 0.15)] {
-            for (name, pose) in poses() {
-                let what = format!("c = {c}, tilt = {tilt}, r = {r}, {name}");
-                let mut topo = Topology::new();
-                let (solid, rims) = tilted_cap(&mut topo, c, tilt, &pose);
-                let faces_before = solid_faces(&topo, solid).unwrap();
-                let volume_before = solid_volume(&topo, solid, 1e-4).unwrap();
-                let round = fillet_v2(&mut topo, solid, &rims, r).unwrap();
-                assert!(round.failed.is_empty(), "{what}: {:?}", round.failed);
-                assert!(
-                    validate_solid(&topo, round.solid).unwrap().is_valid(),
-                    "{what}: not valid"
-                );
-                let h = 1.0 - c;
-                let expected = PI * h * h * (3.0 - h) / 3.0 - removed(c, r);
-                let volume = solid_volume(&topo, round.solid, 1e-4).unwrap();
-                assert!(
-                    (volume - expected).abs() < 1e-6 * expected,
-                    "{what}: volume {volume}, expected {expected}"
-                );
-                for deflection in [0.01, 0.002] {
-                    let mesh = tessellate_solid(&topo, round.solid, deflection).unwrap();
-                    assert!(is_watertight(&mesh), "{what}: open mesh at {deflection}");
-                }
-                assert_eq!(
-                    solid_faces(&topo, solid).unwrap(),
-                    faces_before,
-                    "{what}: the cap's faces"
-                );
-                let after = solid_volume(&topo, solid, 1e-4).unwrap();
-                assert!(
-                    (after - volume_before).abs() < 1e-9 * volume_before,
-                    "{what}: the cap's volume {after}, before {volume_before}"
-                );
-            }
+            rounds_as_the_level_cap_turned(c, tilt, r);
+        }
+    }
+
+    /// A rim below the ball's equator, on the narrow band of the lower face
+    /// between the rim and the equator, whose round's contact crosses the
+    /// equator in part: past it on the rim's high side, short of it on the
+    /// low side. The round is the round of the same cut level, turned.
+    #[test]
+    fn a_round_whose_contact_crosses_the_equator_is_the_level_round_turned() {
+        for (c, tilt, r) in [(-0.2, 0.15, 0.15), (-0.25, 0.2, 0.2), (-0.1, 0.05, 0.12)] {
+            rounds_as_the_level_cap_turned(c, tilt, r);
         }
     }
 
