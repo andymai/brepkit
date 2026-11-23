@@ -2294,6 +2294,24 @@ fn intersect_analytic_analytic_impl(
     marched_sections(a, b, grid_res, v_range_hint_a, v_range_hint_b, region)
 }
 
+/// `x + y t` with one rounding, at the end: Dekker's split product and
+/// Knuth's two-sum keep the rounding of `y t` and of the sum, and the last
+/// addition rounds their total once.
+fn add_product(x: f64, y: f64, t: f64) -> f64 {
+    let split = |v: f64| {
+        let c = 134_217_729.0 * v;
+        let hi = c - (c - v);
+        (hi, v - hi)
+    };
+    let p = y * t;
+    let ((yh, yl), (th, tl)) = (split(y), split(t));
+    let p_err = yl.madd(tl, yl.madd(th, yh.madd(tl, yh.madd(th, -p))));
+    let s = x + p;
+    let back = s - x;
+    let s_err = (x - (s - back)) + (p - back);
+    s + (s_err + p_err)
+}
+
 /// An analytic surface moved by a vector, held while the marcher works on it.
 enum Moved {
     Cylinder(CylindricalSurface),
@@ -2303,20 +2321,50 @@ enum Moved {
 }
 
 impl Moved {
-    /// `surface` moved by `by`, and how far its `v` moved: a cylinder's
-    /// frame, which can sit anywhere along its axis, is moved along it to
-    /// the point of the axis nearest the origin, so the surface reads alike
-    /// wherever its frame sat, and its `v` drops by as much.
-    fn new(surface: &AnalyticSurface<'_>, by: Vec3) -> (Self, f64) {
+    /// `surface` moved so that `anchor` lies at the origin, how far its `v`
+    /// moved, and a bound on how far the move's rounding shifted it.
+    ///
+    /// A cylinder's frame, which can sit anywhere along its axis, goes to
+    /// the point of the axis nearest `anchor`, so the surface reads alike
+    /// wherever its frame sat, and its `v` drops by as much. That point is
+    /// the old frame plus a multiple of the axis, each coordinate summed with
+    /// one rounding at the end ([`add_product`]), so it lies within a float
+    /// step of the axis however far the old frame sat: moved by plain sums,
+    /// a frame 1e12 along a tilted axis landed 4.7e-6 off it. Each other
+    /// surface's frame point (an apex or a centre) is fixed by its shape and
+    /// moves by one subtraction, rounding each coordinate by up to half its
+    /// float spacing.
+    fn new(surface: &AnalyticSurface<'_>, anchor: Point3) -> (Self, f64, f64) {
+        let size = |p: Point3| p.x().abs().max(p.y().abs()).max(p.z().abs());
+        let shift = Point3::new(0.0, 0.0, 0.0) - anchor;
         match surface {
             AnalyticSurface::Cylinder(c) => {
-                let moved = c.translated(by);
-                let along = -c.axis().dot(moved.origin() - Point3::new(0.0, 0.0, 0.0));
-                (Self::Cylinder(moved.translated(c.axis() * along)), along)
+                let (o, a) = (c.origin(), c.axis());
+                let along = a.dot(anchor - o);
+                let foot = Point3::new(
+                    add_product(o.x(), a.x(), along),
+                    add_product(o.y(), a.y(), along),
+                    add_product(o.z(), a.z(), along),
+                );
+                let near = foot + shift;
+                let error = 4.0 * f64::EPSILON * (size(foot) + size(near));
+                (Self::Cylinder(c.framed_at(near)), along, error)
             }
-            AnalyticSurface::Cone(c) => (Self::Cone(c.translated(by)), 0.0),
-            AnalyticSurface::Sphere(s) => (Self::Sphere(s.translated(by)), 0.0),
-            AnalyticSurface::Torus(t) => (Self::Torus(t.translated(by)), 0.0),
+            AnalyticSurface::Cone(c) => {
+                let near = c.translated(shift);
+                let error = 2.0 * f64::EPSILON * size(near.apex());
+                (Self::Cone(near), 0.0, error)
+            }
+            AnalyticSurface::Sphere(s) => {
+                let near = s.translated(shift);
+                let error = 2.0 * f64::EPSILON * size(near.center());
+                (Self::Sphere(near), 0.0, error)
+            }
+            AnalyticSurface::Torus(t) => {
+                let near = t.translated(shift);
+                let error = 2.0 * f64::EPSILON * size(near.center());
+                (Self::Torus(near), 0.0, error)
+            }
         }
     }
 
@@ -2340,9 +2388,10 @@ impl Moved {
 /// decide whether a point lies on both surfaces and whether they cross
 /// there, and a pair moved there would not read as it does near the origin:
 /// a touch as a crossing, a shallow crossing as a touch. Moving a curve back
-/// rounds each coordinate by up to half its spacing there, so each fit is
-/// held that much within the linear tolerance; where that leaves less than
-/// half of it, a traced section is refused.
+/// rounds each coordinate by up to half its spacing there, and moving each
+/// surface shifts it by a bound [`Moved::new`] gives, so each fit is held
+/// that much within the linear tolerance; where that leaves less than half
+/// of it, a traced section is refused before its fit.
 fn marched_sections(
     a: AnalyticSurface<'_>,
     b: AnalyticSurface<'_>,
@@ -2362,15 +2411,15 @@ fn marched_sections(
         (first + (last - first) * 0.5, reach)
     };
     let shift = anchor - Point3::new(0.0, 0.0, 0.0);
-    let ((near_a, dv_a), (near_b, dv_b)) = (Moved::new(&a, -shift), Moved::new(&b, -shift));
+    let ((near_a, dv_a, moved_a), (near_b, dv_b, moved_b)) =
+        (Moved::new(&a, anchor), Moved::new(&b, anchor));
     let v_range = |surface: &AnalyticSurface<'_>, hint: Option<(f64, f64)>, dv: f64| {
         let (lo, hi) = hint.unwrap_or_else(|| surface_closures(surface).3);
         Some((lo - dv, hi - dv))
     };
     let linear = Tolerance::new().linear;
-    let fit_tol = (-f64::EPSILON)
-        .madd(size(anchor) + reach, linear)
-        .min(linear);
+    let fit_tol =
+        ((-f64::EPSILON).madd(size(anchor) + reach, linear) - moved_a - moved_b).min(linear);
     let near_region = region.map(|r| Aabb3 {
         min: r.min - shift,
         max: r.max - shift,
@@ -9657,6 +9706,118 @@ mod tests {
         assert_eq!(far.len(), near.len());
         for (n, f) in near.iter().zip(&far) {
             assert!((n.min - f.min).length() < 1e-6 && (n.max - f.max).length() < 1e-6);
+        }
+    }
+
+    /// `a + b` as a float and its rounding error.
+    fn two_sum(a: f64, b: f64) -> (f64, f64) {
+        let s = a + b;
+        let back = s - a;
+        (s, (a - (s - back)) + (b - back))
+    }
+
+    /// `a b` as a float and its rounding error, by Dekker's split.
+    fn two_prod(a: f64, b: f64) -> (f64, f64) {
+        let split = |v: f64| {
+            let c = 134_217_729.0 * v;
+            let hi = c - (c - v);
+            (hi, v - hi)
+        };
+        let p = a * b;
+        let ((ah, al), (bh, bl)) = (split(a), split(b));
+        (p, ((ah * bh - p) + ah * bl + al * bh) + al * bl)
+    }
+
+    /// How far `p` lies from the line through `o` along `a`, in
+    /// double-length arithmetic, so a far `o` costs no digits of the answer
+    /// (nor does `a` being a float step from unit length).
+    fn off_line(o: Point3, a: Vec3, p: Point3) -> f64 {
+        let w = [
+            two_sum(p.x(), -o.x()),
+            two_sum(p.y(), -o.y()),
+            two_sum(p.z(), -o.z()),
+        ];
+        let a = [a.x(), a.y(), a.z()];
+        // A sum of products `a_i y_i` with each `y_i` double-length.
+        let dot = |y: &[(f64, f64); 3]| {
+            let (mut hi, mut lo) = (0.0, 0.0);
+            for (ai, (yh, yl)) in a.iter().zip(y) {
+                let (prod, prod_err) = two_prod(*ai, *yh);
+                let (sum, sum_err) = two_sum(hi, prod);
+                hi = sum;
+                lo += sum_err + prod_err + ai * yl;
+            }
+            two_sum(hi, lo)
+        };
+        let (aw, aw_err) = dot(&w);
+        let (aa, aa_err) = dot(&a.map(|x| (x, 0.0)));
+        // `s = aw / aa` to double length: its float, then the remainder
+        // over `aa`.
+        let s = aw / aa;
+        let (sa, sa_err) = two_prod(s, aa);
+        let rest = ((aw - sa) - sa_err) + aw_err - s * aa_err;
+        let s_err = rest / aa;
+        let across = a.iter().zip(w).map(|(ai, (hi, lo))| {
+            let (prod, prod_err) = two_prod(*ai, s);
+            let (diff, diff_err) = two_sum(hi, -prod);
+            diff + (diff_err + lo - prod_err - ai * s_err)
+        });
+        across.map(|c| c * c).sum::<f64>().sqrt()
+    }
+
+    /// A rod of radius 0.6 on an axis along (0.3, 0.4, 0.5) through the
+    /// centre circle of the ring of radii 4 and 1.5 at (4, 0, 0), its frame
+    /// 1e12 along the axis. Moved to the region by plain sums, such a frame
+    /// landed 2.1e-5 off the axis, and a fit certified against the moved rod
+    /// need not lie within 1e-7 of the input one. The frame now lands within
+    /// 4e-15 of the axis, and both loops lie within 1e-7 of the input rod
+    /// (measured in double-length arithmetic) and of the ring.
+    #[test]
+    fn a_tilted_rod_framed_far_along_its_axis_is_traced_on_it() {
+        let along = Vec3::new(0.3, 0.4, 0.5);
+        let through = Point3::new(4.0, 0.0, 0.0);
+        let ring = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 4.0, 1.5).unwrap();
+        let near_rod = CylindricalSurface::new(through, along, 0.6).unwrap();
+        let axis = near_rod.axis();
+        let far = through + axis * 1e12;
+        let rod = CylindricalSurface::new(far, along, 0.6).unwrap();
+        let anchor = Point3::new(4.0, 0.0, 0.0);
+        let (moved, dv, error) = Moved::new(&AnalyticSurface::Cylinder(&rod), anchor);
+        let AnalyticSurface::Cylinder(moved) = moved.surface() else {
+            unreachable!("a rod moves to a rod");
+        };
+        let foot = moved.origin() + (anchor - Point3::new(0.0, 0.0, 0.0));
+        let off = off_line(rod.origin(), rod.axis(), foot);
+        assert!(
+            off <= error && error < 1e-14,
+            "the frame lies {off:.2e} off the axis"
+        );
+        assert!((dv + 1e12).abs() < 1.0, "v moved by {dv}");
+
+        let region = Aabb3 {
+            min: Point3::new(2.0, -2.0, -2.0),
+            max: Point3::new(6.0, 2.0, 2.0),
+        };
+        let sweep = (1e12 - 10.0, 1e12 + 10.0);
+        let result = marched_sections(
+            AnalyticSurface::Cylinder(&rod),
+            AnalyticSurface::Torus(&ring),
+            32,
+            Some((-sweep.1, -sweep.0)),
+            None,
+            Some(region),
+        );
+        let curves = result.unwrap();
+        assert_eq!(curves.len(), 2);
+        {
+            for c in &curves {
+                let worst = farthest_along(&c.curve, 4000, |p| {
+                    let on_rod = (off_line(rod.origin(), rod.axis(), p) - 0.6).abs();
+                    let on_ring = ((p.x().hypot(p.y()) - 4.0).hypot(p.z()) - 1.5).abs();
+                    on_rod.max(on_ring)
+                });
+                assert!(worst <= 1e-7, "off by {worst:.2e}");
+            }
         }
     }
 }
