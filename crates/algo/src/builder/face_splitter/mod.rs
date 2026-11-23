@@ -11333,12 +11333,17 @@ fn split_face_2d_impl(
     // A face with holes in the arrangement also takes the trace for a section
     // closed on its own reverse (an arc ending where the face's boundary turns
     // away from it, a wall's notch over a bore: the walker follows the notch).
+    // So does a greedy walk whose regions cover each other with no hole
+    // between them. Where two section circles cross inside the face, the walk
+    // turns right at a crossing and traces the outline of both discs as one
+    // region, each whole circle as a hole, and the lens as a region inside.
     if is_plane
         && !sections.is_empty()
         && ((((woven_inner_wires.is_empty() && !holes_promoted) || woven_spur)
-            && loops
+            && (loops
                 .iter()
-                .any(|lp| split_loop_at_pinch_vertices(lp, tol.linear).len() != 1))
+                .any(|lp| split_loop_at_pinch_vertices(lp, tol.linear).len() != 1)
+                || greedy_outer_loops_nested(&loops, cw_loops)))
             || loops
                 .iter()
                 .any(|lp| loop_has_degenerate_area(lp, tol.linear, Some(frame))))
