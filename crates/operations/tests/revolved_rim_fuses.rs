@@ -3,14 +3,16 @@
 //!
 //! - `conical-pour-funnel`: a whole torus lip rolled onto the top rim of a
 //!   funnel's body. The tube crosses the two cones of the bowl's wall and
-//!   covers the flat ring between them.
+//!   covers the flat ring between them, on the body's axis or leaning off
+//!   it. A hang tab's plate runs out through the lip, and a rib stands on
+//!   the wall across the body's seam.
 //! - `rotary-potentiometer`: a lug, revolved 20 degrees, that stands on the
 //!   flat rim of a cup. Its bottom lies in the rim's plane and its inner and
 //!   outer faces lie on the cylinders of the cup's bore and wall.
 //!
-//! Each fuse is exact, valid and watertight in every pose, holds its volume
-//! from the closed forms, and holds a point of a grid round the contact
-//! exactly where one of its operands holds it.
+//! Each fuse is exact, valid and watertight in every pose, holds the volume
+//! that closed forms and quadratures of the operands give, and holds a point
+//! of a grid round the contact exactly where one of its operands holds it.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::f64::consts::{FRAC_1_SQRT_2, PI};
@@ -20,9 +22,10 @@ use brepkit_math::quadrature::gauss_legendre_points;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{BooleanOp, BooleanOptions, boolean_with_options};
 use brepkit_operations::classify::{PointClassification, classify_point};
+use brepkit_operations::extrude::extrude;
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::mirror::mirror;
-use brepkit_operations::primitives::make_torus;
+use brepkit_operations::primitives::{make_box, make_torus};
 use brepkit_operations::revolve::revolve;
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
 use brepkit_operations::transform::transform_solid;
@@ -256,6 +259,304 @@ fn a_torus_lip_fuses_onto_a_funnels_rim() {
             &[("cone", 4), ("cylinder", 4), ("plane", 1), ("torus", 1)],
             truth,
             ([77.0, -4.0, 67.0], [85.0, 4.0, 73.0], 14),
+        );
+    }
+}
+
+/// The volume the lip's tube (radius 2 about the circle of radius `major`
+/// about `z = 70.5`, its axis turned `tilt` about `x`) shares with the
+/// funnel's wall near the rim. In each half-plane through the funnel's axis,
+/// the tube's section is traced point by point round the tube (the ring
+/// angle found by Newton's method for each tube angle) and clipped by the
+/// wall's three bounds there: below the rim, outside the inner cone and
+/// inside the outer cone. Green's theorem gives the clipped polygon's
+/// `∫∫ ρ dρ dz`, and the trapezoid rule, exact enough on a periodic
+/// integrand, sums it round the axis.
+fn tilted_lip_in_wall(major: f64, tilt: f64) -> f64 {
+    let skin = 1.6 / FRAC_1_SQRT_2;
+    let (top, outside, minor): (f64, f64, f64) = (70.5, 9.5 + skin, 2.0);
+    let (around, round_tube) = (32_u32, 8000_u32);
+    let (sin_t, cos_t) = tilt.sin_cos();
+    let mut total = 0.0;
+    for j in 0..around {
+        let (sin_p, cos_p) = (2.0 * PI * f64::from(j) / f64::from(around)).sin_cos();
+        let phi = sin_p.atan2(cos_p);
+        let mut polygon: Vec<(f64, f64)> = (0..round_tube)
+            .map(|k| {
+                let (sin_v, cos_v) = (2.0 * PI * f64::from(k) / f64::from(round_tube)).sin_cos();
+                let (w, lift) = (minor.mul_add(cos_v, major), minor * sin_v * sin_t);
+                let mut u = phi;
+                for _ in 0..50 {
+                    let off = w * (u.sin() * cos_t * cos_p - u.cos() * sin_p) - lift * cos_p;
+                    let slope = w * (u.cos() * cos_t * cos_p + u.sin() * sin_p);
+                    let step = off / slope;
+                    u -= step;
+                    if step.abs() < 1e-15 {
+                        break;
+                    }
+                }
+                let (x, y) = (w * u.cos(), (w * u.sin()).mul_add(cos_t, -lift));
+                let z = (w * u.sin()).mul_add(sin_t, minor.mul_add(sin_v * cos_t, top));
+                (x.mul_add(cos_p, y * sin_p), z)
+            })
+            .collect();
+        let bounds: [&dyn Fn((f64, f64)) -> f64; 3] = [
+            &|(r, z)| z - r + outside,
+            &|(r, z)| r - 9.5 - z,
+            &|(_, z)| top - z,
+        ];
+        for bound in bounds {
+            let mut kept = Vec::with_capacity(polygon.len());
+            for (i, &a) in polygon.iter().enumerate() {
+                let b = polygon[(i + 1) % polygon.len()];
+                let (ga, gb) = (bound(a), bound(b));
+                if ga >= 0.0 {
+                    kept.push(a);
+                }
+                if (ga >= 0.0) != (gb >= 0.0) {
+                    let s = ga / (ga - gb);
+                    kept.push((s.mul_add(b.0 - a.0, a.0), s.mul_add(b.1 - a.1, a.1)));
+                }
+            }
+            polygon = kept;
+        }
+        let moment: f64 = (0..polygon.len())
+            .map(|i| {
+                let ((r0, z0), (r1, z1)) = (polygon[i], polygon[(i + 1) % polygon.len()]);
+                (z1 - z0) / 6.0 * r0.mul_add(r0 + r1, r1 * r1)
+            })
+            .sum();
+        total += moment.abs();
+    }
+    total * 2.0 * PI / f64::from(around)
+}
+
+/// The lip leans a ten-thousandth or a thousandth of a radian off the
+/// funnel's axis. The tube still covers the rim's flat ring, and crosses
+/// each cone of the wall along one loop round the axis: the fuse keeps the
+/// body's cones cut along those loops and the part of the tube outside the
+/// wall, and drops the ring, as on the axis.
+#[test]
+fn a_torus_lip_leaning_off_a_funnels_axis_fuses_onto_its_rim() {
+    let skin = 1.6 / FRAC_1_SQRT_2;
+    let major = 80.0 + skin / 2.0 + 0.8;
+    let profile = funnel_profile();
+    let lip = 2.0 * PI * PI * major * 4.0;
+    let level = tilted_lip_in_wall(major, 0.0);
+    assert!(
+        (level - lip_in_wall(major)).abs() < 1e-6 * level,
+        "{level} on the axis"
+    );
+    for tilt in [0.0001, 0.001] {
+        let truth = pappus(&profile) + lip - tilted_lip_in_wall(major, tilt);
+        for pose in POSES {
+            let mut topo = Topology::new();
+            let body = lathe(&mut topo, &profile, 2.0 * PI);
+            let torus = make_torus(&mut topo, major, 2.0, 32).unwrap();
+            let lean = Mat4::translation(0.0, 0.0, 70.5) * Mat4::rotation_x(tilt);
+            transform_solid(&mut topo, torus, &lean).unwrap();
+            let operands = (posed(&mut topo, body, pose), posed(&mut topo, torus, pose));
+            fuse_exactly(
+                &mut topo,
+                operands,
+                pose,
+                &[("cone", 4), ("cylinder", 4), ("plane", 1), ("torus", 1)],
+                truth,
+                ([77.0, -4.0, 67.0], [85.0, 4.0, 73.0], 14),
+            );
+        }
+    }
+}
+
+/// `∫ f` over `[lo, hi]` by four-point Gauss rules on `steps` equal pieces.
+fn integrate(f: impl Fn(f64) -> f64, (lo, hi): (f64, f64), steps: usize) -> f64 {
+    let gauss = gauss_legendre_points(4);
+    #[allow(clippy::cast_precision_loss)]
+    let step = (hi - lo) / steps as f64;
+    let mut total = 0.0;
+    for i in 0..steps {
+        #[allow(clippy::cast_precision_loss)]
+        let a = step.mul_add(i as f64, lo);
+        for g in gauss {
+            total += 0.5 * step * g.w * f(step.mul_add(0.5 * (g.x + 1.0), a));
+        }
+    }
+    total
+}
+
+/// The volume that the hang tab's plate, `x` from -108 to -80, `y` from -11
+/// to 11 and `z` from 69.3 to 71.7, shares with the lipped funnel (the body
+/// and the lip's tube of radius 2 about the circle of radius `major` at
+/// `z = 70.5`). At a distance `ρ` from the axis, the body and the tube hold
+/// the same heights all round, so the shared volume is the integral over `ρ`
+/// of the heights in the plate held there, times the arc of the circle of
+/// radius `ρ` over the plate.
+fn tab_in_lipped_funnel(major: f64) -> f64 {
+    let skin = 1.6 / FRAC_1_SQRT_2;
+    let (top, outside) = (70.5, 9.5 + skin);
+    let (low, high) = (69.3, 71.7);
+    let held = |rho: f64| {
+        let mut spans: Vec<(f64, f64)> = Vec::new();
+        let off = rho - major;
+        if off.abs() < 2.0 {
+            let h = off.mul_add(-off, 4.0).sqrt();
+            spans.push((top - h, top + h));
+        }
+        if rho - outside < top {
+            spans.push((rho - outside, top));
+        }
+        let mut clipped: Vec<(f64, f64)> = spans
+            .into_iter()
+            .map(|(a, b)| (a.max(low), b.min(high)))
+            .filter(|(a, b)| b > a)
+            .collect();
+        clipped.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut length = 0.0;
+        let mut reach = f64::NEG_INFINITY;
+        for (a, b) in clipped {
+            let a = a.max(reach);
+            if b > a {
+                length += b - a;
+            }
+            reach = reach.max(b);
+        }
+        length
+    };
+    let arc = |rho: f64| 2.0 * rho * (80.0 / rho).acos().min((11.0 / rho).asin());
+    integrate(|rho| held(rho) * arc(rho), (80.0, major + 2.0), 40_000)
+}
+
+/// The hang tab's plate runs out over the rim through the lip's tube: it
+/// cuts two islands out of the tube's band, one round its outer side and a
+/// lens on the inner side under the plate's top, and fuses with the wall
+/// below the rim.
+#[test]
+fn a_hang_tab_fuses_through_a_funnels_lip() {
+    let skin = 1.6 / FRAC_1_SQRT_2;
+    let major = 80.0 + skin / 2.0 + 0.8;
+    let profile = funnel_profile();
+    let lip = 2.0 * PI * PI * major * 4.0;
+    let lipped = pappus(&profile) + lip - lip_in_wall(major);
+    let truth = lipped + 28.0 * 22.0 * 2.4 - tab_in_lipped_funnel(major);
+    for pose in POSES {
+        let mut topo = Topology::new();
+        let body = lathe(&mut topo, &profile, 2.0 * PI);
+        let torus = make_torus(&mut topo, major, 2.0, 32).unwrap();
+        transform_solid(&mut topo, torus, &Mat4::translation(0.0, 0.0, 70.5)).unwrap();
+        let exact = BooleanOptions {
+            mesh_fallback: false,
+            ..BooleanOptions::default()
+        };
+        let funnel = boolean_with_options(&mut topo, BooleanOp::Fuse, body, torus, exact).unwrap();
+        let plate = make_box(&mut topo, 28.0, 22.0, 2.4).unwrap();
+        transform_solid(&mut topo, plate, &Mat4::translation(-108.0, -11.0, 69.3)).unwrap();
+        let operands = (
+            posed(&mut topo, funnel, pose),
+            posed(&mut topo, plate, pose),
+        );
+        fuse_exactly(
+            &mut topo,
+            operands,
+            pose,
+            &[("cone", 4), ("cylinder", 4), ("plane", 8), ("torus", 1)],
+            truth,
+            ([-86.0, -12.0, 68.0], [-78.0, 12.0, 73.0], 14),
+        );
+    }
+}
+
+/// The rib's profile `(r, z)`: a hexagon in the plane `y = -1`, pushed 2
+/// along `y`. It runs up the spout's outer wall and on up the bowl's outer
+/// cone, its inner side half a unit inside the wall.
+fn rib_profile() -> Vec<(f64, f64)> {
+    let outside = 9.5 + 1.6 / FRAC_1_SQRT_2;
+    let corner = 3.0 * 22.5f64.to_radians().tan();
+    vec![
+        (outside - 0.5, -24.0),
+        (outside + 3.0, -20.0),
+        (outside + 3.0, corner),
+        (outside + 29.0, corner + 26.0),
+        (outside + 31.5, 32.0),
+        (outside - 0.5, 0.0),
+    ]
+}
+
+/// The volume the rib shares with the funnel's wall. At a height `z`, the
+/// rib holds `x` from its inner side `a` to its outer side `b`, and the wall
+/// holds the points within `R`, the outer wall's radius, of the axis. Across
+/// the rib's thickness, `y` from -1 to 1, the shared length is from `a` to
+/// the nearer of `b` and `√(R² − y²)`, in closed form; the heights are
+/// summed by Gauss rules.
+fn rib_in_wall() -> f64 {
+    let profile = rib_profile();
+    let outside = 9.5 + 1.6 / FRAC_1_SQRT_2;
+    let side = |z: f64, from: usize, to: usize| {
+        let ((r0, z0), (r1, z1)) = (profile[from], profile[to]);
+        (z - z0).mul_add((r1 - r0) / (z1 - z0), r0)
+    };
+    let inner = |z: f64| {
+        if z <= 0.0 {
+            side(z, 0, 5)
+        } else {
+            side(z, 5, 4)
+        }
+    };
+    let outer = |z: f64| match z {
+        z if z <= profile[1].1 => side(z, 0, 1),
+        z if z <= profile[2].1 => side(z, 1, 2),
+        z if z <= profile[3].1 => side(z, 2, 3),
+        z => side(z, 3, 4),
+    };
+    let shared = |z: f64| {
+        let (a, b, wall) = (inner(z), outer(z), outside + z.max(0.0));
+        let arc = |y: f64| {
+            0.5 * y.mul_add(
+                wall.mul_add(wall, -y * y).sqrt(),
+                wall * wall * (y / wall).asin(),
+            )
+        };
+        let reach = if b < wall {
+            wall.mul_add(wall, -b * b).sqrt().min(1.0)
+        } else {
+            0.0
+        };
+        2.0 * (reach * (b - a) + arc(1.0) - arc(reach) - (1.0 - reach) * a)
+    };
+    integrate(shared, (profile[0].1, profile[4].1), 20_000)
+}
+
+/// A rib fused onto the funnel's body across the body's seam, the
+/// half-plane `y = 0`, `x > 0`, where each of the body's faces starts and
+/// ends: the rib spans `y` from -1 to 1 there, through the spout's outer
+/// cylinder and the bowl's outer cone. The fuse cuts the wall along the
+/// rib's sides and holds the body's volume and the rib's, less what they
+/// share.
+#[test]
+fn a_rib_fuses_onto_a_funnel_across_its_seam() {
+    let profile = funnel_profile();
+    let rib = rib_profile();
+    let twice_area: f64 = (0..rib.len())
+        .map(|i| {
+            let ((r0, z0), (r1, z1)) = (rib[i], rib[(i + 1) % rib.len()]);
+            r0.mul_add(z1, -r1 * z0)
+        })
+        .sum();
+    let truth = pappus(&profile) + twice_area.abs() - rib_in_wall();
+    for pose in POSES {
+        let mut topo = Topology::new();
+        let body = lathe(&mut topo, &profile, 2.0 * PI);
+        let points: Vec<Point3> = rib.iter().map(|&(r, z)| Point3::new(r, -1.0, z)).collect();
+        let wire = make_polygon_wire(&mut topo, &points, 1e-7).unwrap();
+        let face = make_planar_face_from_wire(&mut topo, wire).unwrap();
+        let rib = extrude(&mut topo, face, Vec3::new(0.0, 1.0, 0.0), 2.0).unwrap();
+        let operands = (posed(&mut topo, body, pose), posed(&mut topo, rib, pose));
+        fuse_exactly(
+            &mut topo,
+            operands,
+            pose,
+            &[("cone", 4), ("cylinder", 4), ("plane", 8)],
+            truth,
+            ([8.5, -2.0, -26.0], [16.5, 2.0, 6.0], 14),
         );
     }
 }

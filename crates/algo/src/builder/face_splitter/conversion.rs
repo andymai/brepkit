@@ -660,7 +660,32 @@ pub(super) fn is_point_on_boundary_uv(
             brepkit_topology::edge::EdgeCurve::Line
             | brepkit_topology::edge::EdgeCurve::NurbsCurve(_) => continue,
         };
-        if (foot - point).length() > size * tol {
+        // The step from the point to its foot crosses the arc, so the arc's
+        // own radius does not scale it: off a rim of a large ring the tube's
+        // radius does, and off a thin rod's rim nothing smaller than the
+        // tolerance itself. On a cylinder, cone or torus the step is read in
+        // the surface's parameters alone. (A sphere's `u` runs wild near its
+        // poles, and its arcs keep the 3D test scaled by the arc's radius.)
+        if matches!(
+            surface,
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Torus(_)
+        ) {
+            let Some((fu, fv)) = surface.project_point(foot) else {
+                continue;
+            };
+            let du = (pu - fu + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+                - std::f64::consts::PI;
+            let dv = match surface {
+                FaceSurface::Torus(_) => {
+                    (pv - fv + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+                        - std::f64::consts::PI
+                }
+                _ => pv - fv,
+            };
+            if du.hypot(dv) > tol {
+                continue;
+            }
+        } else if (foot - point).length() > size * tol {
             continue;
         }
         // `domain_with_endpoints` returns the CCW span between its arguments;
@@ -703,10 +728,23 @@ pub(super) fn is_point_on_boundary_uv(
         for edge in boundary {
             // A sphere's arcs were settled in 3D above: the UV chord of one
             // ending at a pole runs to an arbitrary pole `u` and sweeps across
-            // the face (a meridian's chord to a pole at `u = 0`).
-            if matches!(surface, FaceSurface::Sphere(_))
-                && matches!(edge.curve_3d, brepkit_topology::edge::EdgeCurve::Circle(_))
-            {
+            // the face (a meridian's chord to a pole at `u = 0`). So were the
+            // circles and ellipses of a cylinder, cone or torus, in its own
+            // parameters: the chord of an oblique rim runs level between its
+            // ends, under the rim's rise.
+            let conic = matches!(
+                edge.curve_3d,
+                brepkit_topology::edge::EdgeCurve::Circle(_)
+                    | brepkit_topology::edge::EdgeCurve::Ellipse(_)
+            );
+            let settled = match surface {
+                FaceSurface::Sphere(_) => {
+                    matches!(edge.curve_3d, brepkit_topology::edge::EdgeCurve::Circle(_))
+                }
+                FaceSurface::Cylinder(_) | FaceSurface::Cone(_) | FaceSurface::Torus(_) => conic,
+                FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => false,
+            };
+            if settled {
                 continue;
             }
             let su = edge.start_uv;
@@ -891,6 +929,110 @@ mod tests {
                 edge.end_3d,
                 next.start_3d
             );
+        }
+    }
+
+    /// A unit cylinder about `z` whose rim is the oblique ellipse where the
+    /// plane `z = x / 2` cuts it, run from `(0, -1, 0)` to `(0, 1, 0)` over
+    /// the side `x > 0`. The point `(1, 0, 0)` lies on the chord between the
+    /// rim's ends in `(u, v)`, but half a unit below the rim's top: it is not
+    /// on the boundary. The rim's own top is.
+    #[test]
+    fn a_point_under_an_oblique_rim_on_its_chord_is_off_it() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::surfaces::CylindricalSurface;
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap(),
+        );
+        let rim = Ellipse3D::new_with_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(-0.5, 0.0, 1.0),
+            1.25f64.sqrt(),
+            1.0,
+            Vec3::new(1.0, 0.0, 0.5),
+        )
+        .unwrap();
+        let (start, end) = (Point3::new(0.0, -1.0, 0.0), Point3::new(0.0, 1.0, 0.0));
+        let uv = |p: Point3| {
+            let (u, v) = surface.project_point(p).unwrap();
+            Point2::new(u, v)
+        };
+        let (mut start_uv, end_uv) = (uv(start), uv(end));
+        if start_uv.x() > end_uv.x() {
+            start_uv = Point2::new(start_uv.x() - std::f64::consts::TAU, start_uv.y());
+        }
+        let edge = OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Ellipse(rim),
+            pcurve: Curve2D::Line(
+                Line2D::new(start_uv, brepkit_math::vec::Vec2::new(1.0, 0.0)).unwrap(),
+            ),
+            start_uv,
+            end_uv,
+            start_3d: start,
+            end_3d: end,
+            forward: true,
+            source_edge_idx: None,
+            pave_block_id: None,
+        };
+        let boundary = [edge];
+        assert!(!is_point_on_boundary_uv(
+            Point3::new(1.0, 0.0, 0.0),
+            &surface,
+            &boundary,
+            0.01
+        ));
+        assert!(is_point_on_boundary_uv(
+            Point3::new(1.0, 0.0, 0.5),
+            &surface,
+            &boundary,
+            0.01
+        ));
+    }
+
+    /// A unit-free rule: on a cylinder of radius 0.1 or of radius 100 about
+    /// `z`, with a half circle rim at `z = 0` over `y > 0`, a point at the
+    /// rim's middle angle reads on the boundary at `z = 0.005`, within the
+    /// tolerance of 0.01 in the surface's parameters, and off it at
+    /// `z = 0.02`, whatever the rim's radius.
+    #[test]
+    fn a_point_beside_a_small_or_large_rim_reads_by_the_surfaces_parameters() {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::surfaces::CylindricalSurface;
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        for radius in [0.1, 100.0] {
+            let origin = Point3::new(0.0, 0.0, 0.0);
+            let surface =
+                FaceSurface::Cylinder(CylindricalSurface::new(origin, z, radius).unwrap());
+            let rim = Circle3D::new(origin, z, radius).unwrap();
+            let (start, end) = (
+                Point3::new(radius, 0.0, 0.0),
+                Point3::new(-radius, 0.0, 0.0),
+            );
+            let edge = OrientedPCurveEdge {
+                curve_3d: EdgeCurve::Circle(rim),
+                pcurve: Curve2D::Line(
+                    Line2D::new(
+                        Point2::new(0.0, 0.0),
+                        brepkit_math::vec::Vec2::new(1.0, 0.0),
+                    )
+                    .unwrap(),
+                ),
+                start_uv: Point2::new(0.0, 0.0),
+                end_uv: Point2::new(std::f64::consts::PI, 0.0),
+                start_3d: start,
+                end_3d: end,
+                forward: true,
+                source_edge_idx: None,
+                pave_block_id: None,
+            };
+            let boundary = [edge];
+            let beside = |height: f64| {
+                is_point_on_boundary_uv(Point3::new(0.0, radius, height), &surface, &boundary, 0.01)
+            };
+            assert!(beside(0.005), "radius {radius}: 0.005 from the rim");
+            assert!(!beside(0.02), "radius {radius}: 0.02 from the rim");
         }
     }
 }

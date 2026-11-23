@@ -8,7 +8,7 @@ use std::f64::consts::PI;
 use brepkit_check::classify::{ClassifyOptions, PointClassification, classify_point};
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::Point3;
-use brepkit_operations::boolean::{BooleanOp, boolean};
+use brepkit_operations::boolean::{BooleanOp, BooleanOptions, boolean, boolean_with_options};
 use brepkit_operations::measure::{face_area, oriented_solid_volume, solid_volume};
 use brepkit_operations::primitives::{make_cylinder, make_sphere, make_torus};
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
@@ -155,6 +155,60 @@ fn drill_ring(x: f64, y: f64) {
         (area - area_truth).abs() < 1e-6 * area_truth,
         "ring face area {area}, truth {area_truth}"
     );
+}
+
+/// The ring drilled at `(x, y)`, then drilled again across its hole at
+/// `(-x, -y)`. After the first drill, the ring's face is the whole ring
+/// less two holes on one side; the second drill's sections lie on the other
+/// side of the ring, and the cut takes the second plug as exactly as the
+/// first.
+fn drill_ring_on_both_sides(x: f64, y: f64) {
+    let mut topo = Topology::new();
+    let ring = make_torus(&mut topo, 5.0, 1.0, 16).unwrap();
+    let exact = BooleanOptions {
+        mesh_fallback: false,
+        ..BooleanOptions::default()
+    };
+    let mut result = ring;
+    for (dx, dy) in [(x, y), (-x, -y)] {
+        let drill = make_cylinder(&mut topo, 0.3, 4.0).unwrap();
+        transform_solid(&mut topo, drill, &Mat4::translation(dx, dy, -2.0)).unwrap();
+        result = boolean_with_options(&mut topo, BooleanOp::Cut, result, drill, exact).unwrap();
+    }
+    let plug = |cx: f64, cy: f64| {
+        over_disc(cx, cy, 0.3, |px, py| {
+            let reach = 1.0 - (px.hypot(py) - 5.0).powi(2);
+            2.0 * reach.max(0.0).sqrt()
+        })
+    };
+    let truth = 2.0 * PI * PI * 5.0 - plug(x, y) - plug(-x, -y);
+    let (ux, uy) = (x / 5.0, y / 5.0);
+    check(
+        &topo,
+        result,
+        &[("cylinder", 2), ("torus", 1)],
+        truth,
+        &[
+            Point3::new(x, y, 0.0),
+            Point3::new(-x, -y, 0.0),
+            Point3::new(-x, -y, 0.8),
+        ],
+        &[
+            Point3::new(-x + uy * 0.6, -y - ux * 0.6, 0.0),
+            Point3::new(-x - ux * 0.6, -y - uy * 0.6, 0.0),
+            Point3::new(uy * 5.0, -ux * 5.0, 0.0),
+        ],
+    );
+}
+
+#[test]
+fn ring_drilled_on_both_sides_clear_of_its_seam() {
+    drill_ring_on_both_sides(0.0, 5.0);
+}
+
+#[test]
+fn ring_drilled_on_both_sides_across_its_seam() {
+    drill_ring_on_both_sides(5.0, 0.0);
 }
 
 #[test]

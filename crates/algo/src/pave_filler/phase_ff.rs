@@ -3059,9 +3059,155 @@ fn restrict_curves_to_faces(
         {
             continue;
         }
+        // So does a plane's closed section of a ring that leans off the
+        // ring's axis: a marched loop, not a circle.
+        if closed
+            && matches!(raw.curve, EdgeCurve::NurbsCurve(_) | EdgeCurve::Ellipse(_))
+            && [fa, fb]
+                .into_iter()
+                .any(|f| plane_face_clear_of_loop(topo, f, &raw, tol))
+        {
+            continue;
+        }
         out.push(raw);
     }
     out
+}
+
+/// Whether `face` is a plane face that the whole closed section `raw`, in
+/// its plane, lies off, proved piece by piece. The face's boundary must be
+/// lines and conic arcs, read exactly. Each piece of the loop lies in a disc
+/// in the plane: a spline's knot span, its weights of one sign, in the hull
+/// of its control points, within its points' reach of their mean; an
+/// ellipse's arc within its middle point's reach at the ellipse's fastest
+/// speed. A piece is clear when the disc's centre lies off the face, farther
+/// from the boundary than the disc's radius and ten times the linear
+/// tolerance, and the piece lies within that tolerance of the plane. Other
+/// pieces are halved, at most `MAX_HALVINGS` times each. `false` for any
+/// other face, a region that cannot be read, a point of the loop on the
+/// face, near its boundary or off its plane, or a piece that does not clear.
+fn plane_face_clear_of_loop(topo: &Topology, face: FaceId, raw: &RawCurve, tol: Tolerance) -> bool {
+    const MAX_HALVINGS: u32 = 24;
+    const MAX_PIECES: usize = 1 << 16;
+    let depth = 10.0 * tol.linear;
+    let Ok(data) = topo.face(face) else {
+        return false;
+    };
+    let FaceSurface::Plane { normal, .. } = data.surface() else {
+        return false;
+    };
+    let Ok(normal) = normal.normalize() else {
+        return false;
+    };
+    let Some(origin) = topo
+        .wire(data.outer_wire())
+        .ok()
+        .and_then(|w| w.edges().first().copied())
+        .and_then(|oe| topo.edge(oe.edge()).ok())
+        .and_then(|e| topo.vertex(e.start()).ok())
+        .map(Vertex::point)
+    else {
+        return false;
+    };
+    let frame = crate::builder::plane_frame::PlaneFrame::from_normal_and_point(normal, origin);
+    let Ok(Some(pieces)) = brepkit_topology::planar::face_boundary_2d(
+        topo,
+        face,
+        frame.origin(),
+        frame.u_axis(),
+        frame.v_axis(),
+    ) else {
+        return false;
+    };
+    let off_plane = |p: Point3| (p - origin).dot(normal).abs();
+    // Whether the disc of `radius` round `centre`, in the plane, lies off
+    // the face and clear of its boundary.
+    let disc_clear = |centre: Point3, radius: f64| {
+        let flat = frame.project(centre);
+        brepkit_math::region2d::distance_to_boundary(&pieces, flat) > radius + depth
+            && brepkit_math::region2d::point_in_region(&pieces, flat, depth) == Some(false)
+    };
+    // A point of the loop itself that is not clear ends the proof: no
+    // halving clears the pieces round it.
+    let point_clear = |p: Point3| off_plane(p) <= depth && disc_clear(p, 0.0);
+    // An ellipse's speed is at most its larger semi-axis, and the ellipse
+    // strays from the face's plane by its tilt over that semi-axis.
+    let reach = match &raw.curve {
+        EdgeCurve::NurbsCurve(_) => 0.0,
+        EdgeCurve::Ellipse(ellipse) => {
+            let Ok(axis) = ellipse.normal().normalize() else {
+                return false;
+            };
+            let reach = ellipse.semi_major().max(ellipse.semi_minor());
+            if reach.madd(axis.cross(normal).length(), off_plane(ellipse.center())) > depth {
+                return false;
+            }
+            reach
+        }
+        EdgeCurve::Line | EdgeCurve::Circle(_) => return false,
+    };
+    // The disc a piece of the loop from `a` to `b` lies in, its centre and
+    // radius; `None` when the piece's bound does not hold.
+    let disc = |a: f64, b: f64| -> Option<(Point3, f64)> {
+        let EdgeCurve::NurbsCurve(curve) = &raw.curve else {
+            return Some((
+                raw.curve
+                    .evaluate_with_endpoints(f64::midpoint(a, b), raw.p_start, raw.p_end),
+                0.5 * reach * (b - a).abs(),
+            ));
+        };
+        let hull = brepkit_math::nurbs::decompose::curve_bezier_between(curve, a, b).ok()?;
+        let one_sign = hull.iter().all(|q| q[3] > 0.0) || hull.iter().all(|q| q[3] < 0.0);
+        if !one_sign {
+            return None;
+        }
+        let points: Vec<Point3> = hull
+            .iter()
+            .map(|q| Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3]))
+            .collect();
+        if points.iter().any(|&p| off_plane(p) > depth) {
+            return None;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let share = 1.0 / points.len() as f64;
+        let centre = points.iter().fold(Point3::new(0.0, 0.0, 0.0), |sum, &p| {
+            sum + Vec3::new(p.x(), p.y(), p.z()) * share
+        });
+        let radius = points
+            .iter()
+            .map(|&p| (p - centre).length())
+            .fold(0.0, f64::max);
+        Some((centre, radius))
+    };
+    let (t0, t1) = raw.t_range;
+    let mut cuts = vec![t0];
+    if let EdgeCurve::NurbsCurve(curve) = &raw.curve {
+        for &k in curve.knots() {
+            if k > cuts[cuts.len() - 1] && k < t1 {
+                cuts.push(k);
+            }
+        }
+    }
+    cuts.push(t1);
+    let mut pending: Vec<(f64, f64, u32)> = cuts.windows(2).map(|w| (w[0], w[1], 0)).collect();
+    let at = |t: f64| raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
+    let mut read = 0;
+    while let Some((a, b, halvings)) = pending.pop() {
+        read += 1;
+        if read > MAX_PIECES || !point_clear(at(a)) {
+            return false;
+        }
+        if disc(a, b).is_some_and(|(centre, radius)| disc_clear(centre, radius)) {
+            continue;
+        }
+        if halvings == MAX_HALVINGS {
+            return false;
+        }
+        let middle = f64::midpoint(a, b);
+        pending.push((a, middle, halvings + 1));
+        pending.push((middle, b, halvings + 1));
+    }
+    true
 }
 
 /// Whether `face` is a plane face that the whole `circle`, in its plane,
@@ -6438,6 +6584,10 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
         FaceSurface::Torus(t) if face_boundary_all_degenerate(topo, face_id, tol)? => {
             Some(t.aabb())
         }
+        // A band of a ring bulges past its edges too: the tube's outer side
+        // between two latitudes, whose boundary reaches the outer equator
+        // only along the seam.
+        FaceSurface::Torus(t) => torus_patch_box(topo, face_id, t),
         // A NURBS face can bulge far past its boundary (a lofted wall
         // between its two rims); its control net bounds it.
         FaceSurface::Nurbs(n) => Some(n.aabb()),
@@ -6458,6 +6608,240 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
         FaceSurface::Nurbs(n) => super::helpers::nurbs_face_box(topo, face_id, n, bounds, tol),
         _ => Ok(bounds),
     }
+}
+
+/// The box of a ring torus face over the ring and tube angles its outer wire
+/// can reach. Holes take material away, so the outer wire alone bounds the
+/// face's angles: in each angle, the face spans the turn less the widest arc
+/// the wire leaves out. That arc is left out only where the wire bounds a
+/// disc in the surface cut across it, and the face is that disc
+/// (`wire_bounds_the_face_off`): a whole ring's outer wire runs along its
+/// seams, and the arcs between its seam points are the face's. Both read the
+/// wire's edges exactly (`torus_edge_reach`); a wire with an edge that does
+/// not read so takes the whole torus's box. `None` on a horn or spindle
+/// torus, whose far sheet's points do not project to their own angles.
+fn torus_patch_box(
+    topo: &Topology,
+    face_id: FaceId,
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+) -> Option<Aabb3> {
+    use std::f64::consts::TAU;
+    if torus.major_radius() <= torus.minor_radius() {
+        return None;
+    }
+    let face = topo.face(face_id).ok()?;
+    let (mut ring, mut tube, mut steps) = (Vec::new(), Vec::new(), Vec::new());
+    let mut first: Option<(f64, f64)> = None;
+    for oe in topo.wire(face.outer_wire()).ok()?.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        let ends = (
+            topo.vertex(edge.start()).ok()?.point(),
+            topo.vertex(edge.end()).ok()?.point(),
+        );
+        let Some(reach) = torus_edge_reach(torus, edge.curve(), ends, oe.is_forward()) else {
+            return Some(torus.aabb());
+        };
+        first.get_or_insert_with(|| {
+            torus.project_point(if oe.is_forward() { ends.0 } else { ends.1 })
+        });
+        steps.push(reach.step);
+        ring.push(reach.ring);
+        tube.push(reach.tube);
+    }
+    let first = first?;
+    let whole = (0.0, TAU);
+    let span = |arcs: &[(f64, f64)], along_ring: bool| {
+        turn_left_by(arcs)
+            .filter(|&kept| wire_bounds_the_face_off(torus, first, &steps, kept, along_ring))
+            .unwrap_or(whole)
+    };
+    Some(torus.patch_aabb(span(&ring, true), span(&tube, false)))
+}
+
+/// A circle on a torus along one of its angles: about the axis (its ring
+/// angle runs and its tube angle stays at `fixed`), or round the tube in a
+/// half-plane through the axis (its tube angle runs and its ring angle stays
+/// at `fixed`). `along` says whether that angle grows with the circle's own.
+struct IsoCircle {
+    about_axis: bool,
+    fixed: f64,
+    along: bool,
+}
+
+/// The circle `c` as an [`IsoCircle`] of `torus`, or `None`.
+fn iso_circle(
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    c: &brepkit_math::curves::Circle3D,
+) -> Option<IsoCircle> {
+    let (centre, major, minor) = (torus.center(), torus.major_radius(), torus.minor_radius());
+    let (x, y, z) = (torus.x_axis(), torus.y_axis(), torus.z_axis());
+    let tol = Tolerance::new().linear * major.max(1.0);
+    let to_centre = c.center() - centre;
+    let height = to_centre.dot(z);
+    let radial = to_centre - z * height;
+    let turns = c.u_axis().cross(c.v_axis());
+    if c.normal().cross(z).length() <= 1e-12 && radial.length() <= tol {
+        return Some(IsoCircle {
+            about_axis: true,
+            fixed: height.atan2(c.radius() - major),
+            along: turns.dot(x.cross(y)) > 0.0,
+        });
+    }
+    let out = radial.normalize().ok()?;
+    (height.abs() <= tol
+        && (radial.length() - major).abs() <= tol
+        && (c.radius() - minor).abs() <= tol
+        && c.normal().cross(out.cross(z)).length() <= 1e-12)
+        .then(|| IsoCircle {
+            about_axis: false,
+            fixed: radial.dot(y).atan2(radial.dot(x)),
+            along: turns.dot(out.cross(z)) > 0.0,
+        })
+}
+
+/// How an edge of a torus, `curve` between `ends`, runs in the ring and
+/// tube angles the way a wire runs it (`forward` from its start vertex to
+/// its end vertex): the step it takes in each, and the arc of each it
+/// covers (its first angle and its length).
+struct EdgeReach {
+    step: (f64, f64),
+    ring: (f64, f64),
+    tube: (f64, f64),
+}
+
+/// The [`EdgeReach`] of an edge of a torus where it is exact: a seam
+/// placeholder, a line from a point to itself, takes no step and covers its
+/// point, and an [`IsoCircle`] runs its arc along its angle and holds the
+/// other. `None` for any other edge.
+fn torus_edge_reach(
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    curve: &EdgeCurve,
+    (start, end): (Point3, Point3),
+    forward: bool,
+) -> Option<EdgeReach> {
+    match curve {
+        EdgeCurve::Line => ((start - end).length() <= 1e-9).then(|| {
+            let (u, v) = torus.project_point(start);
+            EdgeReach {
+                step: (0.0, 0.0),
+                ring: (u, 0.0),
+                tube: (v, 0.0),
+            }
+        }),
+        EdgeCurve::Circle(c) => {
+            let iso = iso_circle(torus, c)?;
+            let (a, b) = curve.domain_with_endpoints(start, end);
+            let (t0, span) = (a.min(b), (b - a).abs());
+            let (u, v) = torus.project_point(c.evaluate(t0));
+            let first = if iso.about_axis { u } else { v };
+            let run = (if iso.along { first } else { first - span }, span);
+            let still = (iso.fixed, 0.0);
+            let step = if iso.along == forward { span } else { -span };
+            Some(if iso.about_axis {
+                EdgeReach {
+                    step: (step, 0.0),
+                    ring: run,
+                    tube: still,
+                }
+            } else {
+                EdgeReach {
+                    step: (0.0, step),
+                    ring: still,
+                    tube: run,
+                }
+            })
+        }
+        EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => None,
+    }
+}
+
+/// Whether the face an outer wire bounds keeps out of the arc of one angle
+/// the wire leaves out: of the ring angle `along_ring`, else of the tube
+/// angle. `kept` is the arc the wire spans, its first angle and its last.
+/// The wire runs from `first` (its ring and tube angles) by exact `steps`
+/// (`torus_edge_reach`), a polygon in `(u, v)`. Cut across the arc left out,
+/// the surface is a band in which the other angle runs round, and the wire
+/// must wind round neither angle: it then bounds a disc of the band. An
+/// outer wire runs counterclockwise about the surface's normal, so the face
+/// is that disc, clear of the arc left out, where the polygon's area has
+/// the sign of the turn from `∂u` to `∂v` about that normal; otherwise the
+/// face is the rest of the surface.
+fn wire_bounds_the_face_off(
+    torus: &brepkit_math::surfaces::ToroidalSurface,
+    first: (f64, f64),
+    steps: &[(f64, f64)],
+    kept: (f64, f64),
+    along_ring: bool,
+) -> bool {
+    use std::f64::consts::TAU;
+    let span = kept.1 - kept.0;
+    let mut corners = Vec::with_capacity(steps.len() + 1);
+    let mut at = first;
+    corners.push(at);
+    for &(du, dv) in steps {
+        at = (at.0 + du, at.1 + dv);
+        corners.push(at);
+    }
+    let (net_u, net_v) = (at.0 - first.0, at.1 - first.1);
+    if net_u.abs() > 1e-9 || net_v.abs() > 1e-9 {
+        return false;
+    }
+    let inside = corners.iter().all(|&(u, v)| {
+        let cut = if along_ring { u } else { v };
+        let across = (cut - kept.0).rem_euclid(TAU);
+        across <= span + 1e-9 || across >= TAU - 1e-9
+    });
+    let area: f64 = corners
+        .windows(2)
+        .map(|w| w[0].0.madd(w[1].1, -w[1].0 * w[0].1))
+        .sum::<f64>()
+        * 0.5;
+    let turn = torus.x_axis().cross(torus.y_axis()).dot(torus.z_axis());
+    inside && area * turn > 1e-9 * TAU * TAU
+}
+
+/// The arc of a turn that `arcs` (each its first angle and its length)
+/// leave out at their widest gap, as the arc that is left: its first angle
+/// and its last, after the first by less than a turn. `None` when the arcs
+/// leave no gap.
+fn turn_left_by(arcs: &[(f64, f64)]) -> Option<(f64, f64)> {
+    use std::f64::consts::TAU;
+    if arcs.is_empty() || arcs.iter().any(|&(_, len)| len >= TAU) {
+        return None;
+    }
+    // Each arc from its first angle in the first turn; one that runs past
+    // the turn's end also from a turn back, so its end covers the start.
+    let mut spans: Vec<(f64, f64)> = Vec::with_capacity(2 * arcs.len());
+    for &(first, len) in arcs {
+        let lo = first.rem_euclid(TAU);
+        spans.push((lo, lo + len));
+        if lo + len > TAU {
+            spans.push((lo - TAU, lo + len - TAU));
+        }
+    }
+    spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut covered: Vec<(f64, f64)> = Vec::new();
+    for (lo, hi) in spans {
+        let (lo, hi) = (lo.max(0.0), hi.min(TAU));
+        if hi < lo {
+            continue;
+        }
+        match covered.last_mut() {
+            Some(last) if lo <= last.1 => last.1 = last.1.max(hi),
+            _ => covered.push((lo, hi)),
+        }
+    }
+    let wrap = covered.first()?.0 + TAU;
+    let mut widest: Option<(f64, f64)> = None;
+    for (i, &(_, hi)) in covered.iter().enumerate() {
+        let next = covered.get(i + 1).map_or(wrap, |c| c.0);
+        if next - hi > widest.map_or(1e-9, |(lo, up)| up - lo) {
+            widest = Some((hi, next));
+        }
+    }
+    let (gap_lo, gap_hi) = widest?;
+    let shift = if gap_hi >= TAU { TAU } else { 0.0 };
+    Some((gap_hi - shift, gap_lo + TAU - shift))
 }
 
 /// Pole-side axis of a spherical face, from its boundary winding: the summed
@@ -9383,6 +9767,11 @@ fn emit_split_circle_arcs(
                 max.y().max(c.y() + r),
                 max.z().max(c.z() + r),
             );
+        } else if let FaceSurface::Torus(torus) = face.surface()
+            && let Some(patch) = torus_patch_box(topo, fid, torus)
+        {
+            let joined = Aabb3 { min, max }.union(patch);
+            (min, max) = (joined.min, joined.max);
         }
         Some(Aabb3 { min, max }.expanded(tol.linear * 10.0))
     };
@@ -10940,6 +11329,338 @@ mod tests {
                 "spline {spline}: the circle in the hole"
             );
         }
+    }
+
+    /// A closed spline loop round the thin ring's centre at radius 9.95 lies
+    /// in the ring's hole, off the ring. With a bump to radius 10.01 along an
+    /// arc of a few hundredths of a radian it runs into the ring, and lifted
+    /// off the ring's plane it is not read at all.
+    #[test]
+    fn a_spline_loop_in_a_thin_rings_hole_is_off_it() {
+        let tol = Tolerance::default();
+        let looped = |bump: f64, lift: f64| {
+            let n = 2000;
+            let points: Vec<Point3> = (0..=n)
+                .map(|k| {
+                    let at = std::f64::consts::TAU * f64::from(k % n) / f64::from(n);
+                    let r = bump.madd((-((at - 1.0) / 0.02).powi(2)).exp(), 9.95);
+                    Point3::new(r * at.cos(), r * at.sin(), lift)
+                })
+                .collect();
+            let curve = brepkit_math::nurbs::fitting::interpolate(&points, 3).unwrap();
+            let t_range = curve.domain();
+            RawCurve {
+                bbox: Aabb3::from_points(points.iter().copied()),
+                p_start: curve.evaluate(t_range.0),
+                p_end: curve.evaluate(t_range.1),
+                curve: EdgeCurve::NurbsCurve(curve),
+                t_range,
+            }
+        };
+        let mut topo = Topology::new();
+        let ring = thin_ring(&mut topo, false);
+        assert!(plane_face_clear_of_loop(
+            &topo,
+            ring,
+            &looped(0.0, 0.0),
+            tol
+        ));
+        assert!(!plane_face_clear_of_loop(
+            &topo,
+            ring,
+            &looped(0.06, 0.0),
+            tol
+        ));
+        assert!(!plane_face_clear_of_loop(
+            &topo,
+            ring,
+            &looped(0.0, 1.0),
+            tol
+        ));
+    }
+
+    /// A closed polygon of 2048 sides round the thin ring's centre at radius
+    /// 9 runs one corner out to radius 10.01, into the ring, and back. Read
+    /// at eight points of each piece, the corner lies between two of them,
+    /// and their chords run well clear of the ring. The loop is not off the
+    /// ring. Without the corner it is.
+    #[test]
+    fn a_loop_into_a_thin_ring_between_its_samples_is_not_off_it() {
+        let tol = Tolerance::default();
+        let polygon = |reach: f64| {
+            let n = 2048_u32;
+            let points: Vec<Point3> = (0..=n)
+                .map(|k| {
+                    let at = std::f64::consts::TAU * f64::from(k % n) / f64::from(n);
+                    let r = if k == 1001 { reach } else { 9.0 };
+                    Point3::new(r * at.cos(), r * at.sin(), 0.0)
+                })
+                .collect();
+            let mut knots = vec![0.0, 0.0];
+            knots.extend((1..n).map(|k| f64::from(k) / f64::from(n)));
+            knots.extend([1.0, 1.0]);
+            let weights = vec![1.0; points.len()];
+            let curve =
+                brepkit_math::nurbs::curve::NurbsCurve::new(1, knots, points.clone(), weights)
+                    .unwrap();
+            let t_range = curve.domain();
+            RawCurve {
+                bbox: Aabb3::from_points(points),
+                p_start: curve.evaluate(t_range.0),
+                p_end: curve.evaluate(t_range.1),
+                curve: EdgeCurve::NurbsCurve(curve),
+                t_range,
+            }
+        };
+        let mut topo = Topology::new();
+        let ring = thin_ring(&mut topo, false);
+        assert!(!plane_face_clear_of_loop(&topo, ring, &polygon(10.01), tol));
+        assert!(plane_face_clear_of_loop(&topo, ring, &polygon(9.0), tol));
+    }
+
+    /// An ellipse in the thin ring's hole, its semi-axes 9.99 and 5, comes
+    /// within 0.01 of the ring and stays off it. One whose major semi-axis
+    /// reaches 10.01 runs into the ring.
+    #[test]
+    fn an_ellipse_in_a_thin_rings_hole_is_off_it() {
+        use brepkit_math::curves::Ellipse3D;
+        let tol = Tolerance::default();
+        let ellipse = |major: f64| {
+            let curve = Ellipse3D::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                major,
+                5.0,
+            )
+            .unwrap();
+            let start = curve.evaluate(0.0);
+            RawCurve {
+                bbox: curve.aabb(),
+                curve: EdgeCurve::Ellipse(curve),
+                t_range: (0.0, std::f64::consts::TAU),
+                p_start: start,
+                p_end: start,
+            }
+        };
+        let mut topo = Topology::new();
+        let ring = thin_ring(&mut topo, false);
+        assert!(plane_face_clear_of_loop(&topo, ring, &ellipse(9.99), tol));
+        assert!(!plane_face_clear_of_loop(&topo, ring, &ellipse(10.01), tol));
+    }
+
+    /// The outer half of the tube of a ring (10, 2), between its top and
+    /// bottom latitudes, its seam the meridian at the ring angle 0. Each rim
+    /// is a rational quadratic circle whose four quarters run over the
+    /// parameters 0 to 0.001, 0.001 to 0.002, 0.002 to 0.003 and 0.003 to
+    /// 1, counterclockwise about the axis or clockwise. Read at even steps
+    /// of its parameter, such a rim reached one quarter of the ring.
+    fn torus_band_with_skewed_rims(
+        topo: &mut Topology,
+        clockwise: bool,
+    ) -> (FaceId, brepkit_math::surfaces::ToroidalSurface) {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 10.0, 2.0).unwrap();
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        let mut rim = |z: f64| {
+            let mut corners = vec![
+                (1.0, 0.0),
+                (1.0, 1.0),
+                (0.0, 1.0),
+                (-1.0, 1.0),
+                (-1.0, 0.0),
+                (-1.0, -1.0),
+                (0.0, -1.0),
+                (1.0, -1.0),
+                (1.0, 0.0),
+            ];
+            if clockwise {
+                corners.reverse();
+            }
+            let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+                2,
+                vec![
+                    0.0, 0.0, 0.0, 0.001, 0.001, 0.002, 0.002, 0.003, 0.003, 1.0, 1.0, 1.0,
+                ],
+                corners
+                    .iter()
+                    .map(|&(x, y)| Point3::new(10.0 * x, 10.0 * y, z))
+                    .collect(),
+                vec![1.0, s, 1.0, s, 1.0, s, 1.0, s, 1.0],
+            )
+            .unwrap();
+            let start = topo.add_vertex(Vertex::new(Point3::new(10.0, 0.0, z), 1e-7));
+            (
+                topo.add_edge(Edge::new(start, start, EdgeCurve::NurbsCurve(curve))),
+                start,
+            )
+        };
+        let (bottom, low) = rim(-2.0);
+        let (top, high) = rim(2.0);
+        let meridian =
+            Circle3D::new(Point3::new(10.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0), 2.0).unwrap();
+        let seam = topo.add_edge(Edge::new(low, high, EdgeCurve::Circle(meridian)));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(bottom, true),
+                    OrientedEdge::new(seam, true),
+                    OrientedEdge::new(top, false),
+                    OrientedEdge::new(seam, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Torus(torus.clone())));
+        (face, torus)
+    }
+
+    /// A band's box holds the whole band, the outer equator on the far side
+    /// of the ring from the seam included, however its rims' quarters are
+    /// spread over their parameters and whichever way they run.
+    #[test]
+    fn a_torus_band_with_skewed_spline_rims_keeps_its_whole_box() {
+        for clockwise in [false, true] {
+            let mut topo = Topology::new();
+            let (face, torus) = torus_band_with_skewed_rims(&mut topo, clockwise);
+            let bound = torus_patch_box(&topo, face, &torus).unwrap();
+            for i in 0..=64 {
+                for j in 0..=16 {
+                    let u = std::f64::consts::TAU * f64::from(i) / 64.0;
+                    let v = std::f64::consts::PI
+                        .madd(f64::from(j) / 16.0, -std::f64::consts::FRAC_PI_2);
+                    let p = torus.evaluate(u, v);
+                    assert!(
+                        bound.expanded(1e-9).contains_point(p),
+                        "clockwise {clockwise}: {p:?} off {bound:?}"
+                    );
+                }
+            }
+            assert!(bound.max.x() - bound.min.x() < 24.0 + 1e-6);
+            assert!(bound.max.z() - bound.min.z() < 4.0 + 1e-6);
+        }
+    }
+
+    /// The quarter of a ring (10, 2) from its outer equator up to its top,
+    /// between two circles about its axis and along the meridian at the ring
+    /// angle 0, run counterclockwise about the surface's normal. Its wire's
+    /// steps are exact, so its box keeps the tube's top quarter alone.
+    #[test]
+    fn a_torus_band_between_circles_keeps_a_tight_box() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 10.0, 2.0).unwrap();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let mut topo = Topology::new();
+        let low = topo.add_vertex(Vertex::new(Point3::new(12.0, 0.0, 0.0), 1e-7));
+        let high = topo.add_vertex(Vertex::new(Point3::new(10.0, 0.0, 2.0), 1e-7));
+        let equator = Circle3D::new(Point3::new(0.0, 0.0, 0.0), z, 12.0).unwrap();
+        let top = Circle3D::new(Point3::new(0.0, 0.0, 2.0), z, 10.0).unwrap();
+        let meridian =
+            Circle3D::new(Point3::new(10.0, 0.0, 0.0), Vec3::new(0.0, -1.0, 0.0), 2.0).unwrap();
+        let equator = topo.add_edge(Edge::new(low, low, EdgeCurve::Circle(equator)));
+        let top = topo.add_edge(Edge::new(high, high, EdgeCurve::Circle(top)));
+        let seam = topo.add_edge(Edge::new(low, high, EdgeCurve::Circle(meridian)));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(equator, true),
+                    OrientedEdge::new(seam, true),
+                    OrientedEdge::new(top, false),
+                    OrientedEdge::new(seam, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Torus(torus.clone())));
+        let bound = torus_patch_box(&topo, face, &torus).unwrap();
+        for i in 0..=64 {
+            for j in 0..=16 {
+                let u = std::f64::consts::TAU * f64::from(i) / 64.0;
+                let v = std::f64::consts::FRAC_PI_2 * f64::from(j) / 16.0;
+                let p = torus.evaluate(u, v);
+                assert!(
+                    bound.expanded(1e-9).contains_point(p),
+                    "{p:?} off {bound:?}"
+                );
+            }
+        }
+        assert!(bound.min.z() > -1e-9, "{bound:?}");
+    }
+
+    /// A face of a ring (10, 2) whose outer wire is one closed spline: a
+    /// unit square about the outer equator's point on `x`, in the plane
+    /// tangent there, run clockwise about the surface's normal, with a dent
+    /// in its top side. The square's sides run over the parameters 0 to
+    /// 0.005 and the dent over the rest, so even samples of the parameter
+    /// read the dent alone, which runs counterclockwise. The face is the
+    /// ring less the square, and its box holds the whole ring.
+    #[test]
+    fn a_clockwise_spline_loop_with_clustered_knots_keeps_the_whole_box() {
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 10.0, 2.0).unwrap();
+        let corners = [
+            (0.3, 0.5),
+            (0.5, 0.5),
+            (0.5, -0.5),
+            (-0.5, -0.5),
+            (-0.5, 0.5),
+            (-0.3, 0.5),
+            (-0.3, 0.1),
+            (0.3, 0.1),
+            (0.3, 0.5),
+        ];
+        let points: Vec<Point3> = corners
+            .iter()
+            .map(|&(y, z)| Point3::new(12.0, y, z))
+            .collect();
+        let knots = vec![
+            0.0, 0.0, 0.001, 0.002, 0.003, 0.004, 0.005, 0.34, 0.67, 1.0, 1.0,
+        ];
+        let curve =
+            brepkit_math::nurbs::curve::NurbsCurve::new(1, knots, points, vec![1.0; 9]).unwrap();
+        let mut topo = Topology::new();
+        let start = topo.add_vertex(Vertex::new(Point3::new(12.0, 0.3, 0.5), 1e-7));
+        let edge = topo.add_edge(Edge::new(start, start, EdgeCurve::NurbsCurve(curve)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Torus(torus.clone())));
+        let bound = torus_patch_box(&topo, face, &torus).unwrap();
+        for i in 0..=64 {
+            for j in 0..=64 {
+                let u = std::f64::consts::TAU * f64::from(i) / 64.0;
+                let v = std::f64::consts::TAU * f64::from(j) / 64.0;
+                let p = torus.evaluate(u, v);
+                assert!(
+                    bound.expanded(1e-9).contains_point(p),
+                    "{p:?} off {bound:?}"
+                );
+            }
+        }
+    }
+
+    /// Arcs of a turn leave out their widest gap, and an arc that runs past
+    /// the turn's end covers the start of the next.
+    #[test]
+    fn arcs_of_a_turn_leave_out_their_widest_gap() {
+        let left = turn_left_by(&[(0.1, 0.1), (0.5, 0.1)]).unwrap();
+        assert!(
+            (left.0 - 0.1).abs() < 1e-12 && (left.1 - 0.6).abs() < 1e-12,
+            "{left:?}"
+        );
+        let wrapped = turn_left_by(&[(0.1, 0.1), (0.5, 0.1), (6.0, 1.0)]).unwrap();
+        assert!(
+            (wrapped.0 - 6.0).abs() < 1e-12 && (wrapped.1 - 7.0).abs() < 1e-12,
+            "{wrapped:?}"
+        );
+        assert!(turn_left_by(&[(0.0, 3.2), (3.1, 3.2)]).is_none());
     }
 
     /// A point on a torus and a plane lies on their section: its error is

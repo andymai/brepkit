@@ -3093,9 +3093,15 @@ fn cdt_in_surface_frame(
             )
             .map_or((u_min_bnd, u_max_bnd), |(seam_u, period)| {
                 let slack = 1e-9 * period;
-                let lo = seam_u - ((seam_u - u_min_bnd - slack) / period).ceil() * period;
                 let span = u_max_bnd - u_min_bnd;
-                if span < period - slack && span > 0.75 * period && lo + period >= u_max_bnd - slack
+                // A seam and a rim read their shared vertex through their
+                // own pcurves, which can disagree by more than rounding (by
+                // 2e-5 on a torus's fitted seam and loop): half the gap the
+                // rims leave tells a seam copy at a rim's end from one a
+                // sample beyond it.
+                let reach = slack.max(0.5 * (period - span));
+                let lo = seam_u - ((seam_u - u_min_bnd - reach) / period).ceil() * period;
+                if span < period - slack && span > 0.75 * period && lo + period >= u_max_bnd - reach
                 {
                     (lo, lo + period)
                 } else {
