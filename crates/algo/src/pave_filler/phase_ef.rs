@@ -2074,9 +2074,13 @@ fn run_contacts_counted(
             stack.push(((pair[0], sa, ga), (pair[1], sb, gb), 0));
         }
     }
+    // Each parameter the search reads, with the signed distance there.
+    let mut readings: Vec<(f64, f64)> = Vec::new();
     let mut read = 0_usize;
     while let Some(((a, s_a, g_a), (b, s_b, g_b), halvings)) = stack.pop() {
         read += 1;
+        readings.push((a, s_a));
+        readings.push((b, s_b));
         let width = b - a;
         let changes = (g_a > 0.0) != (g_b > 0.0);
         let spent = over || read > RUN_INTERVALS || halvings >= MOST_HALVINGS;
@@ -2123,8 +2127,12 @@ fn run_contacts_counted(
         let Some((pm, s_m, _)) = foot_on(on, tm) else {
             continue;
         };
-        // A most of the distance between two of its leasts is no contact.
-        if s_m.abs() > s_a.abs().min(s_b.abs()) {
+        readings.push((tm, s_m));
+        // A touch: the distance falls into the root and rises out of it on
+        // one side of the surface. A most of it, or a least of the signed
+        // distance beyond the surface between two crossings, is no contact.
+        let sign = if s_m < 0.0 { -1.0 } else { 1.0 };
+        if s_m.abs() > floor && (sign * g_a > 0.0 || sign * g_b < 0.0) {
             mosts.push((tm, s_m.abs()));
             continue;
         }
@@ -2136,6 +2144,51 @@ fn run_contacts_counted(
                 crossing: false,
             });
         }
+    }
+    // A change of side between two readings that the samples do not show:
+    // a dip through the surface and back between two samples, which
+    // crosses it on each side of its least.
+    readings.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let mut known: Vec<f64> = contacts
+        .iter()
+        .filter(|c| c.crossing)
+        .map(|c| c.t)
+        .collect();
+    known.sort_by(f64::total_cmp);
+    let mut previous: Option<(f64, f64)> = None;
+    for &(t, side) in &readings {
+        if side.abs() <= floor {
+            continue;
+        }
+        if let Some((t_prev, s_prev)) = previous
+            && (s_prev > 0.0) != (side > 0.0)
+            && known.partition_point(|&k| k < t_prev) == known.partition_point(|&k| k <= t)
+        {
+            let (mut lo, mut hi) = (t_prev, t);
+            for _ in 0..60 {
+                let mid = f64::midpoint(lo, hi);
+                let Some((_, s_mid, _)) = foot(mid) else {
+                    break;
+                };
+                if (s_mid > 0.0) == (s_prev > 0.0) {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let tc = f64::midpoint(lo, hi);
+            if let Some((pc, _, _)) = foot(tc)
+                && distance_to_surface(pc, surface) < tol.linear
+            {
+                contacts.push(Contact {
+                    t: tc,
+                    p: pc,
+                    depth: 0.0,
+                    crossing: true,
+                });
+            }
+        }
+        previous = Some((t, side));
     }
     contacts.sort_by(|a, b| a.t.total_cmp(&b.t));
     mosts.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -3242,10 +3295,11 @@ mod tests {
 
     /// Where the edge `(x, 0, k (x - r0)(x - r1)...)`, for `x` from -1 to 1
     /// and its height a polynomial with the roots `roots`, meets the wall
-    /// of a rod of radius 1 along `x`, from `x = -2` to `x = 2`, whose top
-    /// lies at `z = 0`: the `x` of the vertices phase EF makes on the edge.
+    /// of a rod of radius `radius` along `x`, from `x = -2` to `x = 2`,
+    /// whose top lies at `z = 0`: the `x` of the vertices phase EF makes on
+    /// the edge.
     /// Along `y = 0` the edge's height is its signed distance from the wall.
-    fn contacts_with_a_wall(k: f64, roots: &[f64]) -> Vec<f64> {
+    fn contacts_with_a_wall(k: f64, roots: &[f64], radius: f64) -> Vec<f64> {
         use brepkit_math::nurbs::curve::NurbsCurve;
         // The height in powers of `u`, with `x = 2u - 1`, then as a Bézier
         // curve's control heights.
@@ -3273,7 +3327,7 @@ mod tests {
         let knots = [vec![0.0; n + 1], vec![1.0; n + 1]].concat();
         contacts_of_a_spline_with_a_wall(
             &NurbsCurve::new(n, knots, points, vec![1.0; n + 1]).unwrap(),
-            1.0,
+            radius,
         )
     }
 
@@ -3361,7 +3415,7 @@ mod tests {
     /// at `x = 0.3`: each takes a vertex.
     #[test]
     fn a_run_that_touches_and_crosses_a_wall_keeps_both() {
-        let xs = contacts_with_a_wall(1e-6, &[-0.3, -0.3, 0.3]);
+        let xs = contacts_with_a_wall(1e-6, &[-0.3, -0.3, 0.3], 1.0);
         assert_eq!(xs.len(), 2, "contacts at {xs:?}");
         for (x, want) in xs.iter().zip([-0.3, 0.3]) {
             assert!((x - want).abs() < 1e-9, "contact at {x}, expected {want}");
@@ -3373,7 +3427,7 @@ mod tests {
     /// and 8.1e-9 off it between: each touch takes a vertex.
     #[test]
     fn a_run_that_touches_a_wall_twice_keeps_both_touches() {
-        let xs = contacts_with_a_wall(1e-6, &[-0.3, -0.3, 0.3, 0.3]);
+        let xs = contacts_with_a_wall(1e-6, &[-0.3, -0.3, 0.3, 0.3], 1.0);
         assert_eq!(xs.len(), 2, "contacts at {xs:?}");
         for (x, want) in xs.iter().zip([-0.3, 0.3]) {
             assert!((x - want).abs() < 1e-9, "contact at {x}, expected {want}");
@@ -3387,7 +3441,7 @@ mod tests {
     /// distance's rate has one sign. Each contact takes a vertex.
     #[test]
     fn a_touch_and_a_most_between_two_samples_keep_the_touch() {
-        let xs = contacts_with_a_wall(2e-3, &[-0.3, -0.3, -0.28]);
+        let xs = contacts_with_a_wall(2e-3, &[-0.3, -0.3, -0.28], 1.0);
         assert_eq!(xs.len(), 2, "contacts at {xs:?}");
         for (x, want) in xs.iter().zip([-0.3, -0.28]) {
             assert!((x - want).abs() < 1e-9, "contact at {x}, expected {want}");
@@ -3494,6 +3548,20 @@ mod tests {
             read <= RUN_INTERVALS + 2 * (ts.len() + MOST_HALVINGS as usize),
             "read {read}"
         );
+    }
+
+    /// An edge that dips 6.4e-10 into the wall of a rod of radius 1000
+    /// between `x = -0.308` and `x = -0.292`, both within one sample
+    /// interval where the distance has one sign at the samples. The least
+    /// of the distance at `x = -0.3`, between the two crossings, is no
+    /// touch; each crossing takes a vertex.
+    #[test]
+    fn a_dip_between_two_samples_crosses_twice_and_touches_nowhere() {
+        let xs = contacts_with_a_wall(1e-5, &[-0.308, -0.292], 1000.0);
+        assert_eq!(xs.len(), 2, "contacts at {xs:?}");
+        for (x, want) in xs.iter().zip([-0.308, -0.292]) {
+            assert!((x - want).abs() < 1e-9, "contact at {x}, expected {want}");
+        }
     }
 
     /// The ellipse where a flat leaning 5e-12 off a bore of radius 10
