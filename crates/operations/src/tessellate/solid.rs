@@ -1,7 +1,7 @@
 //! Solid-level tessellation orchestration.
 
 use brepkit_geometry::extrema::segment_segment_distance;
-use brepkit_math::det_hash::{DetHashMap, WordHashMap, WordHashSet, WordState};
+use brepkit_math::det_hash::{DetHashMap, DetHashSet, WordHashMap, WordHashSet, WordState};
 use brepkit_math::madd::Madd;
 use brepkit_math::traits::ParametricSurface;
 use brepkit_math::vec::{Point3, Vec3};
@@ -906,6 +906,221 @@ pub(super) fn split_crossing_spline_chords(
     Ok(halved)
 }
 
+/// Gives each straight edge of a sphere face's outline the samples of the
+/// faces' holes that reach past it.
+///
+/// A ball's equator is a polygon of chords, each within its sag of the
+/// sphere. A boolean finds where a section crosses such an edge on the
+/// chord, so a section that passes between a chord and the sphere does not
+/// split there, and a face's holes can reach past the outline into the face
+/// beyond. The holes' samples past a chord, by no more than its sag, become
+/// samples of the chord as well. Each chord takes them from the holes of
+/// every face on it, all at once and in order along it, and keeps its own
+/// samples where two holes' samples overlap along it. The outline then runs
+/// round them, the face beyond leaves them out, and the two faces and each
+/// hole's other face meet along the same points. An outline keeps its face
+/// on its left, seen from the side the surface's normal points to, so a
+/// sample past a chord lies on the right of the great circle through it.
+pub(super) fn sample_holes_past_sphere_chords(
+    topo: &Topology,
+    faces: &[FaceId],
+    edge_points: &mut DetHashMap<usize, Vec<Point3>>,
+) -> Result<(), crate::OperationsError> {
+    // For each chord, its samples' ends and each hole's run past it, with
+    // their places along the chord from its first sample.
+    type Runs = (Point3, Point3, Vec<Vec<(f64, Point3)>>);
+    let mut chords: std::collections::BTreeMap<usize, Runs> = std::collections::BTreeMap::new();
+    for &face_id in faces {
+        let face = topo.face(face_id)?;
+        let FaceSurface::Sphere(sphere) = face.surface() else {
+            continue;
+        };
+        if face.inner_wires().is_empty() {
+            continue;
+        }
+        let (centre, radius) = (sphere.center(), sphere.radius());
+        let key = |p: Point3| point_merge_key(p, MERGE_GRID);
+        let mut loops: Vec<Vec<Point3>> = Vec::new();
+        for &wire_id in face.inner_wires() {
+            let mut samples: Vec<Point3> = Vec::new();
+            for oe in topo.wire(wire_id)?.edges() {
+                let Some(points) = edge_points.get(&oe.edge().index()) else {
+                    continue;
+                };
+                let ordered: Vec<Point3> = if oe.is_forward() {
+                    points.clone()
+                } else {
+                    points.iter().rev().copied().collect()
+                };
+                for p in ordered {
+                    if samples.last().is_none_or(|&q| key(q) != key(p)) {
+                        samples.push(p);
+                    }
+                }
+            }
+            if samples.len() > 1
+                && samples.first().map(|&p| key(p)) == samples.last().map(|&p| key(p))
+            {
+                samples.pop();
+            }
+            loops.push(samples);
+        }
+        for oe in topo.wire(face.outer_wire())?.edges() {
+            if !matches!(topo.edge(oe.edge())?.curve(), EdgeCurve::Line) {
+                continue;
+            }
+            let Some(&[start, end]) = edge_points.get(&oe.edge().index()).map(Vec::as_slice) else {
+                continue;
+            };
+            let (p, q) = if oe.is_forward() {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            let Ok(left) = (p - centre).cross(q - centre).normalize() else {
+                continue;
+            };
+            let sag = radius - (p + (q - p) * 0.5 - centre).length();
+            let chord = q - p;
+            let length_sq = chord.dot(chord);
+            let tol = 1e-9 * radius;
+            if sag <= 0.0 || length_sq <= tol * tol {
+                continue;
+            }
+            // Where along the chord, from its first sample, a sample past it
+            // lies: within the sag past its great circle, and within the sag
+            // of the arc over it, so within twice the sag of the chord.
+            let along = |h: Point3| {
+                let past = -left.dot(h - centre);
+                let t = (h - p).dot(chord) / length_sq;
+                let off = (h - (p + chord * t)).length();
+                let t = if oe.is_forward() { t } else { 1.0 - t };
+                (past >= -tol && past <= sag && off <= 2.0 * sag && t > 1e-9 && t < 1.0 - 1e-9)
+                    .then_some(t)
+            };
+            let runs = &mut chords
+                .entry(oe.edge().index())
+                .or_insert_with(|| (start, end, Vec::new()))
+                .2;
+            // Each hole's run of consecutive samples past the chord.
+            for samples in &loops {
+                let n = samples.len();
+                let hits: Vec<Option<f64>> = samples.iter().map(|&h| along(h)).collect();
+                let starts: Vec<usize> = (0..n)
+                    .filter(|&i| hits[i].is_some() && hits[(i + n - 1) % n].is_none())
+                    .collect();
+                let &[i0] = starts.as_slice() else {
+                    continue;
+                };
+                let mut run: Vec<(f64, Point3)> = (0..n)
+                    .map(|k| (i0 + k) % n)
+                    .map_while(|i| hits[i].map(|t| (t, samples[i])))
+                    .collect();
+                let rising = run.windows(2).all(|w| w[1].0 > w[0].0);
+                let falling = run.windows(2).all(|w| w[1].0 < w[0].0);
+                if !(rising || falling) {
+                    continue;
+                }
+                run.sort_by(|a, b| a.0.total_cmp(&b.0));
+                runs.push(run);
+            }
+        }
+    }
+    for (index, (start, end, mut runs)) in chords {
+        if runs.is_empty() {
+            continue;
+        }
+        // Runs that overlap along the chord would put the outline across a
+        // hole.
+        runs.sort_by(|a, b| a[0].0.total_cmp(&b[0].0));
+        if runs
+            .windows(2)
+            .any(|w| w[0].last().is_none_or(|last| last.0 >= w[1][0].0))
+        {
+            continue;
+        }
+        let mut points = vec![start];
+        points.extend(runs.into_iter().flatten().map(|(_, h)| h));
+        points.push(end);
+        edge_points.insert(index, points);
+    }
+    Ok(())
+}
+
+/// Gives each closed circle or ellipse edge that a face's seam meets its
+/// vertex as a sample.
+///
+/// A closed edge's samples start where its curve's frame starts, which need
+/// not be its vertex. A face's mesher ends its seam on the rim's sample
+/// nearest the vertex, which moves the seam up to half a step round the
+/// wall, and across a hole that passes nearer the seam than that. With the
+/// vertex as a sample, the seam stays where the face has it. The faces on
+/// both sides of the rim take the same sample.
+pub(super) fn sample_seam_vertices_on_rims(
+    topo: &Topology,
+    faces: &[FaceId],
+    edge_points: &mut DetHashMap<usize, Vec<Point3>>,
+) -> Result<(), crate::OperationsError> {
+    let mut seam_vertices: DetHashSet<usize> = DetHashSet::default();
+    let mut rims = Vec::new();
+    for &face_id in faces {
+        let face = topo.face(face_id)?;
+        for &wire_id in std::iter::once(&face.outer_wire()).chain(face.inner_wires()) {
+            let edges = topo.wire(wire_id)?.edges();
+            for (i, oe) in edges.iter().enumerate() {
+                let edge = topo.edge(oe.edge())?;
+                if edge.is_closed() {
+                    if matches!(edge.curve(), EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) {
+                        rims.push(oe.edge());
+                    }
+                } else if edges[i + 1..].iter().any(|other| other.edge() == oe.edge()) {
+                    seam_vertices.extend([edge.start().index(), edge.end().index()]);
+                }
+            }
+        }
+    }
+    if seam_vertices.is_empty() {
+        return Ok(());
+    }
+    rims.sort_unstable_by_key(|e| e.index());
+    rims.dedup();
+    for rim in rims {
+        let edge = topo.edge(rim)?;
+        if !seam_vertices.contains(&edge.start().index()) {
+            continue;
+        }
+        let Some(points) = edge_points.get_mut(&rim.index()) else {
+            continue;
+        };
+        let vertex = topo.vertex(edge.start())?.point();
+        let key = point_merge_key(vertex, MERGE_GRID);
+        if points.len() < 2
+            || points
+                .iter()
+                .any(|&p| point_merge_key(p, MERGE_GRID) == key)
+        {
+            continue;
+        }
+        let param = |p: Point3| match edge.curve() {
+            EdgeCurve::Circle(circle) => circle.project(p),
+            EdgeCurve::Ellipse(ellipse) => ellipse.project(p),
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => 0.0,
+        };
+        let t0 = param(points[0]);
+        let along = |p: Point3| (param(p) - t0 + 1e-9).rem_euclid(std::f64::consts::TAU) - 1e-9;
+        // The samples run once round from the first, which the last repeats.
+        let last = points.len() - 1;
+        let rising = points[..last].windows(2).all(|w| along(w[1]) > along(w[0]));
+        if !rising {
+            continue;
+        }
+        let t = along(vertex);
+        let at = (1..last).find(|&i| along(points[i]) > t).unwrap_or(last);
+        points.insert(at, vertex);
+    }
+    Ok(())
+}
+
 /// [`split_crossing_spline_chords`], then the samples of edges that double
 /// back over each other shared again: a straight edge the split halved hands
 /// its new samples to the edge overlapping it, which a face across that edge
@@ -1224,6 +1439,8 @@ pub(super) fn tessellate_solid_core(
         }
     }
 
+    sample_seam_vertices_on_rims(topo, &all_faces, &mut edge_points)?;
+    sample_holes_past_sphere_chords(topo, &all_faces, &mut edge_points)?;
     split_chords_and_share(topo, &all_faces, &mut edge_points, edge_params, deflection)?;
     phase("circle_sync", &mut phase_t);
     let mut merged = TriangleMesh::default();

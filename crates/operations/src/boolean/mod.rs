@@ -155,6 +155,9 @@ fn boolean_inner(
     b: SolidId,
 ) -> Result<SolidId, crate::OperationsError> {
     LAST_USED_MESH_FALLBACK.with(|f| f.set(false));
+    if let Some((result, _)) = empty_operand_result(topo, op, a, b)? {
+        return Ok(result);
+    }
     let tol = brepkit_math::tolerance::Tolerance::new();
 
     // A tool of NURBS faces wholly inside a blank of them, the two
@@ -1053,11 +1056,12 @@ fn boolean_inner(
     // more complex interaction semantics so we leave those to mesh.
     if op == BooleanOp::Cut {
         let components = crate::boolean::assembly::face_components(topo, a);
-        if components.len() >= 2
-            && components_are_disjoint_pieces(topo, &components)
-            && let Ok(result) = cut_multi_region_input(topo, a, b, components.len())
-        {
-            return Ok(result);
+        if components.len() >= 2 && components_are_disjoint_pieces(topo, &components) {
+            match cut_multi_region_input(topo, a, b, components.len()) {
+                Ok(result) => return Ok(result),
+                Err(e @ crate::OperationsError::EmptyResult { .. }) => return Err(e),
+                Err(_) => {}
+            }
         }
     }
 
@@ -1110,6 +1114,45 @@ fn boolean_inner(
         }
     }
     Ok(enforce_manifold_shell(topo, result).unwrap_or(result))
+}
+
+/// The result of `op` when `a` or `b` is the empty solid, as a new solid: a
+/// fuse gives a copy of the other operand, a cut gives a copy of `a` or the
+/// empty solid, and an intersect gives the empty solid. Returns the result
+/// and the operand it copies, or `None` when neither operand is empty.
+///
+/// # Errors
+///
+/// Returns an error if either operand, or a shell of it, does not resolve.
+fn empty_operand_result(
+    topo: &mut Topology,
+    op: BooleanOp,
+    a: SolidId,
+    b: SolidId,
+) -> Result<Option<(SolidId, Option<SolidId>)>, crate::OperationsError> {
+    let (a_empty, b_empty) = (topo.is_empty_solid(a), topo.is_empty_solid(b));
+    if !a_empty && !b_empty {
+        return Ok(None);
+    }
+    // An operand that is not copied is not read below, so a handle that
+    // does not resolve would pass unseen.
+    for s in [a, b] {
+        let solid = topo.solid(s)?;
+        topo.shell(solid.outer_shell())?;
+        for &shell in solid.inner_shells() {
+            topo.shell(shell)?;
+        }
+    }
+    let kept = match op {
+        BooleanOp::Fuse if a_empty => (!b_empty).then_some(b),
+        BooleanOp::Fuse | BooleanOp::Cut => (!a_empty).then_some(a),
+        BooleanOp::Intersect => None,
+    };
+    let result = match kept {
+        Some(s) => crate::copy::copy_solid(topo, s)?,
+        None => topo.add_empty_solid(),
+    };
+    Ok(Some((result, kept)))
 }
 
 /// Perform a boolean operation with custom options.
@@ -1567,6 +1610,33 @@ pub fn boolean_with_evolution(
     b: SolidId,
 ) -> Result<(SolidId, crate::evolution::EvolutionMap), crate::OperationsError> {
     use brepkit_topology::explorer::solid_faces;
+
+    // With an empty operand the result is a copy of the other operand or the
+    // empty solid. A copy keeps its source's shells and faces in order, so
+    // each face, a cavity's too, maps to the face it copies; the faces of an
+    // operand not copied are all gone.
+    if let Some((result, kept)) = empty_operand_result(topo, op, a, b)? {
+        let mut evo = crate::evolution::EvolutionMap::new();
+        if let Some(source) = kept {
+            let (inputs, outputs) = (solid_faces(topo, source)?, solid_faces(topo, result)?);
+            if inputs.len() != outputs.len() {
+                return Err(crate::OperationsError::InvalidInput {
+                    reason: "a copied operand has another face count".into(),
+                });
+            }
+            for (input, output) in inputs.into_iter().zip(outputs) {
+                evo.add_modified(input.index(), output.index());
+            }
+        }
+        for s in [a, b] {
+            if Some(s) != kept {
+                for face in solid_faces(topo, s)? {
+                    evo.add_deleted(face.index());
+                }
+            }
+        }
+        return Ok((result, evo));
+    }
 
     // A tool of NURBS faces wholly inside the blank: each face of the result
     // is a copy of one input face, so the provenance is exact with no engine
@@ -4649,12 +4719,8 @@ fn cut_multi_region_input(
         let comp_solid = crate::copy::copy_solid(topo, comp_solid_raw)?;
         match boolean(topo, BooleanOp::Cut, comp_solid, b) {
             Ok(r) => per_component_results.push(r),
-            Err(
-                crate::OperationsError::EmptyResult { .. }
-                | crate::OperationsError::InvalidInput { .. },
-            ) => {
-                per_component_results.push(comp_solid);
-            }
+            // The piece lies wholly inside the tool: none of it remains.
+            Err(crate::OperationsError::EmptyResult { .. }) => {}
             Err(e) => return Err(e),
         }
     }
@@ -4675,6 +4741,11 @@ fn cut_multi_region_input(
         for &shell in r_data.inner_shells() {
             cavity_faces.push(topo.shell(shell)?.faces().to_vec());
         }
+    }
+    if all_faces.is_empty() {
+        return Err(crate::OperationsError::EmptyResult {
+            reason: "Cut with every piece of the target inside the tool".into(),
+        });
     }
     let combined = make_solid_from_face_subset(topo, &all_faces)?;
     for faces in cavity_faces {

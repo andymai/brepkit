@@ -4555,6 +4555,8 @@ pub(super) fn tessellate_holed_face_local(
         }
     }
     // The face's outline is read in its (u, v) as the solid mesher reads it.
+    super::solid::sample_seam_vertices_on_rims(topo, &[face_id], &mut edge_points)?;
+    super::solid::sample_holes_past_sphere_chords(topo, &[face_id], &mut edge_points)?;
     super::solid::split_crossing_spline_chords(
         topo,
         &[face_id],
