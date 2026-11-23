@@ -352,7 +352,7 @@ fn split_edges_at_3d_points(
                 split_uv
             };
             let mut pcurve = boundary_piece_pcurve(&edge, prev_3d, split_3d, surface, frame);
-            if nurbs_by_projection {
+            if nurbs_by_projection || clear_ball {
                 pcurve = on_copy_of(pcurve, prev_uv, periods);
             }
             result.push(OrientedPCurveEdge {
@@ -370,7 +370,7 @@ fn split_edges_at_3d_points(
             prev_3d = split_3d;
         }
         let mut pcurve = boundary_piece_pcurve(&edge, prev_3d, edge.end_3d, surface, frame);
-        if nurbs_by_projection {
+        if nurbs_by_projection || clear_ball {
             pcurve = on_copy_of(pcurve, prev_uv, periods);
         }
         // The stored `end_uv` of a closed rim follows the CURVE's direction

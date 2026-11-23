@@ -9811,9 +9811,7 @@ fn split_face_2d_impl(
             {
                 #[allow(clippy::cast_precision_loss)]
                 let by = t as f64 * u_period;
-                let e = &mut all_edges[k];
-                e.start_uv = Point2::new(e.start_uv.x() + by, e.start_uv.y());
-                e.end_uv = Point2::new(e.end_uv.x() + by, e.end_uv.y());
+                move_edge_in_uv(&mut all_edges[k], by, 0.0);
             }
         }
     }

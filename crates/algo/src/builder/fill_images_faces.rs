@@ -697,8 +697,8 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             // outline in `(u, v)` runs on chords, and the middle of a thin
             // piece can lie between a section's arc and its chords, on the
             // neighbouring piece. A point that is not clear inside it gives
-            // way to another candidate the wires accept. A piece with no
-            // such candidate (one with no area between its wires) keeps it.
+            // way to another candidate the wires accept, or to none: the
+            // piece is then not classified from a point off it.
             if let Some(p) = interior_point
                 && new_face_id.is_some()
                 && matches!(split.surface, FaceSurface::Sphere(_))
@@ -706,11 +706,10 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                     crate::classifier::SphereFaceTrim::new(topo, resolved_face_id)
             {
                 let near = tol.linear * 10.0;
-                if !trim.holds_clear(p, near)
-                    && let Some(clear) =
-                        super::face_splitter::ball_interior_point_clear(split, &trim, near)
-                {
-                    interior_point = Some(clear);
+                if !trim.holds_clear(p, near) {
+                    interior_point =
+                        super::face_splitter::ball_interior_point_clear(split, &trim, near);
+                    interior_unclear = interior_point.is_none();
                 }
             }
 
