@@ -2303,12 +2303,20 @@ enum Moved {
 }
 
 impl Moved {
-    fn new(surface: &AnalyticSurface<'_>, by: Vec3) -> Self {
+    /// `surface` moved by `by`, and how far its `v` moved: a cylinder's
+    /// frame, which can sit anywhere along its axis, is moved along it to
+    /// the point of the axis nearest the origin, so the surface reads alike
+    /// wherever its frame sat, and its `v` drops by as much.
+    fn new(surface: &AnalyticSurface<'_>, by: Vec3) -> (Self, f64) {
         match surface {
-            AnalyticSurface::Cylinder(c) => Self::Cylinder(c.translated(by)),
-            AnalyticSurface::Cone(c) => Self::Cone(c.translated(by)),
-            AnalyticSurface::Sphere(s) => Self::Sphere(s.translated(by)),
-            AnalyticSurface::Torus(t) => Self::Torus(t.translated(by)),
+            AnalyticSurface::Cylinder(c) => {
+                let moved = c.translated(by);
+                let along = -c.axis().dot(moved.origin() - Point3::new(0.0, 0.0, 0.0));
+                (Self::Cylinder(moved.translated(c.axis() * along)), along)
+            }
+            AnalyticSurface::Cone(c) => (Self::Cone(c.translated(by)), 0.0),
+            AnalyticSurface::Sphere(s) => (Self::Sphere(s.translated(by)), 0.0),
+            AnalyticSurface::Torus(t) => (Self::Torus(t.translated(by)), 0.0),
         }
     }
 
@@ -2326,7 +2334,8 @@ impl Moved {
 /// on a grid over `a`, confined to `region` when one is given.
 ///
 /// The marcher works with both surfaces moved by the same vector to the
-/// middle of the region, or of `a`'s patch, and moves its curves back. Far
+/// middle of the region, or of `a`'s patch, each cylinder's frame moved
+/// along its axis to there, and moves its curves back. Far
 /// from the origin the spacing of floats in one coordinate would otherwise
 /// decide whether a point lies on both surfaces and whether they cross
 /// there, and a pair moved there would not read as it does near the origin:
@@ -2353,9 +2362,15 @@ fn marched_sections(
         (first + (last - first) * 0.5, reach)
     };
     let shift = anchor - Point3::new(0.0, 0.0, 0.0);
-    let (near_a, near_b) = (Moved::new(&a, -shift), Moved::new(&b, -shift));
+    let ((near_a, dv_a), (near_b, dv_b)) = (Moved::new(&a, -shift), Moved::new(&b, -shift));
+    let v_range = |surface: &AnalyticSurface<'_>, hint: Option<(f64, f64)>, dv: f64| {
+        let (lo, hi) = hint.unwrap_or_else(|| surface_closures(surface).3);
+        Some((lo - dv, hi - dv))
+    };
     let linear = Tolerance::new().linear;
-    let fit_tol = (-f64::EPSILON).madd(size(anchor) + reach, linear);
+    let fit_tol = (-f64::EPSILON)
+        .madd(size(anchor) + reach, linear)
+        .min(linear);
     let near_region = region.map(|r| Aabb3 {
         min: r.min - shift,
         max: r.max - shift,
@@ -2364,14 +2379,11 @@ fn marched_sections(
         near_a.surface(),
         near_b.surface(),
         grid_res,
-        v_range_hint_a,
-        v_range_hint_b,
+        v_range(&a, v_range_hint_a, dv_a),
+        v_range(&b, v_range_hint_b, dv_b),
         near_region,
         fit_tol,
     )?;
-    if !curves.is_empty() && fit_tol < 0.5 * linear {
-        return Err(MathError::ConvergenceFailure { iterations: 0 });
-    }
     curves
         .into_iter()
         .map(|c| {
@@ -2401,7 +2413,8 @@ fn marched_sections(
 }
 
 /// [`marched_sections`] on surfaces near the origin, each fit held within
-/// `fit_tol` of both surfaces.
+/// `fit_tol` of both surfaces. A traced section is refused before its fit
+/// where `fit_tol` is less than half the linear tolerance.
 #[allow(clippy::too_many_lines, clippy::similar_names)]
 fn marched_sections_near(
     a: AnalyticSurface<'_>,
@@ -2600,6 +2613,9 @@ fn marched_sections_near(
             }
             if spaced.len() < 2 {
                 continue;
+            }
+            if fit_tol < 0.5 * Tolerance::new().linear {
+                return Err(MathError::ConvergenceFailure { iterations: 0 });
             }
             let (curve, points) = fit_section(&a, &b, &spaced, fit_tol)?;
             let ipts: Vec<IntersectionPoint> = points
@@ -9511,8 +9527,8 @@ mod tests {
     /// (0.5, y, 1), moved 1e6 along each axis, meet in the two loops they
     /// meet in unmoved, each within the linear tolerance of both surfaces.
     /// Moved 1e9, where the floats' spacing (1.2e-7) leaves no room for the
-    /// tolerance once a curve is moved back, the traced section is refused,
-    /// not dropped.
+    /// tolerance once a curve is moved back, the traced section is refused
+    /// before any fit, not dropped; its fit ran 7 passes over 1.4 s first.
     #[test]
     fn a_section_far_from_the_origin_is_traced_as_near_it() {
         let ring = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 4.0, 1.5).unwrap();
@@ -9560,7 +9576,87 @@ mod tests {
             Vec3::new(0.0, 1e9, 0.0),
             Vec3::new(0.0, 0.0, 1e9),
         ] {
-            assert!(run(o).is_err(), "moved {o:?}: not refused");
+            assert!(
+                matches!(run(o), Err(MathError::ConvergenceFailure { iterations: 0 })),
+                "moved {o:?}: not refused before its fit"
+            );
+        }
+    }
+
+    /// A cylinder's frame can sit anywhere along its axis. The rods
+    /// `x^2 + y^2 = 1` and `(x - 3)^2 + z^2 = 4`, with their frames 1e6 along
+    /// their axes, touch at (1, 0, 0) alone, as with their frames beside it:
+    /// a seed near the touch settled 1.55e-4 from it and read as a crossing,
+    /// and the marcher refused the pair. Now the seed settles on no crossing
+    /// and no section is traced. The ring and rod of the truth audit, the
+    /// rod's frame 1e6 along its axis, meet in the loops they meet in with
+    /// the frame beside them.
+    #[test]
+    fn frames_far_along_a_rods_axis_read_as_near_ones() {
+        let post =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, -1e6), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap();
+        let beam =
+            CylindricalSurface::new(Point3::new(3.0, -1e6, 0.0), Vec3::new(0.0, 1.0, 0.0), 2.0)
+                .unwrap();
+        let (a, b) = (
+            AnalyticSurface::Cylinder(&post),
+            AnalyticSurface::Cylinder(&beam),
+        );
+        let settled = settle_on_section(&a, &b, Point3::new(1.0, 0.01, 0.01));
+        assert!(
+            settled.is_none_or(|p| !crosses_at(&a, &b, p)),
+            "settles on a crossing at {settled:?}"
+        );
+        let region = Aabb3 {
+            min: Point3::new(0.5, -0.5, -0.5),
+            max: Point3::new(1.5, 0.5, 0.5),
+        };
+        let far = Some((1e6 - 1.0, 1e6 + 1.0));
+        let curves = marched_sections(a, b, 32, far, far, Some(region)).unwrap();
+        assert!(curves.is_empty(), "{} sections", curves.len());
+
+        let ring = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 4.0, 1.5).unwrap();
+        let boxes = |frame: f64| {
+            let rod = CylindricalSurface::new(
+                Point3::new(0.5, -frame, 1.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                0.6,
+            )
+            .unwrap();
+            let region = Aabb3 {
+                min: Point3::new(-0.1, -5.5, 0.4),
+                max: Point3::new(1.1, 5.5, 1.5),
+            };
+            let curves = intersect_analytic_analytic_in_region(
+                AnalyticSurface::Cylinder(&rod),
+                AnalyticSurface::Torus(&ring),
+                32,
+                Some((frame - 10.0, frame + 10.0)),
+                None,
+                region,
+            )
+            .unwrap();
+            let mut boxes: Vec<Aabb3> = curves
+                .iter()
+                .map(|c| {
+                    let worst = farthest_along(&c.curve, 4000, |p| {
+                        let on_torus = ((p.x().hypot(p.y()) - 4.0).hypot(p.z()) - 1.5).abs();
+                        let on_rod = ((p.x() - 0.5).hypot(p.z() - 1.0) - 0.6).abs();
+                        on_torus.max(on_rod)
+                    });
+                    assert!(worst <= 1e-7, "frame {frame}: off by {worst:.2e}");
+                    Aabb3::try_from_points(c.points.iter().map(|ip| ip.point)).unwrap()
+                })
+                .collect();
+            boxes.sort_by(|p, q| p.min.y().total_cmp(&q.min.y()));
+            boxes
+        };
+        let (near, far) = (boxes(0.0), boxes(1e6));
+        assert_eq!(near.len(), 2);
+        assert_eq!(far.len(), near.len());
+        for (n, f) in near.iter().zip(&far) {
+            assert!((n.min - f.min).length() < 1e-6 && (n.max - f.max).length() < 1e-6);
         }
     }
 }

@@ -76,7 +76,8 @@ pub(super) trait Carrier {
     fn bound(&self, ctrl: &[Point3; 4]) -> Option<f64>;
 
     /// A length that sizes the rounding of the distance at `p`: the
-    /// surface's own size and `p`'s distance from its frame.
+    /// surface's own size and `p`'s distance from its frame, or for a
+    /// cylinder, whose frame can sit anywhere along its axis, from its axis.
     fn scale(&self, p: Point3) -> f64;
 }
 
@@ -285,7 +286,10 @@ impl Carrier for AnalyticSurface<'_> {
 
     fn scale(&self, p: Point3) -> f64 {
         match self {
-            Self::Cylinder(c) => (p - c.origin()).length() + c.radius(),
+            Self::Cylinder(c) => {
+                let w = p - c.origin();
+                (w - c.axis() * c.axis().dot(w)).length() + c.radius()
+            }
             Self::Sphere(s) => (p - s.center()).length() + s.radius(),
             Self::Cone(c) => (p - c.apex()).length(),
             Self::Torus(t) => (p - t.center()).length() + t.major_radius() + t.minor_radius(),
