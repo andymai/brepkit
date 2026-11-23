@@ -438,6 +438,185 @@ impl FaceLoops {
     }
 }
 
+/// How many whole times a wire runs round the surface of its face.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Turns {
+    /// Round the axis of a cylinder or a cone, round a pole of a sphere, or
+    /// round a B-spline surface that closes on itself in one parameter.
+    Round(i64),
+    /// Along each parameter of a torus, or of a B-spline surface that
+    /// closes on itself in both.
+    Torus(i64, i64),
+}
+
+impl Turns {
+    /// Whether a wire that turns so can bound a face. A face lies on one
+    /// side of its wire all the way along it. Where a wire runs round the
+    /// surface by two rims joined by a seam, the face lies between the rims,
+    /// so the rims run opposite ways round and the wire turns no times.
+    /// So a wire runs round at most once. On a torus a loop that does not
+    /// cross itself runs along each period a number of times with no common
+    /// factor, so the two counts have no common factor larger than one.
+    #[must_use]
+    pub fn bound_a_face(self) -> bool {
+        match self {
+            Self::Round(k) => k.unsigned_abs() <= 1,
+            Self::Torus(a, b) => common_factor(a.unsigned_abs(), b.unsigned_abs()) <= 1,
+        }
+    }
+}
+
+fn common_factor(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+/// The most times a piece of an edge is halved to read how far it turns.
+const MOST_TURN_HALVINGS: u32 = 20;
+
+/// The most a step along a wire may turn round the drawing's centre, or move
+/// along a torus's period, in turns, for the step to be read.
+const TURN_STEP: f64 = 1.0 / 16.0;
+
+/// How near the drawing's centre, as a fraction of the farthest point, a
+/// wire may come and still be read.
+const CENTRE_CLEAR: f64 = 1e-3;
+
+/// How many times each wire of a face runs round its surface, outline
+/// first.
+///
+/// `None` where the surface does not close on itself (a plane, or a
+/// B-spline surface open in both parameters) or does not draw (see
+/// [`FaceLoops::of`]); `None` for a wire that does not read: one that runs
+/// through or next to an apex or a pole at the drawing's centre, or whose
+/// turns do not come to a whole number.
+///
+/// # Errors
+///
+/// Returns an error if topology lookups fail.
+pub fn wire_turns(
+    topo: &Topology,
+    face_id: FaceId,
+) -> Result<Option<Vec<Option<Turns>>>, CheckError> {
+    let face = topo.face(face_id)?;
+    let closes = match face.surface() {
+        FaceSurface::Plane { .. } => false,
+        FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_) => true,
+        FaceSurface::Nurbs(s) => s.is_periodic_u() || s.is_periodic_v(),
+    };
+    if !closes {
+        return Ok(None);
+    }
+    let wire_ids: Vec<WireId> = std::iter::once(face.outer_wire())
+        .chain(face.inner_wires().iter().copied())
+        .collect();
+    let mut wires: Vec<Option<Vec<BoundaryEdge<'_>>>> = Vec::with_capacity(wire_ids.len());
+    for &wid in &wire_ids {
+        wires.push(wires_of(topo, &[wid])?.and_then(|mut w| w.pop()));
+    }
+    let all: Vec<Point3> = wires.iter().flatten().flat_map(|w| samples(w)).collect();
+    if all.is_empty() {
+        return Ok(None);
+    }
+    let edges: Vec<&BoundaryEdge<'_>> = wires.iter().flatten().flatten().collect();
+    let Some(chart) = drawing_of(face.surface(), &all, &edges) else {
+        return Ok(None);
+    };
+    Ok(Some(
+        wires
+            .iter()
+            .map(|w| w.as_ref().and_then(|w| turns_of(w, &chart)))
+            .collect(),
+    ))
+}
+
+/// How many times `wire` runs round the drawing's centre, or along each
+/// period of a torus's drawing. Each piece of an edge is halved until each
+/// step turns less than [`TURN_STEP`], so a step's turn is the smaller angle
+/// between its ends.
+fn turns_of(wire: &[BoundaryEdge<'_>], chart: &Chart<'_>) -> Option<Turns> {
+    let period = match chart.drawing {
+        Drawing::Torus(period) => Some(period),
+        Drawing::Disc | Drawing::Annulus | Drawing::Sphere => None,
+    };
+    let moved = |a: Point2, b: Point2| {
+        if let Some(p) = period {
+            return ((b.x() - a.x()) / p.x(), (b.y() - a.y()) / p.y());
+        }
+        let cross = a.x().madd(b.y(), -(a.y() * b.x()));
+        let dot = a.x().madd(b.x(), a.y() * b.y());
+        (cross.atan2(dot) / TAU, 0.0)
+    };
+    let mut total = (0.0_f64, 0.0_f64);
+    let (mut first, mut last): (Option<Point2>, Option<Point2>) = (None, None);
+    let (mut nearest, mut farthest) = (f64::INFINITY, 0.0_f64);
+    let mut take = |from: Option<Point2>, to: Point2, total: &mut (f64, f64)| -> bool {
+        if let Some(from) = from {
+            let (du, dv) = moved(from, to);
+            if du.abs() > TURN_STEP || dv.abs() > TURN_STEP {
+                return false;
+            }
+            total.0 += du;
+            total.1 += dv;
+        }
+        let r = to.x().hypot(to.y());
+        nearest = nearest.min(r);
+        farthest = farthest.max(r);
+        true
+    };
+    for edge in wire {
+        let at = |t: f64| edge.curve.evaluate_with_endpoints(t, edge.start, edge.end);
+        for (ta, tb) in edge_pieces(edge) {
+            let start = (chart.draw)(at(ta), last);
+            if !take(last, start, &mut total) {
+                return None;
+            }
+            first.get_or_insert(start);
+            last = Some(start);
+            let mut pending = vec![(ta, tb, 0_u32)];
+            while let Some((ta, tb, depth)) = pending.pop() {
+                let a = last?;
+                let b = (chart.draw)(at(tb), Some(a));
+                if take(Some(a), b, &mut total) {
+                    last = Some(b);
+                    continue;
+                }
+                if depth >= MOST_TURN_HALVINGS {
+                    return None;
+                }
+                let mid = f64::midpoint(ta, tb);
+                pending.push((mid, tb, depth + 1));
+                pending.push((ta, mid, depth + 1));
+            }
+        }
+    }
+    let (first, last) = (first?, last?);
+    if period.is_none() {
+        // The wire ends where it starts; on a torus the carried point ends
+        // whole periods on.
+        if !take(Some(last), first, &mut total) {
+            return None;
+        }
+        if !nearest.is_finite() || nearest <= CENTRE_CLEAR * farthest {
+            return None;
+        }
+    }
+    let whole = |x: f64| {
+        let k = x.round();
+        #[allow(clippy::cast_possible_truncation)]
+        ((x - k).abs() <= 1e-3 && k.abs() < 1e6).then_some(k as i64)
+    };
+    Some(match period {
+        Some(_) => Turns::Torus(whole(total.0)?, whole(total.1)?),
+        None => Turns::Round(whole(total.0)?),
+    })
+}
+
 /// Where a hole lies off its face.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Misplaced {

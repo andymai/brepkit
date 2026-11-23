@@ -19,7 +19,7 @@ use brepkit_topology::wire::WireId;
 
 use super::checks::{CheckId, EntityRef, Severity, ValidationIssue};
 use crate::CheckError;
-use crate::face_loops::{FaceLoops, Misplaced};
+use crate::face_loops::{FaceLoops, Misplaced, Turns, wire_turns};
 
 /// The chords a curved edge is read in when meeting points are looked for.
 const CHORDS: usize = 16;
@@ -816,6 +816,54 @@ pub fn check_face_holes_placed(
     Ok(face_wires_issue(topo, face_id, tolerance, false)?
         .into_iter()
         .collect())
+}
+
+/// Check that no wire of a face on a surface that closes on itself runs
+/// round the surface more than once.
+///
+/// The surface is a cylinder, cone, sphere, torus, or a closed B-spline
+/// surface. A wire that runs round more than once (see
+/// [`Turns::bound_a_face`]) bounds no region of the surface. Two rims of one
+/// wire that run the same way round, as where one of them is used the wrong
+/// way along the wire, give one. The edges' own curves are read; a wire that
+/// does not read is not reported.
+///
+/// # Errors
+///
+/// Returns an error if topology lookups fail.
+pub fn check_face_wire_turns(
+    topo: &Topology,
+    face_id: FaceId,
+) -> Result<Vec<ValidationIssue>, CheckError> {
+    let Some(turns) = wire_turns(topo, face_id)? else {
+        return Ok(vec![]);
+    };
+    let face = topo.face(face_id)?;
+    let wire_ids = std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied());
+    for (wire_id, turns) in wire_ids.zip(turns) {
+        let Some(turns) = turns.filter(|t| !t.bound_a_face()) else {
+            continue;
+        };
+        let times = match turns {
+            Turns::Round(k) => format!("{} times", k.unsigned_abs()),
+            Turns::Torus(a, b) => format!(
+                "{} and {} times along its two periods",
+                a.unsigned_abs(),
+                b.unsigned_abs()
+            ),
+        };
+        return Ok(vec![ValidationIssue {
+            check: CheckId::FaceWireTurns,
+            severity: Severity::Error,
+            entity: EntityRef::Face(face_id),
+            description: format!(
+                "wire {} runs round the surface {times}, so it bounds no region of it",
+                wire_id.index()
+            ),
+            deviation: None,
+        }]);
+    }
+    Ok(vec![])
 }
 
 fn face_wires_issue(
@@ -2781,5 +2829,112 @@ mod tests {
         assert_eq!(found(&topo, face), None);
         let face = topo.add_face(Face::new(outer, vec![outside], surface));
         assert!(found(&topo, face).is_some_and(|d| d.contains("outside the outer wire")));
+    }
+
+    fn turns(topo: &Topology, face: FaceId) -> Option<String> {
+        check_face_wire_turns(topo, face)
+            .unwrap()
+            .into_iter()
+            .next()
+            .map(|i| i.description)
+    }
+
+    /// A band of a cylinder or a cone whose two rims run the same way round,
+    /// as where one of them is used the wrong way, runs round the surface
+    /// twice and is reported. The band as built turns no times, and each rim
+    /// alone, as an outline and a hole, turns once: neither is reported.
+    #[test]
+    fn a_band_whose_rims_run_one_way_round_is_reported() {
+        // A surface, its radius at a height, and the band's heights.
+        type Band<'a> = (FaceSurface, &'a dyn Fn(f64) -> f64, (f64, f64));
+        let (cone, on_cone) = cone();
+        let surfaces: [Band<'_>; 2] = [
+            (cylinder(), THREE, (0.0, 10.0)),
+            (cone, &*on_cone, (2.0, 6.0)),
+        ];
+        for (surface, r, (low, high)) in surfaces {
+            let mut topo = Topology::default();
+            let outer = band(&mut topo, (low, high), r);
+            let face = topo.add_face(Face::new(outer, vec![], surface.clone()));
+            assert_eq!(turns(&topo, face), None);
+            assert_eq!(
+                crate::face_loops::wire_turns(&topo, face).unwrap(),
+                Some(vec![Some(Turns::Round(0))])
+            );
+
+            let twisted: Vec<OrientedEdge> = topo
+                .wire(outer)
+                .unwrap()
+                .edges()
+                .iter()
+                .enumerate()
+                .map(|(k, oe)| OrientedEdge::new(oe.edge(), oe.is_forward() != (k == 2)))
+                .collect();
+            let twisted = topo.add_wire(Wire::new(twisted, true).unwrap());
+            let face = topo.add_face(Face::new(twisted, vec![], surface.clone()));
+            assert!(
+                turns(&topo, face).is_some_and(|d| d.contains("2 times")),
+                "{:?}",
+                turns(&topo, face)
+            );
+
+            for (top, bottom) in [(true, false), (true, true)] {
+                let outer = ring_wire(&mut topo, high, r(high), top);
+                let hole = ring_wire(&mut topo, low, r(low), bottom);
+                let face = topo.add_face(Face::new(outer, vec![hole], surface.clone()));
+                assert_eq!(turns(&topo, face), None, "{top} {bottom}");
+            }
+        }
+    }
+
+    /// A band of a ring torus between two circles round its axis, joined by
+    /// an arc of its tube: as built it turns no times; with the second
+    /// circle run the same way as the first, it runs twice along the ring
+    /// and is reported.
+    #[test]
+    fn a_torus_band_whose_rims_run_one_way_round_is_reported() {
+        use brepkit_math::surfaces::ToroidalSurface;
+        let (big, small) = (5.0, 1.0);
+        let torus = || {
+            FaceSurface::Torus(
+                ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), big, small).unwrap(),
+            )
+        };
+        for twisted in [false, true] {
+            let mut topo = Topology::default();
+            let latitude = |v: f64| ring(small * v.sin(), big + small * v.cos());
+            let (lower, upper) = (latitude(-0.5), latitude(0.5));
+            let (a, b) = (lower.evaluate(0.0), upper.evaluate(0.0));
+            let va = vertex(&mut topo, [a.x(), a.y(), a.z()]);
+            let vb = vertex(&mut topo, [b.x(), b.y(), b.z()]);
+            let rim_a = topo.add_edge(Edge::new(va, va, EdgeCurve::Circle(lower)));
+            let rim_b = topo.add_edge(Edge::new(vb, vb, EdgeCurve::Circle(upper)));
+            // The arc of the tube through both rims' vertices.
+            let radial = Vec3::new(a.x(), a.y(), 0.0).normalize().unwrap();
+            let centre = Point3::new(0.0, 0.0, 0.0) + radial * big;
+            let tube = Circle3D::new(centre, radial.cross(Z), small).unwrap();
+            let seam = topo.add_edge(Edge::new(va, vb, EdgeCurve::Circle(tube)));
+            let wire = topo.add_wire(
+                Wire::new(
+                    vec![
+                        OrientedEdge::new(rim_a, true),
+                        OrientedEdge::new(seam, true),
+                        OrientedEdge::new(rim_b, twisted),
+                        OrientedEdge::new(seam, false),
+                    ],
+                    true,
+                )
+                .unwrap(),
+            );
+            let face = topo.add_face(Face::new(wire, vec![], torus()));
+            let read = crate::face_loops::wire_turns(&topo, face).unwrap();
+            if twisted {
+                assert_eq!(read, Some(vec![Some(Turns::Torus(2, 0))]));
+                assert!(turns(&topo, face).is_some_and(|d| d.contains("2 and 0 times")));
+            } else {
+                assert_eq!(read, Some(vec![Some(Turns::Torus(0, 0))]));
+                assert_eq!(turns(&topo, face), None);
+            }
+        }
     }
 }

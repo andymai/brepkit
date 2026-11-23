@@ -461,18 +461,20 @@ fn valid_fillet(
 
 /// The first fault of `result` in the faces a fillet of `input` made or
 /// trimmed (those with an edge `input` does not have): a wire that crosses
-/// itself, a hole that crosses or leaves its face's outline, or a plane
-/// face that covers the area of another. These are the checks of
-/// [`crate::validate::validate_solid`] that read where faces lie; the
-/// builder's own audit reads how they share edges. Faces the fillet left
-/// as they were are not read again.
+/// itself or runs round its surface more than once, a hole that crosses or
+/// leaves its face's outline, or a plane face that covers the area of
+/// another. These are the checks of [`crate::validate::validate_solid`]
+/// that read where faces lie; the builder's own audit reads how they share
+/// edges. Faces the fillet left as they were are not read again.
 fn fillet_fault(
     topo: &Topology,
     input: SolidId,
     result: SolidId,
 ) -> Result<Option<String>, OperationsError> {
     use brepkit_check::validate::face_overlap::check_faces_overlap_among;
-    use brepkit_check::validate::face_wires::{check_face_wires_apart, check_face_wires_simple};
+    use brepkit_check::validate::face_wires::{
+        check_face_wire_turns, check_face_wires_apart, check_face_wires_simple,
+    };
     // The tolerance `validate_solid` reads these at.
     const TOL: f64 = 1e-6;
     let checked = |found: Result<Vec<brepkit_check::validate::checks::ValidationIssue>, _>| {
@@ -496,6 +498,7 @@ fn fillet_fault(
         made.insert(face);
         let mut found = checked(check_face_wires_simple(topo, face, TOL))?;
         found.extend(checked(check_face_wires_apart(topo, face, TOL))?);
+        found.extend(checked(check_face_wire_turns(topo, face))?);
         if let Some(issue) = found.first() {
             return Ok(Some(format!(
                 "face {}: {}",

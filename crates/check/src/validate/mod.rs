@@ -201,6 +201,9 @@ fn validate_shell_checks(
                     options.tolerance_scale * 1e-6,
                 )?);
             }
+            if !options.disabled_checks.contains(&CheckId::FaceWireTurns) {
+                issues.extend(face_wires::check_face_wire_turns(topo, fid)?);
+            }
         }
     }
 
