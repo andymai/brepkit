@@ -68,8 +68,16 @@ pub fn chamfer(
     // (a pocket's rim) goes there too.
     let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
     if has_curved_edge(topo, &faces)? || on_a_hole(topo, &faces, edges)? {
-        let result = crate::blend_ops::chamfer_v2_walking(topo, solid, edges, distance, distance)?;
-        return crate::blend_ops::all_blended(result);
+        let blended = crate::blend_ops::chamfer_v2_walking(topo, solid, edges, distance, distance)
+            .and_then(crate::blend_ops::all_blended);
+        return match blended {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                let picks: Vec<_> = edges.iter().map(|&e| (e, None)).collect();
+                crate::chamfer_prism::chamfer_by_prisms(topo, solid, &picks, distance, distance)?
+                    .ok_or(error)
+            }
+        };
     }
     chamfer_planar(topo, solid, edges, ChamferDistances::Symmetric(distance))
 }
@@ -227,18 +235,25 @@ pub fn chamfer_two_on(
     match blended {
         Ok(result) => Ok(result),
         Err(error) => {
+            // Separate straight edges between planes, each ending on a
+            // plane square to it, are cut as their bevels' prisms.
+            let picks: Vec<_> = edges.iter().map(|&(e, f)| (e, Some(f))).collect();
             let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
             if has_curved_edge(topo, &faces)? {
-                return Err(error);
+                return crate::chamfer_prism::chamfer_by_prisms(topo, solid, &picks, d1, d2)?
+                    .ok_or(error);
             }
             let reference = edges.iter().map(|&(e, f)| (e.index(), f)).collect();
-            chamfer_planar(
+            match chamfer_planar(
                 topo,
                 solid,
                 &ids,
                 ChamferDistances::Referenced { d1, d2, reference },
-            )
-            .map_err(|_| error)
+            ) {
+                Ok(result) => Ok(result),
+                Err(_) => crate::chamfer_prism::chamfer_by_prisms(topo, solid, &picks, d1, d2)?
+                    .ok_or(error),
+            }
         }
     }
 }
