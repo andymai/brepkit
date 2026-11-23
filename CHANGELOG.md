@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.42](https://github.com/andymai/brepkit/compare/v4.11.41...v4.11.42) (2026-11-23)
+
+
+### Bug Fixes
+
+* **operations:** give a boolean with an empty operand its trivial result, drop a piece inside the tool from a cut per piece, and mesh two rod footprints closed ([#2738](https://github.com/andymai/brepkit/issues/2738)) ([37cca01](https://github.com/andymai/brepkit/commit/37cca0173383553694f904d9a840f4f44e9b6883))
+
 ## [4.11.41](https://github.com/andymai/brepkit/compare/v4.11.40...v4.11.41) (2026-11-23)
 
 
