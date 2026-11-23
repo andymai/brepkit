@@ -906,6 +906,130 @@ pub(super) fn split_crossing_spline_chords(
     Ok(halved)
 }
 
+/// Gives each straight edge of a sphere face's outline the samples of the
+/// face's holes that reach past it.
+///
+/// A ball's equator is a polygon of chords, each within its sag of the
+/// sphere. A boolean finds where a section crosses such an edge on the
+/// chord, so a section that passes between a chord and the sphere does not
+/// split there, and the face's hole can reach past the outline into the face
+/// beyond. The hole's samples past the chord, by no more than its sag, become
+/// samples of the chord as well. The outline then runs round them, the face
+/// beyond leaves them out, and the two faces and the hole's other face meet
+/// along the same points. An outline keeps its face on its left, seen from
+/// the side the surface's normal points to, so a sample past a chord lies on
+/// the right of the great circle through it.
+pub(super) fn sample_holes_past_sphere_chords(
+    topo: &Topology,
+    faces: &[FaceId],
+    edge_points: &mut DetHashMap<usize, Vec<Point3>>,
+) -> Result<(), crate::OperationsError> {
+    for &face_id in faces {
+        let face = topo.face(face_id)?;
+        let FaceSurface::Sphere(sphere) = face.surface() else {
+            continue;
+        };
+        if face.inner_wires().is_empty() {
+            continue;
+        }
+        let (centre, radius) = (sphere.center(), sphere.radius());
+        let key = |p: Point3| point_merge_key(p, MERGE_GRID);
+        let mut loops: Vec<Vec<Point3>> = Vec::new();
+        for &wire_id in face.inner_wires() {
+            let mut samples: Vec<Point3> = Vec::new();
+            for oe in topo.wire(wire_id)?.edges() {
+                let Some(points) = edge_points.get(&oe.edge().index()) else {
+                    continue;
+                };
+                let ordered: Vec<Point3> = if oe.is_forward() {
+                    points.clone()
+                } else {
+                    points.iter().rev().copied().collect()
+                };
+                for p in ordered {
+                    if samples.last().is_none_or(|&q| key(q) != key(p)) {
+                        samples.push(p);
+                    }
+                }
+            }
+            if samples.len() > 1
+                && samples.first().map(|&p| key(p)) == samples.last().map(|&p| key(p))
+            {
+                samples.pop();
+            }
+            loops.push(samples);
+        }
+        let mut split: Vec<(usize, Vec<Point3>)> = Vec::new();
+        for oe in topo.wire(face.outer_wire())?.edges() {
+            if !matches!(topo.edge(oe.edge())?.curve(), EdgeCurve::Line) {
+                continue;
+            }
+            let Some(&[start, end]) = edge_points.get(&oe.edge().index()).map(Vec::as_slice) else {
+                continue;
+            };
+            let (p, q) = if oe.is_forward() {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            let Ok(left) = (p - centre).cross(q - centre).normalize() else {
+                continue;
+            };
+            let sag = radius - (p + (q - p) * 0.5 - centre).length();
+            let chord = q - p;
+            let length_sq = chord.dot(chord);
+            let tol = 1e-9 * radius;
+            if sag <= 0.0 || length_sq <= tol * tol {
+                continue;
+            }
+            // Where along the chord, from its start, a sample past it lies:
+            // within the sag past its great circle, and within the sag of
+            // the arc over it, so within twice the sag of the chord.
+            let along = |h: Point3| {
+                let past = -left.dot(h - centre);
+                let t = (h - p).dot(chord) / length_sq;
+                let off = (h - (p + chord * t)).length();
+                (past >= -tol && past <= sag && off <= 2.0 * sag && t > 1e-9 && t < 1.0 - 1e-9)
+                    .then_some(t)
+            };
+            for samples in &loops {
+                let n = samples.len();
+                let hits: Vec<Option<f64>> = samples.iter().map(|&h| along(h)).collect();
+                let starts: Vec<usize> = (0..n)
+                    .filter(|&i| hits[i].is_some() && hits[(i + n - 1) % n].is_none())
+                    .collect();
+                // One run of consecutive samples, in order along the chord.
+                let &[i0] = starts.as_slice() else {
+                    continue;
+                };
+                let run: Vec<(f64, Point3)> = (0..n)
+                    .map(|k| (i0 + k) % n)
+                    .map_while(|i| hits[i].map(|t| (t, samples[i])))
+                    .collect();
+                let rising = run.windows(2).all(|w| w[1].0 > w[0].0);
+                let falling = run.windows(2).all(|w| w[1].0 < w[0].0);
+                if !(rising || falling) {
+                    continue;
+                }
+                let mut inside: Vec<(f64, Point3)> = run;
+                inside.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let mut points = vec![p];
+                points.extend(inside.into_iter().map(|(_, h)| h));
+                points.push(q);
+                if !oe.is_forward() {
+                    points.reverse();
+                }
+                split.push((oe.edge().index(), points));
+                break;
+            }
+        }
+        for (index, points) in split {
+            edge_points.insert(index, points);
+        }
+    }
+    Ok(())
+}
+
 /// Gives each closed circle or ellipse edge that a face's seam meets its
 /// vertex as a sample.
 ///
@@ -1299,6 +1423,7 @@ pub(super) fn tessellate_solid_core(
     }
 
     sample_seam_vertices_on_rims(topo, &all_faces, &mut edge_points)?;
+    sample_holes_past_sphere_chords(topo, &all_faces, &mut edge_points)?;
     split_chords_and_share(topo, &all_faces, &mut edge_points, edge_params, deflection)?;
     phase("circle_sync", &mut phase_t);
     let mut merged = TriangleMesh::default();

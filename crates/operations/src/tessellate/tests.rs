@@ -6251,9 +6251,61 @@ fn spun_rod(
     s
 }
 
+/// Checks that each triangle of the solid's mesh faces the way its face
+/// does, its normal on the side of the face's outward surface normal at its
+/// centroid, and that the two triangles on each edge run it opposite ways.
+fn assert_faces_turn_outward(topo: &Topology, solid: SolidId, deflection: f64, name: &str) {
+    let (mesh, offsets) = tessellate_solid_grouped_with_tolerance(
+        topo,
+        solid,
+        deflection,
+        brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+    )
+    .unwrap();
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid).unwrap();
+    for (group, w) in offsets.windows(2).enumerate() {
+        let face = topo.face(faces[group]).unwrap();
+        let sense = if face.is_reversed() { -1.0 } else { 1.0 };
+        for t in (w[0] as usize..w[1] as usize).step_by(3) {
+            let [a, b, c] = [0, 1, 2].map(|k| mesh.positions[mesh.indices[t + k] as usize]);
+            let normal = (b - a).cross(c - a);
+            let centroid = Point3::new(
+                (a.x() + b.x() + c.x()) / 3.0,
+                (a.y() + b.y() + c.y()) / 3.0,
+                (a.z() + b.z() + c.z()) / 3.0,
+            );
+            let outward = match face.surface() {
+                FaceSurface::Plane { normal, .. } => *normal,
+                surface => {
+                    let (u, v) = surface.project_point(centroid).unwrap();
+                    surface.normal(u, v)
+                }
+            } * sense;
+            assert!(
+                normal.dot(outward) > 0.0,
+                "{name} at {deflection}: a triangle of face {group} ({}) turns inward at {centroid:?}",
+                face.surface().type_tag()
+            );
+        }
+    }
+    let mut directed: DetHashMap<(u32, u32), usize> = DetHashMap::default();
+    for tri in mesh.indices.chunks_exact(3) {
+        for k in 0..3 {
+            *directed.entry((tri[k], tri[(k + 1) % 3])).or_default() += 1;
+        }
+    }
+    for (&(a, b), &n) in &directed {
+        assert!(
+            n == 1 && directed.get(&(b, a)) == Some(&1),
+            "{name} at {deflection}: edge {a}-{b} runs {n} times one way and {:?} the other",
+            directed.get(&(b, a))
+        );
+    }
+}
+
 /// Runs `ops` on `solids` in turn with the mesh fallback off, in each pose,
 /// and checks that the result is valid and meshes closed at two deflections,
-/// with the mesh's volume near the solid's.
+/// each triangle turned outward, with the mesh's volume near the solid's.
 fn assert_chain_meshes_closed(
     build: impl Fn(&mut Topology) -> Vec<SolidId>,
     ops: &[crate::boolean::BooleanOp],
@@ -6284,6 +6336,7 @@ fn assert_chain_meshes_closed(
                 0,
                 "{name} at {deflection}: open"
             );
+            assert_faces_turn_outward(&topo, result, deflection, name);
             assert_eq!(
                 non_manifold_edge_count(&mesh),
                 0,
@@ -6301,8 +6354,9 @@ fn assert_chain_meshes_closed(
 /// A ball less a ball through its top, less a blind rod along x whose
 /// footprint reaches past the ball's equator by 5e-4 in latitude: the
 /// boolean tests the footprint against the equator's chords, which the rod
-/// misses, so the whole footprint is a hole in the southern face. Its mesh
-/// closes on the chord.
+/// misses, so the whole footprint is a hole in the southern face. The chord
+/// takes the footprint's samples past it, and both hemispheres mesh round
+/// them, closed and turned outward.
 #[test]
 fn rod_footprint_past_a_balls_equator_meshes_closed() {
     use crate::boolean::BooleanOp::Cut;
