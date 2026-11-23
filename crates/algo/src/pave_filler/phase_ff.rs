@@ -6613,14 +6613,13 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
 /// The box of a ring torus face over the ring and tube angles its outer wire
 /// can reach. Holes take material away, so the outer wire alone bounds the
 /// face's angles: in each angle, the face spans the turn less the widest arc
-/// the wire leaves out, read from bounds on each edge's angles that hold
-/// every point of the edge (`torus_edge_arcs`). That arc is left out only
-/// where the wire bounds a disc in the surface cut across it, and the face is
-/// that disc (`wire_bounds_the_face_off`): a whole ring's outer wire runs
-/// along its seams, and the arcs between its seam points are the face's. A
-/// wire that cannot be bounded or read takes the whole turn. `None` on a horn
-/// or spindle torus, whose far sheet's points do not project to their own
-/// angles.
+/// the wire leaves out. That arc is left out only where the wire bounds a
+/// disc in the surface cut across it, and the face is that disc
+/// (`wire_bounds_the_face_off`): a whole ring's outer wire runs along its
+/// seams, and the arcs between its seam points are the face's. Both read the
+/// wire's edges exactly (`torus_edge_reach`); a wire with an edge that does
+/// not read so takes the whole torus's box. `None` on a horn or spindle
+/// torus, whose far sheet's points do not project to their own angles.
 fn torus_patch_box(
     topo: &Topology,
     face_id: FaceId,
@@ -6631,36 +6630,29 @@ fn torus_patch_box(
         return None;
     }
     let face = topo.face(face_id).ok()?;
-    let (mut ring, mut tube) = (Vec::new(), Vec::new());
-    let mut steps: Option<Vec<(f64, f64)>> = Some(Vec::new());
+    let (mut ring, mut tube, mut steps) = (Vec::new(), Vec::new(), Vec::new());
     let mut first: Option<(f64, f64)> = None;
-    let mut bounded = true;
     for oe in topo.wire(face.outer_wire()).ok()?.edges() {
         let edge = topo.edge(oe.edge()).ok()?;
         let ends = (
             topo.vertex(edge.start()).ok()?.point(),
             topo.vertex(edge.end()).ok()?.point(),
         );
-        bounded &= torus_edge_arcs(torus, edge.curve(), ends, &mut ring, &mut tube);
+        let Some(reach) = torus_edge_reach(torus, edge.curve(), ends, oe.is_forward()) else {
+            return Some(torus.aabb());
+        };
         first.get_or_insert_with(|| {
             torus.project_point(if oe.is_forward() { ends.0 } else { ends.1 })
         });
-        let step = torus_edge_step(torus, edge.curve(), ends, oe.is_forward());
-        steps = steps.zip(step).map(|(mut all, one)| {
-            all.push(one);
-            all
-        });
+        steps.push(reach.step);
+        ring.push(reach.ring);
+        tube.push(reach.tube);
     }
+    let first = first?;
     let whole = (0.0, TAU);
     let span = |arcs: &[(f64, f64)], along_ring: bool| {
-        bounded
-            .then(|| turn_left_by(arcs))
-            .flatten()
-            .filter(|&kept| {
-                first.zip(steps.as_deref()).is_some_and(|(at, steps)| {
-                    wire_bounds_the_face_off(torus, at, steps, kept, along_ring)
-                })
-            })
+        turn_left_by(arcs)
+            .filter(|&kept| wire_bounds_the_face_off(torus, first, &steps, kept, along_ring))
             .unwrap_or(whole)
     };
     Some(torus.patch_aabb(span(&ring, true), span(&tube, false)))
@@ -6707,30 +6699,56 @@ fn iso_circle(
         })
 }
 
-/// The step an edge of a torus, `curve` between `ends`, takes in the ring
-/// and tube angles the way a wire runs it (`forward` from its start vertex
-/// to its end vertex), where the step is exact: a seam placeholder, a line
-/// from a point to itself, takes none, and an [`IsoCircle`] its arc along
-/// its angle. `None` for any other edge, whose angles a step cannot hold.
-fn torus_edge_step(
+/// How an edge of a torus, `curve` between `ends`, runs in the ring and
+/// tube angles the way a wire runs it (`forward` from its start vertex to
+/// its end vertex): the step it takes in each, and the arc of each it
+/// covers (its first angle and its length).
+struct EdgeReach {
+    step: (f64, f64),
+    ring: (f64, f64),
+    tube: (f64, f64),
+}
+
+/// The [`EdgeReach`] of an edge of a torus where it is exact: a seam
+/// placeholder, a line from a point to itself, takes no step and covers its
+/// point, and an [`IsoCircle`] runs its arc along its angle and holds the
+/// other. `None` for any other edge.
+fn torus_edge_reach(
     torus: &brepkit_math::surfaces::ToroidalSurface,
     curve: &EdgeCurve,
     (start, end): (Point3, Point3),
     forward: bool,
-) -> Option<(f64, f64)> {
+) -> Option<EdgeReach> {
     match curve {
-        EdgeCurve::Line => ((start - end).length() <= 1e-9).then_some((0.0, 0.0)),
+        EdgeCurve::Line => ((start - end).length() <= 1e-9).then(|| {
+            let (u, v) = torus.project_point(start);
+            EdgeReach {
+                step: (0.0, 0.0),
+                ring: (u, 0.0),
+                tube: (v, 0.0),
+            }
+        }),
         EdgeCurve::Circle(c) => {
             let iso = iso_circle(torus, c)?;
-            let (t0, t1) = curve.domain_with_endpoints(start, end);
-            let mut step = (t1 - t0).abs();
-            if iso.along != forward {
-                step = -step;
-            }
+            let (a, b) = curve.domain_with_endpoints(start, end);
+            let (t0, span) = (a.min(b), (b - a).abs());
+            let (u, v) = torus.project_point(c.evaluate(t0));
+            let first = if iso.about_axis { u } else { v };
+            let run = (if iso.along { first } else { first - span }, span);
+            let still = (iso.fixed, 0.0);
+            let step = if iso.along == forward { span } else { -span };
             Some(if iso.about_axis {
-                (step, 0.0)
+                EdgeReach {
+                    step: (step, 0.0),
+                    ring: run,
+                    tube: still,
+                }
             } else {
-                (0.0, step)
+                EdgeReach {
+                    step: (0.0, step),
+                    ring: still,
+                    tube: run,
+                }
             })
         }
         EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => None,
@@ -6741,7 +6759,7 @@ fn torus_edge_step(
 /// the wire leaves out: of the ring angle `along_ring`, else of the tube
 /// angle. `kept` is the arc the wire spans, its first angle and its last.
 /// The wire runs from `first` (its ring and tube angles) by exact `steps`
-/// (`torus_edge_step`), a polygon in `(u, v)`. Cut across the arc left out,
+/// (`torus_edge_reach`), a polygon in `(u, v)`. Cut across the arc left out,
 /// the surface is a band in which the other angle runs round, and the wire
 /// must wind round neither angle: it then bounds a disc of the band. An
 /// outer wire runs counterclockwise about the surface's normal, so the face
@@ -6780,211 +6798,6 @@ fn wire_bounds_the_face_off(
         * 0.5;
     let turn = torus.x_axis().cross(torus.y_axis()).dot(torus.z_axis());
     inside && area * turn > 1e-9 * TAU * TAU
-}
-
-/// The angle from `from` to `to` about the origin of the plane, in the
-/// range from minus a half turn to a half turn.
-fn angle_between(from: (f64, f64), to: (f64, f64)) -> f64 {
-    (from.0 * to.1 - from.1 * to.0).atan2(from.0.madd(to.0, from.1 * to.1))
-}
-
-/// The arc of angles about the origin of the plane that holds the convex
-/// hull of `points`, as its first angle and its length, when the hull keeps
-/// `clear` from the origin and lies within less than a half turn of it.
-fn hull_angle_arc(points: &[(f64, f64)], clear: f64) -> Option<(f64, f64)> {
-    let &first = points.first()?;
-    let offsets: Vec<f64> = points.iter().map(|&p| angle_between(first, p)).collect();
-    let lo = offsets.iter().copied().fold(0.0, f64::min);
-    let hi = offsets.iter().copied().fold(0.0, f64::max);
-    (hi - lo < std::f64::consts::PI - 1e-9 && hull_clearance(points) > clear)
-        .then(|| (first.1.atan2(first.0) + lo, hi - lo))
-}
-
-/// How near the convex hull of `points` comes to the origin of the plane, at
-/// least, when the hull does not hold it: the least distance to a segment
-/// between two of the points, the hull's edges among them.
-fn hull_clearance(points: &[(f64, f64)]) -> f64 {
-    let mut least = f64::INFINITY;
-    for (i, &(ax, ay)) in points.iter().enumerate() {
-        for &(bx, by) in &points[i..] {
-            let (ex, ey) = (bx - ax, by - ay);
-            let len2 = ex.madd(ex, ey * ey);
-            let f = if len2 > 0.0 {
-                (-(ax.madd(ex, ay * ey)) / len2).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            least = least.min(ex.madd(f, ax).hypot(ey.madd(f, ay)));
-        }
-    }
-    least
-}
-
-/// Arcs of the ring and tube angles of a torus that hold every point of the
-/// convex hull of `points`. The ring angle's arc holds the hull seen along
-/// the axis. The hull's points lie between its least and greatest distances
-/// from the axis, and between its least and greatest heights; the tube
-/// angle's arc holds that box of the tube's half-plane. `None` when the hull
-/// comes near the axis or the box holds the tube's centre.
-fn hull_torus_arcs(
-    torus: &brepkit_math::surfaces::ToroidalSurface,
-    points: &[Point3],
-) -> Option<((f64, f64), (f64, f64))> {
-    let (centre, major) = (torus.center(), torus.major_radius());
-    let clear = Tolerance::new().linear * major.max(1.0);
-    let flat: Vec<(f64, f64)> = points
-        .iter()
-        .map(|&p| {
-            (
-                (p - centre).dot(torus.x_axis()),
-                (p - centre).dot(torus.y_axis()),
-            )
-        })
-        .collect();
-    let ring = hull_angle_arc(&flat, clear)?;
-    let near = hull_clearance(&flat) - major;
-    let far = flat
-        .iter()
-        .map(|&(x, y)| x.hypot(y))
-        .fold(f64::NEG_INFINITY, f64::max)
-        - major;
-    let heights = points.iter().map(|&p| (p - centre).dot(torus.z_axis()));
-    let low = heights.clone().fold(f64::INFINITY, f64::min);
-    let high = heights.fold(f64::NEG_INFINITY, f64::max);
-    if near <= 0.0 && far >= 0.0 && low <= 0.0 && high >= 0.0 {
-        return None;
-    }
-    let tube = hull_angle_arc(&[(near, low), (near, high), (far, low), (far, high)], 0.0)?;
-    Some((ring, tube))
-}
-
-/// Push onto `ring` and `tube` arcs of a torus's ring and tube angles that
-/// hold every point of an edge on it, `curve` between `ends`. A circle about
-/// the torus's axis, or one round its tube in a half-plane through the axis,
-/// takes its exact arcs. Any other edge is read in pieces that each lie in a
-/// hull: a segment, the triangle an arc of a circle or an ellipse of less
-/// than a quarter turn makes with the meeting point of its end tangents, or
-/// a spline's knot span, its weights of one sign, in its control points'
-/// hull. A piece is halved until both its arcs are short, at most 16 times.
-/// `false` when a piece cannot be bounded.
-fn torus_edge_arcs(
-    torus: &brepkit_math::surfaces::ToroidalSurface,
-    curve: &EdgeCurve,
-    (start, end): (Point3, Point3),
-    ring: &mut Vec<(f64, f64)>,
-    tube: &mut Vec<(f64, f64)>,
-) -> bool {
-    use std::f64::consts::{FRAC_PI_2, TAU};
-    const MAX_HALVINGS: u32 = 16;
-    const MAX_PIECES: usize = 1 << 14;
-    const SHORT: f64 = 0.05;
-    let (centre, major) = (torus.center(), torus.major_radius());
-    let (x, y, z) = (torus.x_axis(), torus.y_axis(), torus.z_axis());
-    let ring_angle = |p: Point3| (p - centre).dot(y).atan2((p - centre).dot(x));
-    let (t0, t1) = if matches!(curve, EdgeCurve::Line) {
-        (0.0, 1.0)
-    } else {
-        let (a, b) = curve.domain_with_endpoints(start, end);
-        (a.min(b), a.max(b))
-    };
-    if let EdgeCurve::Circle(c) = curve
-        && let Some(iso) = iso_circle(torus, c)
-    {
-        // An arc along one angle runs that angle by its own and holds the
-        // other.
-        let span = t1 - t0;
-        let first = if iso.about_axis {
-            ring_angle(c.evaluate(t0))
-        } else {
-            let q = c.evaluate(t0) - centre;
-            let out = (q - z * q.dot(z)).normalize().map_or(x, |v| v);
-            q.dot(z).atan2(q.dot(out) - major)
-        };
-        let run = (if iso.along { first } else { first - span }, span);
-        let still = (iso.fixed, 0.0);
-        let (r, t) = if iso.about_axis {
-            (run, still)
-        } else {
-            (still, run)
-        };
-        ring.push(r);
-        tube.push(t);
-        return true;
-    }
-    let hull = |a: f64, b: f64| -> Option<Vec<Point3>> {
-        match curve {
-            EdgeCurve::Line => Some(vec![start + (end - start) * a, start + (end - start) * b]),
-            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
-                let (middle, half) = (f64::midpoint(a, b), 0.5 * (b - a));
-                let at = |t: f64| curve.evaluate_with_endpoints(t, start, end);
-                // The meeting point of the end tangents: the middle point
-                // pushed out from the centre by the secant of half the arc.
-                let (centre, apex_from) = match curve {
-                    EdgeCurve::Circle(c) => (c.center(), c.evaluate(middle)),
-                    EdgeCurve::Ellipse(e) => (e.center(), e.evaluate(middle)),
-                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return None,
-                };
-                let apex = centre + (apex_from - centre) * (1.0 / half.cos());
-                Some(vec![at(a), at(b), apex])
-            }
-            EdgeCurve::NurbsCurve(spline) => {
-                let points =
-                    brepkit_math::nurbs::decompose::curve_bezier_between(spline, a, b).ok()?;
-                let one_sign =
-                    points.iter().all(|q| q[3] > 0.0) || points.iter().all(|q| q[3] < 0.0);
-                one_sign.then(|| {
-                    points
-                        .iter()
-                        .map(|q| Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3]))
-                        .collect()
-                })
-            }
-        }
-    };
-    let mut cuts = vec![t0];
-    match curve {
-        EdgeCurve::NurbsCurve(spline) => {
-            for &k in spline.knots() {
-                if k > cuts[cuts.len() - 1] && k < t1 {
-                    cuts.push(k);
-                }
-            }
-        }
-        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
-            let quarters = ((t1 - t0) / FRAC_PI_2).ceil().max(1.0);
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let n = quarters.min(8.0) as u32 + 1;
-            for k in 1..n {
-                cuts.push((t1 - t0).madd(f64::from(k) / f64::from(n), t0));
-            }
-        }
-        EdgeCurve::Line => {}
-    }
-    cuts.push(t1);
-    if t1 - t0 > 2.0 * TAU {
-        return false;
-    }
-    let mut pending: Vec<(f64, f64, u32)> = cuts.windows(2).map(|w| (w[0], w[1], 0)).collect();
-    let mut read = 0;
-    while let Some((a, b, halvings)) = pending.pop() {
-        read += 1;
-        if read > MAX_PIECES {
-            return false;
-        }
-        match hull(a, b).and_then(|points| hull_torus_arcs(torus, &points)) {
-            Some((r, t)) if (r.1 <= SHORT && t.1 <= SHORT) || halvings == MAX_HALVINGS => {
-                ring.push(r);
-                tube.push(t);
-                continue;
-            }
-            None if halvings == MAX_HALVINGS => return false,
-            _ => {}
-        }
-        let middle = f64::midpoint(a, b);
-        pending.push((a, middle, halvings + 1));
-        pending.push((middle, b, halvings + 1));
-    }
-    true
 }
 
 /// The arc of a turn that `arcs` (each its first angle and its length)
