@@ -3567,6 +3567,7 @@ fn trim_torus_oval_to_box_face(
             EdgeCurve::Ellipse(e) => conic_arc_plane_crossings(
                 |t| e.evaluate(t),
                 |q| e.project(q),
+                (e.u_axis() * e.semi_major(), e.v_axis() * e.semi_minor()),
                 sp,
                 ep,
                 plane_n,
@@ -4490,6 +4491,7 @@ fn trim_ellipse_to_boundary_crossings(
                     for p in conic_arc_plane_crossings(
                         |t| e.evaluate(t),
                         |q| e.project(q),
+                        (e.u_axis() * e.semi_major(), e.v_axis() * e.semi_minor()),
                         sv.point(),
                         ev.point(),
                         *plane_n,
@@ -4877,9 +4879,11 @@ fn circle_arc_plane_crossings(
     normal: Vec3,
     d: f64,
 ) -> Vec<Point3> {
+    let r = circle.radius();
     conic_arc_plane_crossings(
         |t| circle.evaluate(t),
         |p| circle.project(p),
+        (circle.u_axis() * r, circle.v_axis() * r),
         sp,
         ep,
         normal,
@@ -4895,10 +4899,13 @@ fn circle_arc_plane_crossings(
 /// `a cos t + b sin t = c` solve. Points outside the arc actually spanned by
 /// `[sp, ep]` are discarded; a closed edge (coincident endpoints) spans all of
 /// it. The caller re-validates every point against the section curve, so a
-/// spurious root cannot survive.
+/// spurious root cannot survive. Each crossing is settled onto the plane in
+/// a frame at its point (`axes` are the conic's `a u` and `b v`), free of
+/// the rounding of a far centre.
 fn conic_arc_plane_crossings(
     evaluate: impl Fn(f64) -> Point3,
     project: impl Fn(Point3) -> f64,
+    axes: (Vec3, Vec3),
     sp: Point3,
     ep: Point3,
     normal: Vec3,
@@ -4943,13 +4950,17 @@ fn conic_arc_plane_crossings(
         if fwd < 1e-12 { TAU } else { fwd }
     };
 
+    // Each root moves no more than halfway to the other.
+    let reach = 0.5 * (evaluate(phase + delta) - evaluate(phase - delta)).length();
     let mut out = Vec::new();
     for root in [phase + delta, phase - delta] {
         let t = root.rem_euclid(TAU);
         if !closed && (t - ts).rem_euclid(TAU) > span + 1e-9 {
             continue;
         }
-        out.push(evaluate(t));
+        let (_, settled) =
+            super::phase_ef::settle_conic_crossing(evaluate(t), t, axes, normal, d, reach);
+        out.push(settled);
     }
     out
 }
@@ -10539,6 +10550,7 @@ fn split_plane_line_at_curved_boundaries(
                     hits.extend(conic_arc_plane_crossings(
                         |t| e.evaluate(t),
                         |q| e.project(q),
+                        (e.u_axis() * e.semi_major(), e.v_axis() * e.semi_minor()),
                         sp,
                         ep,
                         partner_n,
@@ -12539,6 +12551,10 @@ mod tests {
         let hits = conic_arc_plane_crossings(
             |t| ellipse.evaluate(t),
             |q| ellipse.project(q),
+            (
+                ellipse.u_axis() * ellipse.semi_major(),
+                ellipse.v_axis() * ellipse.semi_minor(),
+            ),
             Point3::new(2.0, 0.0, 0.0),
             Point3::new(0.0, 1.0, 0.0),
             Vec3::new(1.0, 0.0, 0.0),

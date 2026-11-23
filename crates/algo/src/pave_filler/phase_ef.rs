@@ -1106,16 +1106,86 @@ fn conic_plane_crossings(
     } else {
         &pair
     };
+    // Each of two roots moves no more than halfway to the other.
+    let reach = if roots.len() == 2 {
+        0.5 * (at(pair[0]) - at(pair[1])).length()
+    } else {
+        0.0
+    };
     let mut out: Vec<(f64, Point3)> = Vec::new();
     for &root in roots {
         let t = t0 + (root - t0).rem_euclid(TAU);
         if t > t1 + 1e-12 {
             continue;
         }
-        out.push((t, at(t)));
+        out.push(match conic_axes(curve) {
+            Some(axes) => settle_conic_crossing(at(t), t, axes, normal, d, reach),
+            None => (t, at(t)),
+        });
     }
     out.sort_by(|x, y| x.0.total_cmp(&y.0));
     out
+}
+
+/// The semi-axis vectors `a u` and `b v` of a circle or an ellipse
+/// `centre + a u cos t + b v sin t`.
+pub(super) fn conic_axes(curve: &EdgeCurve) -> Option<(Vec3, Vec3)> {
+    match curve {
+        EdgeCurve::Circle(c) => Some((c.u_axis() * c.radius(), c.v_axis() * c.radius())),
+        EdgeCurve::Ellipse(e) => Some((e.u_axis() * e.semi_major(), e.v_axis() * e.semi_minor())),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+    }
+}
+
+/// A conic's crossing of the plane `normal·p = d` from `point`, its point at
+/// `t`, a root of the closed-form solve, and the crossing's parameter.
+///
+/// The conic's point carries the rounding of its centre's coordinates and
+/// the root that of the solve: a flat leaning 5e-8 off a bore's axis meets
+/// the bore along an ellipse whose centre lies 1e8 away, where the two put
+/// a crossing 1.2e-7 off the plane. The crossing is found again in a frame
+/// at `point`: the conic's change from `t` over a step `δ`, `a u (cos(t+δ)
+/// - cos t) + b v (sin(t+δ) - sin t)`, is written as products with
+/// `2 sin(δ/2)`, free of the centre and of the rounding of `t + δ`, and
+/// Newton steps on `δ` bring the point onto the plane. `point` is kept when
+/// the crossing would move farther than `reach` or lie no nearer the plane.
+pub(super) fn settle_conic_crossing(
+    point: Point3,
+    t: f64,
+    (au, bv): (Vec3, Vec3),
+    normal: Vec3,
+    d: f64,
+    reach: f64,
+) -> (f64, Point3) {
+    let off = |q: Point3| {
+        normal
+            .x()
+            .madd(q.x(), normal.y().madd(q.y(), normal.z() * q.z()))
+            - d
+    };
+    let change = |delta: f64| {
+        let chord = 2.0 * (0.5 * delta).sin();
+        let mid = 0.5f64.madd(delta, t);
+        au * (-chord * mid.sin()) + bv * (chord * mid.cos())
+    };
+    let start = off(point);
+    let mut delta = 0.0;
+    for _ in 0..4 {
+        let s = t + delta;
+        let slope = normal.dot(bv * s.cos() - au * s.sin());
+        let step = (start + normal.dot(change(delta))) / slope;
+        if !step.is_finite() {
+            return (t, point);
+        }
+        delta -= step;
+    }
+    let moved = change(delta);
+    let settled = point + moved;
+    if moved.length() <= reach && off(settled).abs() <= start.abs() {
+        (t + delta, settled)
+    } else {
+        (t, point)
+    }
 }
 
 /// What an edge's pass over a face finds before anything is added: `None`
@@ -2277,6 +2347,53 @@ mod tests {
         assert_eq!(crossings.len(), 1, "{crossings:?}");
         let p = crossings[0].1;
         assert!((p - Point3::new(-1.8, -2.4, 0.0)).length() < 1e-7, "{p:?}");
+    }
+
+    /// A flat leaning 5e-8 off a bore's axis meets the bore along an ellipse
+    /// whose centre lies 1e8 along the axis. Its crossings of a plane square
+    /// to the axis lie on that plane, and on the bore and the flat.
+    #[test]
+    fn a_long_ellipse_crosses_a_plane_on_the_plane() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::vec::Vec3;
+        let tilt = 5e-8;
+        let flat = Vec3::new(0.0, 1.0, tilt).normalize().unwrap();
+        let along = Vec3::new(0.0, -tilt, 1.0).normalize().unwrap();
+        let ellipse = Ellipse3D::new_with_ref(
+            Point3::new(0.0, 0.0, 5.0 / tilt),
+            flat,
+            10.0 / flat.z(),
+            10.0,
+            along,
+        )
+        .unwrap();
+        let start = ellipse.evaluate(0.0);
+        for (normal, d) in [
+            (Vec3::new(0.0, 0.0, 1.0), 0.0),
+            (Vec3::new(0.0, 0.0, 1.0), 60.0),
+            (Vec3::new(0.0, 0.0, -1.0), -100.0),
+        ] {
+            let crossings = find_edge_plane_crossings(
+                &EdgeCurve::Ellipse(ellipse.clone()),
+                start,
+                start,
+                0.0,
+                std::f64::consts::TAU,
+                normal,
+                d,
+                Tolerance::new(),
+            );
+            assert_eq!(crossings.len(), 2, "{crossings:?}");
+            for (_, p) in crossings {
+                let off_plane = normal.dot(Vec3::new(p.x(), p.y(), p.z())) - d;
+                let off_bore = p.x().hypot(p.y()) - 10.0;
+                let off_flat = flat.dot(Vec3::new(p.x(), p.y(), p.z())) - flat.y() * 5.0;
+                assert!(
+                    off_plane.abs() < 1e-12 && off_bore.abs() < 1e-7 && off_flat.abs() < 1e-7,
+                    "{p:?}: off the plane {off_plane:.2e}, the bore {off_bore:.2e}, the flat {off_flat:.2e}"
+                );
+            }
+        }
     }
 
     /// A straight edge through a cylinder band crosses it where no sample of
