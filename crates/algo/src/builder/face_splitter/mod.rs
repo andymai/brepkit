@@ -1860,12 +1860,10 @@ fn boundary_seam_u(
     None
 }
 
-/// Split every section piece that crosses the seam meridian at the crossing
-/// point (bisected on the piece's own curve). Pieces are assumed u-monotone
-/// between their endpoints (chain pieces subtend well under a half-turn);
-/// pieces already ending on the seam, or not straddling it, pass through
-/// unchanged. Split halves clear their UV hints and pave block id, matching
-/// `presplit_sections_at_registry`.
+/// Split every section piece at each point where it crosses the seam
+/// meridian ([`seam_crossings`]). Pieces already ending on the seam, or not
+/// crossing it, pass through unchanged. Split pieces clear their UV hints
+/// and pave block id, matching `presplit_sections_at_registry`.
 fn split_sections_at_seam_meridian(
     sections: &[SectionEdge],
     surface: &FaceSurface,
@@ -1873,49 +1871,21 @@ fn split_sections_at_seam_meridian(
     wire_pts: &[Point3],
     tol: f64,
 ) -> Vec<SectionEdge> {
-    use std::f64::consts::{PI, TAU};
-    let wrap = |d: f64| -> f64 { (d + PI).rem_euclid(TAU) - PI };
-    let delta_u =
-        |p: Point3| -> Option<f64> { surface.project_point(p).map(|(u, _)| wrap(u - seam_u)) };
     let mut out = Vec::with_capacity(sections.len() + 2);
     for s in sections {
-        let (Some(d0), Some(d1)) = (delta_u(s.start), delta_u(s.end)) else {
-            out.push(s.clone());
-            continue;
-        };
-        let straddles = d0 * d1 < 0.0 && (d0 - d1).abs() < PI && d0.abs() > 1e-9 && d1.abs() > 1e-9;
-        if !straddles {
+        let crossings = seam_crossings(s, surface, seam_u, tol);
+        if crossings.is_empty() {
             out.push(s.clone());
             continue;
         }
-        let (t0, t1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
-        let (mut lo, mut hi, f_lo) = (t0, t1, d0);
-        for _ in 0..60 {
-            let tm = 0.5 * (lo + hi);
-            let Some(fm) = delta_u(s.curve_3d.evaluate_with_endpoints(tm, s.start, s.end)) else {
-                break;
-            };
-            if (fm > 0.0) == (f_lo > 0.0) {
-                lo = tm;
-            } else {
-                hi = tm;
-            }
-        }
-        let p = s
-            .curve_3d
-            .evaluate_with_endpoints(0.5 * (lo + hi), s.start, s.end);
-        // The sign of the wrapped offset also flips half a turn from the
-        // seam, where a span read the long way round crosses instead.
-        let on_seam = delta_u(p).is_some_and(|d| d.abs() < 1e-6);
-        if !on_seam || (p - s.start).length() <= tol * 10.0 || (p - s.end).length() <= tol * 10.0 {
-            out.push(s.clone());
-            continue;
-        }
-        let mut first = s.clone();
-        first.end = p;
-        let mut second = s.clone();
-        second.start = p;
-        for piece in [&mut first, &mut second] {
+        let ends: Vec<Point3> = std::iter::once(s.start)
+            .chain(crossings)
+            .chain(std::iter::once(s.end))
+            .collect();
+        for w in ends.windows(2) {
+            let mut piece = s.clone();
+            piece.start = w[0];
+            piece.end = w[1];
             piece.start_uv_a = None;
             piece.end_uv_a = None;
             piece.start_uv_b = None;
@@ -1923,7 +1893,7 @@ fn split_sections_at_seam_meridian(
             piece.pave_block_id = None;
             // A fitted pcurve spans the whole section, and its ends would
             // stand for the piece's ends; a NURBS pcurve reads its UV ends off
-            // its own ends too: each half gets its own on this face.
+            // its own ends too: each piece gets its own on this face.
             if !matches!(piece.curve_3d, EdgeCurve::Line)
                 || matches!(piece.pcurve_a, brepkit_math::curves2d::Curve2D::Nurbs(_))
                 || matches!(piece.pcurve_b, brepkit_math::curves2d::Curve2D::Nurbs(_))
@@ -1939,11 +1909,91 @@ fn split_sections_at_seam_meridian(
                 piece.pcurve_a = pcurve.clone();
                 piece.pcurve_b = pcurve;
             }
+            out.push(piece);
         }
-        out.push(first);
-        out.push(second);
     }
     out
+}
+
+/// The points, in order from its start, where section `s` crosses the seam
+/// meridian at `seam_u`: where its `u`, lifted along it, passes a copy of
+/// the seam's. A crossing within `10 tol` of an end is that end's own. A
+/// closed section stays whole, as the band and hole splitters read it.
+///
+/// The `u` is lifted from samples along the span the section's pcurve
+/// traces ([`super::pcurve_compute::edge_point_at`]: the shorter arc between
+/// the ends of an open circle or ellipse, whichever way its own sense runs),
+/// by the one-way lift along an ellipse on a cylinder or a cone, and from
+/// sample to sample the short way round along any other curve. A piece's
+/// ends alone, read the short way round, cannot tell a piece over half a
+/// turn (a steep cone's ellipse across its near vertex) that crosses the
+/// seam from one that does not. Each crossing is bisected between the two
+/// samples it lies between, on the same span, with `u` lifted from the
+/// first of them the same way.
+fn seam_crossings(s: &SectionEdge, surface: &FaceSurface, seam_u: f64, tol: f64) -> Vec<Point3> {
+    use std::f64::consts::{PI, TAU};
+    const SAMPLES: u32 = 32;
+    let wrap = |d: f64| -> f64 { (d + PI).rem_euclid(TAU) - PI };
+    if (s.start - s.end).length() <= tol {
+        return Vec::new();
+    }
+    let at = super::pcurve_compute::edge_point_at(&s.curve_3d, s.start, s.end);
+    let param = |k: u32| f64::from(k) / f64::from(SAMPLES);
+    let pts: Vec<Point3> = (0..=SAMPLES).map(|k| at(param(k))).collect();
+    let Some(uvs) = super::pcurve_compute::edge_uv_samples(&s.curve_3d, surface, &pts) else {
+        return Vec::new();
+    };
+    // Offsets from the seam, the start's in (-pi, pi], so the seam's copies
+    // lie at whole turns.
+    let shift = wrap(uvs[0].x() - seam_u) - uvs[0].x();
+    let offsets: Vec<f64> = uvs.iter().map(|p| p.x() + shift).collect();
+    // The offset at fraction `t` of the span, lifted from the offset `from`
+    // at fraction `t_from`, at most a thirty-second of the span before it.
+    let lifted = |t: f64, (t_from, from): (f64, f64)| -> Option<f64> {
+        let p = at(t);
+        let (u, _) = surface.project_point(p)?;
+        let ellipse = match &s.curve_3d {
+            EdgeCurve::Ellipse(e) => {
+                let run =
+                    super::pcurve_compute::shorter_arc_delta(e.project(p) - e.project(at(t_from)));
+                super::pcurve_compute::ellipse_u_after(e, surface, (from - shift, u), run)
+            }
+            EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::NurbsCurve(_) => None,
+        };
+        Some(ellipse.map_or_else(|| from + wrap(u + shift - from), |u| u + shift))
+    };
+    let mut found: Vec<Point3> = Vec::new();
+    for k in 0..SAMPLES {
+        let (a, b) = (offsets[k as usize], offsets[k as usize + 1]);
+        let (lo, hi) = (a.min(b), a.max(b));
+        // Each copy of the seam in (lo, hi], so one met at a sample counts
+        // in one bracket.
+        for copy in (lo / TAU).floor() as i64 + 1..=(hi / TAU).floor() as i64 {
+            let target = TAU * copy as f64;
+            let (mut t_lo, mut t_hi) = (param(k), param(k + 1));
+            let below = a < target;
+            for _ in 0..60 {
+                let mid = 0.5 * (t_lo + t_hi);
+                let Some(off) = lifted(mid, (param(k), a)) else {
+                    break;
+                };
+                if (off < target) == below {
+                    t_lo = mid;
+                } else {
+                    t_hi = mid;
+                }
+            }
+            let p = at(0.5 * (t_lo + t_hi));
+            let on_seam = surface
+                .project_point(p)
+                .is_some_and(|(u, _)| wrap(u - seam_u).abs() < 1e-6);
+            let clear = |q: Point3| (p - q).length() > tol * 10.0;
+            if on_seam && clear(s.start) && clear(s.end) && found.last().is_none_or(|&q| clear(q)) {
+                found.push(p);
+            }
+        }
+    }
+    found
 }
 
 /// Split a u-periodic cylinder/cone lateral into stacked bands along
@@ -15600,6 +15650,175 @@ mod tests {
                 }
             }
             assert_eq!(checked, 12, "{way}: each piece in the outline and its half");
+        }
+    }
+
+    /// Pieces of the ellipse of `cone_ellipse_fixture::oblique_cone` at
+    /// slope 0.99999, each way along it. The piece across the near vertex
+    /// runs most of a turn of `u`, and crosses the seam meridian once, where
+    /// its `u` lifted along it passes the seam's: with the seam at the
+    /// vertex, and half a radian on from the piece's start. Read from its
+    /// ends the short way round, it crossed nowhere. A short piece crosses
+    /// the seam at its middle, and not the meridian opposite.
+    #[test]
+    fn a_section_over_half_a_turn_splits_where_it_crosses_the_seam() {
+        use crate::builder::pcurve_compute::cone_ellipse_fixture::{lifted_u, oblique_cone};
+        use std::f64::consts::{PI, TAU};
+        let (surface, ellipse) = oblique_cone(0.99999);
+        let curve = EdgeCurve::Ellipse(ellipse.clone());
+        let reversed = curve.reversed().unwrap();
+        let check = |(a, b): (f64, f64), seam: f64, crossings: usize| {
+            for (c, start, end) in [
+                (&curve, ellipse.evaluate(a), ellipse.evaluate(b)),
+                (&reversed, ellipse.evaluate(b), ellipse.evaluate(a)),
+            ] {
+                let s = SectionEdge {
+                    curve_3d: c.clone(),
+                    ..line_section(start, end)
+                };
+                let split = split_sections_at_seam_meridian(
+                    &[s],
+                    &surface,
+                    seam.rem_euclid(TAU),
+                    &[],
+                    1e-7,
+                );
+                assert_eq!(split.len(), crossings + 1, "({a}, {b}) at seam {seam}");
+                assert!((split[0].start - start).length() < 1e-12);
+                assert!((split[crossings].end - end).length() < 1e-12);
+                for k in 0..crossings {
+                    let p = split[k].end;
+                    assert!((split[k + 1].start - p).length() < 1e-12);
+                    let t = (ellipse.project(p) - a).rem_euclid(TAU) + a;
+                    assert!((ellipse.evaluate(t) - p).length() < 1e-9, "off the ellipse");
+                    assert!(t > a && t < b, "({a}, {b}) at seam {seam}: crossed at {t}");
+                    let (_, u) = lifted_u(&surface, &ellipse, a, t);
+                    assert!(
+                        (u - seam).abs() < 1e-6,
+                        "({a}, {b}): crossed at u {u}, the seam at {seam}"
+                    );
+                }
+            }
+        };
+        let near = (PI - 0.02, PI + 0.02);
+        let (u_a, u_b) = lifted_u(&surface, &ellipse, near.0, near.1);
+        assert!((u_b - u_a).abs() > PI, "the piece runs {}", u_b - u_a);
+        let (_, u_vertex) = lifted_u(&surface, &ellipse, near.0, PI);
+        check(near, u_vertex, 1);
+        check(near, u_a + 0.5f64.copysign(u_b - u_a), 1);
+        let short = (1.5 * PI, 1.75 * PI);
+        let (u_c, u_d) = lifted_u(&surface, &ellipse, short.0, short.1);
+        assert!((u_d - u_c).abs() < 0.5, "the piece runs {}", u_d - u_c);
+        check(short, f64::midpoint(u_c, u_d), 1);
+        check(short, f64::midpoint(u_c, u_d) + PI, 0);
+    }
+
+    /// An arc of a ring round a unit cylinder from u = 0.2 to u = -0.2, the
+    /// short way round as its pcurve runs, written with the ring's normal
+    /// up and down and each way along it, so in some cases its own sense
+    /// runs the long way between its ends. It crosses the seam at u = 0 at
+    /// (1, 0, z), and not the seam at u = pi on the long way round: walked
+    /// along that long way, it took a point at (-1, 0, z), off the arc.
+    #[test]
+    fn a_ring_arc_crosses_the_seam_on_the_short_way_its_pcurve_runs() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use std::f64::consts::PI;
+        let z = 2.0;
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap(),
+        );
+        let at = |u: f64| surface.evaluate(u, z).unwrap();
+        for normal in [1.0, -1.0] {
+            let ring = EdgeCurve::Circle(
+                Circle3D::new(Point3::new(0.0, 0.0, z), Vec3::new(0.0, 0.0, normal), 1.0).unwrap(),
+            );
+            for (from, to) in [(0.2, -0.2), (-0.2, 0.2)] {
+                let arc = SectionEdge {
+                    curve_3d: ring.clone(),
+                    ..line_section(at(from), at(to))
+                };
+                let what = format!("normal {normal}, {from} to {to}");
+                let split = split_sections_at_seam_meridian(
+                    std::slice::from_ref(&arc),
+                    &surface,
+                    PI,
+                    &[],
+                    1e-7,
+                );
+                assert_eq!(split.len(), 1, "{what}: split at the far seam");
+                let split = split_sections_at_seam_meridian(&[arc], &surface, 0.0, &[], 1e-7);
+                assert_eq!(split.len(), 2, "{what}: no split at the near seam");
+                assert!(
+                    (split[0].end - at(0.0)).length() < 1e-9,
+                    "{what}: split at {:?}",
+                    split[0].end
+                );
+            }
+        }
+    }
+
+    /// A rational spline on a unit cylinder of quarter arcs from u = 0 to
+    /// -pi/2, back to 0 and on to pi/2, rising from z = 0 to 3 a unit each,
+    /// each way along it. It starts on the seam at u = 0 and crosses it
+    /// again at z = 2, where it splits. A crossing at the seam copy its
+    /// start lies on was dropped wherever it fell.
+    #[test]
+    fn a_section_leaving_the_seam_splits_where_it_crosses_it_again() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, FRAC_PI_4};
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap(),
+        );
+        // The point at `u` on the ring of radius `r` about the axis at `z`.
+        let at = |u: f64, z: f64, r: f64| {
+            let axis = Point3::new(0.0, 0.0, z);
+            axis + (surface.evaluate(u, z).unwrap() - axis) * r
+        };
+        let turns = [0.0, -FRAC_PI_2, 0.0, FRAC_PI_2];
+        let mut poles = vec![at(0.0, 0.0, 1.0)];
+        let mut weights = vec![1.0];
+        for (k, z0) in [0.0, 1.0, 2.0].into_iter().enumerate() {
+            let z1 = z0 + 1.0;
+            let middle = 0.5 * (turns[k] + turns[k + 1]);
+            poles.push(at(middle, 0.5 * (z0 + z1), 1.0 / FRAC_PI_4.cos()));
+            poles.push(at(turns[k + 1], z1, 1.0));
+            weights.extend([FRAC_1_SQRT_2, 1.0]);
+        }
+        let third = 1.0 / 3.0;
+        let knots = vec![
+            0.0,
+            0.0,
+            0.0,
+            third,
+            third,
+            2.0 * third,
+            2.0 * third,
+            1.0,
+            1.0,
+            1.0,
+        ];
+        let spline =
+            EdgeCurve::NurbsCurve(NurbsCurve::new(2, knots, poles.clone(), weights).unwrap());
+        let (first, last) = (poles[0], poles[poles.len() - 1]);
+        for (curve, start, end) in [
+            (spline.clone(), first, last),
+            (spline.reversed().unwrap(), last, first),
+        ] {
+            let section = SectionEdge {
+                curve_3d: curve,
+                ..line_section(start, end)
+            };
+            let split = split_sections_at_seam_meridian(&[section], &surface, 0.0, &[], 1e-7);
+            assert_eq!(split.len(), 2, "from {start:?}: {split:?}");
+            assert!(
+                (split[0].end - at(0.0, 2.0, 1.0)).length() < 1e-9,
+                "from {start:?}: split at {:?}",
+                split[0].end
+            );
         }
     }
 }

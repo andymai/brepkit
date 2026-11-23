@@ -724,16 +724,19 @@ pub(super) fn shifted_pcurve(
     }
 }
 
-/// The surface parameters of `edge` at fraction `t` of its domain, unwrapped
-/// continuously from the edge's start UV over a walk along its curve. `None`
-/// on a surface with no period, and when the walk cannot finish: a value
-/// that is not finite, a projection that fails, a step too small to move,
-/// or more than `MAX_STEPS` steps.
+/// The surface parameters of spline edge `edge` at fraction `t` of its
+/// domain, on the copies of the periods the edge reaches them on along its
+/// curve from its start UV. `None` on a surface with no period, for another
+/// curve, and when the run cannot be proved: a value that is not finite, a
+/// projection that fails, or a part of the spline within the tolerance of
+/// the axis (or a torus's core), where the run has no value.
 ///
-/// A step is taken when its middle and its end each move less than an
-/// eighth of a period from the point before, and halved when not: a span of
-/// the curve dense in u on few of its parameters, or one that goes round a
-/// whole period, does not read as a short step.
+/// The run from the edge's start to the point is proved span by span from
+/// the spline's control hulls ([`spline_run`]), so a spline that packs most
+/// of a turn into a short run of its parameter cannot skip it, as a walk
+/// that sampled each step's middle and end could.
+///
+/// [`spline_run`]: crate::builder::fill_images_faces::spline_run
 fn walked_uv(
     edge: &OrientedPCurveEdge,
     t: f64,
@@ -741,13 +744,13 @@ fn walked_uv(
     periods: (Option<f64>, Option<f64>),
 ) -> Option<brepkit_math::vec::Point2> {
     use brepkit_math::vec::Point2;
-    const FIRST_STEPS: f64 = 16.0;
-    const MAX_HALVINGS: u32 = 16;
-    const MAX_STEPS: u32 = 4096;
     let finite = |p: Point2| p.x().is_finite() && p.y().is_finite();
     if periods.0.is_none() && periods.1.is_none() || !t.is_finite() || !finite(edge.start_uv) {
         return None;
     }
+    let EdgeCurve::NurbsCurve(spline) = &edge.curve_3d else {
+        return None;
+    };
     let at =
         crate::builder::pcurve_compute::edge_point_at(&edge.curve_3d, edge.start_3d, edge.end_3d);
     // The fractions run from the domain's first end, which is the edge's
@@ -757,50 +760,15 @@ fn walked_uv(
     } else {
         0.0
     };
-    let uv_at = |f: f64, near: Point2| {
-        surface
-            .project_point(at(f))
-            .map(|(u, v)| Point2::new(u, v))
-            .filter(|&p| finite(p))
-            .map(|p| on_copy_near(p, near, periods))
-    };
-    let small = |a: Point2, b: Point2| {
-        periods.0.is_none_or(|p| (b.x() - a.x()).abs() < 0.125 * p)
-            && periods.1.is_none_or(|p| (b.y() - a.y()).abs() < 0.125 * p)
-    };
-    let (mut f, mut uv) = (from, edge.start_uv);
-    let first_step = (t - from) / FIRST_STEPS;
-    let mut step = first_step;
-    let mut halvings = 0;
-    for _ in 0..MAX_STEPS {
-        let tiny = f64::EPSILON * f.abs().max(1.0);
-        if (t - f).abs() <= tiny {
-            return Some(uv);
-        }
-        // A step at least `tiny` long always moves `f`.
-        if step.abs() < tiny {
-            return None;
-        }
-        let last = (t - f).abs() <= step.abs();
-        let next = if last { t } else { f + step };
-        let m = uv_at(0.5 * (f + next), uv)?;
-        let n = uv_at(next, m)?;
-        if halvings < MAX_HALVINGS && !(small(uv, m) && small(m, n)) {
-            step *= 0.5;
-            halvings += 1;
-            continue;
-        }
-        if last {
-            return Some(n);
-        }
-        (f, uv) = (next, n);
-        halvings = 0;
-        step = (2.0 * step)
-            .abs()
-            .min(first_step.abs())
-            .copysign(first_step);
-    }
-    None
+    let (d0, d1) = edge
+        .curve_3d
+        .domain_with_endpoints(edge.start_3d, edge.end_3d);
+    let param = |f: f64| (d1 - d0).madd(f, d0);
+    let (du, dv) =
+        crate::builder::fill_images_faces::spline_run(spline, (param(from), param(t)), surface)?;
+    let (u, v) = surface.project_point(at(t))?;
+    let near = Point2::new(edge.start_uv.x() + du, edge.start_uv.y() + dv);
+    Some(on_copy_near(Point2::new(u, v), near, periods)).filter(|&p| finite(p))
 }
 
 /// The `u` of the point at fraction `t` of an ellipse edge on a cylinder or
@@ -2231,6 +2199,71 @@ mod hole_copy_tests {
             "the walk took u = {}",
             walked.x()
         );
+    }
+
+    /// An arc of the unit cylinder's ring at z = 3 from u = 0 to u = 6 as a
+    /// rational quadratic spline that packs its first 5.6 radians, four
+    /// pieces, into the first thousandth of its knots, each way along it.
+    /// Its `u` at any fraction past a thousandth lies past 5.6 on its own
+    /// turn. A walk that checked only each step's middle and end saw a step
+    /// back of 0.68, under an eighth of a turn, across those pieces, and
+    /// read the arc a turn short there.
+    #[test]
+    fn the_walk_along_a_spline_cannot_skip_a_turn_packed_into_one_step() {
+        use std::f64::consts::TAU;
+        let surface = unit_cylinder();
+        let periods = crate::builder::pcurve_compute::surface_periods(&surface);
+        let z = 3.0;
+        // The point at `u` on the ring of radius `r` about the axis at z.
+        let axis_point = Point3::new(0.0, 0.0, z);
+        let at = |u: f64, r: f64| axis_point + (surface.evaluate(u, z).unwrap() - axis_point) * r;
+        let ends = [0.0, 1.4, 2.8, 4.2, 5.6, 6.0];
+        let (mut poles, mut weights) = (vec![at(0.0, 1.0)], vec![1.0]);
+        for w in ends.windows(2) {
+            let half = 0.5 * (w[1] - w[0]);
+            poles.extend([at(w[0] + half, 1.0 / half.cos()), at(w[1], 1.0)]);
+            weights.extend([half.cos(), 1.0]);
+        }
+        let mut knots = vec![0.0; 3];
+        for k in 1..=4 {
+            let knot = 0.00025 * f64::from(k);
+            knots.extend([knot, knot]);
+        }
+        knots.extend([1.0; 3]);
+        let arc = NurbsCurve::new(2, knots, poles.clone(), weights).unwrap();
+        let (first, last) = (poles[0], poles[poles.len() - 1]);
+        let edge = |forward: bool| {
+            let (start_3d, end_3d, start_uv, end_uv) = if forward {
+                (first, last, Point2::new(0.0, z), Point2::new(6.0, z))
+            } else {
+                (last, first, Point2::new(6.0, z), Point2::new(0.0, z))
+            };
+            OrientedPCurveEdge {
+                curve_3d: EdgeCurve::NurbsCurve(arc.clone()),
+                pcurve: Curve2D::Line(Line2D::new(start_uv, end_uv - start_uv).unwrap()),
+                start_uv,
+                end_uv,
+                start_3d,
+                end_3d,
+                forward,
+                source_edge_idx: None,
+                pave_block_id: None,
+            }
+        };
+        for forward in [true, false] {
+            for t in [0.05, 0.5, 0.95] {
+                let walked = walked_uv(&edge(forward), t, &surface, periods).unwrap();
+                let param = if forward { t } else { 1.0 - t };
+                let (want, _) = surface.project_point(arc.evaluate(param)).unwrap();
+                let want = want.rem_euclid(TAU);
+                assert!(
+                    want > 5.6 && (walked.x() - want).abs() < 1e-9,
+                    "forward {forward}, t {t}: the walk took u = {}, the arc is at {want}",
+                    walked.x()
+                );
+                assert!((walked.y() - z).abs() < 1e-9);
+            }
+        }
     }
 
     /// A woven hole's rim arc on a cylinder that runs from u = 0 to u = 5,
