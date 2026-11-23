@@ -2849,3 +2849,170 @@ fn crossing_closed_sections_from_two_solids_are_cut_where_they_cross() {
         assert_eq!(vertices.len(), 1, "crossing {k}: {vertices:?}");
     }
 }
+
+/// Each section's start and end vertices, in the arena's order.
+fn section_vertices(arena: &GfaArena) -> Vec<[brepkit_topology::vertex::VertexId; 2]> {
+    arena
+        .curves
+        .iter()
+        .map(|curve| {
+            let pb = arena.pave_blocks.get(curve.pave_blocks[0]).unwrap();
+            [pb.start.vertex, pb.end.vertex]
+        })
+        .collect()
+}
+
+/// Two whole circles cross at the first circle's seam and at one point more.
+/// The first is cut at the second point only; the second is cut at both, at
+/// the first circle's seam vertex where they cross there.
+#[test]
+fn a_loop_crossing_another_at_its_seam_is_cut_at_that_vertex() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_topology::explorer::solid_faces;
+
+    let mut topo = Topology::new();
+    let a = make_box(&mut topo, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+    let b = make_box(&mut topo, [0.2, 0.4, 0.5], [0.8, 0.6, 1.5]);
+    let c = make_box(&mut topo, [0.4, 0.2, 0.5], [0.6, 0.8, 1.5]);
+    let face = |solid| solid_faces(&topo, solid).unwrap()[0];
+    let (fa, fb, fc) = (face(a), face(b), face(c));
+    let normal = Vec3::new(0.0, 0.0, 1.0);
+    // The circles cross at (0.6, 0.5, 1), the first one's seam, and at
+    // (0.4, 0.3, 1).
+    let first = Circle3D::new(Point3::new(0.4, 0.5, 1.0), normal, 0.2).unwrap();
+    let second = Circle3D::new(Point3::new(0.6, 0.3, 1.0), normal, 0.2).unwrap();
+    let (seam_point, other) = (Point3::new(0.6, 0.5, 1.0), Point3::new(0.4, 0.3, 1.0));
+    let mut arena = GfaArena::new();
+    for (partner, circle, seam) in [
+        (fb, &first, seam_point),
+        (fc, &second, Point3::new(0.6, 0.1, 1.0)),
+    ] {
+        let t0 = circle.project(seam);
+        push_section(
+            &mut topo,
+            &mut arena,
+            (fa, partner),
+            EdgeCurve::Circle(circle.clone()),
+            (t0, t0 + std::f64::consts::TAU),
+            (circle.evaluate(t0), circle.evaluate(t0)),
+        );
+    }
+    let seam_vertex = arena
+        .pave_blocks
+        .get(arena.curves[0].pave_blocks[0])
+        .unwrap()
+        .start
+        .vertex;
+
+    super::split_sections_at_triple_points(
+        &mut topo,
+        &[a, b, c],
+        brepkit_math::tolerance::Tolerance::new(),
+        &mut arena,
+    )
+    .unwrap();
+
+    let at = |v: brepkit_topology::vertex::VertexId, q: Point3| {
+        (topo.vertex(v).unwrap().point() - q).length() < 1e-9
+    };
+    let ends = section_vertices(&arena);
+    let mut at_other = Vec::new();
+    let mut seam_ends = 0;
+    for (curve, pair) in arena.curves.iter().zip(&ends) {
+        for &v in pair {
+            if at(v, other) && !at_other.contains(&v) {
+                at_other.push(v);
+            }
+            if curve.face_b == fc && at(v, seam_point) {
+                assert_eq!(v, seam_vertex, "the second circle is cut at a new vertex");
+                seam_ends += 1;
+            }
+        }
+    }
+    assert_eq!(
+        at_other.len(),
+        1,
+        "one vertex where both are cut: {at_other:?}"
+    );
+    assert_eq!(
+        seam_ends, 2,
+        "the second circle is not cut at the first's seam"
+    );
+}
+
+/// An open arc ends on another arc inside its span: the second arc is cut
+/// there at the first one's end vertex, and the first is left whole.
+#[test]
+fn an_arc_ending_on_another_cuts_it_at_its_end() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_topology::explorer::solid_faces;
+
+    let mut topo = Topology::new();
+    let a = make_box(&mut topo, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+    let b = make_box(&mut topo, [0.2, 0.4, 0.5], [0.8, 0.6, 1.5]);
+    let c = make_box(&mut topo, [0.4, 0.2, 0.5], [0.6, 0.8, 1.5]);
+    let face = |solid| solid_faces(&topo, solid).unwrap()[0];
+    let (fa, fb, fc) = (face(a), face(b), face(c));
+    let normal = Vec3::new(0.0, 0.0, 1.0);
+    let meet = Point3::new(0.5, 0.7, 1.0);
+    // The crossed arc runs a radian either side of `meet`; the other comes up
+    // to it from outside its circle and ends at `meet`, at an angle to it.
+    let crossed = Circle3D::new(Point3::new(0.5, 0.5, 1.0), normal, 0.2).unwrap();
+    let ending_centre = Point3::new(0.7, 0.9, 1.0);
+    let ending = Circle3D::new(ending_centre, normal, (meet - ending_centre).length()).unwrap();
+    let mut arena = GfaArena::new();
+    let tm = crossed.project(meet);
+    push_section(
+        &mut topo,
+        &mut arena,
+        (fa, fb),
+        EdgeCurve::Circle(crossed.clone()),
+        (tm - 1.0, tm + 1.0),
+        (crossed.evaluate(tm - 1.0), crossed.evaluate(tm + 1.0)),
+    );
+    let te = ending.project(meet);
+    let outside = |t: f64| (ending.evaluate(t) - crossed.center()).length() > crossed.radius();
+    let t0 = if outside(te - 0.5) {
+        te - 1.0
+    } else {
+        te + 1.0
+    };
+    let (lo, hi) = (t0.min(te), t0.max(te));
+    push_section(
+        &mut topo,
+        &mut arena,
+        (fa, fc),
+        EdgeCurve::Circle(ending.clone()),
+        (lo, hi),
+        (ending.evaluate(lo), ending.evaluate(hi)),
+    );
+    let end_vertex = section_vertices(&arena)[1]
+        .into_iter()
+        .find(|&v| (topo.vertex(v).unwrap().point() - meet).length() < 1e-9)
+        .unwrap();
+
+    super::split_sections_at_triple_points(
+        &mut topo,
+        &[a, b, c],
+        brepkit_math::tolerance::Tolerance::new(),
+        &mut arena,
+    )
+    .unwrap();
+
+    let pieces: Vec<_> = arena
+        .curves
+        .iter()
+        .zip(section_vertices(&arena))
+        .filter(|(curve, _)| curve.face_b == fb)
+        .map(|(_, ends)| ends)
+        .collect();
+    assert_eq!(pieces.len(), 2, "the crossed arc is not cut once");
+    assert_eq!(pieces[0][1], end_vertex);
+    assert_eq!(pieces[1][0], end_vertex);
+    let whole = arena
+        .curves
+        .iter()
+        .filter(|curve| curve.face_b == fc)
+        .count();
+    assert_eq!(whole, 1, "the arc that ends there is cut");
+}

@@ -679,7 +679,12 @@ fn split_sections_at_triple_points(
         bbox: Option<brepkit_math::aabb::Aabb3>,
         /// A whole loop, from its one vertex round to it.
         closed: bool,
+        /// The vertices at its start and its end.
+        ends: [VertexId; 2],
     }
+    /// A section a crossing lies on, where the crossing cuts it, and its
+    /// vertex there where the crossing is at one of its ends.
+    type Side = (usize, Option<f64>, Option<VertexId>);
 
     if sources.len() < 3 {
         return Ok(());
@@ -726,6 +731,7 @@ fn split_sections_at_triple_points(
             reading,
             bbox: phase_ee::proven_span_box(edge.curve(), start, end).map(|b| b.expanded(WELD)),
             closed,
+            ends: [pb.start.vertex, pb.end.vertex],
         });
         for face in [curve.face_a, curve.face_b] {
             on_face.entry(face).or_default().push(k);
@@ -746,8 +752,10 @@ fn split_sections_at_triple_points(
         (lo < at && at < hi).then_some(at)
     };
 
-    let mut points: Vec<(Point3, VertexId)> = Vec::new();
-    let mut cuts: BTreeMap<usize, Vec<(f64, VertexId)>> = BTreeMap::new();
+    // Each crossing with, for both sections, where it cuts the section (a
+    // crossing inside its span) and the section's vertex there (a crossing
+    // at one of its ends).
+    let mut hits: Vec<(Point3, [Side; 2])> = Vec::new();
     for (&face, here) in &on_face {
         let Some(&own) = source_of.get(&face) else {
             continue;
@@ -776,31 +784,62 @@ fn split_sections_at_triple_points(
                     continue;
                 }
                 for (ta, tb, p) in phase_ee::edge_crossings(topo, a.edge, b.edge, tol)? {
-                    let clear_of_ends =
-                        |s: &Section| (p - s.start).length() > WELD && (p - s.end).length() > WELD;
-                    if !clear_of_ends(a) || !clear_of_ends(b) {
-                        continue;
-                    }
-                    let (Some(at_a), Some(at_b)) = (pave_parameter(a, ta), pave_parameter(b, tb))
-                    else {
-                        continue;
+                    let side = |k: usize, s: &Section, t: f64| -> Side {
+                        let end = if (p - s.start).length() <= WELD {
+                            Some(s.ends[0])
+                        } else if (p - s.end).length() <= WELD {
+                            Some(s.ends[1])
+                        } else {
+                            None
+                        };
+                        let cut = if end.is_none() {
+                            pave_parameter(s, t)
+                        } else {
+                            None
+                        };
+                        (k, cut, end)
                     };
-                    let vertex = if let Some(&(_, v)) =
-                        points.iter().find(|(q, _)| (*q - p).length() <= WELD)
-                    {
-                        v
-                    } else {
-                        let v = topo.add_vertex(Vertex::new(p, tol.linear));
-                        points.push((p, v));
-                        v
-                    };
-                    for (k, at) in [(i, at_a), (j, at_b)] {
-                        let list = cuts.entry(k).or_default();
-                        if !list.iter().any(|&(_, v)| v == vertex) {
-                            list.push((at, vertex));
-                        }
+                    let sides = [side(i, a, ta), side(j, b, tb)];
+                    if sides.iter().any(|&(_, cut, _)| cut.is_some()) {
+                        hits.push((p, sides));
                     }
                 }
+            }
+        }
+    }
+
+    // One vertex for the crossings at one place: a section's own vertex where
+    // one ends there, else a new one.
+    let mut places: Vec<(Point3, Option<VertexId>)> = Vec::new();
+    let place_of: Vec<usize> = hits
+        .iter()
+        .map(|&(p, sides)| {
+            let end = sides.iter().find_map(|&(_, _, end)| end);
+            if let Some(k) = places.iter().position(|(q, _)| (*q - p).length() <= WELD) {
+                if places[k].1.is_none() {
+                    places[k].1 = end;
+                }
+                k
+            } else {
+                places.push((p, end));
+                places.len() - 1
+            }
+        })
+        .collect();
+    let vertices: Vec<VertexId> = places
+        .iter()
+        .map(|&(p, end)| end.unwrap_or_else(|| topo.add_vertex(Vertex::new(p, tol.linear))))
+        .collect();
+    let mut cuts: BTreeMap<usize, Vec<(f64, VertexId)>> = BTreeMap::new();
+    for ((_, sides), &place) in hits.iter().zip(&place_of) {
+        let vertex = vertices[place];
+        for &(k, cut, _) in sides {
+            let Some(at) = cut else {
+                continue;
+            };
+            let list = cuts.entry(k).or_default();
+            if !list.iter().any(|&(_, v)| v == vertex) {
+                list.push((at, vertex));
             }
         }
     }
