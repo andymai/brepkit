@@ -2492,7 +2492,10 @@ fn marched_sections_near(
     // from the other surface is within the cell's reach from its middle (see
     // [`cell_reach`]), and the box of those cells. Every point of the section
     // lies in a cell of each patch, no farther from its middle than that, so
-    // each cell it crosses gives a seed.
+    // each cell it crosses gives a seed. A cell whose distance or reach
+    // cannot be read (its middle on the other surface's axis, centre or apex)
+    // may hold the section: it is kept, its middle its seed, and where its
+    // reach is unknown its box is all of space.
     let cells = |surface: &AnalyticSurface<'_>,
                  surf: &dyn Fn(f64, f64) -> Point3,
                  (u_range, v_range): ((f64, f64), (f64, f64)),
@@ -2512,21 +2515,34 @@ fn marched_sections_near(
                 );
                 let middle = surf(u, v);
                 let reach = cell_reach(surface, (0.5 * du, 0.5 * dv), v);
-                if near.is_some_and(|r| !r.expanded(reach).contains_point(middle)) {
+                let placed = reach.is_finite()
+                    && middle.x().is_finite()
+                    && middle.y().is_finite()
+                    && middle.z().is_finite();
+                if placed && near.is_some_and(|r| !r.expanded(reach).contains_point(middle)) {
                     continue;
                 }
-                let Some((dist, normal)) = section_fit::Carrier::distance(other, middle) else {
-                    continue;
+                let reading = section_fit::Carrier::distance(other, middle)
+                    .filter(|(d, n)| d.is_finite() && n.length().is_finite());
+                let (dist, seed) = match reading {
+                    Some((d, _)) if placed && d.abs() > reach => continue,
+                    Some((d, n)) => (d.abs(), middle - n * (0.5 * d)),
+                    None => (f64::INFINITY, middle),
                 };
-                if dist.abs() <= reach {
-                    found.push((dist.abs(), middle - normal * (0.5 * dist)));
-                    let cell = Aabb3 {
+                found.push((dist, seed));
+                let cell = if placed {
+                    Aabb3 {
                         min: middle,
                         max: middle,
                     }
-                    .expanded(reach);
-                    held = Some(held.map_or(cell, |h| h.union(cell)));
-                }
+                    .expanded(reach)
+                } else {
+                    Aabb3 {
+                        min: Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY),
+                        max: Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY),
+                    }
+                };
+                held = Some(held.map_or(cell, |h| h.union(cell)));
             }
         }
         (found, held)
@@ -10608,6 +10624,82 @@ mod tests {
                     let near = crate::nurbs::projection::project_point_to_curve(&c.curve, t, 1e-12)
                         .unwrap()
                         .distance;
+                    assert!(near < 1e-5, "{label}: {t:?} lies {near:.1e} off");
+                }
+            }
+        }
+    }
+
+    /// A cone opening a quarter turn about z, its apex at the origin, and a
+    /// ball of radius 0.1 about the apex meet in two circles, one on each
+    /// nappe. With the cone's patch from v = -0.5 to 31.5 in a grid of 32,
+    /// the only cells near the ball have their middles on the apex, the
+    /// ball's centre, where the ball's distance has no gradient: they were
+    /// dropped as holding no section, no cell of the cone was kept, and the
+    /// pair traced nothing. A cell whose distance cannot be read may hold the
+    /// section and is kept, so the ball's cells near it are read too.
+    #[test]
+    fn cells_centred_on_a_balls_centre_are_kept() {
+        use std::f64::consts::FRAC_PI_4;
+        let lin = Tolerance::new().linear;
+        let (radius, h) = (0.1_f64, 0.1 * FRAC_PI_4.sin());
+        let rho = 0.1 * FRAC_PI_4.cos();
+        for (k, pose) in three_poses().iter().enumerate() {
+            let o = Point3::new(0.0, 0.0, 0.0);
+            let along = |v: Vec3| pose.mul_point(o + v) - pose.mul_point(o);
+            let cone = ConicalSurface::new(
+                pose.mul_point(o),
+                along(Vec3::new(0.0, 0.0, 1.0)),
+                FRAC_PI_4,
+            )
+            .unwrap();
+            let ball = SphericalSurface::new(pose.mul_point(o), radius).unwrap();
+            let mut truth = Vec::new();
+            for j in 0..72 {
+                let t = TAU * f64::from(j) / 72.0;
+                for z in [h, -h] {
+                    truth.push(pose.mul_point(Point3::new(rho * t.cos(), rho * t.sin(), z)));
+                }
+            }
+            let off_ball = |p: Point3| ((p - pose.mul_point(o)).length() - radius).abs();
+            for cone_first in [true, false] {
+                let label = format!("pose {k} cone first {cone_first}");
+                let (a, b, va, vb) = if cone_first {
+                    (
+                        AnalyticSurface::Cone(&cone),
+                        AnalyticSurface::Sphere(&ball),
+                        Some((-0.5, 31.5)),
+                        None,
+                    )
+                } else {
+                    (
+                        AnalyticSurface::Sphere(&ball),
+                        AnalyticSurface::Cone(&cone),
+                        None,
+                        Some((-0.5, 31.5)),
+                    )
+                };
+                let result = marched_sections(a, b, 32, va, vb, None);
+                assert!(result.is_ok(), "{label}: {:?}", result.as_ref().err());
+                let curves = result.unwrap();
+                assert_eq!(curves.len(), 2, "{label}: circles");
+                for c in &curves {
+                    let worst = farthest_along(&c.curve, 4000, |p| {
+                        off_double_cone(&cone, p).max(off_ball(p))
+                    });
+                    assert!(worst <= lin, "{label}: off by {worst:.2e}");
+                    let (first, last) = (c.points[0].point, c.points[c.points.len() - 1].point);
+                    assert!((first - last).length() < 1e-9, "{label}: open");
+                }
+                for &t in &truth {
+                    let near = curves
+                        .iter()
+                        .map(|c| {
+                            crate::nurbs::projection::project_point_to_curve(&c.curve, t, 1e-12)
+                                .unwrap()
+                                .distance
+                        })
+                        .fold(f64::INFINITY, f64::min);
                     assert!(near < 1e-5, "{label}: {t:?} lies {near:.1e} off");
                 }
             }
