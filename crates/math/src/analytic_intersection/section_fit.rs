@@ -300,15 +300,17 @@ impl Carrier for AnalyticSurface<'_> {
 /// about 1e-6 of parallel), where a distance has no gradient, or where the
 /// steps do not settle.
 ///
-/// The steps settle when one is shorter than the rounding of the distances,
-/// sized by the surfaces' own sizes and the point's distance from their
-/// frames, or than the spacing of floats at the point, below which no point
-/// can be placed. A short step, not small distances, ends them: where the
-/// normals lie near each other a step is the distances over the sine of the
-/// angle between them, so distances within rounding can leave the point far
-/// off the section, near a touch with no section at all.
+/// The steps settle when each part of a step along an axis is below the
+/// spacing of floats in that coordinate of the point, below which no point
+/// can be placed, plus the rounding of the distances, sized by the surfaces'
+/// own sizes and the point's distance from their frames, over the sine of the
+/// angle between the normals. A short step, not small distances, ends them:
+/// where the normals lie near each other a step is the distances over that
+/// sine, so distances within rounding can leave the point far off the
+/// section, near a touch with no section at all. Each coordinate is held to
+/// its own spacing: a far coordinate's coarse spacing does not hide a step
+/// in a near one.
 pub(super) fn settle_on_section(a: &impl Carrier, b: &impl Carrier, p: Point3) -> Option<Point3> {
-    let spacing = |q: Point3| q.x().abs().max(q.y().abs()).max(q.z().abs());
     let mut x = p;
     for _ in 0..48 {
         let (fa, ga) = a.distance(x)?;
@@ -323,28 +325,51 @@ pub(super) fn settle_on_section(a: &impl Carrier, b: &impl Carrier, p: Point3) -
         }
         let along_a = c.madd(-fb, fa) / det;
         let along_b = c.madd(-fa, fb) / det;
-        let step = (ga * along_a + gb * along_b).length();
+        let step = ga * along_a + gb * along_b;
         x = x - ga * along_a - gb * along_b;
-        let rounding =
-            (64.0 * f64::EPSILON).madd(a.scale(x) + b.scale(x), 8.0 * f64::EPSILON * spacing(x));
-        if step <= rounding {
+        let surfaces = 64.0 * f64::EPSILON * (a.scale(x) + b.scale(x)) / det.sqrt();
+        let settled = [(step.x(), x.x()), (step.y(), x.y()), (step.z(), x.z())]
+            .into_iter()
+            .all(|(part, at)| part.abs() <= f64::EPSILON.madd(at.abs(), surfaces));
+        if settled {
             return Some(x);
         }
     }
     None
 }
 
-/// Whether `a` and `b` cross at `p`, a point on both: their normals there lie
-/// more than about 1e-6 from parallel, as the Newton steps of
-/// [`settle_on_section`] need.
+/// How far a section point at `p` can be told from a touch: a point whose
+/// place across the section its own rounding leaves less certain than this
+/// is not read as a crossing.
+const CROSSING_RESOLUTION: f64 = 1e-8;
+
+/// Whether `a` and `b` cross at `p`, a point on both.
+///
+/// Their normals there lie more than about 1e-6 from parallel, as the Newton
+/// steps of [`settle_on_section`] need, and `p`'s place across the section
+/// is certain to within [`CROSSING_RESOLUTION`]. Each coordinate's float
+/// spacing moves each distance by that spacing times the gradient's part
+/// along it, the distances' own rounding adds to that, and the sum over the
+/// sine of the normals' angle is how far `p` can stray across the section.
+/// Far from the origin the spacing of one coordinate can leave a point a
+/// step from a touch reading as on both surfaces with its normals apart.
 pub(super) fn crosses_at(a: &impl Carrier, b: &impl Carrier, p: Point3) -> bool {
-    match (a.distance(p), b.distance(p)) {
-        (Some((_, ga)), Some((_, gb))) => {
-            let c = ga.dot(gb);
-            c.madd(-c, 1.0) >= 1e-12
-        }
-        _ => false,
+    let (Some((_, ga)), Some((_, gb))) = (a.distance(p), b.distance(p)) else {
+        return false;
+    };
+    let c = ga.dot(gb);
+    let det = c.madd(-c, 1.0);
+    if det < 1e-12 {
+        return false;
     }
+    let spread = |g: Vec3, scale: f64| {
+        [(g.x(), p.x()), (g.y(), p.y()), (g.z(), p.z())]
+            .into_iter()
+            .fold(8.0 * f64::EPSILON * scale, |sum, (part, at)| {
+                (f64::EPSILON * at.abs()).madd(part.abs(), sum)
+            })
+    };
+    (spread(ga, a.scale(p)) + spread(gb, b.scale(p))) / det.sqrt() <= CROSSING_RESOLUTION
 }
 
 /// The cubic Bezier from `t0` to `t1` of `curve`, one of its knot spans, a
@@ -456,9 +481,17 @@ pub(super) fn fit_section(
             for j in 1..k {
                 #[allow(clippy::cast_precision_loss)]
                 let t = (params[i + 1] - params[i]).madd(j as f64 / k as f64, params[i]);
-                let on_fit = curve.evaluate(t);
-                let on = settle_on_section(a, b, on_fit)
-                    .filter(|on| (*on - on_fit).length() < 0.5 * gap)
+                // The cubic's point, or where it strays too far for Newton
+                // steps to bring it back (a fit through points far apart
+                // on a thin loop), the chord's point between the two
+                // points of the section either side.
+                #[allow(clippy::cast_precision_loss)]
+                let chord = pts[i] + (pts[i + 1] - pts[i]) * (j as f64 / k as f64);
+                let on = [curve.evaluate(t), chord]
+                    .into_iter()
+                    .find_map(|from| {
+                        settle_on_section(a, b, from).filter(|on| (*on - from).length() < 0.5 * gap)
+                    })
                     .ok_or(MathError::ConvergenceFailure { iterations: pass })?;
                 finer.push(on);
             }

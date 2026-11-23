@@ -9317,12 +9317,19 @@ mod tests {
     /// (1, 0, 0) alone. Moved 1e6 along x, a seed near the touch settled
     /// 3.1e-4 from it, where both distances lay below the rounding of the
     /// coordinates and the normals 1.5e-4 from parallel, and a march started
-    /// there. Near and far from the origin alike, the seed settles on no
-    /// crossing, and the marcher traces no section.
+    /// there. Moved 1e12, the spacing of x alone stopped a step of 1.2e-3 in
+    /// z, 3.9e-7 off one rod. Near and far from the origin alike, along each
+    /// axis, the seed settles on no crossing, and the marcher traces no
+    /// section.
     #[test]
     fn a_touch_far_from_the_origin_settles_as_one_near_it_does() {
-        for shift in [0.0, 1e6] {
-            let o = Vec3::new(shift, 0.0, 0.0);
+        for o in [
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1e6, 0.0, 0.0),
+            Vec3::new(1e12, 0.0, 0.0),
+            Vec3::new(0.0, 1e12, 0.0),
+            Vec3::new(0.0, 0.0, 1e12),
+        ] {
             let post = CylindricalSurface::new(
                 Point3::new(0.0, 0.0, 0.0) + o,
                 Vec3::new(0.0, 0.0, 1.0),
@@ -9343,7 +9350,7 @@ mod tests {
             let settled = settle_on_section(&a, &b, seed);
             assert!(
                 settled.is_none_or(|p| !crosses_at(&a, &b, p)),
-                "shift {shift}: settles on a crossing at {settled:?}"
+                "moved {o:?}: settles on a crossing at {settled:?}"
             );
             let region = Aabb3 {
                 min: Point3::new(0.5, -0.5, -0.5) + o,
@@ -9352,11 +9359,43 @@ mod tests {
             let curves =
                 marched_sections(a, b, 32, Some((-1.0, 1.0)), Some((-1.0, 1.0)), Some(region))
                     .unwrap();
-            assert!(
-                curves.is_empty(),
-                "shift {shift}: {} sections",
-                curves.len()
+            assert!(curves.is_empty(), "moved {o:?}: {} sections", curves.len());
+        }
+    }
+
+    /// A cone opening 0.01 or 0.001 either side of its axis, or lying that
+    /// far off its radial plane, meets a rod on its axis in one circle. The
+    /// fit through points of that circle is bounded on both surfaces within
+    /// the linear tolerance: the cone's factor, `|h| cos + rho sin`, keeps a
+    /// lower bound however slender or flat the cone.
+    #[test]
+    fn fits_on_slender_and_flat_cones_are_bounded() {
+        use std::f64::consts::FRAC_PI_2;
+        for half in [FRAC_PI_2 - 0.01, FRAC_PI_2 - 0.001, 0.01, 0.001] {
+            let cone =
+                ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), half)
+                    .unwrap();
+            let v = 10.0;
+            let (rho, h) = (v * half.cos(), v * half.sin());
+            let rod =
+                CylindricalSurface::new(Point3::new(0.0, 0.0, -1.0), Vec3::new(0.0, 0.0, 1.0), rho)
+                    .unwrap();
+            let (a, b) = (
+                AnalyticSurface::Cone(&cone),
+                AnalyticSurface::Cylinder(&rod),
             );
+            let circle: Vec<Point3> = (0..=12)
+                .map(|k| {
+                    let t = TAU * f64::from(k) / 12.0;
+                    Point3::new(rho * t.cos(), rho * t.sin(), h)
+                })
+                .collect();
+            let (curve, points) = fit_section(&a, &b, &circle, 1e-7).unwrap();
+            let worst = farthest_along(&curve, 4000, |p| {
+                off_double_cone(&cone, p).max((p.x().hypot(p.y()) - rho).abs())
+            });
+            assert!(worst <= 1e-7, "half {half}: off by {worst:.2e}");
+            assert!(points.len() < 2000, "half {half}: {} points", points.len());
         }
     }
 }
