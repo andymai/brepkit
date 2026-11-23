@@ -36,6 +36,27 @@ const fn pascal() -> [[f64; 13]; 13] {
     table
 }
 
+/// `SHARES_3[i][j]` and `SHARES_6[i][j]`: the share of the product of
+/// Bernstein terms `i` and `j` of degree 3 (or 6) in term `i + j` of twice
+/// the degree, `C(n, i) C(n, j) / C(2n, i + j)`.
+const SHARES_3: [[f64; 4]; 4] = shares::<4>();
+const SHARES_6: [[f64; 7]; 7] = shares::<7>();
+
+const fn shares<const N: usize>() -> [[f64; N]; N] {
+    let n = N - 1;
+    let mut table = [[0.0; N]; N];
+    let mut i = 0;
+    while i < N {
+        let mut j = 0;
+        while j < N {
+            table[i][j] = CHOOSE[n][i] * CHOOSE[n][j] / CHOOSE[2 * n][i + j];
+            j += 1;
+        }
+        i += 1;
+    }
+    table
+}
+
 /// How many times a span of the fit is halved before its bound counts.
 const HALVINGS: usize = 3;
 
@@ -58,17 +79,26 @@ pub(super) trait Carrier {
     fn reach(&self) -> f64;
 }
 
-/// The Bernstein coefficients of the product of the polynomials with
-/// Bernstein coefficients `p` and `q`, written to `out`.
-fn product(p: &[f64], q: &[f64], out: &mut [f64]) {
-    let (m, n) = (p.len() - 1, q.len() - 1);
-    out.fill(0.0);
+/// The degree-6 Bernstein coefficients of the product of two cubics.
+fn product_3(p: &[f64; 4], q: &[f64; 4]) -> [f64; 7] {
+    let mut out = [0.0; 7];
     for (i, &pi) in p.iter().enumerate() {
         for (j, &qj) in q.iter().enumerate() {
-            let share = CHOOSE[m][i] * CHOOSE[n][j] / CHOOSE[m + n][i + j];
-            out[i + j] = (share * pi).madd(qj, out[i + j]);
+            out[i + j] = (SHARES_3[i][j] * pi).madd(qj, out[i + j]);
         }
     }
+    out
+}
+
+/// The degree-12 Bernstein coefficients of the product of two sextics.
+fn product_6(p: &[f64; 7], q: &[f64; 7]) -> [f64; 13] {
+    let mut out = [0.0; 13];
+    for (i, &pi) in p.iter().enumerate() {
+        for (j, &qj) in q.iter().enumerate() {
+            out[i + j] = (SHARES_6[i][j] * pi).madd(qj, out[i + j]);
+        }
+    }
+    out
 }
 
 /// The degree-6 Bernstein coefficients of `a(t) · b(t)` for two cubics.
@@ -76,8 +106,7 @@ fn dot(a: &[Vec3; 4], b: &[Vec3; 4]) -> [f64; 7] {
     let mut out = [0.0; 7];
     for (i, ai) in a.iter().enumerate() {
         for (j, bj) in b.iter().enumerate() {
-            let share = CHOOSE[3][i] * CHOOSE[3][j] / CHOOSE[6][i + j];
-            out[i + j] = share.madd(ai.dot(*bj), out[i + j]);
+            out[i + j] = SHARES_3[i][j].madd(ai.dot(*bj), out[i + j]);
         }
     }
     out
@@ -198,8 +227,7 @@ impl Carrier for AnalyticSurface<'_> {
                 let (sin, cos) = c.half_angle().sin_cos();
                 let (across, h, far) = about_axis(ctrl, o, c.axis());
                 let rho2 = dot(&across, &across);
-                let mut h2 = [0.0; 7];
-                product(&h, &h, &mut h2);
+                let h2 = product_3(&h, &h);
                 let f: [f64; 7] =
                     std::array::from_fn(|k| (cos * cos).madd(h2[k], -(sin * sin) * rho2[k]));
                 let floor = cos.madd(least(&h), sin * least(&rho2).max(0.0).sqrt());
@@ -217,14 +245,11 @@ impl Carrier for AnalyticSurface<'_> {
                 let (big, small) = (t.major_radius(), t.minor_radius());
                 let (across, h, far) = about_axis(ctrl, o, t.z_axis());
                 let rho2 = dot(&across, &across);
-                let mut h2 = [0.0; 7];
-                product(&h, &h, &mut h2);
+                let h2 = product_3(&h, &h);
                 let shift = big.madd(big, -small * small);
                 let g: [f64; 7] = std::array::from_fn(|k| rho2[k] + h2[k] + shift);
-                let mut g2 = [0.0; 13];
-                product(&g, &g, &mut g2);
-                let mut rho2_up = [0.0; 13];
-                product(&rho2, &[1.0; 7], &mut rho2_up);
+                let g2 = product_6(&g, &g);
+                let rho2_up = product_6(&rho2, &[1.0; 7]);
                 let f: [f64; 13] =
                     std::array::from_fn(|k| (-4.0 * big * big).madd(rho2_up[k], g2[k]));
                 let rho_least = least(&rho2).max(0.0).sqrt();
