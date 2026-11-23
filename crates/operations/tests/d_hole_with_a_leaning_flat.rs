@@ -22,7 +22,7 @@ mod tests {
     use brepkit_operations::transform::transform_solid;
     use brepkit_operations::validate::validate_solid;
     use brepkit_topology::Topology;
-    use brepkit_topology::explorer::solid_faces;
+    use brepkit_topology::explorer::{solid_faces, solid_vertices};
     use brepkit_topology::face::FaceSurface;
     use brepkit_topology::solid::SolidId;
 
@@ -66,7 +66,9 @@ mod tests {
         [block, rod, keep]
     }
 
-    fn check(length: f64, name: &str, pose: &Mat4) {
+    /// The D rod and the holed block in `pose`, the block's volume within
+    /// `volume_tol` of the whole of its closed form.
+    fn check(length: f64, name: &str, pose: &Mat4, volume_tol: f64) {
         let what = format!("length {length}, {name}");
         let opts = BooleanOptions {
             mesh_fallback: false,
@@ -94,13 +96,11 @@ mod tests {
         let report = validate_solid(&topo, holed).unwrap();
         assert!(report.is_valid(), "{what}: block {:?}", report.issues);
         assert_eq!(solid_faces(&topo, holed).unwrap().len(), 8, "{what}: faces");
-        // The hole's corners lie up to 1.2e-7 off the end faces, which
-        // leaves the faces about 1.5e-10 of the whole apart. The mesh
-        // boolean's block reads 1.1e-3 off.
+        // The mesh boolean's block reads 1.1e-3 off.
         let expected = block_volume(length, TILT);
         let v = solid_volume(&topo, holed, 1e-3).unwrap();
         assert!(
-            (v - expected).abs() < 3e-10 * expected,
+            (v - expected).abs() < volume_tol * expected,
             "{what}: volume {v}, expected {expected}"
         );
         let mesh = tessellate_solid(&topo, holed, 0.05).unwrap();
@@ -200,7 +200,61 @@ mod tests {
                 ("upside down", Mat4::rotation_x(PI)),
                 ("on its side", Mat4::rotation_y(FRAC_PI_2)),
             ] {
-                check(length, name, &pose);
+                check(length, name, &pose, 1e-13);
+            }
+        }
+    }
+
+    /// The hole's corners, where the flat and the bore meet the block's end
+    /// caps, lie on the caps, as does every other vertex of the bore: the
+    /// flat meets the bore along an ellipse whose centre lies 1e8 away.
+    #[test]
+    fn a_d_holes_corners_lie_on_its_end_caps() {
+        let opts = BooleanOptions {
+            mesh_fallback: false,
+            ..BooleanOptions::default()
+        };
+        let turned = Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1) * Mat4::rotation_z(0.3);
+        for length in [60.0, 100.0] {
+            for (name, pose) in [
+                ("upright", Mat4::identity()),
+                ("mirrored", Mat4::scale(-1.0, 1.0, 1.0)),
+                ("spun about the bore", Mat4::rotation_z(0.7)),
+                (
+                    "moved",
+                    Mat4::translation(3.0, -2.0, 7.0) * Mat4::rotation_z(2.0),
+                ),
+                ("upside down", Mat4::rotation_x(PI)),
+                ("on its side", Mat4::rotation_y(FRAC_PI_2)),
+                ("turned", turned),
+            ] {
+                let what = format!("length {length}, {name}");
+                let mut topo = Topology::new();
+                let [block, rod, keep] = parts(&mut topo, length, TILT, &pose);
+                let d =
+                    boolean::boolean_with_options(&mut topo, BooleanOp::Intersect, rod, keep, opts)
+                        .unwrap();
+                let holed =
+                    boolean::boolean_with_options(&mut topo, BooleanOp::Cut, block, d, opts)
+                        .unwrap();
+                let back = pose.inverse().unwrap();
+                let mut corners = 0;
+                for v in solid_vertices(&topo, holed).unwrap() {
+                    let p = back.mul_point(topo.vertex(v).unwrap().point());
+                    if (p.x().hypot(p.y()) - WALL).abs() > 1e-6 {
+                        continue;
+                    }
+                    let cap = if p.z() < 0.5 * length { 0.0 } else { length };
+                    assert!(
+                        (p.z() - cap).abs() < 1e-9,
+                        "{what}: a vertex of the bore lies {:.3e} off its cap at {p:?}",
+                        p.z() - cap
+                    );
+                    if (TILT.mul_add(p.z(), p.y()) - FLAT).abs() < 1e-6 {
+                        corners += 1;
+                    }
+                }
+                assert_eq!(corners, 4, "{what}: corners");
             }
         }
     }
@@ -213,11 +267,15 @@ mod tests {
     fn a_short_d_hole_cuts_exactly_turned_obliquely() {
         let turned = Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1) * Mat4::rotation_z(0.3);
         for length in [100.0, 200.0] {
-            check(length, "turned", &turned);
+            // Turned, the ellipse's points carry the rounding of its far
+            // centre's coordinates, up to 5e-9 off the bore and the flat,
+            // and the block reads up to 1.8e-10 of the whole off.
+            check(length, "turned", &turned, 3e-10);
             check(
                 length,
                 "turned and mirrored",
                 &(Mat4::scale(1.0, -1.0, 1.0) * turned),
+                3e-10,
             );
         }
     }

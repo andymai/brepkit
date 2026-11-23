@@ -3567,6 +3567,7 @@ fn trim_torus_oval_to_box_face(
             EdgeCurve::Ellipse(e) => conic_arc_plane_crossings(
                 |t| e.evaluate(t),
                 |q| e.project(q),
+                (e.u_axis() * e.semi_major(), e.v_axis() * e.semi_minor()),
                 sp,
                 ep,
                 plane_n,
@@ -4332,6 +4333,13 @@ fn trim_ellipse_to_boundary_crossings(
                 SecCurve::Circ(_) => (t1 - t0) < 1e-6,
             }
         }
+        /// An upper bound on the length of the arc from `t0` to `t1`.
+        fn arc_length_bound(&self, t0: f64, t1: f64) -> f64 {
+            match self {
+                SecCurve::Ell(e) => ellipse_arc_length_bound(e, t0, t1),
+                SecCurve::Circ(c) => c.radius() * (t1 - t0).abs(),
+            }
+        }
     }
     let sec = match &raw.curve {
         EdgeCurve::Ellipse(e) => SecCurve::Ell(e),
@@ -4483,6 +4491,7 @@ fn trim_ellipse_to_boundary_crossings(
                     for p in conic_arc_plane_crossings(
                         |t| e.evaluate(t),
                         |q| e.project(q),
+                        (e.u_axis() * e.semi_major(), e.v_axis() * e.semi_minor()),
                         sv.point(),
                         ev.point(),
                         *plane_n,
@@ -4682,9 +4691,12 @@ fn trim_ellipse_to_boundary_crossings(
         .map(|(p, src)| (sec.project(p).rem_euclid(std::f64::consts::TAU), p, src))
         .collect();
     t_pts.sort_by(|a, b| a.0.total_cmp(&b.0));
-    // Drop near-duplicate parameters (a crossing hit by two adjacent edges).
+    // Drop a crossing within the tolerance of the one before it along the
+    // curve (a crossing hit by two adjacent edges). Along a long ellipse a
+    // small angle is a long way: 1e-9 rad is 0.17 on a semi-major axis of
+    // 2e8.
     t_pts.dedup_by(|a, b| {
-        let same = (a.0 - b.0).abs() < 1e-9;
+        let same = sec.arc_length_bound(b.0, a.0) <= tol.linear;
         if same {
             for e in a.2.drain(..) {
                 if !b.2.contains(&e) {
@@ -4775,12 +4787,16 @@ fn trim_ellipse_to_boundary_crossings(
 /// angle. A flat leaning 5e-8 off the axis of a bore of radius 10 meets the
 /// bore in an ellipse of semi-major axis 2e8, where a millionth of a radian
 /// runs 170 along the curve.
-///
-/// The length is bounded above: the speed `|(a sin t, b cos t)|` is at most
-/// `|(a S, b C)|`, with `S` and `C` the largest `|sin|` and `|cos|` over the
-/// span. The speed at the span's middle can be far less than at its ends,
-/// as across the tip of a long ellipse's major axis.
 fn ellipse_arc_is_sliver(ellipse: &brepkit_math::curves::Ellipse3D, t0: f64, t1: f64) -> bool {
+    ellipse_arc_length_bound(ellipse, t0, t1) < 1e-6 * ellipse.semi_minor()
+}
+
+/// An upper bound on the length of the arc of `ellipse` from `t0` to `t1`.
+/// The speed `|(a sin t, b cos t)|` is at most `|(a S, b C)|`, with `S` and
+/// `C` the largest `|sin|` and `|cos|` over the span. The speed at the
+/// span's middle can be far less than at its ends, as across the tip of a
+/// long ellipse's major axis.
+fn ellipse_arc_length_bound(ellipse: &brepkit_math::curves::Ellipse3D, t0: f64, t1: f64) -> f64 {
     use std::f64::consts::{FRAC_PI_2, PI};
     let (lo, hi) = (t0.min(t1), t0.max(t1));
     // Whether the span holds `phase + k π` for some whole `k`.
@@ -4796,7 +4812,7 @@ fn ellipse_arc_is_sliver(ellipse: &brepkit_math::curves::Ellipse3D, t0: f64, t1:
         lo.cos().abs().max(hi.cos().abs())
     };
     let (a, b) = (ellipse.semi_major(), ellipse.semi_minor());
-    (a * sin_most).hypot(b * cos_most) * (hi - lo) < 1e-6 * b
+    (a * sin_most).hypot(b * cos_most) * (hi - lo)
 }
 
 /// Whether a closed plane section through `point`, crossing none of the
@@ -4863,9 +4879,11 @@ fn circle_arc_plane_crossings(
     normal: Vec3,
     d: f64,
 ) -> Vec<Point3> {
+    let r = circle.radius();
     conic_arc_plane_crossings(
         |t| circle.evaluate(t),
         |p| circle.project(p),
+        (circle.u_axis() * r, circle.v_axis() * r),
         sp,
         ep,
         normal,
@@ -4881,10 +4899,13 @@ fn circle_arc_plane_crossings(
 /// `a cos t + b sin t = c` solve. Points outside the arc actually spanned by
 /// `[sp, ep]` are discarded; a closed edge (coincident endpoints) spans all of
 /// it. The caller re-validates every point against the section curve, so a
-/// spurious root cannot survive.
+/// spurious root cannot survive. Each crossing is settled onto the plane in
+/// a frame at its point (`axes` are the conic's `a u` and `b v`), free of
+/// the rounding of a far centre.
 fn conic_arc_plane_crossings(
     evaluate: impl Fn(f64) -> Point3,
     project: impl Fn(Point3) -> f64,
+    axes: (Vec3, Vec3),
     sp: Point3,
     ep: Point3,
     normal: Vec3,
@@ -4929,13 +4950,28 @@ fn conic_arc_plane_crossings(
         if fwd < 1e-12 { TAU } else { fwd }
     };
 
+    // Each root moves no more than halfway to the other.
+    let reach = 0.5 * (evaluate(phase + delta) - evaluate(phase - delta)).length();
+    let linear = Tolerance::new().linear;
     let mut out = Vec::new();
     for root in [phase + delta, phase - delta] {
         let t = root.rem_euclid(TAU);
-        if !closed && (t - ts).rem_euclid(TAU) > span + 1e-9 {
-            continue;
+        let (step, settled) =
+            super::phase_ef::settle_conic_crossing(evaluate(t), t, axes, normal, d, reach);
+        // The settled crossing's angle from the arc's start, the step added
+        // to the root's own: the arc holds it where that lies on its span,
+        // or where it lies within the tolerance of one of its ends.
+        let mut along = (t - ts).rem_euclid(TAU) + step;
+        if along >= TAU {
+            along -= TAU;
         }
-        out.push(evaluate(t));
+        if closed
+            || (0.0..=span).contains(&along)
+            || (settled - sp).length() <= linear
+            || (settled - ep).length() <= linear
+        {
+            out.push(settled);
+        }
     }
     out
 }
@@ -10525,6 +10561,7 @@ fn split_plane_line_at_curved_boundaries(
                     hits.extend(conic_arc_plane_crossings(
                         |t| e.evaluate(t),
                         |q| e.project(q),
+                        (e.u_axis() * e.semi_major(), e.v_axis() * e.semi_minor()),
                         sp,
                         ep,
                         partner_n,
@@ -11131,6 +11168,94 @@ mod tests {
         let t = 2.0 * PI / 3.0;
         assert!(!ellipse_arc_is_sliver(&bore, t, t + 6.9e-7));
         assert!(ellipse_arc_is_sliver(&bore, t, t + 1e-15));
+    }
+
+    /// A strip 1e-3 wide of a flat leaning 5e-8 off a bore's axis crosses
+    /// the bore's wall twice at each side, 1e-3 apart along an ellipse of
+    /// semi-major axis 2e8, where they lie 6e-12 radians apart. Each side of
+    /// the strip keeps its arc between its two crossings.
+    #[test]
+    fn crossings_close_in_angle_on_a_long_ellipse_both_stay() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let tol = Tolerance::new();
+        let mut topo = Topology::new();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let wall = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z, 10.0).unwrap();
+        let (bottom, top) = (
+            topo.add_vertex(Vertex::new(wall.evaluate(0.0, 0.0), 1e-7)),
+            topo.add_vertex(Vertex::new(wall.evaluate(0.0, 40.0), 1e-7)),
+        );
+        let rim = |topo: &mut Topology, h: f64, v| {
+            let circle =
+                brepkit_math::curves::Circle3D::new(Point3::new(0.0, 0.0, h), z, 10.0).unwrap();
+            topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)))
+        };
+        let (low, high) = (rim(&mut topo, 0.0, bottom), rim(&mut topo, 40.0, top));
+        let seam = topo.add_edge(Edge::new(bottom, top, EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(low, true),
+                    OrientedEdge::new(seam, true),
+                    OrientedEdge::new(high, false),
+                    OrientedEdge::new(seam, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let bore = topo.add_face(Face::new(wire, vec![], FaceSurface::Cylinder(wall)));
+
+        let tilt = 5e-8;
+        let flat_y = |h: f64| (-tilt).madd(h, 5.0);
+        let normal = Vec3::new(0.0, 1.0, tilt).normalize().unwrap();
+        let (low_z, high_z) = (20.0, 20.001);
+        let corners: Vec<Point3> = [
+            (-12.0, low_z),
+            (12.0, low_z),
+            (12.0, high_z),
+            (-12.0, high_z),
+        ]
+        .iter()
+        .map(|&(x, h)| Point3::new(x, flat_y(h), h))
+        .collect();
+        let outline =
+            brepkit_topology::builder::make_polygon_wire(&mut topo, &corners, 1e-7).unwrap();
+        let d = normal.dot(Vec3::new(0.0, 5.0, 0.0));
+        let strip = topo.add_face(Face::new(outline, vec![], FaceSurface::Plane { normal, d }));
+
+        let surf_p = topo.face(strip).unwrap().surface().clone();
+        let surf_c = topo.face(bore).unwrap().surface().clone();
+        let room = Aabb3 {
+            min: Point3::new(-20.0, -20.0, -10.0),
+            max: Point3::new(20.0, 20.0, 50.0),
+        };
+        let raws = compute_raw_curves(&surf_p, &surf_c, &room, &room, None, None).unwrap();
+        let raw = raws
+            .iter()
+            .find(|r| matches!(r.curve, EdgeCurve::Ellipse(_)))
+            .expect("the flat meets the bore in an ellipse");
+        let ext_p = FaceExtent::new(&topo, strip, &surf_p, None, tol).unwrap();
+        let ext_c = FaceExtent::new(&topo, bore, &surf_c, Some((0.0, 40.0)), tol).unwrap();
+        let arcs = trim_ellipse_to_boundary_crossings(
+            &topo, strip, bore, &surf_p, &surf_c, raw, &ext_p, &ext_c, tol,
+        )
+        .expect("the strip keeps two arcs");
+        assert_eq!(arcs.len(), 2, "one arc at each side of the strip");
+        for arc in &arcs {
+            let (lo, hi) = (
+                arc.p_start.z().min(arc.p_end.z()),
+                arc.p_start.z().max(arc.p_end.z()),
+            );
+            assert!(
+                (lo - low_z).abs() < 1e-6 && (hi - high_z).abs() < 1e-6,
+                "arc from z {lo} to z {hi}"
+            );
+        }
     }
 
     /// The ring in `z = 0` between radii 10 and 10.02 about the origin, its
@@ -12420,6 +12545,71 @@ mod tests {
         assert!(hits.is_empty(), "got {hits:?}");
     }
 
+    /// An arc of the ellipse where a flat leaning 5e-12 off a bore meets
+    /// it, its centre 1e12 along the axis, starting where it crosses
+    /// `z = 0`: a crossing settled onto the plane behind the arc's start,
+    /// farther than the tolerance, is not the arc's.
+    #[test]
+    fn a_rim_crossing_settled_past_the_arcs_start_is_not_the_arcs() {
+        let tilt = 5e-12;
+        let flat = Vec3::new(0.0, 1.0, tilt).normalize().unwrap();
+        let along = Vec3::new(0.0, -tilt, 1.0).normalize().unwrap();
+        let ellipse = brepkit_math::curves::Ellipse3D::new_with_ref(
+            Point3::new(0.0, 0.0, 5.0 / tilt),
+            flat,
+            10.0 / flat.z(),
+            10.0,
+            along,
+        )
+        .unwrap();
+        let t0 = 2.094_395_102_393_195_7;
+        let (sp, ep) = (ellipse.evaluate(t0), ellipse.evaluate(t0 + 5e-11));
+        let hits = conic_arc_plane_crossings(
+            |t| ellipse.evaluate(t),
+            |q| ellipse.project(q),
+            (
+                ellipse.u_axis() * ellipse.semi_major(),
+                ellipse.v_axis() * ellipse.semi_minor(),
+            ),
+            sp,
+            ep,
+            Vec3::new(0.0, 0.0, 1.0),
+            0.0,
+        );
+        assert!(hits.is_empty(), "hits {hits:?}");
+    }
+
+    /// An arc of an ellipse centred 1e12 up `z`, its major axis 2e12 along
+    /// `z`, starting at an angle of 2.0943951023931966: `z = -0.001953`
+    /// meets it 1.25e-7 behind its start, a step in angle under the
+    /// spacing of floats near the start's, so it is not the arc's.
+    #[test]
+    fn a_rim_crossing_a_sub_spacing_step_behind_the_start_is_not_the_arcs() {
+        let ellipse = brepkit_math::curves::Ellipse3D::new_with_ref(
+            Point3::new(0.0, 0.0, 1e12),
+            Vec3::new(0.0, 1.0, 0.0),
+            2e12,
+            10.0,
+            Vec3::new(0.0, 0.0, 1.0),
+        )
+        .unwrap();
+        let t0 = 2.094_395_102_393_196_6;
+        let (sp, ep) = (ellipse.evaluate(t0), ellipse.evaluate(t0 + 5e-11));
+        let hits = conic_arc_plane_crossings(
+            |t| ellipse.evaluate(t),
+            |q| ellipse.project(q),
+            (
+                ellipse.u_axis() * ellipse.semi_major(),
+                ellipse.v_axis() * ellipse.semi_minor(),
+            ),
+            sp,
+            ep,
+            Vec3::new(0.0, 0.0, 1.0),
+            -0.001_953,
+        );
+        assert!(hits.is_empty(), "hits {hits:?}");
+    }
+
     #[test]
     fn elliptical_rim_arc_crosses_a_plane_within_its_span() {
         // An earlier plane cut leaves an elliptical rim on a cylinder; a later
@@ -12437,6 +12627,10 @@ mod tests {
         let hits = conic_arc_plane_crossings(
             |t| ellipse.evaluate(t),
             |q| ellipse.project(q),
+            (
+                ellipse.u_axis() * ellipse.semi_major(),
+                ellipse.v_axis() * ellipse.semi_minor(),
+            ),
             Point3::new(2.0, 0.0, 0.0),
             Point3::new(0.0, 1.0, 0.0),
             Vec3::new(1.0, 0.0, 0.0),
