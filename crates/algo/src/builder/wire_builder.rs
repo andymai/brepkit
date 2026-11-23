@@ -72,6 +72,28 @@ pub fn build_wire_loops_with_winding(
     v_periodic: bool,
     cw_boundary: bool,
 ) -> Vec<Vec<OrientedPCurveEdge>> {
+    trace_loops(edges, tol, (u_periodic, v_periodic), cw_boundary, false)
+}
+
+/// [`build_wire_loops`] on a ball face round a pole of its chart. The
+/// face's outline runs a whole turn of `u`, and so does each region that
+/// holds the pole: such a loop closes a turn on from where it starts, at
+/// the same vertex, which the walk otherwise reads as a false closure
+/// across the seam.
+pub fn build_wire_loops_round_a_pole(
+    edges: &[OrientedPCurveEdge],
+    tol: f64,
+) -> Vec<Vec<OrientedPCurveEdge>> {
+    trace_loops(edges, tol, (true, false), false, true)
+}
+
+fn trace_loops(
+    edges: &[OrientedPCurveEdge],
+    tol: f64,
+    (u_periodic, v_periodic): (bool, bool),
+    cw_boundary: bool,
+    close_a_turn: bool,
+) -> Vec<Vec<OrientedPCurveEdge>> {
     if edges.is_empty() {
         return Vec::new();
     }
@@ -138,9 +160,12 @@ pub fn build_wire_loops_with_winding(
                 let raw_du = (current_edge.end_uv.x() - edges[start_idx].start_uv.x()).abs();
                 let raw_dv = (current_edge.end_uv.y() - edges[start_idx].start_uv.y()).abs();
                 let seam_threshold = std::f64::consts::PI;
+                let a_turn = close_a_turn && (raw_du - TAU).abs() < 1e-6 && raw_dv < 1e-6;
                 // Reject seam-boundary false closures: vertices on opposite sides
                 // of a periodic seam quantize to the same key but have large UV distance.
-                !(u_periodic && raw_du > seam_threshold || v_periodic && raw_dv > seam_threshold)
+                a_turn
+                    || !(u_periodic && raw_du > seam_threshold
+                        || v_periodic && raw_dv > seam_threshold)
             } else {
                 false
             };

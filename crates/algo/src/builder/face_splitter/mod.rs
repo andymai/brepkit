@@ -7875,6 +7875,7 @@ fn split_face_2d_impl(
         BallChart::Own => (None, true),
         BallChart::Turned { chart, clear } => (Some(chart), clear),
     };
+    let rechart_is_own = rechart.is_none();
     // The sections' pcurves and end hints read the face's own chart.
     let recharted_sections: Vec<SectionEdge>;
     let sections: &[SectionEdge] = match &rechart {
@@ -9903,6 +9904,34 @@ fn split_face_2d_impl(
         }
     }
 
+    // A ball face that holds a pole of its own chart winds the chart: its
+    // outline runs one whole turn of u. A section that meets no vertex of
+    // the outline keeps its points' own u, which can lie a turn off that
+    // window, and its region then never closes. The region that holds the
+    // pole runs that turn too.
+    let mut round_a_pole = false;
+    if u_periodic
+        && ball_chart_clear
+        && rechart_is_own
+        && matches!(surface, FaceSurface::Sphere(_))
+        && original_inner_wires.is_empty()
+        && all_edges.len() > n_boundary_edges
+        && let (Some(u_period), _) = super::pcurve_compute::surface_periods(&surface)
+    {
+        let (lo, hi) = all_edges[..n_boundary_edges]
+            .iter()
+            .flat_map(|e| [e.start_uv.x(), e.end_uv.x()])
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), u| {
+                (lo.min(u), hi.max(u))
+            });
+        if (hi - lo - u_period).abs() < 1e-6 {
+            for e in &mut all_edges[n_boundary_edges..] {
+                place_section_in_turn(e, &surface, lo, u_period);
+            }
+            round_a_pole = true;
+        }
+    }
+
     // Partial-band u unwrap: a face whose u-window touches the period seam
     // (e.g. a rounded-rect corner cylinder spanning [3pi/2, 2pi]) carries
     // mixed u anchors — surface projection returns u in [0, 2pi), so
@@ -10622,7 +10651,11 @@ fn split_face_2d_impl(
         })
     });
     // Build wire loops via angular-sorting traversal.
-    let mut loops = build_wire_loops(&all_edges, tol.linear, u_periodic && !strip, v_periodic);
+    let mut loops = if round_a_pole {
+        super::wire_builder::build_wire_loops_round_a_pole(&all_edges, tol.linear)
+    } else {
+        build_wire_loops(&all_edges, tol.linear, u_periodic && !strip, v_periodic)
+    };
     // A woven hole's edges run one way only, and at a corner of the hole
     // where a section leaves on the material's side (a strut's footprint
     // under a window), the greedy walk turns into the hole's next side. The
