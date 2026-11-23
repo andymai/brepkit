@@ -4952,15 +4952,22 @@ fn conic_arc_plane_crossings(
 
     // Each root moves no more than halfway to the other.
     let reach = 0.5 * (evaluate(phase + delta) - evaluate(phase - delta)).length();
+    let linear = Tolerance::new().linear;
     let mut out = Vec::new();
     for root in [phase + delta, phase - delta] {
         let t = root.rem_euclid(TAU);
-        if !closed && (t - ts).rem_euclid(TAU) > span + 1e-9 {
-            continue;
-        }
-        let (_, settled) =
+        let (settled_t, settled) =
             super::phase_ef::settle_conic_crossing(evaluate(t), t, axes, normal, d, reach);
-        out.push(settled);
+        // The arc holds the crossing where it lies on the arc's span once
+        // settled, or within the tolerance of one of its ends: settling can
+        // move it past an end by more than the root's angle tells.
+        if closed
+            || (settled_t - ts).rem_euclid(TAU) <= span
+            || (settled - sp).length() <= linear
+            || (settled - ep).length() <= linear
+        {
+            out.push(settled);
+        }
     }
     out
 }
@@ -12532,6 +12539,48 @@ mod tests {
             -0.5,
         );
         assert!(hits.is_empty(), "got {hits:?}");
+    }
+
+    /// An arc of the ellipse where a flat leaning 5e-12 off a bore meets
+    /// it, its centre 1e12 along the axis, starting where it crosses
+    /// `z = 0`: a crossing settled onto the plane behind the arc's start,
+    /// farther than the tolerance, is not the arc's.
+    #[test]
+    fn a_rim_crossing_settled_past_the_arcs_start_is_not_the_arcs() {
+        let tilt = 5e-12;
+        let flat = Vec3::new(0.0, 1.0, tilt).normalize().unwrap();
+        let along = Vec3::new(0.0, -tilt, 1.0).normalize().unwrap();
+        let ellipse = brepkit_math::curves::Ellipse3D::new_with_ref(
+            Point3::new(0.0, 0.0, 5.0 / tilt),
+            flat,
+            10.0 / flat.z(),
+            10.0,
+            along,
+        )
+        .unwrap();
+        let t0 = 2.094_395_102_393_195_7;
+        let (sp, ep) = (ellipse.evaluate(t0), ellipse.evaluate(t0 + 5e-11));
+        let hits = conic_arc_plane_crossings(
+            |t| ellipse.evaluate(t),
+            |q| ellipse.project(q),
+            (
+                ellipse.u_axis() * ellipse.semi_major(),
+                ellipse.v_axis() * ellipse.semi_minor(),
+            ),
+            sp,
+            ep,
+            Vec3::new(0.0, 0.0, 1.0),
+            0.0,
+        );
+        let tol = Tolerance::new().linear;
+        for p in hits {
+            let span = ellipse.project(ep) - t0;
+            let along_arc = (ellipse.project(p) - t0).rem_euclid(std::f64::consts::TAU);
+            assert!(
+                along_arc <= span || (p - sp).length() <= tol || (p - ep).length() <= tol,
+                "crossing {p:?} off the arc"
+            );
+        }
     }
 
     #[test]

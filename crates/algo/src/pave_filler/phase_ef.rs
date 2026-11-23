@@ -1115,13 +1115,20 @@ fn conic_plane_crossings(
     let mut out: Vec<(f64, Point3)> = Vec::new();
     for &root in roots {
         let t = t0 + (root - t0).rem_euclid(TAU);
-        if t > t1 + 1e-12 {
-            continue;
-        }
-        out.push(match conic_axes(curve) {
+        let (settled, p) = match conic_axes(curve) {
             Some(axes) => settle_conic_crossing(at(t), t, axes, normal, d, reach),
             None => (t, at(t)),
-        });
+        };
+        // The edge holds the crossing where it lies on the edge's span once
+        // settled, or within the tolerance of one of its ends: settling can
+        // move it past an end by more than the root's angle tells.
+        if (t0..=t1).contains(&settled) {
+            out.push((settled, p));
+        } else if (p - end_pos).length() <= tol.linear {
+            out.push((t1, p));
+        } else if (p - start_pos).length() <= tol.linear {
+            out.push((t0, p));
+        }
     }
     out.sort_by(|x, y| x.0.total_cmp(&y.0));
     out
@@ -3487,6 +3494,52 @@ mod tests {
             read <= RUN_INTERVALS + 2 * (ts.len() + MOST_HALVINGS as usize),
             "read {read}"
         );
+    }
+
+    /// The ellipse where a flat leaning 5e-12 off a bore of radius 10
+    /// meets it, its centre 1e12 along the axis: an arc of it that starts
+    /// where it crosses `z = 0`. That crossing settled onto the plane lies
+    /// behind the arc's start, by more than the tolerance where the
+    /// centre's rounding puts the start: it is the arc's only if it lies
+    /// within the tolerance of the start.
+    #[test]
+    fn a_crossing_settled_past_an_arcs_start_is_not_the_arcs() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::vec::Vec3;
+        let tilt = 5e-12;
+        let flat = Vec3::new(0.0, 1.0, tilt).normalize().unwrap();
+        let along = Vec3::new(0.0, -tilt, 1.0).normalize().unwrap();
+        let ellipse = Ellipse3D::new_with_ref(
+            Point3::new(0.0, 0.0, 5.0 / tilt),
+            flat,
+            10.0 / flat.z(),
+            10.0,
+            along,
+        )
+        .unwrap();
+        let t0 = 2.094_395_102_393_195_7;
+        let t1 = t0 + 5e-11;
+        let (start, end) = (ellipse.evaluate(t0), ellipse.evaluate(t1));
+        let tol = Tolerance::new();
+        let crossings = find_edge_plane_crossings(
+            &EdgeCurve::Ellipse(ellipse),
+            start,
+            end,
+            t0,
+            t1,
+            Vec3::new(0.0, 0.0, 1.0),
+            0.0,
+            tol,
+        );
+        for (t, p) in crossings {
+            let on_arc = (t0..=t1).contains(&t)
+                || (p - start).length() <= tol.linear
+                || (p - end).length() <= tol.linear;
+            assert!(
+                on_arc,
+                "crossing at {t} ({p:?}) off the arc from {t0} to {t1}"
+            );
+        }
     }
 
     /// A ball's equator turned 1.57 about `x`, against a rod of the ball's
