@@ -663,6 +663,7 @@ fn wedge(points: &[Vec2]) -> Option<(f64, Vec2, f64)> {
 fn piece_hull(
     curve: &EdgeCurve,
     (a, b): (f64, f64),
+    span: Option<(f64, f64)>,
     at: &dyn Fn(f64) -> Point3,
 ) -> Option<Vec<Point3>> {
     let arc = |center: Point3| {
@@ -680,17 +681,10 @@ fn piece_hull(
         EdgeCurve::NurbsCurve(n) => {
             let (d0, d1) = n.domain();
             let near = 1e-9 * (d1 - d0).abs();
-            // The knot span the piece's middle lies in. An end that lies
-            // just outside it, by rounding, is read at its knot; an end
-            // inside it is read where it is, however short the span.
-            let knots = n.knots();
-            let i = brepkit_math::nurbs::basis::find_span(
-                n.control_points().len(),
-                n.degree(),
-                f64::midpoint(a, b),
-                knots,
-            );
-            let (lo, hi) = (*knots.get(i)?, *knots.get(i + 1)?);
+            // The piece lies in the knot span `span`. An end that lies just
+            // outside it, by rounding, is read at its knot; an end inside it
+            // is read where it is, however short the span.
+            let (lo, hi) = span?;
             let inside = |t: f64| {
                 if t < lo && lo - t <= near {
                     lo
@@ -715,10 +709,11 @@ fn piece_hull(
 fn piece_turn(
     curve: &EdgeCurve,
     (a, b): (f64, f64),
+    span: Option<(f64, f64)>,
     at: &dyn Fn(f64) -> Point3,
     winding: Winding,
 ) -> Option<[f64; 2]> {
-    let hull = piece_hull(curve, (a, b), at)?;
+    let hull = piece_hull(curve, (a, b), span, at)?;
     let flat: Vec<Vec2> = hull.iter().map(|&p| winding.flat(p)).collect();
     let (round, middle, half) = wedge(&flat)?;
     let Winding::Ring { .. } = winding else {
@@ -751,18 +746,25 @@ fn piece_turn(
     Some([round, round_tube])
 }
 
+/// A piece of an edge: its parameter span in traversal order and, on a
+/// B-spline curve, the knot span it lies in.
+type TurnPiece = (f64, f64, Option<(f64, f64)>);
+
 /// An edge's parameter span in traversal order, cut as [`edge_pieces`]
 /// cuts it, but a B-spline curve at every distinct knot inside it however
-/// near another or an end, so that each piece lies in one knot span. `None`
-/// for more than `most` pieces.
-fn turn_spans(edge: &BoundaryEdge<'_>, most: usize) -> Option<Vec<(f64, f64)>> {
+/// near another or an end, so that each piece lies in one knot span, which
+/// comes with it: the span its lower end starts. `None` for more than
+/// `most` pieces.
+fn turn_spans(edge: &BoundaryEdge<'_>, most: usize) -> Option<Vec<TurnPiece>> {
     let EdgeCurve::NurbsCurve(nc) = edge.curve else {
         let spans = edge_pieces(edge);
-        return (spans.len() <= most).then_some(spans);
+        return (spans.len() <= most)
+            .then(|| spans.into_iter().map(|(a, b)| (a, b, None)).collect());
     };
     let (lo, hi) = (edge.from.min(edge.to), edge.from.max(edge.to));
+    let knots = nc.knots();
     let mut ends = vec![lo];
-    for &k in nc.knots() {
+    for &k in knots {
         if k > lo && k < hi && ends.last().is_some_and(|&last| k > last) {
             if ends.len() > most {
                 return None;
@@ -771,12 +773,22 @@ fn turn_spans(edge: &BoundaryEdge<'_>, most: usize) -> Option<Vec<(f64, f64)>> {
         }
     }
     ends.push(hi);
-    let mut spans: Vec<(f64, f64)> = ends.windows(2).map(|w| (w[0], w[1])).collect();
-    if spans.len() > most {
+    if ends.len() - 1 > most {
         return None;
     }
+    // The knot span from the last knot at or below `x` to the next: the
+    // pieces hold no knot inside, so it holds the piece from `x` on.
+    let (p, n) = (nc.degree(), nc.control_points().len());
+    let span_from = |x: f64| -> Option<(f64, f64)> {
+        let j = knots.partition_point(|&k| k <= x).clamp(p + 1, n);
+        Some((*knots.get(j - 1)?, *knots.get(j)?))
+    };
+    let mut spans = Vec::with_capacity(ends.len() - 1);
+    for w in ends.windows(2) {
+        spans.push((w[0], w[1], Some(span_from(w[0])?)));
+    }
     if edge.to < edge.from {
-        spans = spans.into_iter().rev().map(|(a, b)| (b, a)).collect();
+        spans = spans.into_iter().rev().map(|(a, b, k)| (b, a, k)).collect();
     }
     Some(spans)
 }
@@ -799,7 +811,7 @@ fn turns_of(wire: &[BoundaryEdge<'_>], winding: Winding) -> Option<(i64, i64)> {
     for edge in wire {
         let at = |t: f64| edge.curve.evaluate_with_endpoints(t, edge.start, edge.end);
         let spans = turn_spans(edge, MOST_TURN_PIECES - pieces)?;
-        for (ta, tb) in spans {
+        for (ta, tb, span) in spans {
             let start = at(ta);
             if let Some(end) = last {
                 add(winding.join(end, start)?);
@@ -816,14 +828,16 @@ fn turns_of(wire: &[BoundaryEdge<'_>], winding: Winding) -> Option<(i64, i64)> {
                 pieces += 1;
                 #[cfg(test)]
                 PIECES_READ.with(|read| read.set(pieces));
-                if let Some(turn) = piece_turn(edge.curve, (a, b), &at, winding) {
+                if let Some(turn) = piece_turn(edge.curve, (a, b), span, &at, winding) {
                     add(turn);
                     continue;
                 }
-                if depth >= MOST_TURN_HALVINGS {
+                let mid = f64::midpoint(a, b);
+                // A piece of two neighbouring numbers has no middle to cut
+                // at.
+                if depth >= MOST_TURN_HALVINGS || mid <= a.min(b) || mid >= a.max(b) {
                     return None;
                 }
-                let mid = f64::midpoint(a, b);
                 pending.push((mid, b, depth + 1));
                 pending.push((a, mid, depth + 1));
             }

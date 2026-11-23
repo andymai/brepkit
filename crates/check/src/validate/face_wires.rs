@@ -3010,9 +3010,9 @@ mod tests {
     }
 
     /// A circle round the z axis at height 5, radius 3, run twice as a
-    /// rational B-spline of quarter arcs: the first turn's four arcs on knot
-    /// spans `width` wide, the second's on spans of a quarter.
-    fn twice_on_short_spans(topo: &mut Topology, width: f64) -> EdgeId {
+    /// rational B-spline of eight quarter arcs, on the knot spans between
+    /// 0, the seven `inner` knots, and `end`.
+    fn twice_round(topo: &mut Topology, inner: [f64; 7], end: f64) -> EdgeId {
         let s = std::f64::consts::FRAC_1_SQRT_2;
         let corners = [
             (3.0, 0.0),
@@ -3035,21 +3035,31 @@ mod tests {
         points.push(Point3::new(3.0, 0.0, 5.0));
         weights.push(1.0);
         let mut knots = vec![0.0; 3];
-        for k in [
-            width,
-            2.0 * width,
-            3.0 * width,
-            4.0 * width,
-            0.25,
-            0.5,
-            0.75,
-        ] {
+        for k in inner {
             knots.extend([k, k]);
         }
-        knots.extend([1.0; 3]);
+        knots.extend([end; 3]);
         let curve = brepkit_math::nurbs::curve::NurbsCurve::new(2, knots, points, weights).unwrap();
         let v = vertex(topo, [3.0, 0.0, 5.0]);
         topo.add_edge(Edge::new(v, v, EdgeCurve::NurbsCurve(curve)))
+    }
+
+    /// The circle run twice, its first turn's four arcs on knot spans `width`
+    /// wide, the second's on spans of a quarter.
+    fn twice_on_short_spans(topo: &mut Topology, width: f64) -> EdgeId {
+        twice_round(
+            topo,
+            [
+                width,
+                2.0 * width,
+                3.0 * width,
+                4.0 * width,
+                0.25,
+                0.5,
+                0.75,
+            ],
+            1.0,
+        )
     }
 
     /// A closed edge that runs twice round a cylinder, its first turn on
@@ -3116,5 +3126,25 @@ mod tests {
             Some(vec![None])
         );
         assert_eq!(crate::face_loops::PIECES_READ.with(std::cell::Cell::get), 0);
+    }
+
+    /// The circle run twice, its second turn's four arcs on knot spans one
+    /// float wide just past 0.5, where the middle of a span rounds to one of
+    /// its knots: it reads as twice round and is reported.
+    #[test]
+    fn a_turn_on_spans_one_float_wide_is_counted() {
+        let k1 = 0.5_f64.next_up();
+        let k2 = k1.next_up();
+        let k3 = k2.next_up();
+        let end = k3.next_up();
+        let mut topo = Topology::default();
+        let edge = twice_round(&mut topo, [0.125, 0.25, 0.375, 0.5, k1, k2, k3], end);
+        let wire = alone(&mut topo, edge);
+        let face = topo.add_face(Face::new(wire, vec![], cylinder()));
+        assert_eq!(
+            crate::face_loops::wire_turns(&topo, face).unwrap(),
+            Some(vec![Some(Turns::Round(2))])
+        );
+        assert!(turns(&topo, face).is_some_and(|d| d.contains("2 times")));
     }
 }
