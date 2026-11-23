@@ -6,6 +6,7 @@ use brepkit_math::analytic_intersection::{
 use brepkit_math::madd::Madd;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
+use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{FaceId, FaceSurface};
 use brepkit_topology::solid::SolidId;
 
@@ -382,9 +383,21 @@ fn project_edge_onto_surface(
     edge_id: brepkit_topology::edge::EdgeId,
     surface: &FaceSurface,
 ) -> Result<Vec<Point3>, OffsetError> {
+    // A closed curved edge (a ball's equator) has one vertex: points along
+    // it give the loop it offsets to.
+    const CLOSED_SAMPLES: u32 = 32;
     let edge = topo.edge(edge_id)?;
     let p0 = topo.vertex(edge.start())?.point();
     let p1 = topo.vertex(edge.end())?.point();
+    if edge.start() == edge.end() && !matches!(edge.curve(), EdgeCurve::Line) {
+        let (t0, t1) = edge.curve().domain_with_endpoints(p0, p1);
+        return Ok((0..=CLOSED_SAMPLES)
+            .map(|k| {
+                let t = (t1 - t0).madd(f64::from(k) / f64::from(CLOSED_SAMPLES), t0);
+                project_point_onto_surface(edge.curve().evaluate_with_endpoints(t, p0, p1), surface)
+            })
+            .collect());
+    }
     let proj0 = project_point_onto_surface(p0, surface);
     let proj1 = project_point_onto_surface(p1, surface);
     Ok(vec![proj0, proj1])
