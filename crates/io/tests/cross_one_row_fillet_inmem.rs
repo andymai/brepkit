@@ -11,7 +11,7 @@
 //! `18430a7fae03283415ad59facfb74e0c6d8f83425edc19f977db0d96c62c3077`).
 //!
 //! The source baseline is F/E/V = 68/189/126, with zero free or non-manifold
-//! edges, one face-adjacency component, oriented volume 64,989.530446 at
+//! edges, one face-adjacency component, oriented volume 64,989.768943 at
 //! 0.05 mm deflection, and 186 selected fillet edges.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -250,8 +250,9 @@ fn cross_source_baseline_and_selection() {
     assert_eq!(shell_audit::shell_health(&topo, solid), (0, 0));
     assert_eq!(components(&topo, solid), 1);
     let volume = oriented_solid_volume(&topo, solid, DEFLECTION).unwrap();
+    // A mesh volume: each boss wall's seam runs along a ruling, not a chord under the wall.
     assert!(
-        (volume - 64_989.530_446).abs() < 1e-3,
+        (volume - 64_989.768_943).abs() < 1e-3,
         "source volume {volume}"
     );
 
