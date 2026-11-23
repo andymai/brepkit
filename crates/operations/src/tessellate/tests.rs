@@ -6464,12 +6464,14 @@ fn rod_footprint_beside_a_drums_seam_meshes_closed() {
     );
 }
 
-/// A ball with two flat cuts side by side, at azimuths 0.06 and 0.14 on the
-/// first chord of its equator, each across a circle of angular radius 0.02
-/// whose top reaches past the chord's great circle, by 4e-4 and 3e-4 in
-/// latitude. The southern face holds both circles as holes, as a boolean
-/// that tests them against the chord leaves them.
-fn ball_with_two_cuts_past_one_chord(topo: &mut Topology) -> SolidId {
+/// A ball with flat cuts on the first chord of its equator, each across a
+/// circle of angular radius 0.02 at azimuth `phi` whose edge reaches past the
+/// chord's great circle by `rise` in latitude: north of it for a positive
+/// `rise`, from a hole of the southern face, and south of it for a negative
+/// one, from a hole of the northern face. Each circle's vertex is the point
+/// that reaches past. The faces hold the circles as holes, as a boolean that
+/// tests them against the chord leaves them.
+fn ball_with_cuts_on_one_chord(topo: &mut Topology, cuts: &[(f64, f64)]) -> SolidId {
     use brepkit_math::curves::Circle3D;
     use brepkit_topology::shell::Shell;
     use brepkit_topology::solid::Solid;
@@ -6481,19 +6483,20 @@ fn ball_with_two_cuts_past_one_chord(topo: &mut Topology) -> SolidId {
         !wire.edges()[0].is_forward()
     };
     let (south, north): (Vec<_>, Vec<_>) = faces.into_iter().partition(southern);
-    let south = topo.face(south[0]).unwrap().clone();
     let beta: f64 = 0.02;
-    let mut holes = Vec::new();
-    let mut shell_faces = north;
-    for (phi, rise) in [(0.06_f64, 4e-4_f64), (0.14, 3e-4)] {
-        let lat = rise - beta;
+    let mut holes = [Vec::new(), Vec::new()];
+    let mut shell_faces = Vec::new();
+    for &(phi, rise) in cuts {
+        let lat = if rise > 0.0 { rise - beta } else { beta + rise };
         let axis = Vec3::new(lat.cos() * phi.cos(), lat.cos() * phi.sin(), lat.sin());
         let up = Vec3::new(-lat.sin() * phi.cos(), -lat.sin() * phi.sin(), lat.cos());
+        let toward = if rise > 0.0 { up } else { -up };
         let centre = Point3::new(0.0, 0.0, 0.0) + axis * beta.cos();
-        let circle = Circle3D::new_with_ref(centre, axis, beta.sin(), up).unwrap();
-        let top = topo.add_vertex(Vertex::new(circle.evaluate(0.0), 1e-7));
-        let edge = topo.add_edge(Edge::new(top, top, EdgeCurve::Circle(circle)));
-        holes.push(topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, false)], true).unwrap()));
+        let circle = Circle3D::new_with_ref(centre, axis, beta.sin(), toward).unwrap();
+        let vertex = topo.add_vertex(Vertex::new(circle.evaluate(0.0), 1e-7));
+        let edge = topo.add_edge(Edge::new(vertex, vertex, EdgeCurve::Circle(circle)));
+        holes[usize::from(rise < 0.0)]
+            .push(topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, false)], true).unwrap()));
         let rim = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
         shell_faces.push(topo.add_face(Face::new(
             rim,
@@ -6504,11 +6507,14 @@ fn ball_with_two_cuts_past_one_chord(topo: &mut Topology) -> SolidId {
             },
         )));
     }
-    shell_faces.push(topo.add_face(Face::new(
-        south.outer_wire(),
-        holes,
-        south.surface().clone(),
-    )));
+    for (old, holes) in [south[0], north[0]].into_iter().zip(holes) {
+        let face = topo.face(old).unwrap().clone();
+        shell_faces.push(topo.add_face(Face::new(
+            face.outer_wire(),
+            holes,
+            face.surface().clone(),
+        )));
+    }
     let shell = topo.add_shell(Shell::new(shell_faces).unwrap());
     topo.add_solid(Solid::new(shell, vec![]))
 }
@@ -6519,5 +6525,93 @@ fn ball_with_two_cuts_past_one_chord(topo: &mut Topology) -> SolidId {
 /// face on its own.
 #[test]
 fn two_holes_past_one_equator_chord_mesh_closed() {
-    assert_chain_meshes_closed(|topo| vec![ball_with_two_cuts_past_one_chord(topo)], &[]);
+    assert_chain_meshes_closed(
+        |topo| {
+            vec![ball_with_cuts_on_one_chord(
+                topo,
+                &[(0.06, 4e-4), (0.14, 3e-4)],
+            )]
+        },
+        &[],
+    );
+}
+
+/// A hole of a ball's southern face reaches north past one chord of its
+/// equator, and a hole of its northern face south past the same chord,
+/// apart along it: the chord takes the samples of both, and the ball meshes
+/// closed and turned outward.
+#[test]
+fn holes_from_both_hemispheres_past_one_chord_mesh_closed() {
+    assert_chain_meshes_closed(
+        |topo| {
+            vec![ball_with_cuts_on_one_chord(
+                topo,
+                &[(0.06, 4e-4), (0.14, -3e-4)],
+            )]
+        },
+        &[],
+    );
+}
+
+/// The samples a chord of a ball's equator takes from holes past it, on
+/// both hemispheres, are the same whichever face comes first: both runs
+/// in order along the chord where they lie apart, and none where they
+/// overlap along it. Each of the two overlapping holes alone gives the
+/// chord its samples, the southern one more than one.
+#[test]
+fn a_chord_takes_the_runs_of_both_hemispheres_in_either_order() {
+    for (cuts, least, most) in [
+        (&[(0.06, 4e-4), (0.14, -3e-4)][..], 2, 2),
+        (&[(0.10, 4e-3), (0.10, -3e-3)][..], 0, 0),
+        (&[(0.10, 4e-3)][..], 2, usize::MAX),
+        (&[(0.10, -3e-3)][..], 1, usize::MAX),
+    ] {
+        let mut topo = Topology::new();
+        let ball = ball_with_cuts_on_one_chord(&mut topo, cuts);
+        let faces = brepkit_topology::explorer::solid_faces(&topo, ball).unwrap();
+        let mut pool: DetHashMap<usize, Vec<Point3>> = DetHashMap::default();
+        for &f in &faces {
+            for edge in brepkit_topology::explorer::face_edges(&topo, f).unwrap() {
+                let points = super::edge_sampling::sample_edge(
+                    &topo,
+                    topo.edge(edge).unwrap(),
+                    0.01,
+                    brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+                    false,
+                )
+                .unwrap();
+                pool.insert(edge.index(), points);
+            }
+        }
+        let mut results = Vec::new();
+        for order in [faces.clone(), faces.iter().rev().copied().collect()] {
+            let mut sampled = pool.clone();
+            super::solid::sample_holes_past_sphere_chords(&topo, &order, &mut sampled).unwrap();
+            let mut grown: Vec<(usize, Vec<Point3>)> = sampled
+                .into_iter()
+                .filter(|(index, points)| pool[index].len() != points.len())
+                .collect();
+            grown.sort_by_key(|(index, _)| *index);
+            results.push(grown);
+        }
+        let grown = &results[0];
+        assert!(grown.len() <= 1, "{cuts:?}: {} chords changed", grown.len());
+        let taken: usize = grown.iter().map(|(i, p)| p.len() - pool[i].len()).sum();
+        assert!(
+            (least..=most).contains(&taken),
+            "{cuts:?}: the chord takes {taken} samples"
+        );
+        for (_, points) in grown {
+            let (a, b) = (points[0], points[points.len() - 1]);
+            let ts: Vec<f64> = points.iter().map(|&p| (p - a).dot(b - a)).collect();
+            assert!(ts.windows(2).all(|w| w[1] > w[0]), "{cuts:?}: out of order");
+        }
+        let same = results[0].len() == results[1].len()
+            && results[0].iter().zip(&results[1]).all(|((i, p), (j, q))| {
+                i == j
+                    && p.len() == q.len()
+                    && p.iter().zip(q).all(|(x, y)| (*x - *y).length() < 1e-12)
+            });
+        assert!(same, "{cuts:?}: the order of the faces matters");
+    }
 }
