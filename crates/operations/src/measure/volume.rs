@@ -3266,11 +3266,17 @@ fn surface_flux_over_mesh(
             let Some((at, s_u, s_v)) = ev.point_and_partials(u, v) else {
                 return Corner::Far;
             };
+            // A slow speed at one point (a row that starts slowly) is only
+            // a lead: the whole row must lie within the deflection.
             let (lu, lv) = (s_u.length(), s_v.length());
-            if lu * (u_hi - u_lo) <= deflection || lu <= 1e-9 * lv {
+            if (lu * (u_hi - u_lo) <= deflection || lu <= 1e-9 * lv)
+                && row_collapses(s, 0, v, deflection)
+            {
                 return Corner::Pole(0);
             }
-            if lv * (v_hi - v_lo) <= deflection || lv <= 1e-9 * lu {
+            if (lv * (v_hi - v_lo) <= deflection || lv <= 1e-9 * lu)
+                && row_collapses(s, 1, u, deflection)
+            {
                 return Corner::Pole(1);
             }
             let d = *p - at;
@@ -3455,6 +3461,53 @@ fn whole_patch_flux(
     }
     let sign = signed.signum();
     Some((2.0 * sign * flux, moment * (6.0 * sign)))
+}
+
+/// Whether the row of `s` along `u` (`axis` 0) at `v = at`, or along `v`
+/// at `u = at`, lies within `reach` of one point: its control points there,
+/// whose hull holds it where its weights are all positive, lie within a box
+/// no wider than `reach` across.
+fn row_collapses(
+    s: &brepkit_math::nurbs::surface::NurbsSurface,
+    axis: usize,
+    at: f64,
+    reach: f64,
+) -> bool {
+    use brepkit_math::nurbs::basis::{basis_funs, find_span};
+    let (cps, ws) = (s.control_points(), s.weights());
+    let (rows, cols) = (cps.len(), cps.first().map_or(0, Vec::len));
+    if rows == 0 || cols == 0 || ws.iter().flatten().any(|&w| w <= 0.0) {
+        return false;
+    }
+    let (degree, knots, count, along) = if axis == 0 {
+        (s.degree_v(), s.knots_v(), cols, rows)
+    } else {
+        (s.degree_u(), s.knots_u(), rows, cols)
+    };
+    let span = find_span(count, degree, at, knots);
+    let basis = basis_funs(span, at, degree, knots);
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for k in 0..along {
+        let (mut point, mut weight) = (Vec3::new(0.0, 0.0, 0.0), 0.0);
+        for (b, &n) in basis.iter().enumerate() {
+            let other = span - degree + b;
+            let (i, j) = if axis == 0 { (k, other) } else { (other, k) };
+            let w = n * ws[i][j];
+            point += Vec3::new(cps[i][j].x(), cps[i][j].y(), cps[i][j].z()) * w;
+            weight += w;
+        }
+        if weight <= 0.0 {
+            return false;
+        }
+        let q = point * (1.0 / weight);
+        for (c, x) in [q.x(), q.y(), q.z()].into_iter().enumerate() {
+            lo[c] = lo[c].min(x);
+            hi[c] = hi[c].max(x);
+        }
+    }
+    let wide = (0..3).map(|c| (hi[c] - lo[c]).powi(2)).sum::<f64>().sqrt();
+    wide <= reach
 }
 
 /// A closed direction's start and period, or `None` for an open one.
@@ -4245,6 +4298,55 @@ mod tests {
     use brepkit_topology::face::Face;
     use brepkit_topology::vertex::Vertex;
     use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// The patch `(0.01 u + 0.99 u², v, u²)` over the unit square, whose
+    /// speed along `u` is 0.01 at `u = 0` though its rows run √2 long, read
+    /// over the one triangle `(0, 0), (1, 0), (1, 1)`: no corner of it lies
+    /// at a pole, and it matches the patch's flux over the triangle.
+    #[test]
+    fn a_slow_start_along_a_row_is_no_pole() {
+        let net = |b: f64, c: f64| vec![Point3::new(b, 0.0, c), Point3::new(b, 1.0, c)];
+        let surface = brepkit_math::nurbs::surface::NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![net(0.0, 0.0), net(0.005, 0.0), net(1.0, 1.0)],
+            vec![vec![1.0; 2]; 3],
+        )
+        .unwrap();
+        let uvs = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]];
+        let positions: Vec<Point3> = uvs
+            .iter()
+            .map(|uv| surface.evaluate(uv[0], uv[1]))
+            .collect();
+        let mesh = tessellate::TriangleMeshUV {
+            mesh: tessellate::TriangleMesh {
+                normals: vec![Vec3::new(0.0, 0.0, 0.0); 3],
+                positions,
+                indices: vec![0, 1, 2],
+            },
+            uvs,
+        };
+        let about = Point3::new(0.0, 0.0, 0.0);
+        let (read, _) = surface_flux_over_mesh(&mesh, Some(&surface), 0.05, about);
+        // Twice the flux over `0 <= v <= u <= 1`, the integrand a polynomial
+        // the rule takes exactly.
+        let rule = brepkit_math::quadrature::gauss_legendre_points(16);
+        let mut twice = 0.0;
+        for gu in rule {
+            let u = 0.5 * (gu.x + 1.0);
+            for gv in rule {
+                let v = 0.5 * u * (gv.x + 1.0);
+                let (p, s_u, s_v) = surface.first_derivatives(u, v);
+                twice += 2.0 * 0.25 * u * gu.w * gv.w * p.dot(s_u.cross(s_v));
+            }
+        }
+        assert!(
+            (read - twice).abs() < 1e-12,
+            "read {read}, twice the flux {twice}"
+        );
+    }
 
     /// A frustum 3 to 1 across and 4 high, its wall in B-spline form (its
     /// rows doubled where the rational quarter circles join, so it is only
