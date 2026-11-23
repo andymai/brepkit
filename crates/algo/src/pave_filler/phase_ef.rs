@@ -708,6 +708,9 @@ fn check_edge_face_pairs(
                     }
                 } else {
                     find_side_flips(&curve, start_pos, end_pos, t0, t1, surface, tol)
+                        .into_iter()
+                        .map(SideRoot::at)
+                        .collect()
                 };
                 // The sample scan may already hold this root; two roots a
                 // sample step apart are still two crossings.
@@ -752,7 +755,10 @@ fn check_edge_face_pairs(
                     .as_ref()
             {
                 let rim = !matches!(curve, EdgeCurve::NurbsCurve(_));
-                for (t, p) in find_side_flips(&curve, start_pos, end_pos, t0, t1, surface, tol) {
+                for (t, p) in find_side_flips(&curve, start_pos, end_pos, t0, t1, surface, tol)
+                    .into_iter()
+                    .map(SideRoot::at)
+                {
                     let held = if rim {
                         trim.holds_clear(p, 10.0 * tol.linear)
                     } else {
@@ -2445,15 +2451,35 @@ fn distance_derivative_bounds(surface: &FaceSurface, p: Point3, reach: f64) -> O
     }
 }
 
+/// A root of a curve's side of a surface: where it passes through the
+/// surface, or where it touches it and comes back on the side it came from.
+#[derive(Debug, Clone, Copy)]
+enum SideRoot {
+    Crossing(f64, Point3),
+    Touch(f64, Point3),
+}
+
+impl SideRoot {
+    /// The root's parameter on the curve and its point.
+    const fn at(self) -> (f64, Point3) {
+        match self {
+            Self::Crossing(t, p) | Self::Touch(t, p) => (t, p),
+        }
+    }
+}
+
 /// Points where a curve passes from one side of a surface to the other,
-/// bisected onto the surface. A flip where the projection jumps to another
-/// part of the surface lands off it and is dropped.
+/// bisected onto the surface, and samples that lie on the surface exactly:
+/// a crossing where the nearest samples clear of the surface either side lie
+/// on two sides, and a touch where they lie on one. A flip where the projection jumps to
+/// another part of the surface lands off it and is dropped.
 ///
 /// A line, a circle or an ellipse against a cylinder or a ball is read closer
 /// where it can cross and come back between two samples: the side there is
 /// the signed distance from the surface, which changes no faster than the
-/// curve moves, so two samples whose distances add up to more than the
-/// curve's most travel between them hold no crossing.
+/// curve moves, so two samples whose distances add up to the curve's most
+/// travel between them or more hold no crossing.
+#[allow(clippy::too_many_lines)]
 fn find_side_flips(
     curve: &EdgeCurve,
     start_pos: Point3,
@@ -2462,7 +2488,7 @@ fn find_side_flips(
     t1: f64,
     surface: &FaceSurface,
     tol: Tolerance,
-) -> Vec<(f64, Point3)> {
+) -> Vec<SideRoot> {
     // Past this many samples a curve that runs along the surface is read no
     // closer: the scan of runs near the surface finds its contacts.
     const MOST_SAMPLES: usize = 1 << 12;
@@ -2490,6 +2516,9 @@ fn find_side_flips(
             (t, side(t))
         })
         .collect();
+    // A side within this of zero can take either sign from the projection's
+    // rounding, so it neither starts nor ends a change of side.
+    let floor = 1e-3 * tol.linear;
     if let Some(speed) = speed {
         let shortest = tol.linear / speed.max(f64::MIN_POSITIVE);
         loop {
@@ -2498,10 +2527,13 @@ fn find_side_flips(
             for w in samples.windows(2) {
                 finer.push(w[0]);
                 let ((ta, sa), (tb, sb)) = (w[0], w[1]);
+                // Two samples on one side, or one of them on the surface, can
+                // hold a root between them; two on two sides hold one that
+                // the bisection below finds.
                 if let (Some(sa), Some(sb)) = (sa, sb)
-                    && (sa > 0.0) == (sb > 0.0)
+                    && !(sa.abs() > floor && sb.abs() > floor && (sa > 0.0) != (sb > 0.0))
                     && (tb - ta).abs() > shortest
-                    && sa.abs() + sb.abs() <= speed * (tb - ta).abs()
+                    && sa.abs() + sb.abs() < speed * (tb - ta).abs()
                 {
                     let tm = f64::midpoint(ta, tb);
                     finer.push((tm, side(tm)));
@@ -2517,17 +2549,44 @@ fn find_side_flips(
             samples = finer;
         }
     }
-    let mut out = Vec::new();
+    // The side of the nearest sample clear of the surface before and after
+    // one on it.
+    let clear_side = |range: &mut dyn Iterator<Item = usize>| {
+        range
+            .filter_map(|k| samples[k].1)
+            .find(|&s| s.abs() > tol.linear)
+            .map(|s| s > 0.0)
+    };
+    let mut out: Vec<SideRoot> = Vec::new();
     let mut prev: Option<(f64, f64)> = None;
-    for (t, s) in samples {
+    for (k, &(t, s)) in samples.iter().enumerate() {
         let Some(s) = s else {
             prev = None;
             continue;
         };
+        if s == 0.0 {
+            let pc = curve.evaluate_with_endpoints(t, start_pos, end_pos);
+            // Samples on the surface beside each other are one root.
+            if out
+                .last()
+                .is_none_or(|root| (root.at().1 - pc).length() > 100.0 * tol.linear)
+            {
+                let before = clear_side(&mut (0..k).rev());
+                let after = clear_side(&mut (k + 1..samples.len()));
+                out.push(match (before, after) {
+                    (Some(b), Some(a)) if a != b => SideRoot::Crossing(t, pc),
+                    _ => SideRoot::Touch(t, pc),
+                });
+            }
+            prev = None;
+            continue;
+        }
+        // A side this near zero has no sign the projection's rounding keeps.
+        if s.abs() <= floor {
+            continue;
+        }
         if let Some((t_prev, s_prev)) = prev
             && (s_prev > 0.0) != (s > 0.0)
-            && s_prev != 0.0
-            && s != 0.0
         {
             let (mut lo, mut hi, mut s_lo) = (t_prev, t, s_prev);
             for _ in 0..60 {
@@ -2543,7 +2602,7 @@ fn find_side_flips(
             let tc = f64::midpoint(lo, hi);
             let pc = curve.evaluate_with_endpoints(tc, start_pos, end_pos);
             if distance_to_surface(pc, surface) < tol.linear {
-                out.push((tc, pc));
+                out.push(SideRoot::Crossing(tc, pc));
             }
         }
         prev = Some((t, s));
@@ -4067,8 +4126,11 @@ mod tests {
             );
             let start = circle.evaluate(0.0);
             let curve = EdgeCurve::Circle(circle);
-            let found =
-                find_side_flips(&curve, start, start, 0.0, std::f64::consts::TAU, &wall, tol);
+            let found: Vec<_> =
+                find_side_flips(&curve, start, start, 0.0, std::f64::consts::TAU, &wall, tol)
+                    .into_iter()
+                    .map(SideRoot::at)
+                    .collect();
             assert_eq!(found.len(), 4, "{found:?}");
             for (k, (t, p)) in found.into_iter().enumerate() {
                 assert!(distance_to_surface(p, &wall) < tol.linear, "{p:?}");
@@ -4077,5 +4139,49 @@ mod tests {
                 assert!((t - side).abs() < std::f64::consts::PI / 32.0, "{k}: {t}");
             }
         }
+    }
+
+    /// A line from (-3, 0, 0) to (509, 0, 0) crosses the unit ball at
+    /// t = 1/256 and 1/128, both between its first two samples. The samples
+    /// added between them land on the sphere at both, and each is a
+    /// crossing. A line along y through (1, 0, 0) touches the ball there, at
+    /// t = 3/512, where an added sample lands exactly: a touch, and no
+    /// crossing.
+    #[test]
+    fn a_sample_on_the_surface_is_a_crossing_or_a_touch() {
+        use brepkit_math::surfaces::SphericalSurface;
+        let tol = Tolerance::new();
+        let ball =
+            FaceSurface::Sphere(SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0).unwrap());
+        let found = find_side_flips(
+            &EdgeCurve::Line,
+            Point3::new(-3.0, 0.0, 0.0),
+            Point3::new(509.0, 0.0, 0.0),
+            0.0,
+            1.0,
+            &ball,
+            tol,
+        );
+        assert_eq!(found.len(), 2, "{found:?}");
+        for (root, want) in found.iter().zip([1.0 / 256.0, 1.0 / 128.0]) {
+            assert!(matches!(root, SideRoot::Crossing(..)), "{root:?}");
+            let (t, p) = root.at();
+            assert!((t - want).abs() < 1e-12, "{t} against {want}");
+            assert!(distance_to_surface(p, &ball) < tol.linear, "{p:?}");
+        }
+        let touched = find_side_flips(
+            &EdgeCurve::Line,
+            Point3::new(1.0, -3.0, 0.0),
+            Point3::new(1.0, 509.0, 0.0),
+            0.0,
+            1.0,
+            &ball,
+            tol,
+        );
+        assert_eq!(touched.len(), 1, "{touched:?}");
+        assert!(matches!(touched[0], SideRoot::Touch(..)), "{touched:?}");
+        let (t, p) = touched[0].at();
+        assert!((t - 3.0 / 512.0).abs() < 1e-15, "{t}");
+        assert!((p - Point3::new(1.0, 0.0, 0.0)).length() < 1e-15, "{p:?}");
     }
 }

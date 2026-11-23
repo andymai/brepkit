@@ -4315,7 +4315,7 @@ fn split_closed_section_at_crossings(
     const SAMPLES: usize = 512;
     let (lo, hi) = raw.t_range;
     let span = hi - lo;
-    if span <= 0.0 {
+    if span <= 0.0 || crossings.len() < 2 {
         return None;
     }
     let point_at = |t: f64| raw.curve.evaluate_with_endpoints(t, raw.p_start, raw.p_end);
