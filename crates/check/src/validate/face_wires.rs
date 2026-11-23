@@ -2937,4 +2937,75 @@ mod tests {
             }
         }
     }
+
+    /// A closed edge of one Bezier span through `n + 1` points round
+    /// `at(angle)`, from angle 0 to `turns` whole turns: its points are
+    /// `z(t) = (1 - t + t w)^n` scaled, `w` the turn `turns / n`, so it
+    /// turns as often as its points do, and ends where it starts.
+    fn single_span(
+        topo: &mut Topology,
+        n: usize,
+        turns: f64,
+        at: &dyn Fn(f64) -> Point3,
+    ) -> EdgeId {
+        #[allow(clippy::cast_precision_loss)]
+        let points: Vec<Point3> = (0..=n)
+            .map(|k| at(TAU * turns * k as f64 / n as f64))
+            .collect();
+        let mut knots = vec![0.0; n + 1];
+        knots.extend(vec![1.0; n + 1]);
+        let curve =
+            brepkit_math::nurbs::curve::NurbsCurve::new(n, knots, points.clone(), vec![1.0; n + 1])
+                .unwrap();
+        let v = vertex(topo, [points[0].x(), points[0].y(), points[0].z()]);
+        topo.add_edge(Edge::new(v, v, EdgeCurve::NurbsCurve(curve)))
+    }
+
+    fn alone(topo: &mut Topology, edge: EdgeId) -> WireId {
+        topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap())
+    }
+
+    /// A closed edge of one Bezier span whose ends meet but which runs twice
+    /// round a cylinder's axis is read as running round twice, and reported;
+    /// one that runs round once is read as once.
+    #[test]
+    fn a_closed_span_that_runs_twice_round_a_cylinder_is_reported() {
+        let ring = |a: f64| Point3::new(3.0 * a.cos(), 3.0 * a.sin(), 5.0);
+        for (times, want) in [(2.0, 2), (1.0, 1)] {
+            let mut topo = Topology::default();
+            let edge = single_span(&mut topo, 16, times, &ring);
+            let wire = alone(&mut topo, edge);
+            let face = topo.add_face(Face::new(wire, vec![], cylinder()));
+            assert_eq!(
+                crate::face_loops::wire_turns(&topo, face).unwrap(),
+                Some(vec![Some(Turns::Round(want))]),
+                "{times}"
+            );
+            assert_eq!(turns(&topo, face).is_some(), want > 1, "{times}");
+        }
+    }
+
+    /// A closed edge of one Bezier span in a plane through a torus's axis,
+    /// whose ends meet but which runs twice round the tube, is read as
+    /// running twice along the tube, and reported.
+    #[test]
+    fn a_closed_span_that_runs_twice_round_a_torus_tube_is_reported() {
+        use brepkit_math::surfaces::ToroidalSurface;
+        let tube = |a: f64| Point3::new(5.0 + a.cos(), 0.0, a.sin());
+        for (times, want) in [(2.0, 2), (1.0, 1)] {
+            let mut topo = Topology::default();
+            let edge = single_span(&mut topo, 16, times, &tube);
+            let wire = alone(&mut topo, edge);
+            let surface = FaceSurface::Torus(
+                ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 5.0, 1.0).unwrap(),
+            );
+            let face = topo.add_face(Face::new(wire, vec![], surface));
+            assert_eq!(
+                crate::face_loops::wire_turns(&topo, face).unwrap(),
+                Some(vec![Some(Turns::Torus(0, want))]),
+                "{times}"
+            );
+            assert_eq!(turns(&topo, face).is_some(), want > 1, "{times}");
+        }
+    }
 }
