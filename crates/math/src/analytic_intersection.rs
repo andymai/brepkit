@@ -19,7 +19,7 @@ use crate::tolerance::Tolerance;
 use crate::vec::{Point3, Vec3};
 
 mod section_fit;
-use section_fit::{fit_section, settle_on_section};
+use section_fit::{crosses_at, fit_section, settle_on_section};
 
 /// Exact curve type resulting from plane-analytic surface intersection.
 #[derive(Debug, Clone)]
@@ -2396,6 +2396,9 @@ fn marched_sections(
     // projections from one surface to the other also settle where the two
     // pass closest without meeting, with both normals along the gap: a
     // seed there lies on no curve, and a march from it never closes on it.
+    // Nor does a seed where the two surfaces touch without crossing (their
+    // normals within about 1e-6 of parallel): the section there can be a
+    // lone point, and no direction along it is defined.
     let region = region.map(|r| r.expanded(2.0 * char_size / grid_res as f64));
     unique_seeds.retain_mut(|seed| {
         let mut p = seed.0;
@@ -2414,7 +2417,7 @@ fn marched_sections(
             }
         }
         match settle_on_section(&a, &b, p) {
-            Some(on) if region.is_none_or(|r| r.contains_point(on)) => {
+            Some(on) if crosses_at(&a, &b, on) && region.is_none_or(|r| r.contains_point(on)) => {
                 seed.0 = on;
                 true
             }
@@ -9149,5 +9152,40 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    /// Two rods whose axes cross square, as far apart as their radii add up
+    /// to, touch at one point and cross nowhere. A seed settles onto that
+    /// point, where no direction along a section is defined: the march from
+    /// it wandered up to 1.3e-5 off both rods, and its fit was refused. The
+    /// seed is now dropped, and no section is traced.
+    #[test]
+    fn rods_that_only_touch_trace_no_section() {
+        let wall =
+            CylindricalSurface::new(Point3::new(1.1, 1.1, 1.2), Vec3::new(0.0, 0.0, 1.0), 2.55)
+                .unwrap();
+        let air =
+            CylindricalSurface::new(Point3::new(-3.9, 1.1, 4.7), Vec3::new(0.0, 1.0, 0.0), 2.45)
+                .unwrap();
+        let (a, b) = (
+            AnalyticSurface::Cylinder(&wall),
+            AnalyticSurface::Cylinder(&air),
+        );
+        let touch = Point3::new(-1.45, 1.1, 4.7);
+        assert!(!crosses_at(&a, &b, touch));
+        let region = Aabb3 {
+            min: Point3::new(-2.1625, 0.3875, 1.5375),
+            max: Point3::new(-0.7375, 1.8125, 5.4125),
+        };
+        let curves = marched_sections(
+            a,
+            b,
+            32,
+            Some((1.05, 12.45)),
+            Some((0.0, 30.9)),
+            Some(region),
+        )
+        .unwrap();
+        assert!(curves.is_empty(), "{} sections", curves.len());
     }
 }

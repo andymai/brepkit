@@ -309,6 +309,19 @@ pub(super) fn settle_on_section(a: &impl Carrier, b: &impl Carrier, p: Point3) -
     (fa.abs() <= 1e3 * rounding && fb.abs() <= 1e3 * rounding).then_some(x)
 }
 
+/// Whether `a` and `b` cross at `p`, a point on both: their normals there lie
+/// more than about 1e-6 from parallel, as the Newton steps of
+/// [`settle_on_section`] need.
+pub(super) fn crosses_at(a: &impl Carrier, b: &impl Carrier, p: Point3) -> bool {
+    match (a.distance(p), b.distance(p)) {
+        (Some((_, ga)), Some((_, gb))) => {
+            let c = ga.dot(gb);
+            c.madd(-c, 1.0) >= 1e-12
+        }
+        _ => false,
+    }
+}
+
 /// The cubic Bezier from `t0` to `t1` of `curve`, one of its knot spans, a
 /// line or a parabola raised to a cubic.
 fn span_bezier(curve: &NurbsCurve, t0: f64, t1: f64) -> Result<[Point3; 4], MathError> {
