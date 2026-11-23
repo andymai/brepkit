@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795397221219,
+  "lastUpdate": 1795400258530,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -75977,6 +75977,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18331913,
             "range": "± 164234",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "a51fe326fe337897609d4a57d4d95610b08fc01c",
+          "message": "fix(check,operations): mesh a plane face by its whole area's winding, close the boundary integral's loops, and check overlap and revolve on curved surfaces (#2725)\n\n## Summary\n\nOn main:\n\n- a D-hole block 200 long, turned obliquely, meshes with 94 open edges,\nthough it is exact (#2714);\n- the 60-long D-hole block reads about 7e-10 high, and its bore face\n1.5e-9 off (#2711);\n- `revolve` checks only a profile in a plane that holds its axis.\n`validate_solid` passes two faces on one sphere that cover the same area\n(#2707);\n- `solid_volume` reads an edge off a NURBS surface to first order. It\nsends every NURBS face of a solid to the mesh when one face declines\n(#2698);\n- a chamfered pointed cone with its wall in B-spline form reads 31% low:\n25.33 against 36.986.\n\nWith this change, the D-hole block meshes closed and reads within\n1.44e-10 in 14 poses. `revolve` refuses any planar profile across its\naxis's shadow, and `validate_solid` reports faces that overlap on one\ncurved surface. The B-spline cone reads within 6e-10. No face count,\nvalidity or misread changes in the pose sweep or the truth audit.\n\nFixes #2714, fixes #2711, fixes #2707. For #2698, some NURBS faces still\ntake the mesh path.\n\n## The change\n\n- **A plane face's winding (#2714).** A plane face's mesh took the way\nits triangles wind from the first CDT triangle alone. At length 200, the\nhole's corner lies 1.5e-7 from the arc's first sample. So the first\ntriangle was a sliver whose cross product had the wrong sign, and both\nend caps came out inside out. The new `winding_area` sums all the\ntriangles' areas along the normal. It serves the three places that made\nthis decision, in `tessellate/solid.rs` and `tessellate/planar.rs`.\n- **Closed loops in the boundary integral (#2711).** The exact boundary\nintegrals never joined one edge's end to the next edge's start. The\nbore's ellipse, 2e8 across, reads its ends up to 4e-8 along itself. Each\nloop is now closed by a straight step, in (u, v) in\n`integrate_by_boundary` and in the plane in `wire_plane_moments`. A new\n`Walk` reads a circle or ellipse from its start vertex's parameter plus\nthe chord from there, with half-angle forms.\n- **Revolve across the axis (#2707).**\n- Any planar profile is read against the axis's shadow on its plane.\nPoints on the two sides of that line, at one height, lie at one distance\nfrom the axis. So a profile across it sweeps through itself at any\nangle.\n- `revolve` refuses a boundary in no plane, on a full turn, only where\nits (distance, height) curve provably crosses itself. A boundary that\nwinds round the axis with a simple curve, as on a torus, revolves. A\nboundary counts as planar only where `boundary_in_plane` proves each\nedge lies in the plane. A piece whose weights have both signs, or a scan\npast 2,000,000 chord pairs, keeps the profile.\n- **Faces that overlap on one curved surface (#2707).** The new\n`validate/curved_overlap.rs` pairs faces on one sphere, cylinder, cone\nor torus.\n- It keeps a pair only where the faces' parameter ranges meet, in\nparameter terms. A face's range shrinks to its outline's only where the\nface provably lies inside that outline.\n- It reads two points just inside each edge of each face, at distances\nscaled to the face's own outer wire. It reports a pair only when each\npoint lies inside both faces by more than the tolerance, so faces that\nshare only a rim pass. Both `validate_solid` entry points call it.\n`face_contains_each` now samples each hole once for each batch of\npoints.\n- **NURBS faces in the volume (#2698).**\n- `dv` along an edge off its surface is now the derivative of the\nnearest-point projection.\n- Only the faces that the exact path declines take the mesh. Their\ntriangles that cross a knot line or the seam are cut along it.\n- A mesh vertex counts as a pole only where the control points of its\nwhole surface row lie within the deflection. The B-spline cone's domain\nstops 5e-9 short of its apex, so the old pole guard missed it.\n\n## Tests\n\n- `a_short_d_hole_cuts_exactly_turned_obliquely` has no ignore now, and\nalso runs turned and mirrored: 0 open edges, against 94.\n- The D-hole volume allowance is now 3e-10, from 1e-6.\n`the_bore_of_a_d_hole_reads_exactly_about_any_point` holds 1e-11, where\nmain reads 1.5e-9.\n- `revolve_across_the_axis.rs` has five new tests: squares across the\nshadow at leans of 0, 0.3 and 1.2 and turns of 2π, π and 0.2 are\nrefused. Squares beside it revolve to θ·cos(lean)·8. A bow-tie is\nrefused, also with weights of -1. A boundary that winds round the axis\nwith a simple curve revolves.\n- Three tests in brepkit-check and\n`two_faces_on_one_sphere_that_cover_the_same_area_are_reported` pin the\noverlap check, with\n`faces_on_two_surfaces_of_one_radius_are_not_paired`,\n`faces_on_the_large_sides_of_two_far_rims_are_reported`,\n`a_small_patch_on_a_large_wall_and_its_copy_are_reported`,\n`a_small_cap_and_its_copy_are_reported` and\n`a_flat_small_cap_and_the_rest_of_its_sphere_pass`.\n`a_closed_spline_round_the_axis_through_points_of_one_plane_revolves`\npins the planarity proof.\n- `a_patch_bounded_by_edges_off_its_surface_reads_their_nearest_points`\nreads a sphere patch with edges 2e-7·R off within 1e-11 (2.0e-7 on\nmain).\n`a_coarse_mesh_across_a_b_spline_walls_knot_lines_reads_it_exactly`\nreads 1.9e-8 off (8.7e-5 on main).\n`a_chamfered_b_spline_cone_measures_exactly` reads -5.9e-10 in four\nposes, and `a_slow_start_along_a_row_is_no_pole` reads a slow row within\n1e-12.\n- brepkit-check (182), and the brepkit-operations lib tests for measure\n(81), validate (54), tessellate (148) and revolve (37), pass.\n- 164 integration test files pass (679 tests).\n- `check-mul-add.sh`, `check-boundaries.sh` and `check-doc-paths.sh`\npass.\n- The pose sweep changes 172 lines in the error digits only, by at most\n1.3e-13. In the truth audit, only error digits at or below 1e-12 change.\nThe overlap check adds about 0.1 s to the 480 validations of the pose\nsweep. On a cylinder cut by 50 slots it keeps 0 of the 1225 face pairs\nand takes 3.2 ms in a debug build.\n\n## Still open\n\n- The exact path still declines a NURBS face with a pole or on a surface\nclosed both ways. It also declines one with a wire round the closed\ndirection (#2698). A chord edge on a NURBS face waits until every face\nof such a solid reads exactly.\n- The D-hole's corner vertices sit 3e-8 and 1.2e-7 off the end caps,\nwhich is the boolean's vertex precision on a 2e8 ellipse.",
+          "timestamp": "2026-11-23T02:13:19Z",
+          "tree_id": "54dfe6190fcc0734cdea8240b8d39edd74acf5ad",
+          "url": "https://github.com/andymai/brepkit/commit/a51fe326fe337897609d4a57d4d95610b08fc01c"
+        },
+        "date": 1795400248499,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1186903,
+            "range": "± 7523",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1251528,
+            "range": "± 6226",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12592,
+            "range": "± 76",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 806436,
+            "range": "± 10590",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25422504,
+            "range": "± 97728",
             "unit": "ns/iter"
           }
         ]
