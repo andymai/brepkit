@@ -42,6 +42,8 @@ struct Arc<'a> {
     points: Vec<Point3>,
     /// A bound on how far the edge stands off its chords.
     sag: f64,
+    /// A bound on how far the edge stands off each chord.
+    sags: Vec<f64>,
     length: f64,
     lo: [f64; 3],
     hi: [f64; 3],
@@ -119,6 +121,7 @@ impl<'a> Arc<'a> {
             fractions: Vec::new(),
             points: Vec::new(),
             sag: 0.0,
+            sags: Vec::new(),
             length: 0.0,
             lo: [f64::INFINITY; 3],
             hi: [f64::NEG_INFINITY; 3],
@@ -129,7 +132,9 @@ impl<'a> Arc<'a> {
             let (a, b) = (arc.points[k], arc.points[k + 1]);
             arc.length += (b - a).length();
             let (f0, f1) = (arc.fractions[k], arc.fractions[k + 1]);
-            arc.sag = arc.sag.max(arc.stand_off(f0, f1, a, b));
+            let sag = arc.stand_off(f0, f1, a, b);
+            arc.sag = arc.sag.max(sag);
+            arc.sags.push(sag);
         }
         for p in &arc.points {
             for (k, c) in [p.x(), p.y(), p.z()].into_iter().enumerate() {
@@ -182,20 +187,44 @@ impl<'a> Arc<'a> {
                 .map(|&[x, y, z, w]| (w > 0.0).then(|| Point3::new(x / w, y / w, z / w)))
                 .collect()
         };
-        let mut spans = Vec::new();
+        // Each piece in turn, with its Bezier points where they run one
+        // way. A piece joins the stretch before it while the points of the
+        // two, end to end, still run one way along the line from their first
+        // point to their last: the curve then crosses each plane square to
+        // that line once at most, so it cannot come back to cross itself.
+        let mut spans: Vec<(f64, f64)> = Vec::new();
+        let mut run: Vec<Point3> = Vec::new();
         let mut stack: Vec<(f64, f64, u32)> = cuts
             .windows(2)
             .rev()
             .map(|pair| (pair[0], pair[1], 0))
             .collect();
         while let Some((a, b, depth)) = stack.pop() {
-            if depth >= DEPTH || bezier(a, b).is_some_and(|points| one_way(&points)) {
-                spans.push((a, b));
-            } else {
+            let points = bezier(a, b).filter(|points| one_way(points));
+            if points.is_none() && depth < DEPTH {
                 let mid = 0.5 * (a + b);
                 stack.push((mid, b, depth + 1));
                 stack.push((a, mid, depth + 1));
+                continue;
             }
+            let Some(points) = points else {
+                spans.push((a, b));
+                run.clear();
+                continue;
+            };
+            if let Some(last) = spans.last_mut()
+                && !run.is_empty()
+            {
+                let mut joined = run.clone();
+                joined.extend_from_slice(&points[1..]);
+                if one_way(&joined) {
+                    last.1 = b;
+                    run = joined;
+                    continue;
+                }
+            }
+            spans.push((a, b));
+            run = points;
         }
         // `span` runs from `t0`; the wire runs from `t0` when `forward`.
         let rising = t1 >= t0;
@@ -438,23 +467,42 @@ fn meet(
     }
 }
 
+/// A chord's box: its least and its most coordinates.
+type ChordBox = ([f64; 3], [f64; 3]);
+
 /// The fractions at which the two edges come within `tol` of each other.
 fn meetings(a: &Arc<'_>, b: &Arc<'_>, tol: f64) -> Vec<(f64, f64)> {
     let mut found = Vec::new();
     if a.clear_of(b, a.sag + b.sag + tol) {
         return Vec::new();
     }
-    let piece = |arc: &Arc<'_>, k: usize| {
-        Piece::of(
-            arc,
-            (arc.fractions[k], arc.fractions[k + 1]),
-            (arc.points[k], arc.points[k + 1]),
+    let piece = |arc: &Arc<'_>, k: usize| Piece {
+        fractions: (arc.fractions[k], arc.fractions[k + 1]),
+        ends: (arc.points[k], arc.points[k + 1]),
+        sag: arc.sags[k],
+    };
+    // A chord's box: its piece lies within its sag of the chord.
+    let chord_box = |p: &Piece| -> ChordBox {
+        let (lo, hi) = (p.ends.0, p.ends.1);
+        (
+            [lo.x().min(hi.x()), lo.y().min(hi.y()), lo.z().min(hi.z())],
+            [lo.x().max(hi.x()), lo.y().max(hi.y()), lo.z().max(hi.z())],
         )
     };
-    let pieces_b: Vec<Piece> = (0..b.chords()).map(|j| piece(b, j)).collect();
+    let pieces_b: Vec<(Piece, ChordBox)> = (0..b.chords())
+        .map(|j| {
+            let p = piece(b, j);
+            (p, chord_box(&p))
+        })
+        .collect();
     for i in 0..a.chords() {
         let pa = piece(a, i);
-        for &pb in &pieces_b {
+        let (lo_a, hi_a) = chord_box(&pa);
+        for &(pb, (lo_b, hi_b)) in &pieces_b {
+            let reach = pa.sag + pb.sag + tol;
+            if (0..3).any(|k| lo_a[k] > hi_b[k] + reach || lo_b[k] > hi_a[k] + reach) {
+                continue;
+            }
             meet((a, pa), (b, pb), HALVINGS, tol, &mut found);
         }
     }
