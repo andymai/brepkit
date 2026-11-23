@@ -1947,7 +1947,6 @@ fn seam_crossings(s: &SectionEdge, surface: &FaceSurface, seam_u: f64, tol: f64)
     // lie at whole turns.
     let shift = wrap(uvs[0].x() - seam_u) - uvs[0].x();
     let offsets: Vec<f64> = uvs.iter().map(|p| p.x() + shift).collect();
-    let (first, last) = (offsets[0], offsets[offsets.len() - 1]);
     // The offset at fraction `t` of the span, lifted from the offset `from`
     // at fraction `t_from`, at most a thirty-second of the span before it.
     let lifted = |t: f64, (t_from, from): (f64, f64)| -> Option<f64> {
@@ -1971,9 +1970,6 @@ fn seam_crossings(s: &SectionEdge, surface: &FaceSurface, seam_u: f64, tol: f64)
         // in one bracket.
         for copy in (lo / TAU).floor() as i64 + 1..=(hi / TAU).floor() as i64 {
             let target = TAU * copy as f64;
-            if (target - first).abs() <= 1e-9 || (target - last).abs() <= 1e-9 {
-                continue;
-            }
             let (mut t_lo, mut t_hi) = (param(k), param(k + 1));
             let below = a < target;
             for _ in 0..60 {
@@ -15760,6 +15756,69 @@ mod tests {
                     split[0].end
                 );
             }
+        }
+    }
+
+    /// A rational spline on a unit cylinder of quarter arcs from u = 0 to
+    /// -pi/2, back to 0 and on to pi/2, rising from z = 0 to 3 a unit each,
+    /// each way along it. It starts on the seam at u = 0 and crosses it
+    /// again at z = 2, where it splits. A crossing at the seam copy its
+    /// start lies on was dropped wherever it fell.
+    #[test]
+    fn a_section_leaving_the_seam_splits_where_it_crosses_it_again() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_2, FRAC_PI_4};
+        let surface = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0)
+                .unwrap(),
+        );
+        // The point at `u` on the ring of radius `r` about the axis at `z`.
+        let at = |u: f64, z: f64, r: f64| {
+            let axis = Point3::new(0.0, 0.0, z);
+            axis + (surface.evaluate(u, z).unwrap() - axis) * r
+        };
+        let turns = [0.0, -FRAC_PI_2, 0.0, FRAC_PI_2];
+        let mut poles = vec![at(0.0, 0.0, 1.0)];
+        let mut weights = vec![1.0];
+        for (k, z0) in [0.0, 1.0, 2.0].into_iter().enumerate() {
+            let z1 = z0 + 1.0;
+            let middle = 0.5 * (turns[k] + turns[k + 1]);
+            poles.push(at(middle, 0.5 * (z0 + z1), 1.0 / FRAC_PI_4.cos()));
+            poles.push(at(turns[k + 1], z1, 1.0));
+            weights.extend([FRAC_1_SQRT_2, 1.0]);
+        }
+        let third = 1.0 / 3.0;
+        let knots = vec![
+            0.0,
+            0.0,
+            0.0,
+            third,
+            third,
+            2.0 * third,
+            2.0 * third,
+            1.0,
+            1.0,
+            1.0,
+        ];
+        let spline =
+            EdgeCurve::NurbsCurve(NurbsCurve::new(2, knots, poles.clone(), weights).unwrap());
+        let (first, last) = (poles[0], poles[poles.len() - 1]);
+        for (curve, start, end) in [
+            (spline.clone(), first, last),
+            (spline.reversed().unwrap(), last, first),
+        ] {
+            let section = SectionEdge {
+                curve_3d: curve,
+                ..line_section(start, end)
+            };
+            let split = split_sections_at_seam_meridian(&[section], &surface, 0.0, &[], 1e-7);
+            assert_eq!(split.len(), 2, "from {start:?}: {split:?}");
+            assert!(
+                (split[0].end - at(0.0, 2.0, 1.0)).length() < 1e-9,
+                "from {start:?}: split at {:?}",
+                split[0].end
+            );
         }
     }
 }
