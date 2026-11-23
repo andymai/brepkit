@@ -1077,18 +1077,30 @@ fn wires_apart_issues(
     Ok(issues)
 }
 
-/// An error for each pair of plane faces that lie on one plane and cover the
-/// same area.
+/// An error for each pair of faces that lie on one plane, sphere, cylinder,
+/// cone or torus and cover the same area.
 fn faces_overlap_issues(
     topo: &Topology,
     solid: SolidId,
     scale: f64,
 ) -> Result<Vec<ValidationIssue>, crate::OperationsError> {
-    let found =
-        brepkit_check::validate::face_overlap::check_faces_overlap(topo, solid, 1e-6 * scale)
-            .map_err(|e| crate::OperationsError::InvalidInput {
-                reason: e.to_string(),
-            })?;
+    let read = |found: Result<Vec<_>, brepkit_check::CheckError>| {
+        found.map_err(|e| crate::OperationsError::InvalidInput {
+            reason: e.to_string(),
+        })
+    };
+    let mut found = read(brepkit_check::validate::face_overlap::check_faces_overlap(
+        topo,
+        solid,
+        1e-6 * scale,
+    ))?;
+    found.extend(read(
+        brepkit_check::validate::curved_overlap::check_curved_faces_overlap(
+            topo,
+            solid,
+            1e-6 * scale,
+        ),
+    )?);
     Ok(found
         .into_iter()
         .map(|issue| ValidationIssue {

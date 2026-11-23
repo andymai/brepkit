@@ -488,6 +488,18 @@ pub(super) fn tessellate_planar(
     }
 }
 
+/// Twice the area of a plane face's triangles along its `normal`, each
+/// signed by its winding about the normal. A mesher lays all its triangles
+/// one way round, and this sum tells which way. The sign of one sliver
+/// among them (a vertex a fraction of a micron from the next sample) can
+/// be rounding.
+pub(super) fn winding_area(normal: Vec3, triangles: impl IntoIterator<Item = [Point3; 3]>) -> f64 {
+    triangles
+        .into_iter()
+        .map(|[a, b, c]| (b - a).cross(c - a).dot(normal))
+        .sum()
+}
+
 /// Project a 3D point to 2D by dropping the dominant normal axis.
 pub(super) fn project_by_normal(p: Point3, normal: Vec3) -> brepkit_math::vec::Point2 {
     let ax = normal.x().abs();
@@ -1359,16 +1371,12 @@ pub(super) fn tessellate_planar_shared_with_holes(
         }
     }
 
-    let needs_flip = if let Some(&(v0, v1, v2)) = cdt_triangles.first() {
-        let g0 = cdt_to_global[&v0] as usize;
-        let g1 = cdt_to_global[&v1] as usize;
-        let g2 = cdt_to_global[&v2] as usize;
-        let a = merged.positions[g1] - merged.positions[g0];
-        let b = merged.positions[g2] - merged.positions[g0];
-        a.cross(b).dot(normal) < 0.0
-    } else {
-        false
-    };
+    let needs_flip = winding_area(
+        normal,
+        cdt_triangles.iter().map(|&(v0, v1, v2)| {
+            [v0, v1, v2].map(|v| merged.positions[cdt_to_global[&v] as usize])
+        }),
+    ) < 0.0;
 
     for &(v0, v1, v2) in &cdt_triangles {
         let g0 = cdt_to_global[&v0];

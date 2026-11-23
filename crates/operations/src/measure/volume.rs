@@ -3140,7 +3140,16 @@ pub fn volume_from_direct_face_tessellation(
                     return Ok(flux * 6.0);
                 }
             }
-            FaceSurface::Nurbs(_) => {}
+            // Another face of the solid that the exact integral declines
+            // leaves this one to it all the same: only a face it declines
+            // takes its mesh below.
+            FaceSurface::Nurbs(_) => {
+                if let Some(volume) =
+                    brepkit_check::properties::exact_face_volume(topo, fid, about)?
+                {
+                    return Ok(volume * 6.0);
+                }
+            }
         }
 
         let uv_mesh = tessellate::tessellate_with_uvs(topo, fid, deflection)?;
@@ -3236,40 +3245,116 @@ fn surface_flux_over_mesh(
             |x: f64, p: Option<(f64, f64)>| p.map_or(x, |(lo, len)| lo + (x - lo).rem_euclid(len));
         (back(u, periods.0), back(v, periods.1))
     };
-    // Each vertex's offset from the surface at its (u, v), or `None` past
-    // what a sag can explain, or at a pole. A pole (a cone's apex, where a
-    // ruled patch runs to a point) is one point for a whole side of the
-    // domain, so its vertex has no (u, v) of its own: the mesh gives it one
-    // end of that side, and a triangle from it to the rim, read over its
-    // (u, v), sweeps round the surface towards that end instead of running
-    // up the strip it spans.
+    let lines = KnotLines::of(s, periods);
+    // Each vertex's offset from the surface at its (u, v), past what a sag
+    // can explain, or at a pole. A pole (a cone's apex, where a ruled patch
+    // runs to a point) is one point for a whole row of the domain, so its
+    // vertex has no (u, v) of its own: the mesh gives it one point of that
+    // row, and a triangle from it to the rim, read over its (u, v), sweeps
+    // round the surface towards that point instead of running up the strip
+    // it spans. A vertex whose whole row across the domain is shorter than
+    // the deflection lies at a pole (a cone's wall in B-spline form whose
+    // domain stops 5e-9 short of its apex).
     let mut ev = s.evaluator();
     let tol = (10.0 * deflection).max(1e-6);
-    let offsets: Vec<Option<Vec3>> = pos
+    let ((u_lo, u_hi), (v_lo, v_hi)) = (s.domain_u(), s.domain_v());
+    let corners: Vec<Corner> = pos
         .iter()
         .zip(uvs)
         .map(|(p, uv)| {
             let (u, v) = wrap(uv[0], uv[1]);
-            let (at, s_u, s_v) = ev.point_and_partials(u, v)?;
+            let Some((at, s_u, s_v)) = ev.point_and_partials(u, v) else {
+                return Corner::Far;
+            };
+            // A slow speed at one point (a row that starts slowly) is only
+            // a lead: the whole row must lie within the deflection.
             let (lu, lv) = (s_u.length(), s_v.length());
-            if lu.min(lv) <= 1e-9 * lu.max(lv) {
-                return None;
+            if (lu * (u_hi - u_lo) <= deflection || lu <= 1e-9 * lv)
+                && row_collapses(s, 0, v, deflection)
+            {
+                return Corner::Pole(0);
+            }
+            if (lv * (v_hi - v_lo) <= deflection || lv <= 1e-9 * lu)
+                && row_collapses(s, 1, u, deflection)
+            {
+                return Corner::Pole(1);
             }
             let d = *p - at;
-            (d.length() <= tol).then_some(d)
+            if d.length() <= tol {
+                Corner::Offset(d)
+            } else {
+                Corner::Far
+            }
         })
         .collect();
+    // The strip from the pole's row up to the side `a`-`b` of a triangle
+    // whose third corner `p` lies at a pole: the quadrilateral from the
+    // pole's row under `a`, through `a` and `b`, to the pole's row under
+    // `b`, read as two triangles.
+    let pole_strip = |ev: &mut brepkit_math::nurbs::evaluator::SurfaceEvaluator<'_>,
+                      read: &ReadTriangle<'_>,
+                      (p, axis): (usize, usize),
+                      (a, da): (usize, Vec3),
+                      (b, db): (usize, Vec3)| {
+        let under = |i: usize| {
+            let mut uv = uvs[i];
+            uv[1 - axis] = uvs[p][1 - axis];
+            uv
+        };
+        let (pa, pb) = (under(a), under(b));
+        let mut off = |uv: [f64; 2]| -> Option<Vec3> {
+            let (u, v) = wrap(uv[0], uv[1]);
+            Some(pos[p] - ev.point_and_partials(u, v)?.0)
+        };
+        let (dpa, dpb) = (off(pa)?, off(pb)?);
+        let first = read(
+            ev,
+            [
+                (pa, pos[p], dpa),
+                (uvs[a], pos[a], da),
+                (uvs[b], pos[b], db),
+            ],
+        )?;
+        // Under `a` and `b` at one point, the strip is the first triangle.
+        if (pb[axis] - pa[axis]).abs() <= f64::EPSILON * pa[axis].abs().max(1.0) {
+            return Some(first);
+        }
+        let second = read(
+            ev,
+            [(pa, pos[p], dpa), (uvs[b], pos[b], db), (pb, pos[p], dpb)],
+        )?;
+        Some((first.0 + second.0, first.1 + second.1))
+    };
     // Each triangle's term, worked out on its own: in chunks on rayon's
     // pool (each with its own evaluator) for a big mesh, and summed in the
     // triangles' order, as one loop would.
     let term = |ev: &mut brepkit_math::nurbs::evaluator::SurfaceEvaluator<'_>, tri: &[u32]| {
         let [i0, i1, i2] = [tri[0] as usize, tri[1] as usize, tri[2] as usize];
         let flat = flat_flux(i0, i1, i2);
-        let (Some(d0), Some(d1), Some(d2)) = (offsets[i0], offsets[i1], offsets[i2]) else {
-            return flat;
+        let flat_normal = (pos[i1] - pos[i0]).cross(pos[i2] - pos[i0]);
+        let read = |ev: &mut brepkit_math::nurbs::evaluator::SurfaceEvaluator<'_>,
+                    three: [([f64; 2], Point3, Vec3); 3]| {
+            triangle_flux_on_surface(ev, &wrap, &lines, three, flat_normal, deflection, about)
         };
-        let corners = [(i0, d0), (i1, d1), (i2, d2)];
-        triangle_flux_on_surface(ev, &wrap, uvs, pos, corners, deflection, about).unwrap_or(flat)
+        let at = |i: usize, d: Vec3| (uvs[i], pos[i], d);
+        match [corners[i0], corners[i1], corners[i2]] {
+            [Corner::Offset(d0), Corner::Offset(d1), Corner::Offset(d2)] => {
+                read(ev, [at(i0, d0), at(i1, d1), at(i2, d2)]).unwrap_or(flat)
+            }
+            // One corner at a pole: the triangle spans the strip between the
+            // pole's row, under its other two corners, and the side between
+            // them. The pole's vertex stands for each point of its row.
+            [Corner::Pole(axis), Corner::Offset(da), Corner::Offset(db)] => {
+                pole_strip(ev, &read, (i0, axis), (i1, da), (i2, db)).unwrap_or(flat)
+            }
+            [Corner::Offset(db), Corner::Pole(axis), Corner::Offset(da)] => {
+                pole_strip(ev, &read, (i1, axis), (i2, da), (i0, db)).unwrap_or(flat)
+            }
+            [Corner::Offset(da), Corner::Offset(db), Corner::Pole(axis)] => {
+                pole_strip(ev, &read, (i2, axis), (i0, da), (i1, db)).unwrap_or(flat)
+            }
+            _ => flat,
+        }
     };
     #[cfg(not(target_arch = "wasm32"))]
     if idx.len() > TRIANGLE_CHUNK {
@@ -3378,15 +3463,220 @@ fn whole_patch_flux(
     Some((2.0 * sign * flux, moment * (6.0 * sign)))
 }
 
+/// Whether the row of `s` along `u` (`axis` 0) at `v = at`, or along `v`
+/// at `u = at`, lies within `reach` of one point: its control points there,
+/// whose hull holds it where its weights are all positive, lie within a box
+/// no wider than `reach` across.
+fn row_collapses(
+    s: &brepkit_math::nurbs::surface::NurbsSurface,
+    axis: usize,
+    at: f64,
+    reach: f64,
+) -> bool {
+    use brepkit_math::nurbs::basis::{basis_funs, find_span};
+    let (cps, ws) = (s.control_points(), s.weights());
+    let (rows, cols) = (cps.len(), cps.first().map_or(0, Vec::len));
+    if rows == 0 || cols == 0 || ws.iter().flatten().any(|&w| w <= 0.0) {
+        return false;
+    }
+    let (degree, knots, count, along) = if axis == 0 {
+        (s.degree_v(), s.knots_v(), cols, rows)
+    } else {
+        (s.degree_u(), s.knots_u(), rows, cols)
+    };
+    let span = find_span(count, degree, at, knots);
+    let basis = basis_funs(span, at, degree, knots);
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for k in 0..along {
+        let (mut point, mut weight) = (Vec3::new(0.0, 0.0, 0.0), 0.0);
+        for (b, &n) in basis.iter().enumerate() {
+            let other = span - degree + b;
+            let (i, j) = if axis == 0 { (k, other) } else { (other, k) };
+            let w = n * ws[i][j];
+            point += Vec3::new(cps[i][j].x(), cps[i][j].y(), cps[i][j].z()) * w;
+            weight += w;
+        }
+        if weight <= 0.0 {
+            return false;
+        }
+        let q = point * (1.0 / weight);
+        for (c, x) in [q.x(), q.y(), q.z()].into_iter().enumerate() {
+            lo[c] = lo[c].min(x);
+            hi[c] = hi[c].max(x);
+        }
+    }
+    let wide = (0..3).map(|c| (hi[c] - lo[c]).powi(2)).sum::<f64>().sqrt();
+    wide <= reach
+}
+
+/// A closed direction's start and period, or `None` for an open one.
+type Period = Option<(f64, f64)>;
+
+/// A triangle's term read on a surface from its corners' `(u, v)`,
+/// positions and offsets from the surface (see
+/// [`triangle_flux_on_surface`]).
+type ReadTriangle<'a> = dyn Fn(
+        &mut brepkit_math::nurbs::evaluator::SurfaceEvaluator<'_>,
+        [([f64; 2], Point3, Vec3); 3],
+    ) -> Option<(f64, Vec3)>
+    + 'a;
+
+/// How a mesh vertex stands to a NURBS surface: its offset from the surface
+/// at its `(u, v)`, at a pole where the row along `u` (0) or `v` (1)
+/// shrinks to a point, or farther off than a sag can explain.
+#[derive(Clone, Copy)]
+enum Corner {
+    Offset(Vec3),
+    Pole(usize),
+    Far,
+}
+
+/// The lines of a NURBS surface's `(u, v)` across which it may bend at once:
+/// its knots inside its domain, and on a surface that closes, its seam, each
+/// repeated every period along a closed direction.
+struct KnotLines {
+    u: Vec<f64>,
+    v: Vec<f64>,
+    periods: (Option<f64>, Option<f64>),
+}
+
+impl KnotLines {
+    fn of(s: &brepkit_math::nurbs::surface::NurbsSurface, periods: (Period, Period)) -> Self {
+        let inner = |knots: &[f64], (lo, hi): (f64, f64), period: Option<(f64, f64)>| {
+            let mut lines: Vec<f64> = knots
+                .iter()
+                .copied()
+                .filter(|&k| k > lo && k < hi)
+                .collect();
+            if period.is_some() {
+                lines.push(lo);
+            }
+            lines.sort_by(f64::total_cmp);
+            lines.dedup();
+            lines
+        };
+        Self {
+            u: inner(s.knots_u(), s.domain_u(), periods.0),
+            v: inner(s.knots_v(), s.domain_v(), periods.1),
+            periods: (periods.0.map(|p| p.1), periods.1.map(|p| p.1)),
+        }
+    }
+
+    /// The lines along `axis` (0 for `u`) strictly between `lo` and `hi`.
+    fn between(&self, axis: usize, lo: f64, hi: f64) -> Vec<f64> {
+        let (lines, period) = if axis == 0 {
+            (&self.u, self.periods.0)
+        } else {
+            (&self.v, self.periods.1)
+        };
+        let mut found = Vec::new();
+        if lines.is_empty() {
+            return found;
+        }
+        for &line in lines {
+            match period {
+                Some(p) if p > 0.0 => {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let first = ((lo - line) / p).floor() as i64;
+                    #[allow(clippy::cast_possible_truncation)]
+                    let last = ((hi - line) / p).ceil() as i64;
+                    for m in first..=last {
+                        #[allow(clippy::cast_precision_loss)]
+                        let x = p.madd(m as f64, line);
+                        if x > lo && x < hi {
+                            found.push(x);
+                        }
+                    }
+                }
+                _ => {
+                    if line > lo && line < hi {
+                        found.push(line);
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    /// The triangle `a, b, c` in `(u, v)` cut along the lines that cross it,
+    /// as triangles that keep its way round; `None` where none crosses it.
+    fn cut(&self, a: [f64; 2], b: [f64; 2], c: [f64; 2]) -> Option<Vec<[[f64; 2]; 3]>> {
+        let span = |axis: usize| {
+            (
+                a[axis].min(b[axis]).min(c[axis]),
+                a[axis].max(b[axis]).max(c[axis]),
+            )
+        };
+        let crossing: [Vec<f64>; 2] = [0, 1].map(|axis| {
+            let (lo, hi) = span(axis);
+            self.between(axis, lo, hi)
+        });
+        if crossing.iter().all(Vec::is_empty) {
+            return None;
+        }
+        let mut pieces: Vec<Vec<[f64; 2]>> = vec![vec![a, b, c]];
+        for (axis, lines) in crossing.into_iter().enumerate() {
+            for line in lines {
+                let mut next = Vec::with_capacity(pieces.len() + 1);
+                for piece in pieces {
+                    for keep_below in [true, false] {
+                        let part = clip(&piece, axis, line, keep_below);
+                        if part.len() >= 3 {
+                            next.push(part);
+                        }
+                    }
+                }
+                pieces = next;
+            }
+        }
+        let mut triangles = Vec::new();
+        for piece in pieces {
+            for k in 1..piece.len() - 1 {
+                triangles.push([piece[0], piece[k], piece[k + 1]]);
+            }
+        }
+        Some(triangles)
+    }
+}
+
+/// The part of the convex polygon `points` in `(u, v)` on one side of the
+/// line where coordinate `axis` is `at`: below it, or above it.
+fn clip(points: &[[f64; 2]], axis: usize, at: f64, keep_below: bool) -> Vec<[f64; 2]> {
+    let inside = |p: &[f64; 2]| {
+        if keep_below {
+            p[axis] <= at
+        } else {
+            p[axis] >= at
+        }
+    };
+    let mut out = Vec::with_capacity(points.len() + 1);
+    for k in 0..points.len() {
+        let (p, q) = (points[k], points[(k + 1) % points.len()]);
+        if inside(&p) {
+            out.push(p);
+        }
+        if (p[axis] - at) * (q[axis] - at) < 0.0 {
+            let f = (at - p[axis]) / (q[axis] - p[axis]);
+            let mut x = [(q[0] - p[0]).madd(f, p[0]), (q[1] - p[1]).madd(f, p[1])];
+            x[axis] = at;
+            out.push(x);
+        }
+    }
+    out
+}
+
 /// Twice the flux about `about` of the surface patch over one mesh
 /// triangle, and its first moment (see [`surface_flux_over_mesh`]), or
-/// `None` where the flat triangle is the better reading.
+/// `None` where the flat triangle is the better reading. A triangle across a
+/// knot line of the surface, where it may bend at once, is read in the
+/// pieces the line cuts it into: the rule is smooth.
 fn triangle_flux_on_surface(
     ev: &mut brepkit_math::nurbs::evaluator::SurfaceEvaluator<'_>,
     wrap: &dyn Fn(f64, f64) -> (f64, f64),
-    uvs: &[[f64; 2]],
-    pos: &[Point3],
-    corners: [(usize, Vec3); 3],
+    lines: &KnotLines,
+    corners: [([f64; 2], Point3, Vec3); 3],
+    flat_normal: Vec3,
     deflection: f64,
     about: Point3,
 ) -> Option<(f64, Vec3)> {
@@ -3403,13 +3693,11 @@ fn triangle_flux_on_surface(
             0.109_951_743_655_322,
         ),
     ];
-    let [(i0, d0), (i1, d1), (i2, d2)] = corners;
-    let (ua, ub, uc) = (uvs[i0], uvs[i1], uvs[i2]);
+    let [(ua, p0, d0), (ub, p1, d1), (uc, p2, d2)] = corners;
     let uv_area2 = (ub[0] - ua[0]) * (uc[1] - ua[1]) - (uc[0] - ua[0]) * (ub[1] - ua[1]);
     if uv_area2.abs() < 1e-300 {
         return None;
     }
-    let flat_normal = (pos[i1] - pos[i0]).cross(pos[i2] - pos[i0]);
     let centroid = |p: Point3, q: Point3, r: Point3| {
         Point3::new(
             (p.x() + q.x() + r.x()) / 3.0,
@@ -3419,43 +3707,60 @@ fn triangle_flux_on_surface(
     };
     // Corners a period apart on a closed surface each map right, and the
     // triangle between them spans the surface the long way round.
-    let longest = (pos[i1] - pos[i0])
+    let longest = (p1 - p0)
         .length()
-        .max((pos[i2] - pos[i1]).length())
-        .max((pos[i0] - pos[i2]).length());
+        .max((p2 - p1).length())
+        .max((p0 - p2).length());
     let third = 1.0 / 3.0;
     let (mu, mv) = wrap(
         (ua[0] + ub[0] + uc[0]) * third,
         (ua[1] + ub[1] + uc[1]) * third,
     );
     let mid = ev.point(mu, mv) + (d0 + d1 + d2) * third;
-    if (mid - centroid(pos[i0], pos[i1], pos[i2])).length() > (10.0 * deflection).max(0.5 * longest)
-    {
+    if (mid - centroid(p0, p1, p2)).length() > (10.0 * deflection).max(0.5 * longest) {
         return None;
     }
-    // The interpolated offset's own slope in u and v.
+    // The interpolated offset's own slope in u and v, and each point's
+    // weights of the corners.
     let (b1u, b1v) = ((uc[1] - ua[1]) / uv_area2, -(uc[0] - ua[0]) / uv_area2);
     let (b2u, b2v) = (-(ub[1] - ua[1]) / uv_area2, (ub[0] - ua[0]) / uv_area2);
     let off_u = (d1 - d0) * b1u + (d2 - d0) * b2u;
     let off_v = (d1 - d0) * b1v + (d2 - d0) * b2v;
     let (mut sum, mut moment, mut agrees) = (0.0, Vec3::new(0.0, 0.0, 0.0), true);
-    for &(p, q, w) in &RULE {
-        for (w0, w1, w2) in [(p, p, q), (p, q, p), (q, p, p)] {
-            let u = w0 * ua[0] + w1 * ub[0] + w2 * uc[0];
-            let v = w0 * ua[1] + w1 * ub[1] + w2 * uc[1];
-            let (wu, wv) = wrap(u, v);
-            let (p_uv, s_u, s_v) = ev.point_and_partials(wu, wv)?;
-            let n = (s_u + off_u).cross(s_v + off_v);
-            agrees &= n.dot(flat_normal) * uv_area2 >= 0.0;
-            let r = (p_uv - about) + d0 * w0 + d1 * w1 + d2 * w2;
-            sum += w * r.dot(n);
-            moment += r * (w * r.dot(n));
+    // The triangle's normal over its `(u, v)` area is the size of the
+    // surface's normal across it.
+    let faint = 1e-6 * flat_normal.length() / uv_area2.abs();
+    let whole = [[ua, ub, uc]];
+    let cut = lines.cut(ua, ub, uc);
+    for &[sa, sb, sc] in cut.as_deref().unwrap_or(&whole) {
+        let area2 = (sb[0] - sa[0]) * (sc[1] - sa[1]) - (sc[0] - sa[0]) * (sb[1] - sa[1]);
+        let (mut part, mut part_moment) = (0.0, Vec3::new(0.0, 0.0, 0.0));
+        for &(p, q, w) in &RULE {
+            for (w0, w1, w2) in [(p, p, q), (p, q, p), (q, p, p)] {
+                let u = w0 * sa[0] + w1 * sb[0] + w2 * sc[0];
+                let v = w0 * sa[1] + w1 * sb[1] + w2 * sc[1];
+                let (du, dv) = (u - ua[0], v - ua[1]);
+                let l1 = b1u.madd(du, b1v * dv);
+                let l2 = b2u.madd(du, b2v * dv);
+                let l0 = 1.0 - l1 - l2;
+                let (wu, wv) = wrap(u, v);
+                let (p_uv, s_u, s_v) = ev.point_and_partials(wu, wv)?;
+                let n = (s_u + off_u).cross(s_v + off_v);
+                // A point on a pole's row has next to no normal, whose
+                // way is rounding: it weighs nothing either way.
+                agrees &= n.dot(flat_normal) * uv_area2 >= 0.0 || n.length() <= faint;
+                let r = (p_uv - about) + d0 * l0 + d1 * l1 + d2 * l2;
+                part += w * r.dot(n);
+                part_moment += r * (w * r.dot(n));
+            }
         }
+        // The rule's weights sum to one; `area2` is twice the piece's
+        // signed `(u, v)` area, which makes this twice its flux, and three
+        // times it six times the moment's flux.
+        sum += part * area2;
+        moment += part_moment * area2;
     }
-    // The rule's weights sum to one; `uv_area2` is twice the triangle's
-    // signed `(u, v)` area, which makes this twice its flux, and three
-    // times it six times the moment's flux.
-    agrees.then_some((sum * uv_area2, moment * (3.0 * uv_area2)))
+    agrees.then_some((sum, moment * 3.0))
 }
 
 /// Compute the volume of a solid directly from its face vertex
@@ -3993,6 +4298,106 @@ mod tests {
     use brepkit_topology::face::Face;
     use brepkit_topology::vertex::Vertex;
     use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// The patch `(0.01 u + 0.99 u², v, u²)` over the unit square, whose
+    /// speed along `u` is 0.01 at `u = 0` though its rows run √2 long, read
+    /// over the one triangle `(0, 0), (1, 0), (1, 1)`: no corner of it lies
+    /// at a pole, and it matches the patch's flux over the triangle.
+    #[test]
+    fn a_slow_start_along_a_row_is_no_pole() {
+        let net = |b: f64, c: f64| vec![Point3::new(b, 0.0, c), Point3::new(b, 1.0, c)];
+        let surface = brepkit_math::nurbs::surface::NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![net(0.0, 0.0), net(0.005, 0.0), net(1.0, 1.0)],
+            vec![vec![1.0; 2]; 3],
+        )
+        .unwrap();
+        let uvs = vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]];
+        let positions: Vec<Point3> = uvs
+            .iter()
+            .map(|uv| surface.evaluate(uv[0], uv[1]))
+            .collect();
+        let mesh = tessellate::TriangleMeshUV {
+            mesh: tessellate::TriangleMesh {
+                normals: vec![Vec3::new(0.0, 0.0, 0.0); 3],
+                positions,
+                indices: vec![0, 1, 2],
+            },
+            uvs,
+        };
+        let about = Point3::new(0.0, 0.0, 0.0);
+        let (read, _) = surface_flux_over_mesh(&mesh, Some(&surface), 0.05, about);
+        // Twice the flux over `0 <= v <= u <= 1`, the integrand a polynomial
+        // the rule takes exactly.
+        let rule = brepkit_math::quadrature::gauss_legendre_points(16);
+        let mut twice = 0.0;
+        for gu in rule {
+            let u = 0.5 * (gu.x + 1.0);
+            for gv in rule {
+                let v = 0.5 * u * (gv.x + 1.0);
+                let (p, s_u, s_v) = surface.first_derivatives(u, v);
+                twice += 2.0 * 0.25 * u * gu.w * gv.w * p.dot(s_u.cross(s_v));
+            }
+        }
+        assert!(
+            (read - twice).abs() < 1e-12,
+            "read {read}, twice the flux {twice}"
+        );
+    }
+
+    /// A frustum 3 to 1 across and 4 high, its wall in B-spline form (its
+    /// rows doubled where the rational quarter circles join, so it is only
+    /// C0 across those knot lines), its bottom rim chamfered. Each B-spline
+    /// face of it read over a coarse mesh, triangle by triangle on the
+    /// surface, matches its exact term: a triangle across a knot line is
+    /// cut along it.
+    #[test]
+    fn a_coarse_mesh_across_a_b_spline_walls_knot_lines_reads_it_exactly() {
+        use brepkit_heal::custom::convert_to_bspline::face_bspline_surface;
+        let mut topo = Topology::new();
+        let frustum = make_cone(&mut topo, 3.0, 1.0, 4.0).unwrap();
+        let rim = brepkit_topology::explorer::solid_edges(&topo, frustum)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                matches!(topo.edge(e).unwrap().curve(),
+                    EdgeCurve::Circle(c) if c.center().z().abs() < 1e-9)
+            })
+            .unwrap();
+        for face in brepkit_topology::explorer::solid_faces(&topo, frustum).unwrap() {
+            if topo.face(face).unwrap().surface().is_planar() {
+                continue;
+            }
+            let wall = face_bspline_surface(&topo, face).unwrap().unwrap();
+            topo.face_mut(face)
+                .unwrap()
+                .set_surface(FaceSurface::Nurbs(wall));
+        }
+        let built = crate::blend_ops::chamfer_v2(&mut topo, frustum, &[rim], 0.4, 0.25).unwrap();
+        let about = Point3::new(0.3, -0.2, 1.1);
+        let mut read = 0;
+        for face in brepkit_topology::explorer::solid_faces(&topo, built.solid).unwrap() {
+            let FaceSurface::Nurbs(surface) = topo.face(face).unwrap().surface() else {
+                continue;
+            };
+            let exact = brepkit_check::properties::exact_face_volume(&topo, face, about)
+                .unwrap()
+                .unwrap();
+            let mesh = tessellate::tessellate_with_uvs(&topo, face, 0.05).unwrap();
+            let (six, _) = surface_flux_over_mesh(&mesh, Some(surface), 0.05, about);
+            assert!(
+                (six / 6.0 - exact).abs() < 1e-7 * exact.abs(),
+                "face {}: {}, exact {exact}",
+                face.index(),
+                six / 6.0
+            );
+            read += 1;
+        }
+        assert!(read >= 1);
+    }
 
     /// The upper hemisphere less a notch over `x > 0`, `y > 0`, `z < 1`, with
     /// an exact equator: its outline runs along the sides of the `(u, v)` box

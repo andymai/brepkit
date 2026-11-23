@@ -26,7 +26,7 @@ use super::nurbs::{compute_angular_range, compute_v_param_range};
 use super::planar::{
     cdt_triangulate_simple, collect_wire_global_vertices, cover_by_winding, polygon_self_crosses,
     project_by_normal, remove_closing_duplicate_global, remove_closing_duplicate_ids,
-    run_planar_cdt, tessellate_planar_shared_with_holes, unproject_point,
+    run_planar_cdt, tessellate_planar_shared_with_holes, unproject_point, winding_area,
 };
 use super::{MERGE_GRID, PointPool, point_merge_key};
 
@@ -1747,17 +1747,13 @@ pub(super) fn tessellate_solid_core(
                 }
             };
 
-            let needs_flip = if let Some(&(i0, i1, i2)) = tris.first() {
-                let p0 = pos_of(i0);
-                let p1 = pos_of(i1);
-                let p2 = pos_of(i2);
-                let a = p1 - p0;
-                let b = p2 - p0;
-                let winding_matches = a.cross(b).dot(job.normal) > 0.0;
-                winding_matches == job.is_reversed
-            } else {
-                false
-            };
+            let needs_flip = !tris.is_empty()
+                && (winding_area(
+                    job.normal,
+                    tris.iter()
+                        .map(|&(i0, i1, i2)| [pos_of(i0), pos_of(i1), pos_of(i2)]),
+                ) > 0.0)
+                    == job.is_reversed;
 
             for &(i0, i1, i2) in &tris {
                 let g0 = gid_of(i0);
@@ -2187,17 +2183,15 @@ pub(super) fn tessellate_face_with_shared_edges(
         if face_data.inner_wires().is_empty() {
             let mut local_indices = cdt_triangulate_simple(&local_positions, normal);
 
-            if local_indices.len() >= 3 {
-                let i0 = local_indices[0] as usize;
-                let i1 = local_indices[1] as usize;
-                let i2 = local_indices[2] as usize;
-                let a = local_positions[i1] - local_positions[i0];
-                let b = local_positions[i2] - local_positions[i0];
-                let tri_normal = a.cross(b);
-                if tri_normal.dot(normal) < 0.0 {
-                    for t in 0..local_indices.len() / 3 {
-                        local_indices.swap(t * 3 + 1, t * 3 + 2);
-                    }
+            let area = winding_area(
+                normal,
+                local_indices
+                    .chunks_exact(3)
+                    .map(|t| [t[0], t[1], t[2]].map(|i| local_positions[i as usize])),
+            );
+            if area < 0.0 {
+                for t in 0..local_indices.len() / 3 {
+                    local_indices.swap(t * 3 + 1, t * 3 + 2);
                 }
             }
 

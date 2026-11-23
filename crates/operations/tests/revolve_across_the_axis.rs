@@ -425,4 +425,265 @@ mod tests {
             }
         }
     }
+
+    /// A quadrilateral whose corners are `corners` in the frame's
+    /// `(out, side, axis)` coordinates, on `surface`: its plane, or any
+    /// surface the corners need not lie on, as revolve sweeps a curved
+    /// profile's boundary alone.
+    fn quad(
+        topo: &mut Topology,
+        f: &Frame,
+        corners: [[f64; 3]; 4],
+        surface: Option<FaceSurface>,
+    ) -> FaceId {
+        let points = corners.map(|[o, s, a]| f.origin + f.out * o + f.side * s + f.axis * a);
+        let vertices = points.map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+        let edges: Vec<OrientedEdge> = (0..4)
+            .map(|i| {
+                let line = Edge::new(vertices[i], vertices[(i + 1) % 4], EdgeCurve::Line);
+                OrientedEdge::new(topo.add_edge(line), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        let surface = surface.unwrap_or_else(|| {
+            let normal = (points[1] - points[0])
+                .cross(points[2] - points[0])
+                .normalize()
+                .unwrap();
+            let d = normal.dot(Vec3::new(points[0].x(), points[0].y(), points[0].z()));
+            FaceSurface::Plane { normal, d }
+        });
+        topo.add_face(Face::new(wire, vec![], surface))
+    }
+
+    /// A square two wide in a plane that leans `lean` from the axis, `s`
+    /// across the axis's shadow on that plane from `from` to `from + 2`,
+    /// and from 1 to 3 along the shadow. The plane meets the axis at the
+    /// frame's origin, or holds no point of it for a lean of nothing, where
+    /// it stands `R / 10` from the axis.
+    fn leaning_square(topo: &mut Topology, f: &Frame, lean: f64, from: f64) -> FaceId {
+        let (sin, cos) = lean.sin_cos();
+        let off = if lean == 0.0 { 0.1 * R } else { 0.0 };
+        let corner = |s: f64, w: f64| [w * sin + off, s, w * cos];
+        quad(
+            topo,
+            f,
+            [
+                corner(from, 1.0),
+                corner(from + 2.0, 1.0),
+                corner(from + 2.0, 3.0),
+                corner(from, 3.0),
+            ],
+            None,
+        )
+    }
+
+    /// A square in a plane that does not hold the axis, across the axis's
+    /// shadow on it: refused for any turn, the plane leaning off the axis
+    /// or standing beside it.
+    #[test]
+    fn a_square_across_the_shadow_of_the_axis_is_refused() {
+        for (name, f) in frames() {
+            for lean in [0.0, 0.3, 1.2] {
+                for turn in [TAU, PI, 0.2] {
+                    let mut topo = Topology::new();
+                    let face = leaning_square(&mut topo, &f, lean, -0.5);
+                    let result = revolve(&mut topo, face, f.origin, f.axis, turn);
+                    assert!(
+                        refused_at_the_axis(&result),
+                        "{name}, lean {lean}, turn {turn}: {result:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The square on one side of the shadow revolves. A point `s` across the
+    /// shadow and `w` along it lies `sqrt(s^2 + (w sin lean + off)^2)` from
+    /// the axis, at height `w cos lean`: the drawing's area element is
+    /// `|s| cos lean / r` of the square's, and the volume a turn `θ` sweeps
+    /// is `θ cos lean` times the square's moment about the shadow, `4 * 2`.
+    #[test]
+    fn a_square_beside_the_shadow_of_the_axis_revolves() {
+        for (name, f) in frames() {
+            for lean in [0.0, 0.3, 1.2] {
+                for turn in [TAU, PI] {
+                    let mut topo = Topology::new();
+                    let face = leaning_square(&mut topo, &f, lean, 1.0);
+                    let solid = revolve(&mut topo, face, f.origin, f.axis, turn).unwrap();
+                    let report = validate_solid(&topo, solid).unwrap();
+                    assert!(
+                        report.is_valid(),
+                        "{name}, lean {lean}: {:?}",
+                        report.issues
+                    );
+                    let expected = turn * lean.cos() * 8.0;
+                    let volume = solid_volume(&topo, solid, 1e-3).unwrap();
+                    assert!(
+                        (volume - expected).abs() < 1e-4 * expected,
+                        "{name}, lean {lean}, turn {turn}: volume {volume}, expected {expected}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A surface the boundaries below need not lie on.
+    fn wall() -> FaceSurface {
+        FaceSurface::Cylinder(
+            brepkit_math::surfaces::CylindricalSurface::new(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                1.0,
+            )
+            .unwrap(),
+        )
+    }
+
+    /// A curved profile's boundary in no one plane whose drawing in distance
+    /// from the axis and height along it crosses itself: two of its points
+    /// lie on one circle about the axis, and a full turn is refused. Its
+    /// corners draw at (2, 0), (4, 2), (4, 0) and (2, 2).
+    #[test]
+    fn a_boundary_whose_drawing_crosses_itself_is_refused() {
+        for (name, f) in frames() {
+            let mut topo = Topology::new();
+            let corners = [
+                [2.0, 0.0, 0.0],
+                [0.0, 4.0, 2.0],
+                [4.0, 0.0, 0.0],
+                [0.0, -2.0, 2.0],
+            ];
+            let face = quad(&mut topo, &f, corners, Some(wall()));
+            let result = revolve(&mut topo, face, f.origin, f.axis, TAU);
+            assert!(refused_at_the_axis(&result), "{name}: {result:?}");
+        }
+    }
+
+    /// A curved profile's boundary in no one plane whose drawing is a simple
+    /// loop clear of the axis revolves into a valid solid.
+    #[test]
+    fn a_boundary_drawn_as_a_simple_loop_revolves() {
+        for (name, f) in frames() {
+            let mut topo = Topology::new();
+            let corners = [
+                [2.0, 0.0, 0.0],
+                [4.0, 0.6, 0.0],
+                [4.0, 0.0, 3.0],
+                [2.0, 0.6, 3.0],
+            ];
+            let face = quad(&mut topo, &f, corners, Some(wall()));
+            let solid = revolve(&mut topo, face, f.origin, f.axis, TAU).unwrap();
+            let report = validate_solid(&topo, solid).unwrap();
+            assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        }
+    }
+
+    /// A closed polygon through `points` in the frame's `(out, side, axis)`
+    /// coordinates, each side drawn by `side`, on `surface`, which the
+    /// polygon need not lie on.
+    fn polygon(
+        topo: &mut Topology,
+        f: &Frame,
+        points: &[[f64; 3]],
+        side: impl Fn(Point3, Point3) -> EdgeCurve,
+    ) -> FaceId {
+        let at: Vec<Point3> = points
+            .iter()
+            .map(|&[o, s, a]| f.origin + f.out * o + f.side * s + f.axis * a)
+            .collect();
+        let vertices: Vec<_> = at
+            .iter()
+            .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+            .collect();
+        let n = at.len();
+        let edges: Vec<OrientedEdge> = (0..n)
+            .map(|i| {
+                let j = (i + 1) % n;
+                let edge = Edge::new(vertices[i], vertices[j], side(at[i], at[j]));
+                OrientedEdge::new(topo.add_edge(edge), true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+        topo.add_face(Face::new(wire, vec![], wall()))
+    }
+
+    /// The bow-tie boundary above, each side a line in B-spline form whose
+    /// weights are both -1: read as the line it is, its drawing crosses
+    /// itself, and a full turn is refused.
+    #[test]
+    fn a_boundary_of_lines_with_weights_of_minus_one_is_read_as_lines() {
+        let corners = [
+            [2.0, 0.0, 0.0],
+            [0.0, 4.0, 2.0],
+            [4.0, 0.0, 0.0],
+            [0.0, -2.0, 2.0],
+        ];
+        let line = |a: Point3, b: Point3| {
+            EdgeCurve::NurbsCurve(
+                NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![a, b], vec![-1.0, -1.0]).unwrap(),
+            )
+        };
+        for (name, f) in frames() {
+            let mut topo = Topology::new();
+            let face = polygon(&mut topo, &f, &corners, line);
+            let result = revolve(&mut topo, face, f.origin, f.axis, TAU);
+            assert!(refused_at_the_axis(&result), "{name}: {result:?}");
+        }
+    }
+
+    /// A boundary in no one plane that winds once round the axis, though its
+    /// drawing in distance from the axis and height along it is a simple
+    /// loop: the chords of `((3 + cos t) cos t, (3 + cos t) sin t, sin t)`,
+    /// whose full turn covers a ring torus once. It revolves into a valid
+    /// solid.
+    #[test]
+    fn a_boundary_round_the_axis_whose_drawing_is_simple_revolves() {
+        let points: Vec<[f64; 3]> = (0..64)
+            .map(|k| {
+                let t = TAU * f64::from(k) / 64.0;
+                let r = 3.0 + t.cos();
+                [r * t.cos(), r * t.sin(), t.sin()]
+            })
+            .collect();
+        for (name, f) in frames() {
+            let mut topo = Topology::new();
+            let face = polygon(&mut topo, &f, &points, |_, _| EdgeCurve::Line);
+            let solid = revolve(&mut topo, face, f.origin, f.axis, TAU).unwrap();
+            let report = validate_solid(&topo, solid).unwrap();
+            assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        }
+    }
+
+    /// The same loop as one closed B-spline of degree 1 through 64 of its
+    /// points, evenly in its parameter. Read at a quarter, a half and three
+    /// quarters of its span, and at its vertex, it lies in the plane
+    /// `axis = side / 3`, though it leaves that plane between; it revolves
+    /// into a valid solid.
+    #[test]
+    fn a_closed_spline_round_the_axis_through_points_of_one_plane_revolves() {
+        const N: u32 = 64;
+        let mut knots = vec![0.0];
+        knots.extend((0..=N).map(|k| f64::from(k) / f64::from(N)));
+        knots.push(1.0);
+        for (name, f) in frames() {
+            let points: Vec<Point3> = (0..=N)
+                .map(|k| {
+                    let t = TAU * f64::from(k % N) / f64::from(N);
+                    let r = 3.0 + t.cos();
+                    f.origin + f.out * (r * t.cos()) + f.side * (r * t.sin()) + f.axis * t.sin()
+                })
+                .collect();
+            let mut topo = Topology::new();
+            let v = topo.add_vertex(Vertex::new(points[0], 1e-7));
+            let curve =
+                NurbsCurve::new(1, knots.clone(), points, vec![1.0; N as usize + 1]).unwrap();
+            let edge = topo.add_edge(Edge::new(v, v, EdgeCurve::NurbsCurve(curve)));
+            let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+            let face = topo.add_face(Face::new(wire, vec![], wall()));
+            let solid = revolve(&mut topo, face, f.origin, f.axis, TAU).unwrap();
+            let report = validate_solid(&topo, solid).unwrap();
+            assert!(report.is_valid(), "{name}: {:?}", report.issues);
+        }
+    }
 }

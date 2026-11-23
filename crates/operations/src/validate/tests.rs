@@ -1257,3 +1257,46 @@ fn fillet_box_with_options() {
         report.issues
     );
 }
+
+/// Two faces of the cap of a ball past `z = 5`, each run the same way round
+/// their one rim, close a shell of no volume whose faces cover one area of
+/// the sphere twice: reported.
+#[test]
+fn two_faces_on_one_sphere_that_cover_the_same_area_are_reported() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::SphericalSurface;
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{Face, FaceSurface};
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    use brepkit_topology::vertex::Vertex;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    let mut topo = Topology::new();
+    let circle = Circle3D::new(
+        Point3::new(0.0, 0.0, 5.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        75f64.sqrt(),
+    )
+    .unwrap();
+    let v = topo.add_vertex(Vertex::new(circle.evaluate(0.0), 1e-7));
+    let rim = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+    let sphere = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 10.0).unwrap();
+    let faces: Vec<_> = (0..2)
+        .map(|_| {
+            let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+            topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(sphere.clone())))
+        })
+        .collect();
+    let shell = topo.add_shell(Shell::new(faces).unwrap());
+    let lens = topo.add_solid(Solid::new(shell, vec![]));
+    let report = validate_solid(&topo, lens).unwrap();
+    assert!(
+        report.issues.iter().any(|i| i
+            .description
+            .contains("lie on one sphere and cover the same area")),
+        "{:?}",
+        report.issues
+    );
+}

@@ -538,6 +538,38 @@ fn wire_plane_moments(
     let wire = topo.wire(wire_id)?;
     let gauss = gauss_legendre_points(8);
     let mut m = [0.0; 6];
+    // Adds the integrals along `p(t)` with derivative `d(t)`, `t` from
+    // `a` to `b`.
+    let along = |m: &mut [f64; 6],
+                 (a, b): (f64, f64),
+                 p: &dyn Fn(f64) -> Point3,
+                 d: &dyn Fn(f64) -> Vec3| {
+        let (step, mid) = (b - a, f64::midpoint(a, b));
+        for gp in gauss {
+            let t = (0.5 * step).madd(gp.x, mid);
+            let w = 0.5 * step * gp.w;
+            let (p, d) = (p(t) - frame.origin, d(t));
+            let (x, y) = (p.dot(frame.x), p.dot(frame.y));
+            let (dx, dy) = (d.dot(frame.x), d.dot(frame.y));
+            m[0] += w * 0.5 * x.madd(dy, -(y * dx));
+            m[1] += w * 0.5 * x * x * dy;
+            m[2] -= w * 0.5 * y * y * dx;
+            m[3] += w * x * x * x * dy / 3.0;
+            m[4] += w * 0.5 * x * x * y * dy;
+            m[5] -= w * y * y * y * dx / 3.0;
+        }
+    };
+    // The straight step from where one edge's curve ends to where the next
+    // one's starts. Each curve is read from its own parameters, and two of
+    // them can part at a vertex by its tolerance (a long arc of a huge
+    // ellipse reads its ends 1e-7 along itself): the step keeps the loop
+    // closed, so its integrals do not hang on where the frame sits.
+    let bridge = |m: &mut [f64; 6], from: Point3, to: Point3| {
+        if (to - from).length() > 0.0 {
+            along(m, (0.0, 1.0), &|s| from + (to - from) * s, &|_| to - from);
+        }
+    };
+    let mut curve_ends: Option<(Point3, Point3)> = None;
     let mut prev: Option<(brepkit_topology::vertex::VertexId, Point3)> = None;
     let mut first: Option<Point3> = None;
     let mut scale = 0.0_f64;
@@ -564,6 +596,8 @@ fn wire_plane_moments(
             let at = curve.evaluate_with_endpoints(t0, sp, ep);
             (at - sp).length() <= (at - ep).length()
         };
+        let walk = super::boundary::Walk::new(curve, sp, ep);
+        let (t0, t1) = (walk.tau(t0), walk.tau(t1));
         // Breaks between which the integrand is smooth: a NURBS curve's
         // knots within the span, and pieces no wider than an eighth of a turn
         // on a conic.
@@ -588,33 +622,30 @@ fn wire_plane_moments(
         if forward != natural {
             breaks.reverse();
         }
-        for piece in breaks.windows(2) {
-            let (step, mid) = (piece[1] - piece[0], f64::midpoint(piece[0], piece[1]));
-            for gp in gauss {
-                let t = (0.5 * step).madd(gp.x, mid);
-                let w = 0.5 * step * gp.w;
-                let p = curve.evaluate_with_endpoints(t, sp, ep) - frame.origin;
-                let d = match curve {
-                    EdgeCurve::Line => ep - sp,
-                    EdgeCurve::Circle(c) => c.tangent(t) * c.radius(),
-                    EdgeCurve::Ellipse(c) => c.tangent(t),
-                    EdgeCurve::NurbsCurve(c) => c.derivatives(t, 1)[1],
-                };
-                let (x, y) = (p.dot(frame.x), p.dot(frame.y));
-                let (dx, dy) = (d.dot(frame.x), d.dot(frame.y));
-                m[0] += w * 0.5 * x.madd(dy, -(y * dx));
-                m[1] += w * 0.5 * x * x * dy;
-                m[2] -= w * 0.5 * y * y * dx;
-                m[3] += w * x * x * x * dy / 3.0;
-                m[4] += w * 0.5 * x * x * y * dy;
-                m[5] -= w * y * y * y * dx / 3.0;
+        let point = |t: f64| walk.point(t);
+        let velocity = |t: f64| walk.velocity(t);
+        let (Some(&enter), Some(&leave)) = (breaks.first(), breaks.last()) else {
+            continue;
+        };
+        let (enter, leave) = (point(enter), point(leave));
+        match curve_ends {
+            Some((start, end)) => {
+                bridge(&mut m, end, enter);
+                curve_ends = Some((start, leave));
             }
+            None => curve_ends = Some((enter, leave)),
+        }
+        for piece in breaks.windows(2) {
+            along(&mut m, (piece[0], piece[1]), &point, &velocity);
         }
     }
     let closes = match (first, prev) {
         (Some(a), Some((_, b))) => (a - b).length() <= 1e-6 * scale.max(1.0),
         _ => false,
     };
+    if let Some((start, end)) = curve_ends {
+        bridge(&mut m, end, start);
+    }
     Ok(closes.then_some(m))
 }
 
