@@ -1235,7 +1235,19 @@ fn split_sections_at_boundary_crossings(
     const WELD: f64 = 1e-5;
 
     let pair = |a: FaceId, b: FaceId| (a.index().min(b.index()), a.index().max(b.index()));
-    let mut crossings: HashMap<(usize, usize), Vec<VertexId>> = HashMap::new();
+    let linear = tol.linear;
+    let same = |topo: &Topology, a: VertexId, b: VertexId| {
+        a == b
+            || matches!(
+                (topo.vertex(a), topo.vertex(b)),
+                (Ok(p), Ok(q)) if (p.point() - q.point()).length() <= linear
+            )
+    };
+    // Each crossing stands for the vertex its edge keeps there once
+    // MakeBlocks splits it: of the paves that coincide on a block it keeps
+    // one, and the section must end at that same vertex. The rank is the
+    // one that vertex has on its edge: a block's own end, or a pave.
+    let mut crossings: HashMap<(usize, usize), Vec<(VertexId, usize)>> = HashMap::new();
     for interf in &arena.interference.ef {
         let Interference::EF {
             edge,
@@ -1247,11 +1259,26 @@ fn split_sections_at_boundary_crossings(
             continue;
         };
         let vertex = arena.resolve_vertex(*vertex);
+        let kept = arena
+            .edge_pave_blocks
+            .get(edge)
+            .map(|blocks| arena.collect_leaf_pave_blocks(blocks))
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|leaf| arena.pave_blocks.get(leaf))
+            .flat_map(|piece| {
+                make_blocks::piece_vertices(topo, arena, piece)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(k, v)| (arena.resolve_vertex(v), usize::from(k >= 2)))
+            })
+            .find(|&(v, _)| same(topo, v, vertex))
+            .unwrap_or((vertex, 1));
         for owner in topo.faces_of_edge(*edge) {
             if owner != *face {
                 let list = crossings.entry(pair(owner, *face)).or_default();
-                if !list.contains(&vertex) {
-                    list.push(vertex);
+                if !list.contains(&kept) {
+                    list.push(kept);
                 }
             }
         }
@@ -1293,8 +1320,11 @@ fn split_sections_at_boundary_crossings(
         // Each crossing on the curve, as a pave parameter inside the span: a
         // line's paves read its own parameter, from `p0` at its start to `p1`
         // at its end, and a conic's its angle.
-        let mut cuts: Vec<(f64, VertexId)> = Vec::new();
-        for &vertex in list {
+        // Crossings at one place cut the section once, at the vertex the
+        // earliest rank and then the lowest index keeps, as the rim pass
+        // does: no piece is shorter than the linear tolerance.
+        let mut cuts: Vec<(f64, VertexId, usize)> = Vec::new();
+        for &(vertex, rank) in list {
             let p = topo.vertex(vertex)?.point();
             if (p - a).length() <= WELD || (p - b).length() <= WELD {
                 continue;
@@ -1324,8 +1354,13 @@ fn split_sections_at_boundary_crossings(
             if (foot - p).length() > tol.linear || !(lo < at && at < hi) {
                 continue;
             }
-            if !cuts.iter().any(|&(_, v)| v == vertex) {
-                cuts.push((at, vertex));
+            match cuts.iter_mut().find(|c| same(topo, c.1, vertex)) {
+                Some(kept) => {
+                    if (rank, vertex.index()) < (kept.2, kept.1.index()) {
+                        *kept = (at, vertex, rank);
+                    }
+                }
+                None => cuts.push((at, vertex, rank)),
             }
         }
         if cuts.is_empty() {
@@ -1340,7 +1375,7 @@ fn split_sections_at_boundary_crossings(
             }
         });
         let mut paves = vec![start];
-        paves.extend(cuts.into_iter().map(|(at, v)| Pave::new(v, at)));
+        paves.extend(cuts.into_iter().map(|(at, v, _)| Pave::new(v, at)));
         paves.push(end);
         for (n, w) in paves.windows(2).enumerate() {
             let piece_edge =
