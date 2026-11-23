@@ -249,6 +249,77 @@ fn poses() -> [(&'static str, Mat4); 3] {
     ]
 }
 
+/// Struts 4, 6 and 16 fused one at a time, in every order. The first fuse
+/// leaves the curve where two of the walls meet as an edge, and the third
+/// strut's wall crosses it at the point where the three walls meet. The
+/// sections on the third wall end there, and the second strut's wall,
+/// notched near its cap by the first, splits on its own turn of `u`.
+#[test]
+fn struts_that_end_at_one_point_fuse_one_at_a_time() {
+    let options = BooleanOptions {
+        mesh_fallback: false,
+        ..BooleanOptions::default()
+    };
+    let orders = [
+        [4, 6, 16],
+        [4, 16, 6],
+        [6, 4, 16],
+        [6, 16, 4],
+        [16, 4, 6],
+        [16, 6, 4],
+    ];
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let solids = load(&mut topo, &pose);
+        let three = [solids[4], solids[6], solids[16]];
+        let rods = three.map(|s| rod(&topo, s));
+        let expected = union_volume(&rods);
+        let one_pass = brepkit_algo::gfa::fuse_n(&mut topo, &three).unwrap();
+        let one_pass = solid_volume(&topo, one_pass, 0.005).unwrap();
+        let compound = topo.add_compound(Compound::new(three.to_vec()));
+        let all = fuse_all(&mut topo, compound).unwrap();
+        let report = validate_solid(&topo, all).unwrap();
+        assert!(report.is_valid(), "{name}, fuse_all: {:?}", report.issues);
+        assert_eq!(census(&topo, all).get("cylinder"), Some(&3), "{name}");
+        let volume = solid_volume(&topo, all, 0.005).unwrap();
+        assert!(
+            (volume - one_pass).abs() < 1e-8 * one_pass,
+            "{name}, fuse_all: volume {volume}, in one pass {one_pass}"
+        );
+        for order in orders {
+            let mut topo = Topology::new();
+            let solids = load(&mut topo, &pose);
+            let [a, b, c] = order.map(|i| solids[i]);
+            let label = format!("{name}, {order:?}");
+            let first = boolean_with_options(&mut topo, BooleanOp::Fuse, a, b, options).unwrap();
+            let fused =
+                boolean_with_options(&mut topo, BooleanOp::Fuse, first, c, options).unwrap();
+            let report = validate_solid(&topo, fused).unwrap();
+            assert!(report.is_valid(), "{label}: {:?}", report.issues);
+            assert_eq!(edges_not_used_twice(&topo, fused), 0, "{label}");
+            let shape = census(&topo, fused);
+            assert_eq!(shape.get("cylinder"), Some(&3), "{label}: {shape:?}");
+            assert_eq!(shape.len(), 2, "{label}: {shape:?}");
+            let mesh = tessellate_solid(&topo, fused, 0.05).unwrap();
+            assert_eq!(boundary_edge_count(&mesh), 0, "{label}: open mesh");
+            assert_eq!(
+                non_manifold_edge_count(&mesh),
+                0,
+                "{label}: mesh not manifold"
+            );
+            let volume = solid_volume(&topo, fused, 0.005).unwrap();
+            assert!(
+                (volume - expected).abs() < 2e-5 * expected,
+                "{label}: volume {volume} should be {expected}"
+            );
+            assert!(
+                (volume - one_pass).abs() < 1e-8 * one_pass,
+                "{label}: volume {volume}, in one pass {one_pass}"
+            );
+        }
+    }
+}
+
 #[test]
 fn the_truss_fuses_into_one_exact_solid() {
     for (name, pose) in poses() {

@@ -124,6 +124,7 @@ impl<'a> PaveFiller<'a> {
             phase_ff_coplanar::perform(self.topo, self.solid_a, self.solid_b, self.tol, arena)
         )?;
 
+        split_sections_at_boundary_crossings(self.topo, self.tol, arena)?;
         pave_co_endpoint_curves(self.topo, &[self.solid_a, self.solid_b], self.tol, arena)?;
         pave_chords_across_conics(self.topo, self.tol, arena)?;
         split_co_endpoint_sections(self.topo, self.tol, arena)?;
@@ -1203,6 +1204,213 @@ fn split_sections_at_rim_vertices(
     Ok(())
 }
 
+/// Cut each line, circle or ellipse section between two curved faces at the
+/// vertices where a boundary edge of one of the two faces crosses the other
+/// face (the EF crossings of the pair), inside the section's span. The
+/// section leaves the first face there, or meets the sections of a third
+/// face there, and the boundary edge is split at the same vertex. The window
+/// such a section is trimmed to cannot see every boundary: a whole cylinder
+/// band notched by an earlier boolean keeps its `v` window, and the section
+/// runs on past the notch's edge without a vertex where it crosses it. A
+/// section on a plane face stays whole: the face's outline clips it later,
+/// and a piece wholly off the face slips past that clip.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a topology lookup fails.
+fn split_sections_at_boundary_crossings(
+    topo: &mut Topology,
+    tol: Tolerance,
+    arena: &mut GfaArena,
+) -> Result<(), AlgoError> {
+    use std::collections::HashMap;
+
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::{FaceId, FaceSurface};
+    use brepkit_topology::vertex::VertexId;
+
+    use crate::ds::{Interference, Pave, PaveBlock};
+
+    /// A crossing this near a section's end is that end.
+    const WELD: f64 = 1e-5;
+
+    let pair = |a: FaceId, b: FaceId| (a.index().min(b.index()), a.index().max(b.index()));
+    let linear = tol.linear;
+    let same = |topo: &Topology, a: VertexId, b: VertexId| {
+        a == b
+            || matches!(
+                (topo.vertex(a), topo.vertex(b)),
+                (Ok(p), Ok(q)) if (p.point() - q.point()).length() <= linear
+            )
+    };
+    // Each crossing stands for the vertex its edge keeps there once
+    // MakeBlocks splits it: of the paves that coincide on a block it keeps
+    // one, and the section must end at that same vertex. The rank is the
+    // one that vertex has on its edge: a block's own end, or a pave.
+    let mut crossings: HashMap<(usize, usize), Vec<(VertexId, usize)>> = HashMap::new();
+    for interf in &arena.interference.ef {
+        let Interference::EF {
+            edge,
+            face,
+            new_vertex: Some(vertex),
+            ..
+        } = interf
+        else {
+            continue;
+        };
+        let vertex = arena.resolve_vertex(*vertex);
+        let kept = arena
+            .edge_pave_blocks
+            .get(edge)
+            .map(|blocks| arena.collect_leaf_pave_blocks(blocks))
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|leaf| arena.pave_blocks.get(leaf))
+            .flat_map(|piece| {
+                make_blocks::piece_vertices(topo, arena, piece)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(k, v)| (arena.resolve_vertex(v), usize::from(k >= 2)))
+            })
+            .find(|&(v, _)| same(topo, v, vertex))
+            .unwrap_or((vertex, 1));
+        for owner in topo.faces_of_edge(*edge) {
+            if owner != *face {
+                let list = crossings.entry(pair(owner, *face)).or_default();
+                if !list.contains(&kept) {
+                    list.push(kept);
+                }
+            }
+        }
+    }
+    if crossings.is_empty() {
+        return Ok(());
+    }
+
+    for index in 0..arena.curves.len() {
+        let original = arena.curves[index].clone();
+        let Some(list) = crossings.get(&pair(original.face_a, original.face_b)) else {
+            continue;
+        };
+        let &[pb_id] = original.pave_blocks.as_slice() else {
+            continue;
+        };
+        let Some(pb) = arena.pave_blocks.get(pb_id) else {
+            continue;
+        };
+        if !pb.extra_paves.is_empty() {
+            continue;
+        }
+        let planar = |face: FaceId| {
+            topo.face(face)
+                .map(|f| matches!(f.surface(), FaceSurface::Plane { .. }))
+        };
+        if planar(original.face_a)? || planar(original.face_b)? {
+            continue;
+        }
+        let (start, end) = (pb.start, pb.end);
+        let (p0, p1) = (start.parameter, end.parameter);
+        let (lo, hi) = (p0.min(p1), p0.max(p1));
+        let edge = topo.edge(pb.original_edge)?;
+        let a = topo.vertex(edge.start())?.point();
+        let b = topo.vertex(edge.end())?.point();
+        if (a - b).length() <= WELD {
+            continue;
+        }
+        // Each crossing on the curve, as a pave parameter inside the span: a
+        // line's paves read its own parameter, from `p0` at its start to `p1`
+        // at its end, and a conic's its angle.
+        // Crossings at one place cut the section once, at the vertex the
+        // earliest rank and then the lowest index keeps, as the rim pass
+        // does: no piece is shorter than the linear tolerance.
+        let mut cuts: Vec<(f64, VertexId, usize)> = Vec::new();
+        for &(vertex, rank) in list {
+            let p = topo.vertex(vertex)?.point();
+            if (p - a).length() <= WELD || (p - b).length() <= WELD {
+                continue;
+            }
+            let (at, foot) = match &original.curve {
+                EdgeCurve::Line => {
+                    let d = b - a;
+                    let f = (p - a).dot(d) / d.dot(d);
+                    (f.madd(p1 - p0, p0), a + d * f)
+                }
+                EdgeCurve::Circle(c) => {
+                    let t = c.project(p);
+                    (
+                        lo + (t - lo).rem_euclid(std::f64::consts::TAU),
+                        c.evaluate(t),
+                    )
+                }
+                EdgeCurve::Ellipse(e) => {
+                    let t = e.project(p);
+                    (
+                        lo + (t - lo).rem_euclid(std::f64::consts::TAU),
+                        e.evaluate(t),
+                    )
+                }
+                EdgeCurve::NurbsCurve(_) => continue,
+            };
+            if (foot - p).length() > tol.linear || !(lo < at && at < hi) {
+                continue;
+            }
+            match cuts.iter_mut().find(|c| same(topo, c.1, vertex)) {
+                Some(kept) => {
+                    if (rank, vertex.index()) < (kept.2, kept.1.index()) {
+                        *kept = (at, vertex, rank);
+                    }
+                }
+                None => cuts.push((at, vertex, rank)),
+            }
+        }
+        if cuts.is_empty() {
+            continue;
+        }
+        let ascending = p0 <= p1;
+        cuts.sort_by(|x, y| {
+            if ascending {
+                x.0.total_cmp(&y.0)
+            } else {
+                y.0.total_cmp(&x.0)
+            }
+        });
+        let mut paves = vec![start];
+        paves.extend(cuts.into_iter().map(|(at, v, _)| Pave::new(v, at)));
+        paves.push(end);
+        for (n, w) in paves.windows(2).enumerate() {
+            let piece_edge =
+                topo.add_edge(Edge::new(w[0].vertex, w[1].vertex, original.curve.clone()));
+            let piece = arena
+                .pave_blocks
+                .alloc(PaveBlock::new(piece_edge, w[0], w[1]));
+            let t_range = (w[0].parameter, w[1].parameter);
+            if n == 0 {
+                let first = &mut arena.curves[index];
+                first.pave_blocks = vec![piece];
+                first.t_range = t_range;
+                continue;
+            }
+            let next = arena.curves.len();
+            let mut curve = original.clone();
+            curve.pave_blocks = vec![piece];
+            curve.t_range = t_range;
+            arena.curves.push(curve);
+            arena.interference.ff.push(Interference::FF {
+                f1: original.face_a,
+                f2: original.face_b,
+                curve_index: next,
+            });
+            if let Some(skipped) = arena.curve_skip_faces.get(&index).cloned() {
+                arena.curve_skip_faces.insert(next, skipped);
+            }
+            if let Some(extra) = arena.curve_extra_faces.get(&index).cloned() {
+                arena.curve_extra_faces.insert(next, extra);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Run the complete PaveFiller pipeline (both stages).
 ///
 /// **Stage 1 — Intersection** (reads `&Topology`):
@@ -1375,6 +1583,7 @@ fn run_pave_filler_over(
     }
     if fuse {
         split_sections_at_triple_points(topo, sources, tol, arena)?;
+        split_sections_at_boundary_crossings(topo, tol, arena)?;
     }
     pave_co_endpoint_curves(topo, sources, tol, arena)?;
     pave_chords_across_conics(topo, tol, arena)?;
