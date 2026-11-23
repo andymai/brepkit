@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795410630986,
+  "lastUpdate": 1795412138456,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -76247,6 +76247,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 21427974,
             "range": "± 47391",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "6a07a49a0e9feb3043fbb591f98d5fe0978c381b",
+          "message": "fix(algo,operations): score every step of the random sweep, and fix the three wrong results it finds (#2731)\n\n## Summary\n\nThe random boolean sweep scored only each case's final result, so a\nwrong middle step could score as good (#2700). It now scores every step.\nRun over seeds 4 to 10, it found three silent wrong results on main,\nwhich this PR fixes:\n\n- A ball fused with a separate box, less a small ball inside the ball,\ncomes back unchanged. The cavity is lost, +3.10e-3.\n- A short rod that pokes out of a drum's wall reads as inside it,\nturned. The intersect reads 0.081668 against 0.050808 (+60.7%), and the\ncut makes the whole rod a cavity.\n- A rod across a drum that a tunnel already cuts drops its footprint\nloop. The intersect is valid but 34.6% to 34.9% short, with 2 or 3 open\nmesh edges.\n\nEach is now exact in five poses. The pose sweep and the truth audit give\nthe same output as main.\n\nFixes #2700.\n\n## The change\n\n- **Every step (#2700).** After each boolean, the sweep checks the step\nagainst the oracle for that prefix of operations. Each line now shows\n`steps=` codes and `final=` (the old verdict). A BAD step makes the case\nBAD, and a `SUMMARY` line counts bad steps and bad middle steps. A step\nwithin 1e-9 of the oracle is good: on a sliver of 1.7e-8, the oracle and\na fine integral differ in the fifth digit.\n- **Cavities of a solid in separate pieces.** The gate for results in\nseparate pieces counted each cavity shell as a piece. So it refused the\ncorrect result, with Euler 6 against a bound of 4. The per-piece cut\nthat runs next built each piece from its outer shell only, so it lost\nthe cavity. The gate now leaves out the cavity shells. The per-piece cut\ngives each piece its own cavities, and keeps the cavities of each\nresult.\n- **A rod poking out of a drum.** In `detect_trivial_relation`, every\nvertex of the rod lies inside the drum, turned. The rim probes landed in\nthe wall, 1.8° and 2.6° short of the arc that pokes out. The witness now\nalso probes the point of each circle or ellipse edge farthest out from\neach axis or centre of the outer solid.\n- **A footprint on a drum wall with holes.**\n`split_periodic_face_around_seam_holes` took only walls with no holes,\nand the generic paths dropped the loop that touches nothing. It now\ntakes a wall with holes when no section ends on a hole, and gives each\nhole to the piece that holds it. `attach_whole_holes` now unwraps each\nloop on a periodic surface. A loop across the parameter cut spanned the\nwhole period and took in the holes. A piece that gains a hole drops its\ncached interior point, so the search for a point inside it runs with all\nits holes.\n\n## Tests\n\n- Seeds 1 to 3 (150 cases each) find no bad step, and their error counts\nmatch the final-only scoring. With #2699's engine fix reverted, seed 1,\ncase 131 reads `BAD steps=GBG final=GOOD`.\n- Over seeds 4 to 10, bad cases go from 7 to 2. No other verdict changes\nin the 1500 cases, except that seed 7, case 1 goes from an error to\ngood.\n- `cavity_beside_a_separate_piece.rs` (3 tests) and\n`cut_per_piece_keeps_the_cavities` pin the cavities, in five and three\nposes.\n- `short_rod_poking_out_of_a_drum.rs` runs fuse, cut and intersect in\nfive poses.\n- `rod_across_a_tunnelled_drum.rs` runs three operations in five poses.\nEach half of that fix alone still fails it.\n- brepkit-algo (548) and the brepkit-operations lib tests for boolean\n(225) pass, and so do 366 tests in the boolean integration files.\n\n## Still open\n\n- Two results are valid with the right volume, but their meshes are\nopen: seed 6, case 17 and seed 8, case 147.\n- 15 sweep errors come right after an empty middle step: the next\nboolean refuses an empty operand (#2733).\n- A drum dented by a ball, with a rod through the dent, refuses with the\nmesh fallback off, as on main.",
+          "timestamp": "2026-11-23T05:31:18Z",
+          "tree_id": "3d7e79f5e3dee97ac99d3c4e604af6663866966a",
+          "url": "https://github.com/andymai/brepkit/commit/6a07a49a0e9feb3043fbb591f98d5fe0978c381b"
+        },
+        "date": 1795412130578,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1200463,
+            "range": "± 17557",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1258911,
+            "range": "± 13082",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12913,
+            "range": "± 195",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 806812,
+            "range": "± 7842",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 25584164,
+            "range": "± 50571",
             "unit": "ns/iter"
           }
         ]
