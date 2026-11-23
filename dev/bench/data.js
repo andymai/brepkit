@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795401180981,
+  "lastUpdate": 1795403480534,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -76085,6 +76085,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19393780,
             "range": "± 109077",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "861fff4cae7250db2785a8a52921002762882b1e",
+          "message": "fix(algo): read a long piece's run in u along it in the face trace and the seam split, a torus section's run in v, and a spline walk by proof (#2722)\n\n## Summary\n\nOn main, three steps of the face splitter read a curve's run in a\nperiodic parameter from its ends or from coarse steps. So a long piece\ncan read a turn off:\n\n- the face trace and the seam split read a piece over half a turn the\nshort way round (#2704);\n- a closed section on a torus gets no run in `v` (#2695);\n- the walk along a spline accepts any step back of under an eighth of a\nturn. So it can skip a turn packed into one step (#2693).\n\nWith this change, each reads the run along the piece. The pose sweep and\nthe truth audit give the same output as main.\n\nFixes #2704, fixes #2695, fixes #2693.\n\n## The change\n\n- **The face trace (#2704).** The shoelace of `wire_builder.rs` read\neach half's run from its end UVs the short way round. On the cone `x² +\ny² = z²` cut by `z = 1 + 0.99999x`, an ellipse piece runs 5.40 rad of\n`u`, but its ends read -0.88. So the band beside it traced as 2 regions.\nThe shoelace now lives in `lift_orbit`, and the new `half_run` reads an\nopen half along its NURBS pcurve when that pcurve lies on both ends.\nEvery other half keeps the old rules, so the edges stored on mixed\ncopies of the period still trace.\n- A NURBS half's heading came from a short chord folded the short way,\nwhich a packed pcurve reversed. The new `pcurve_heading` uses the\npcurve's signed derivative where that chord runs a quarter period or\nmore.\n- **The seam split (#2704).** `split_sections_at_seam_meridian` found a\nseam crossing from a piece's end offsets. The new `seam_crossings` lifts\n`u` along the piece, with the one-way ellipse lift on a cylinder or\ncone. Then it bisects each bracket that passes a seam copy. It walks the\nspan the section runs, the same span that the section's pcurve traces,\nnever the curve's native domain.\n- **A guard this change needed.** With the seam split fixed, a taper pin\ncut at spin 1.4 returned the rod uncut and valid. It had 3 faces and\n1570.80, and every hole point read Inside. Main refuses that cut. The\nnear loop on the cone is a marched curve that winds twice, so the cone's\none piece held each section as an out-and-back slit.\n- The check that keeps a piece with no section whole now also covers a\npiece that holds its sections only as slits (`sections_only_as_slits`).\nA slit is a section that the wire uses twice, once each way. The cut is\nrefused again, and the other 12 poses stay exact.\n- **A torus's `v` (#2695).** `closed_section_end_uvs` kept the end `v`\nequal to the start `v`. The new `conic_turns_round_tube` counts how the\ncore circle pierces a conic's disc. It gives no count where the core\ncomes within the tolerance of the conic. `spline_run` proves a spline\npiece's `v` turn on a torus.\n- **The spline walk (#2693).** `walked_uv` no longer steps. It takes the\nrun from the edge's start with `spline_run`, proved span by span, and\nfalls back to the even guess where the proof fails.\n\n## Tests\n\n- `a_band_under_a_piece_over_half_a_turn_is_the_one_region`,\n`a_section_over_half_a_turn_splits_where_it_crosses_the_seam` and\n`a_section_run_out_and_back_is_a_slit` pin #2704. Each fails on main.\n`a_packed_pcurve_leaves_its_end_along_its_derivative` pins the heading:\non main a packed half headed 3.08 rad, against 0.022.\n`a_ring_arc_crosses_the_seam_on_the_short_way_its_pcurve_runs` and\n`a_closed_section_run_once_is_no_slit` pin the seam walk's span and the\nslit rule. `a_section_leaving_the_seam_splits_where_it_crosses_it_again`\nand `a_conic_in_the_cores_plane_crossing_it_has_no_turns` pin a crossing\non an end's seam copy and a conic in the core's plane.\n- `a_closed_section_on_a_torus_runs_its_turns_in_v_too` checks a\nmeridian, a circle round the axis, a Villarceau circle and a small loop.\nIt checks each as a circle and as a rational spline, both ways, against\na 20000-sample walk.\n- `the_walk_along_a_spline_cannot_skip_a_turn_packed_into_one_step`\npacks 5.6 rad of `u` into the first 0.001 of a spline's knots. On main\nthe walk read -0.664 at t = 0.05, where the run is 5.6195.\n- `a_taper_pin_cut_the_engine_cannot_build_is_refused_not_wrong` still\npasses: spin 1.4 is refused, as on main.\n- brepkit-algo (549), and the brepkit-operations lib tests for boolean\n(223) and tessellate (148), pass.\n- 90 integration test files for cones, cylinders, tori, rings, rods,\npins, tubes, bores, windows, slants and frustums pass (252 tests).\n\n## Still open\n\n- At spin 1.4 the taper pin's near loop on the cone is marched twice\nround the cone (#2657). The cut is refused, and the double trace is the\nfault upstream.\n- A long piece with a `Line2D` pcurve still runs the short way in the\ntrace. `seam_crossings` walks a curve other than an ellipse at 32\nsamples. Neither has a repro.",
+          "timestamp": "2026-11-23T03:07:37Z",
+          "tree_id": "1eedcab59b1d6b28c7606a321ce49f9143ef40be",
+          "url": "https://github.com/andymai/brepkit/commit/861fff4cae7250db2785a8a52921002762882b1e"
+        },
+        "date": 1795403466838,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 857487,
+            "range": "± 25674",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 932794,
+            "range": "± 17057",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9815,
+            "range": "± 30",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 578766,
+            "range": "± 5258",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19573637,
+            "range": "± 85292",
             "unit": "ns/iter"
           }
         ]
