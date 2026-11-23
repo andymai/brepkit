@@ -158,6 +158,7 @@ fn hit_in_sphere_hole(
         hit,
         outer,
         normal,
+        HALF_SPACE_EPS,
     ))
 }
 
@@ -173,8 +174,15 @@ fn face_holes(topo: &Topology, face_id: FaceId) -> Result<Vec<Vec<Point3>>, Chec
     Ok(holes)
 }
 
-/// [`hit_in_sphere_hole`] for a face's `holes` as [`face_holes`] reads them.
-fn in_sphere_hole(holes: &[Vec<Point3>], hit: Point3, outer: &[Point3], normal: Vec3) -> bool {
+/// [`hit_in_sphere_hole`] for a face's `holes` as [`face_holes`] reads them,
+/// a point in a hole in one plane only past `slack` of its plane.
+fn in_sphere_hole(
+    holes: &[Vec<Point3>],
+    hit: Point3,
+    outer: &[Point3],
+    normal: Vec3,
+    slack: f64,
+) -> bool {
     for hole in holes {
         let hole_normal = polygon_normal(hole);
         let in_hole = if loop_is_planar(hole, hole_normal) {
@@ -184,7 +192,7 @@ fn in_sphere_hole(holes: &[Vec<Point3>], hit: Point3, outer: &[Point3], normal: 
                 .map(|p| (*p - at).dot(hole_normal))
                 .fold(0.0_f64, |a, d| if d.abs() > a.abs() { d } else { a });
             let side = (hit - at).dot(hole_normal);
-            near != 0.0 && side * near.signum() < -HALF_SPACE_EPS
+            near != 0.0 && side * near.signum() < -slack
         } else {
             point_in_polygon_along(&hit, hole, normal)
         };
@@ -807,17 +815,44 @@ impl SphereRegion {
         face_id: FaceId,
         p: Point3,
     ) -> Result<bool, CheckError> {
+        self.contains_within(holes, topo, face_id, p, HALF_SPACE_EPS)
+    }
+
+    /// [`Self::contains_with`] for a point that stands inside by more than
+    /// the slack of the tests against a wire's plane: a point within that
+    /// slack of the plane of the outline or of a hole is not inside.
+    pub fn contains_strictly(
+        &self,
+        holes: &Holes<Vec<Point3>>,
+        topo: &Topology,
+        face_id: FaceId,
+        p: Point3,
+    ) -> Result<bool, CheckError> {
+        self.contains_within(holes, topo, face_id, p, -HALF_SPACE_EPS)
+    }
+
+    /// Whether `p` lies on the face, a point within `slack` of the plane of
+    /// the outline taken as inside, and one within it of a hole's plane as
+    /// outside the hole.
+    fn contains_within(
+        &self,
+        holes: &Holes<Vec<Point3>>,
+        topo: &Topology,
+        face_id: FaceId,
+        p: Point3,
+        slack: f64,
+    ) -> Result<bool, CheckError> {
         if let Some(inside) = self.rims.as_ref().and_then(|rims| rims.contains(p)) {
             return Ok(inside);
         }
         let in_outer = self.whole
-            || ((p - self.outer[0]).dot(self.normal) >= -HALF_SPACE_EPS
+            || ((p - self.outer[0]).dot(self.normal) >= -slack
                 && (self.planar || point_in_polygon_along(&p, &self.outer, self.normal)));
         if !in_outer {
             return Ok(false);
         }
         let holes = holes_of(holes, || face_holes(topo, face_id))?;
-        Ok(!in_sphere_hole(holes, p, &self.outer, self.normal))
+        Ok(!in_sphere_hole(holes, p, &self.outer, self.normal, slack))
     }
 }
 

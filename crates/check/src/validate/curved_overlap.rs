@@ -5,9 +5,9 @@
 //! edge checks pass, while the faces cover the surface twice there. Each face
 //! is read beside its edges: at two places along each edge, on each side, at
 //! two distances from it. Where both reads lie inside the face, they are read
-//! on the other face, and both inside it too show that the two share an
-//! area. Two faces that share only a part narrower than the reads are not
-//! reported.
+//! on the other face, and both inside each face by more than the tolerance
+//! show that the two share an area. Two faces that share only a part
+//! narrower than the reads are not reported.
 
 use brepkit_math::aabb::Aabb3;
 use brepkit_math::madd::Madd;
@@ -148,6 +148,63 @@ fn outline_size(topo: &Topology, face_id: FaceId) -> Result<f64, CheckError> {
         .sqrt())
 }
 
+/// Whether `p`, read inside `face`, stands farther inside than the
+/// tolerance: farther than it from each edge of the face, the edges read
+/// along chords between samples less half the longest chord, and on a
+/// sphere, inside beyond the slack of the tests against a wire's plane. A
+/// read near the boundary shows no shared area, and a face too small to
+/// hold such a read shows none.
+fn strictly_inside(
+    topo: &Topology,
+    face: &Curved,
+    p: Point3,
+    tolerance: f64,
+) -> Result<bool, CheckError> {
+    const SAMPLES: u32 = 64;
+    let data = topo.face(face.face)?;
+    for wid in std::iter::once(data.outer_wire()).chain(data.inner_wires().iter().copied()) {
+        for oe in topo.wire(wid)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (a, b) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let curve = edge.curve();
+            let (t0, t1) = curve.domain_with_endpoints(a, b);
+            let at = |k: u32| {
+                curve.evaluate_with_endpoints(
+                    (t1 - t0).madd(f64::from(k) / f64::from(SAMPLES), t0),
+                    a,
+                    b,
+                )
+            };
+            let (mut near, mut longest) = (f64::INFINITY, 0.0_f64);
+            for k in 0..SAMPLES {
+                let (q, r) = (at(k), at(k + 1));
+                let d = r - q;
+                let d2 = d.dot(d);
+                let s = if d2 > 0.0 {
+                    ((p - q).dot(d) / d2).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                near = near.min((p - (q + d * s)).length());
+                longest = longest.max(d2.sqrt());
+            }
+            if near - 0.5 * longest <= tolerance {
+                return Ok(false);
+            }
+        }
+    }
+    if !matches!(face.surface, FaceSurface::Sphere(_)) {
+        return Ok(true);
+    }
+    let Some(region) = SphereRegion::of(topo, face.face)? else {
+        return Ok(false);
+    };
+    region.contains_strictly(&Holes::new(), topo, face.face, p)
+}
+
 /// Which of `points` lie on `face`, or `None` for a sphere face whose
 /// outline does not read.
 fn on_face(
@@ -264,8 +321,22 @@ pub fn check_curved_faces_overlap(
             let Some(on_other) = on_face(topo, &curved[other], &read)? else {
                 continue;
             };
-            if on_other.chunks_exact(2).any(|pair| pair[0] && pair[1]) {
-                shared = true;
+            for pair in read.chunks_exact(2).zip(on_other.chunks_exact(2)) {
+                let (points, [true, true]) = pair else {
+                    continue;
+                };
+                let mut deep = true;
+                for &p in points {
+                    for face in [&curved[k], &curved[other]] {
+                        deep = deep && strictly_inside(topo, face, p, tolerance)?;
+                    }
+                }
+                if deep {
+                    shared = true;
+                    break;
+                }
+            }
+            if shared {
                 break;
             }
         }
@@ -393,6 +464,32 @@ mod tests {
         let lens = solid(&mut topo, vec![a, b]);
         let got = found(&topo, lens);
         assert_eq!(got.len(), 1, "{got:?}");
+    }
+
+    /// On a ball of radius 1, the cap past `z = √(1 - 1e-10)`, 2e-5 across,
+    /// and the rest of the sphere share only their rim: points beside the
+    /// rim stand within the side tests' slack of the rim's plane on both, so
+    /// they show nothing, and the pair passes.
+    #[test]
+    fn a_flat_small_cap_and_the_rest_of_its_sphere_pass() {
+        let mut topo = Topology::new();
+        let h = (1.0 - 1e-10_f64).sqrt();
+        let circle = Circle3D::new(Point3::new(0.0, 0.0, h), z(), 1e-5).unwrap();
+        let v = topo.add_vertex(Vertex::new(circle.evaluate(0.0), 1e-7));
+        let edge = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+        let ball =
+            FaceSurface::Sphere(SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0).unwrap());
+        let faces: Vec<FaceId> = [true, false]
+            .into_iter()
+            .map(|forward| {
+                let wire =
+                    topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, forward)], true).unwrap());
+                topo.add_face(Face::new(wire, vec![], ball.clone()))
+            })
+            .collect();
+        let pair = solid(&mut topo, faces);
+        let got = found(&topo, pair);
+        assert!(got.is_empty(), "{got:?}");
     }
 
     /// The caps past `z = 5` and past `x = 5` share the part of the sphere
