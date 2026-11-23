@@ -158,4 +158,56 @@ mod tests {
             }
         }
     }
+
+    /// A pcurve can hold data that does not make a curve: here a B-spline
+    /// with more degrees than control points and knots that fall, which
+    /// `NurbsCurve2D::new` takes. Evaluated, it reads past its arrays. Both
+    /// validators report it without evaluating it.
+    #[test]
+    fn a_malformed_pcurve_is_reported_without_being_evaluated() {
+        use brepkit_check::validate::{CheckId, ValidateOptions};
+        use brepkit_math::vec::Point2;
+
+        let mut topo = Topology::new();
+        let (solid, rim) = b_spline_walled(&mut topo, false, false, &Mat4::identity());
+        let old: HashSet<EdgeId> = solid_edges(&topo, solid).unwrap().into_iter().collect();
+        let built = chamfer_v2(&mut topo, solid, &[rim], 0.4, 0.25).unwrap();
+        let broken = NurbsCurve2D::new(
+            3,
+            vec![1.0, 0.0, 1.0, 0.0, 1.0, 0.0],
+            vec![Point2::new(0.0, 0.1), Point2::new(1.0, 0.1)],
+            vec![1.0, 1.0],
+        )
+        .unwrap();
+        let contacts = contact_pcurves(&topo, built.solid, &old);
+        assert!(!contacts.is_empty());
+        for (edge, face, _) in contacts {
+            topo.pcurves_mut().set(
+                edge,
+                face,
+                PCurve::new(Curve2D::Nurbs(broken.clone()), 0.0, 1.0),
+            );
+        }
+        let report = validate_solid(&topo, built.solid).unwrap();
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| i.description.contains("PCurve is malformed")),
+            "{report:?}"
+        );
+        let checked = brepkit_check::validate::validate_solid(
+            &topo,
+            built.solid,
+            &ValidateOptions::default(),
+        )
+        .unwrap();
+        assert!(
+            checked
+                .issues
+                .iter()
+                .any(|i| i.check == CheckId::EdgeSameParameter),
+            "{checked:?}"
+        );
+    }
 }

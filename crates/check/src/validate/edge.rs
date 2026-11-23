@@ -92,6 +92,9 @@ pub fn check_edge_degenerate(
 ///
 /// Samples N points along the edge, evaluates both the 3D curve and the
 /// PCurve projected through the surface, and measures the maximum deviation.
+/// A pcurve that is not well formed (see `Curve2D::is_well_formed`), or
+/// whose span is not finite, is reported without being evaluated, and so
+/// is a reading that gives no finite point.
 ///
 /// # Errors
 ///
@@ -117,6 +120,20 @@ pub fn check_edge_same_parameter(
         brepkit_topology::face::FaceSurface::Plane { .. }
     ) {
         return Ok(vec![]);
+    }
+
+    if !(pcurve.t_start().is_finite()
+        && pcurve.t_end().is_finite()
+        && pcurve.curve().is_well_formed())
+    {
+        return Ok(vec![ValidationIssue {
+            check: CheckId::EdgeSameParameter,
+            severity: Severity::Error,
+            entity: EntityRef::Edge(edge_id),
+            description: "PCurve is malformed: its span or its curve's data cannot be evaluated"
+                .into(),
+            deviation: None,
+        }]);
     }
 
     let n_samples = 10;
@@ -145,7 +162,11 @@ pub fn check_edge_same_parameter(
             .evaluate_with_endpoints(t_curve, start_pt, end_pt);
 
         let deviation = (pcurve_3d - curve_3d).length();
-        max_deviation = max_deviation.max(deviation);
+        max_deviation = if deviation.is_finite() {
+            max_deviation.max(deviation)
+        } else {
+            f64::INFINITY
+        };
     }
 
     if max_deviation > tolerance {
