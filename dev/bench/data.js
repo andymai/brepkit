@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795407310919,
+  "lastUpdate": 1795410630986,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -76193,6 +76193,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27060604,
             "range": "± 114510",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "3ae95d818f907c0408f418b1beb38e2220dfd27c",
+          "message": "fix(operations,blend): chamfer a fused L's rim across its flat seams, and round a rim whose contact crosses between two faces of one surface (#2729)\n\n## Summary\n\nOn main:\n\n- `chamfer` returns an open solid with no error on a fused L block's\nrim: 3 boundary edges, 186.75 against 187.1667 (#2720);\n- `fillet_v2` refuses a tilted cap's rim round whose contact crosses the\nball's equator (#2706);\n- take a rod whose wall is two faces. A round of its tilted rim passes\n`validate_solid`, but meshes open, and its volume depends on where the\nfaces meet. At tilt 0.3 and r 0.2 it reads 9.37266 or 9.36893, against\n9.366389594 for a one-face rod.\n\nWith this change, the chamfer gives the closed form, the cap rounds\nexactly, and the split rod reads 9.366389594 wherever its faces meet.\n`chamfer` now refuses a rebuild that `validate_solid` rejects.\n\nFixes #2720, fixes #2706.\n\n## The change\n\n- **The flat-bevel chamfer (#2720).** `chamfer_core` rebuilds each face\nfrom its own corners. The fused L's top is three flat pieces. At the\ninside corner, two pieces moved the corner back along their seams, to\n(4, 3.5) and (3.5, 4), not (3.5, 3.5). That left a triangular gap.\n- `chamfer_core` now returns an error when `validate_solid` reports one.\nThis covers `chamfer`, `chamfer_asymmetric` and the fallback of\n`chamfer_two_on`.\n- When the rebuild fails, it runs again on a copy with the plane faces\nat the picks' seams merged, through `blend_ops::without_flat_seams`. A\ntwo-distance pick keeps its distance on the merged face with the same\noutward normal.\n- **A round across two faces of one surface (#2706).** On the cap, the\nrim stays on the lower face. So the join for a rim that passes between\ntwo faces never ran. The far-loop check then refused the round, because\nits contact runs past the equator on one side only.\n- When a build fails, it runs once more inside a transaction, with the\nband joined to the face beyond it (`join_sphere_bands_at_picked_rims`).\nThe retry is kept only when every edge rounds.\n- The rim-crossing join now also takes cylinder, cone and torus faces\nwhere the rim crosses their shared edge at an angle other than square. A\nrim that crosses square stays unjoined, as\n`a_floor_reaching_past_its_arc_wall_rounds_off_inside_the_arc` needs.\n- Two faces join only when their surfaces share centre or apex, axes and\nradii, within 1e-9 of the surface's own size. So the test does not\ndepend on where the solid lies, and the parameter frames agree for the\ncopied pcurves. Their axes must also agree within the length tolerance\nover the faces' reach, so two long faces cannot join with a visible\noffset.\n\n## Tests\n\n- `the_flat_bevels_of_a_fused_ls_rim_meet_the_closed_form` has no ignore\nnow: d 0.5 and 1.0, in three poses.\n`the_flat_bevels_of_two_distances_meet_the_closed_form_on_either_l` runs\n`chamfer_two_on` on both Ls.\n`the_rebuild_refuses_a_shell_it_leaves_open` pins the refusal.\n- `a_round_whose_contact_crosses_the_equator_is_the_level_round_turned`\nruns three caps in three poses. Each reads within 1e-6 of the level\nround turned (2.691923 for the first), valid, with a closed mesh at 0.01\nand 0.002. All 9 were refused on main.\n- `fillet_rim_across_split_walls.rs` rounds a tilted rim on a split rod\nand on a split ring, and a level rim on a split rod, in three poses.\n- The split rod reads 9.366389594 for every seam position. An integral\nof the union of the rolling balls gives 9.3663916, good to about 2e-6.\n- The split ring is valid and watertight, and reads 0.977125769 against\n0.977126328 for the one-face ring (5.7e-7). On main it fails\n`validate_solid`.\n  - The level rim matches its closed form, as on main.\n- `balls_apart_stay_apart_and_one_ball_joins_at_any_place` and\n`rods_cones_and_rings_apart_stay_apart_at_any_place` check surfaces 1e-4\napart at the origin and 1e6 away. `nearly_coaxial_long_walls_stay_apart`\nkeeps two walls 1e6 long, 5e-10 rad apart, from joining.\n`a_tilted_rim_on_a_split_frustum_rounds_as_on_a_whole_frustum` rounds a\ntwo-face frustum's rim as the one-face frustum's, in three poses.\n- `cargo nextest run -p brepkit-blend`: 226 passed. The\nbrepkit-operations lib tests for fillet and chamfer: 89 passed.\n- 126 operations integration test files for fillets, chamfers, blends,\nrounds, corners, balls and caps pass, and so do 31 io files that call\nthe blend.\n\n## Still open\n\n- #2680, the depth-step scoop, is still refused, as on main. The concave\nround eats the whole 0.29-long convex edge beside it, and the convex\nrounds then cannot run on to the concave round's surface.\n- A two-face ring cut level by a slab, rounded at r 0.1, now returns\n\"trimming failure\". On main it returned a solid that `validate_solid`\nrejects.\n- A one-face ring cut at x 2.3 and tilt 0.3, rounded at r 0.08, fails to\nwalk at t = 0.124, as on main.",
+          "timestamp": "2026-11-23T05:05:08Z",
+          "tree_id": "f5e22bf4c88b84e6d703719fd83448ab52a6796c",
+          "url": "https://github.com/andymai/brepkit/commit/3ae95d818f907c0408f418b1beb38e2220dfd27c"
+        },
+        "date": 1795410616895,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 970666,
+            "range": "± 6562",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1046785,
+            "range": "± 27582",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11204,
+            "range": "± 57",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 629255,
+            "range": "± 2340",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21427974,
+            "range": "± 47391",
             "unit": "ns/iter"
           }
         ]
