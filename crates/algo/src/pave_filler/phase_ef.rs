@@ -1900,16 +1900,6 @@ fn run_crossings(
 /// higher of the two: a crossing is kept over a touch, and of two touches
 /// the nearer to the surface. Two crossings stay apart as [`run_crossings`]
 /// keeps them.
-///
-/// Two roots of the rate can lie between two samples where it has one
-/// sign, a touch and a most of the distance. Each interval is halved until
-/// a bound on the rate's second derivative shows that it holds no root, or
-/// one where the rate changes sign, or until it is shorter than the
-/// tolerance or the distance can change across it by less than the merge
-/// allows. A spline is cut at its knots first, where that derivative can
-/// jump. Without a bound (a B-spline surface) each interval is halved four
-/// times.
-#[allow(clippy::too_many_lines)]
 fn run_contacts(
     curve: &EdgeCurve,
     start_pos: Point3,
@@ -1918,6 +1908,31 @@ fn run_contacts(
     surface: &FaceSurface,
     tol: Tolerance,
 ) -> Vec<(f64, Point3)> {
+    run_contacts_counted(curve, start_pos, end_pos, ts, surface, tol).0
+}
+
+/// [`run_contacts`], and how many intervals its search read.
+///
+/// Two roots of the rate can lie between two samples where it has one
+/// sign, a touch and a most of the distance. Each interval is halved until
+/// a bound on the rate's second derivative shows that it holds no root, or
+/// one where the rate changes sign, or until it is shorter than the
+/// tolerance or the distance can change across it by less than the merge
+/// allows. A spline is cut at its knots first, where that derivative can
+/// jump, and each knot span takes its own bound. Without a bound (a
+/// B-spline surface) each interval is halved four times. Past
+/// [`RUN_INTERVALS`] intervals, or [`MOST_HALVINGS`] halvings, an interval
+/// is read once at its ends, as the samples alone are: a touch can then
+/// hide in it, but no curve holds the search longer.
+#[allow(clippy::too_many_lines)]
+fn run_contacts_counted(
+    curve: &EdgeCurve,
+    start_pos: Point3,
+    end_pos: Point3,
+    ts: &[f64],
+    surface: &FaceSurface,
+    tol: Tolerance,
+) -> (Vec<(f64, Point3)>, usize) {
     /// A contact's parameter, point and distance from the surface, and
     /// whether the curve passes through the surface there.
     struct Contact {
@@ -1930,25 +1945,41 @@ fn run_contacts(
     type Reading = (f64, f64, f64);
     /// Halvings without a bound on the rate.
     const UNBOUNDED_HALVINGS: u32 = 4;
-    /// Halvings at most with one.
-    const MOST_HALVINGS: u32 = 48;
     let floor = 1e-3 * tol.linear;
-    // The point, the signed distance and its rate.
-    let foot = |t: f64| -> Option<(Point3, f64, f64)> {
-        let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
+    // The point, the signed distance and its rate, on `on`.
+    let foot_on = |on: &EdgeCurve, t: f64| -> Option<(Point3, f64, f64)> {
+        let pt = on.evaluate_with_endpoints(t, start_pos, end_pos);
         let (u, v) = surface.project_point(pt)?;
         let normal = surface.normal(u, v);
         let side = (pt - surface.evaluate(u, v)?).dot(normal);
-        let rate = curve_velocity(curve, start_pos, end_pos, t).dot(normal);
+        let rate = curve_velocity(on, start_pos, end_pos, t).dot(normal);
         Some((pt, side, rate))
     };
-    let speeds = curve_derivative_bounds(curve, start_pos, end_pos);
-    // A bound on the rate's second derivative over `[a, b]`.
-    let bend = |a: f64, b: f64| -> Option<f64> {
-        let [c1, c2, c3] = speeds?;
+    let foot = |t: f64| foot_on(curve, t);
+    // The bounds on the curve's first three derivatives over `[a, b]`,
+    // which lies within one knot span of a spline.
+    let speeds = |a: f64, b: f64| -> Option<[f64; 3]> {
+        match curve {
+            EdgeCurve::NurbsCurve(n) => {
+                let count = n.control_points().len();
+                let span = brepkit_math::nurbs::basis::find_span(
+                    count,
+                    n.degree(),
+                    f64::midpoint(a, b),
+                    n.knots(),
+                );
+                spline_span_derivative_bounds(n, span)
+            }
+            _ => curve_derivative_bounds(curve, start_pos, end_pos),
+        }
+    };
+    // The bound on the curve's first derivative and on the rate's second
+    // derivative over `[a, b]`.
+    let bend = |a: f64, b: f64| -> Option<(f64, f64)> {
+        let [c1, c2, c3] = speeds(a, b)?;
         let mid = curve.evaluate_with_endpoints(f64::midpoint(a, b), start_pos, end_pos);
         let (k2, k3) = distance_derivative_bounds(surface, mid, 0.5 * c1 * (b - a).abs())?;
-        Some((k3 * c1).madd(c1 * c1, (3.0 * k2 * c1).madd(c2, c3)))
+        Some((c1, (k3 * c1).madd(c1 * c1, (3.0 * k2 * c1).madd(c2, c3))))
     };
 
     let mut contacts: Vec<Contact> =
@@ -1962,39 +1993,99 @@ fn run_contacts(
             })
             .collect();
     let mut cuts: Vec<f64> = ts.to_vec();
+    // A spline is read in pieces split at its knots, each piece up to the
+    // parameter it is keyed by: a piece read at its end gives the rate on
+    // its own side of a knot where the derivative jumps, which the whole
+    // spline reads from the span after it.
+    let mut pieces: Vec<(f64, EdgeCurve)> = Vec::new();
     if let (EdgeCurve::NurbsCurve(nurbs), [first, .., last]) = (curve, ts) {
         let (lo, hi) = (first.min(*last), first.max(*last));
-        cuts.extend(nurbs.knots().iter().copied().filter(|&k| lo < k && k < hi));
+        let mut knots: Vec<f64> = nurbs
+            .knots()
+            .iter()
+            .copied()
+            .filter(|&k| lo < k && k < hi)
+            .collect();
+        knots.dedup();
+        let mut rest = nurbs.clone();
+        for &k in &knots {
+            if let Ok((head, tail)) = brepkit_math::nurbs::knot_ops::curve_split(&rest, k) {
+                pieces.push((k, EdgeCurve::NurbsCurve(head)));
+                rest = tail;
+            }
+        }
+        pieces.push((f64::INFINITY, EdgeCurve::NurbsCurve(rest)));
+        cuts.extend(knots);
     }
     cuts.sort_by(f64::total_cmp);
     cuts.dedup();
+    // The piece that holds `[a, b]`.
+    let piece = |a: f64, b: f64| -> &EdgeCurve {
+        let mid = f64::midpoint(a, b);
+        pieces
+            .get(pieces.partition_point(|&(end, _)| end <= mid))
+            .map_or(curve, |(_, on)| on)
+    };
     // The mosts of the distance the search passes, for the rises below.
     let mut mosts: Vec<(f64, f64)> = Vec::new();
+    // Where the rate jumps across a knot from one sign to the other, the
+    // distance has a least or a most at the knot itself.
+    for pair in pieces.windows(2) {
+        let k = pair[0].0;
+        let (Some((p, s, g_in)), Some((_, _, g_out))) =
+            (foot_on(&pair[0].1, k), foot_on(&pair[1].1, k))
+        else {
+            continue;
+        };
+        if (g_in > 0.0) == (g_out > 0.0) {
+            continue;
+        }
+        let sign = if s < 0.0 { -1.0 } else { 1.0 };
+        if s.abs() <= floor || (sign * g_in <= 0.0 && sign * g_out >= 0.0) {
+            if distance_to_surface(p, surface) < tol.linear {
+                contacts.push(Contact {
+                    t: k,
+                    p,
+                    depth: s.abs(),
+                    crossing: false,
+                });
+            }
+        } else {
+            mosts.push((k, s.abs()));
+        }
+    }
     let mut stack: Vec<(Reading, Reading, u32)> = Vec::new();
     for pair in cuts.windows(2) {
-        if let (Some((_, sa, ga)), Some((_, sb, gb))) = (foot(pair[0]), foot(pair[1])) {
+        let on = piece(pair[0], pair[1]);
+        if let (Some((_, sa, ga)), Some((_, sb, gb))) = (foot_on(on, pair[0]), foot_on(on, pair[1]))
+        {
             stack.push(((pair[0], sa, ga), (pair[1], sb, gb), 0));
         }
     }
+    let mut read = 0_usize;
     while let Some(((a, s_a, g_a), (b, s_b, g_b), halvings)) = stack.pop() {
+        read += 1;
         let width = b - a;
         let changes = (g_a > 0.0) != (g_b > 0.0);
-        let bound = bend(a, b);
-        let settled = match bound {
-            // One root where the rate's slope keeps its sign, none where
-            // the rate cannot come down to zero from its values at the ends.
-            Some(m) if changes => (g_b - g_a).abs() > m * width * width,
-            Some(m) => g_a.abs().min(g_b.abs()) > 0.125 * m * width * width,
-            None => halvings >= UNBOUNDED_HALVINGS,
-        };
-        let short = speeds.is_some_and(|[c1, ..]| c1 * width <= tol.linear)
-            || bound.is_some_and(|m| {
-                width * (0.125 * m).madd(width * width, g_a.abs().max(g_b.abs())) < floor
-            })
-            || halvings >= MOST_HALVINGS;
+        let spent = read > RUN_INTERVALS || halvings >= MOST_HALVINGS;
+        let bound = if spent { None } else { bend(a, b) };
+        let settled = spent
+            || match bound {
+                // One root where the rate's slope keeps its sign, none where
+                // the rate cannot come down to zero from its values at the
+                // ends.
+                Some((_, m)) if changes => (g_b - g_a).abs() > m * width * width,
+                Some((_, m)) => g_a.abs().min(g_b.abs()) > 0.125 * m * width * width,
+                None => halvings >= UNBOUNDED_HALVINGS,
+            };
+        let short = bound.is_some_and(|(c1, m)| {
+            c1 * width <= tol.linear
+                || width * (0.125 * m).madd(width * width, g_a.abs().max(g_b.abs())) < floor
+        });
+        let on = piece(a, b);
         if !(settled || short) {
             let mid = f64::midpoint(a, b);
-            if let Some((_, s_m, g_m)) = foot(mid) {
+            if let Some((_, s_m, g_m)) = foot_on(on, mid) {
                 stack.push(((a, s_a, g_a), (mid, s_m, g_m), halvings + 1));
                 stack.push(((mid, s_m, g_m), (b, s_b, g_b), halvings + 1));
                 continue;
@@ -2006,7 +2097,7 @@ fn run_contacts(
         let (mut lo, mut hi, mut g_at_lo) = (a, b, g_a);
         for _ in 0..60 {
             let mid = f64::midpoint(lo, hi);
-            let Some((_, _, g_mid)) = foot(mid) else {
+            let Some((_, _, g_mid)) = foot_on(on, mid) else {
                 break;
             };
             if (g_mid > 0.0) == (g_at_lo > 0.0) {
@@ -2017,7 +2108,7 @@ fn run_contacts(
             }
         }
         let tm = f64::midpoint(lo, hi);
-        let Some((pm, s_m, _)) = foot(tm) else {
+        let Some((pm, s_m, _)) = foot_on(on, tm) else {
             continue;
         };
         // A most of the distance between two of its leasts is no contact.
@@ -2035,20 +2126,42 @@ fn run_contacts(
         }
     }
     contacts.sort_by(|a, b| a.t.total_cmp(&b.t));
+    mosts.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut samples: Vec<f64> = ts.to_vec();
+    samples.sort_by(f64::total_cmp);
+    // The most of the mosts' distances over each run of `2^j` of them from
+    // each index, so any range of them reads in two lookups.
+    let mut most_over: Vec<Vec<f64>> = vec![mosts.iter().map(|&(_, s)| s).collect()];
+    while let Some(last) = most_over.last()
+        && 2 * (1 << (most_over.len() - 1)) <= mosts.len()
+    {
+        let half = 1 << (most_over.len() - 1);
+        let next = (0..=mosts.len() - 2 * half)
+            .map(|i| last[i].max(last[i + half]))
+            .collect();
+        most_over.push(next);
+    }
     // The most the distance reaches strictly between two parameters, read
     // at the samples there, at the mosts found and midway.
     let rise = |a: f64, b: f64| {
-        let read = ts
+        let within = |xs: &[f64]| xs.partition_point(|&x| x <= a)..xs.partition_point(|&x| x < b);
+        let read = samples[within(&samples)]
             .iter()
             .copied()
-            .filter(|&t| a < t && t < b)
             .chain(std::iter::once(f64::midpoint(a, b)))
             .filter_map(|t| foot(t).map(|(_, s, _)| s.abs()))
             .fold(0.0_f64, f64::max);
-        mosts
-            .iter()
-            .filter(|&&(t, _)| a < t && t < b)
-            .fold(read, |most, &(_, s)| most.max(s))
+        let (lo, hi) = (
+            mosts.partition_point(|&(t, _)| t <= a),
+            mosts.partition_point(|&(t, _)| t < b),
+        );
+        if hi <= lo {
+            return read;
+        }
+        let level = (usize::BITS - 1 - (hi - lo).leading_zeros()) as usize;
+        let span = 1 << level;
+        read.max(most_over[level][lo])
+            .max(most_over[level][hi - span])
     };
     let mut kept: Vec<Contact> = Vec::new();
     for c in contacts {
@@ -2064,7 +2177,94 @@ fn run_contacts(
         }
         kept.push(c);
     }
-    kept.into_iter().map(|c| (c.t, c.p)).collect()
+    (kept.into_iter().map(|c| (c.t, c.p)).collect(), read)
+}
+
+/// The most intervals one [`run_contacts`] search reads before it reads the
+/// rest once at their ends: four times the most a run of the tests reads,
+/// 7905, along a ball's equator 3e-7 inside a rod's wall.
+const RUN_INTERVALS: usize = 1 << 15;
+
+/// The most halvings of one sample interval in a [`run_contacts`] search:
+/// the runs of the tests take at most 7.
+const MOST_HALVINGS: u32 = 20;
+
+/// Bounds on the lengths of the first three derivatives of a spline within
+/// its knot span `span`, read from the control points of the derivatives
+/// of its homogeneous form, `w (C - o)` and `w` about the span's first
+/// control point `o`: `|C - o|` is at most the farthest of the span's
+/// control points, `w` at least its least weight, and `C' w = (w (C - o))'
+/// - (C - o) w'`, and so on for `C''` and `C'''`. Order `k` of the
+/// derivative's control points `i` is `(p - k + 1)` times the difference of
+/// order `k - 1`'s at `i + 1` and `i` over `U[i + p + 1] - U[i + k]`, and the
+/// span holds those from `span - p` to `span - k`.
+fn spline_span_derivative_bounds(
+    n: &brepkit_math::nurbs::curve::NurbsCurve,
+    span: usize,
+) -> Option<[f64; 3]> {
+    let (p, knots) = (n.degree(), n.knots());
+    let first = span.checked_sub(p)?;
+    let points = n.control_points().get(first..=span)?;
+    let weights = n.weights().get(first..=span)?;
+    let origin = *points.first()?;
+    let least = weights.iter().copied().fold(f64::INFINITY, f64::min);
+    if !(least > 0.0 && least.is_finite()) {
+        return None;
+    }
+    let far = points
+        .iter()
+        .map(|&q| (q - origin).length())
+        .fold(0.0_f64, f64::max);
+    let mut level: Vec<[f64; 4]> = points
+        .iter()
+        .zip(weights)
+        .map(|(&q, &w)| {
+            let d = (q - origin) * w;
+            [d.x(), d.y(), d.z(), w]
+        })
+        .collect();
+    // The most of each homogeneous derivative's point part and weight, at
+    // orders 1, 2 and 3.
+    let mut most = [(0.0_f64, 0.0_f64); 3];
+    for (k, slot) in (1..=3).zip(&mut most) {
+        if k > p {
+            break;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let scale = (p - k + 1) as f64;
+        level = (0..level.len() - 1)
+            .map(|j| {
+                let i = first + j;
+                let gap = knots.get(i + p + 1).copied().unwrap_or(0.0)
+                    - knots.get(i + k).copied().unwrap_or(0.0);
+                if gap <= 0.0 {
+                    return [0.0; 4];
+                }
+                let f = scale / gap;
+                let (q0, q1) = (level[j], level[j + 1]);
+                [
+                    f * (q1[0] - q0[0]),
+                    f * (q1[1] - q0[1]),
+                    f * (q1[2] - q0[2]),
+                    f * (q1[3] - q0[3]),
+                ]
+            })
+            .collect();
+        *slot = level.iter().fold((0.0_f64, 0.0_f64), |(a, w), q| {
+            (
+                a.max(Vec3::new(q[0], q[1], q[2]).length()),
+                w.max(q[3].abs()),
+            )
+        });
+    }
+    let [(a1, w1), (a2, w2), (a3, w3)] = most;
+    let c1 = far.madd(w1, a1) / least;
+    let c2 = far.madd(w2, (2.0 * c1).madd(w1, a2)) / least;
+    let c3 = far.madd(w3, (3.0 * c1).madd(w2, (3.0 * c2).madd(w1, a3))) / least;
+    [c1, c2, c3]
+        .iter()
+        .all(|c| c.is_finite())
+        .then_some([c1, c2, c3])
 }
 
 /// The derivative of `curve` at `t`, at the speed its parameter runs: a
@@ -2081,12 +2281,9 @@ fn curve_velocity(curve: &EdgeCurve, start_pos: Point3, end_pos: Point3, t: f64)
     }
 }
 
-/// Bounds on the lengths of the first three derivatives of `curve` over its
-/// whole domain. A spline's are read from the control points of the
-/// derivatives of its homogeneous form, `w (C - o)` and `w` about its first
-/// control point `o`: `|C - o|` is at most the farthest control point's,
-/// `w` at least the least weight, and `C' w = (w (C - o))' - (C - o) w'`,
-/// and so on for `C''` and `C'''`. They hold within each knot span.
+/// Bounds on the lengths of the first three derivatives of a line, a
+/// circle or an ellipse; a spline's are read per knot span by
+/// [`spline_span_derivative_bounds`].
 fn curve_derivative_bounds(
     curve: &EdgeCurve,
     start_pos: Point3,
@@ -2096,70 +2293,7 @@ fn curve_derivative_bounds(
         EdgeCurve::Line => Some([(end_pos - start_pos).length(), 0.0, 0.0]),
         EdgeCurve::Circle(c) => Some([c.radius(); 3]),
         EdgeCurve::Ellipse(e) => Some([e.semi_major().max(e.semi_minor()); 3]),
-        EdgeCurve::NurbsCurve(n) => {
-            let points = n.control_points();
-            let weights = n.weights();
-            let origin = *points.first()?;
-            let least = weights.iter().copied().fold(f64::INFINITY, f64::min);
-            if !(least > 0.0 && least.is_finite()) {
-                return None;
-            }
-            let far = points
-                .iter()
-                .map(|&p| (p - origin).length())
-                .fold(0.0_f64, f64::max);
-            let mut level: Vec<[f64; 4]> = points
-                .iter()
-                .zip(weights)
-                .map(|(&p, &w)| {
-                    let d = (p - origin) * w;
-                    [d.x(), d.y(), d.z(), w]
-                })
-                .collect();
-            let (mut degree, mut knots) = (n.degree(), n.knots().to_vec());
-            // The most of each homogeneous derivative's point part and
-            // weight, at orders 1, 2 and 3.
-            let mut most = [(0.0_f64, 0.0_f64); 3];
-            for slot in &mut most {
-                if degree == 0 || level.len() < 2 {
-                    break;
-                }
-                #[allow(clippy::cast_precision_loss)]
-                let p = degree as f64;
-                level = (0..level.len() - 1)
-                    .map(|i| {
-                        let span = knots[i + degree + 1] - knots[i + 1];
-                        if span <= 0.0 {
-                            return [0.0; 4];
-                        }
-                        let k = p / span;
-                        let (q0, q1) = (level[i], level[i + 1]);
-                        [
-                            k * (q1[0] - q0[0]),
-                            k * (q1[1] - q0[1]),
-                            k * (q1[2] - q0[2]),
-                            k * (q1[3] - q0[3]),
-                        ]
-                    })
-                    .collect();
-                knots = knots[1..knots.len() - 1].to_vec();
-                degree -= 1;
-                *slot = level.iter().fold((0.0_f64, 0.0_f64), |(a, w), q| {
-                    (
-                        a.max(Vec3::new(q[0], q[1], q[2]).length()),
-                        w.max(q[3].abs()),
-                    )
-                });
-            }
-            let [(a1, w1), (a2, w2), (a3, w3)] = most;
-            let c1 = far.madd(w1, a1) / least;
-            let c2 = far.madd(w2, (2.0 * c1).madd(w1, a2)) / least;
-            let c3 = far.madd(w3, (3.0 * c1).madd(w2, (3.0 * c2).madd(w1, a3))) / least;
-            [c1, c2, c3]
-                .iter()
-                .all(|c| c.is_finite())
-                .then_some([c1, c2, c3])
-        }
+        EdgeCurve::NurbsCurve(_) => None,
     }
 }
 
@@ -3071,14 +3205,7 @@ mod tests {
     /// lies at `z = 0`: the `x` of the vertices phase EF makes on the edge.
     /// Along `y = 0` the edge's height is its signed distance from the wall.
     fn contacts_with_a_wall(k: f64, roots: &[f64]) -> Vec<f64> {
-        use brepkit_math::curves::Circle3D;
         use brepkit_math::nurbs::curve::NurbsCurve;
-        use brepkit_math::surfaces::CylindricalSurface;
-        use brepkit_math::vec::Vec3;
-        use brepkit_topology::edge::Edge;
-        use brepkit_topology::face::Face;
-        use brepkit_topology::vertex::Vertex;
-        use brepkit_topology::wire::{OrientedEdge, Wire};
         // The height in powers of `u`, with `x = 2u - 1`, then as a Bézier
         // curve's control heights.
         let mut power = vec![k];
@@ -3103,21 +3230,42 @@ mod tests {
             })
             .collect();
         let knots = [vec![0.0; n + 1], vec![1.0; n + 1]].concat();
-        let (first, last) = (points[0], points[n]);
-        let curve = NurbsCurve::new(n, knots, points, vec![1.0; n + 1]).unwrap();
+        contacts_of_a_spline_with_a_wall(
+            &NurbsCurve::new(n, knots, points, vec![1.0; n + 1]).unwrap(),
+            1.0,
+        )
+    }
+
+    /// The `x` of the vertices phase EF makes on an edge along `curve`,
+    /// against the wall of a rod like that of [`contacts_with_a_wall`], of
+    /// radius `radius`.
+    fn contacts_of_a_spline_with_a_wall(
+        curve: &brepkit_math::nurbs::curve::NurbsCurve,
+        radius: f64,
+    ) -> Vec<f64> {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let (d0, d1) = curve.domain();
+        let (first, last) = (curve.evaluate(d0), curve.evaluate(d1));
+        let curve = curve.clone();
 
         let mut topo = Topology::new();
         let x_axis = Vec3::new(1.0, 0.0, 0.0);
         let wall = CylindricalSurface::with_ref_dir(
-            Point3::new(-2.0, 0.0, -1.0),
+            Point3::new(-2.0, 0.0, -radius),
             x_axis,
-            1.0,
+            radius,
             Vec3::new(0.0, 0.0, -1.0),
         )
         .unwrap();
         let rim = |topo: &mut Topology, x: f64| {
-            let v = topo.add_vertex(Vertex::new(Point3::new(x, 0.0, -2.0), 1e-7));
-            let circle = Circle3D::new(Point3::new(x, 0.0, -1.0), x_axis, 1.0).unwrap();
+            let v = topo.add_vertex(Vertex::new(Point3::new(x, 0.0, -2.0 * radius), 1e-7));
+            let circle = Circle3D::new(Point3::new(x, 0.0, -radius), x_axis, radius).unwrap();
             (v, topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle))))
         };
         let ((v_lo, e_lo), (v_hi, e_hi)) = (rim(&mut topo, -2.0), rim(&mut topo, 2.0));
@@ -3203,6 +3351,69 @@ mod tests {
         for (x, want) in xs.iter().zip([-0.3, -0.28]) {
             assert!((x - want).abs() < 1e-9, "contact at {x}, expected {want}");
         }
+    }
+
+    /// A quadratic spline with a double knot at `x = 0`, where it turns
+    /// from one parabola to another: it touches the wall of a rod of radius
+    /// 1000 at `x = -0.01` and at `x = 0.5`, and is 1e-8 off it at the knot
+    /// between, where its rate falls from up to down. Read on the whole
+    /// spline, the rate at the knot comes from the span after it, and the
+    /// bound then shows no root in the interval before, which holds the
+    /// first touch. Each touch takes a vertex.
+    #[test]
+    fn a_spline_touching_a_wall_before_and_after_a_kink_keeps_both_touches() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let at = |x: f64, z: f64| Point3::new(x, 0.0, z);
+        // `1e-4 (x + 0.01)^2` on `[-1, 0]` and `4e-8 (x - 0.5)^2` on `[0, 1]`.
+        let spline = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0],
+            vec![
+                at(-1.0, 9.801e-5),
+                at(-0.5, -9.9e-7),
+                at(0.0, 1e-8),
+                at(0.5, -1e-8),
+                at(1.0, 1e-8),
+            ],
+            vec![1.0; 5],
+        )
+        .unwrap();
+        let xs = contacts_of_a_spline_with_a_wall(&spline, 1000.0);
+        assert_eq!(xs.len(), 2, "contacts at {xs:?}");
+        for (x, want) in xs.iter().zip([-0.01, 0.5]) {
+            assert!((x - want).abs() < 1e-6, "contact at {x}, expected {want}");
+        }
+    }
+
+    /// A line 1 long along the top of a rod of radius 0.005 lies on the
+    /// rod's wall: its distance's rate is zero along it, and the bound on
+    /// the rate's second derivative, `3 c1³ / r²`, is 1.2e5. The search
+    /// would read 131008 intervals before the distance could change across
+    /// each by less than the merge allows; it stops reading past its
+    /// budget.
+    #[test]
+    fn a_line_along_a_thin_rod_stops_at_the_budget() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Vec3;
+        let rod = FaceSurface::Cylinder(
+            CylindricalSurface::new(
+                Point3::new(0.0, 0.0, -0.005),
+                Vec3::new(1.0, 0.0, 0.0),
+                0.005,
+            )
+            .unwrap(),
+        );
+        let (a, b) = (Point3::new(-0.5, 0.0, 0.0), Point3::new(0.5, 0.0, 0.0));
+        #[allow(clippy::cast_precision_loss)]
+        let ts: Vec<f64> = (0..=N_SAMPLES)
+            .map(|i| i as f64 / N_SAMPLES as f64)
+            .collect();
+        let (_, read) = run_contacts_counted(&EdgeCurve::Line, a, b, &ts, &rod, Tolerance::new());
+        assert!(read > RUN_INTERVALS, "read {read}: the bound settled");
+        assert!(
+            read <= RUN_INTERVALS + 2 * (ts.len() + MOST_HALVINGS as usize),
+            "read {read}"
+        );
     }
 
     /// A ball's equator turned 1.57 about `x`, against a rod of the ball's
