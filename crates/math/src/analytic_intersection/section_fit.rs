@@ -79,6 +79,18 @@ pub(super) trait Carrier {
     /// surface's own size and `p`'s distance from its frame, or for a
     /// cylinder, whose frame can sit anywhere along its axis, from its axis.
     fn scale(&self, p: Point3) -> f64;
+
+    /// The second derivative of the signed distance of [`Self::distance`]
+    /// along the unit vector `v` at `p`: on the surface, with `v` tangent
+    /// to it, its curvature along `v`, positive where it bends away from
+    /// the gradient. `None` where the distance has no second derivative: on
+    /// an axis, at a centre, or on a cone's apex plane.
+    fn bend(&self, p: Point3, v: Vec3) -> Option<f64>;
+
+    /// Which sheet of the surface [`Self::distance`] reads at `p`: a cone's
+    /// nappe or a torus's tube on `p`'s side of the axis or the far one, as
+    /// 1 or -1; 0 for a surface of one sheet.
+    fn sheet(&self, p: Point3) -> i8;
 }
 
 /// The degree-6 Bernstein coefficients of the product of two cubics.
@@ -284,6 +296,97 @@ impl Carrier for AnalyticSurface<'_> {
         }
     }
 
+    // The distance from an axis is `rho`, whose second derivative along `v`
+    // is the square of `v`'s part across the axis and across the point's
+    // direction from it, over `rho`. A sphere's is the same with its centre
+    // for the axis; a cone's distance is `rho sin` less a term linear in the
+    // point. A torus's is the distance `q` from a point of its centre
+    // circle, which moves with the point by `R / rho` times the part across
+    // the axis and across the point's direction.
+    fn bend(&self, p: Point3, v: Vec3) -> Option<f64> {
+        let across_of = |w: Vec3, axis: Vec3| w - axis * axis.dot(w);
+        let turn = |v_across: Vec3, e: Vec3| {
+            let along = v_across.dot(e);
+            v_across.dot(v_across) - along * along
+        };
+        match self {
+            Self::Cylinder(c) => {
+                let across = across_of(p - c.origin(), c.axis());
+                let rho = across.length();
+                (rho > 0.0).then(|| turn(across_of(v, c.axis()), across * (1.0 / rho)) / rho)
+            }
+            Self::Sphere(s) => {
+                let w = p - s.center();
+                let r = w.length();
+                (r > 0.0).then(|| turn(v, w * (1.0 / r)) / r)
+            }
+            // `|h|` has no second derivative across the apex's plane: there,
+            // within the rounding of `h`, none is read.
+            Self::Cone(c) => {
+                let w = p - c.apex();
+                let h = c.axis().dot(w);
+                let across = w - c.axis() * h;
+                let rho = across.length();
+                (rho > 0.0 && h.abs() > 64.0 * f64::EPSILON * w.length()).then(|| {
+                    c.half_angle().sin() * turn(across_of(v, c.axis()), across * (1.0 / rho)) / rho
+                })
+            }
+            Self::Torus(t) => {
+                let w = p - t.center();
+                let across = across_of(w, t.z_axis());
+                let rho = across.length();
+                if rho <= 0.0 {
+                    return None;
+                }
+                let tube = |side: f64| {
+                    let to = w - across * (side * t.major_radius() / rho);
+                    (to.length() - t.minor_radius(), to, side)
+                };
+                let (near, far) = (tube(1.0), tube(-1.0));
+                let (_, to, side) = if far.0.abs() < near.0.abs() {
+                    far
+                } else {
+                    near
+                };
+                let q = to.length();
+                (q > 0.0).then(|| {
+                    let centre = side * t.major_radius() / rho;
+                    let spread = turn(across_of(v, t.z_axis()), across * (1.0 / rho));
+                    centre.madd(-spread, turn(v, to * (1.0 / q))) / q
+                })
+            }
+        }
+    }
+
+    fn sheet(&self, p: Point3) -> i8 {
+        match self {
+            Self::Cylinder(_) | Self::Sphere(_) => 0,
+            Self::Cone(c) => {
+                if c.axis().dot(p - c.apex()) < 0.0 {
+                    -1
+                } else {
+                    1
+                }
+            }
+            Self::Torus(t) => {
+                let w = p - t.center();
+                let across = w - t.z_axis() * t.z_axis().dot(w);
+                let rho = across.length();
+                if rho <= 0.0 {
+                    return 1;
+                }
+                let tube = |side: f64| {
+                    (w - across * (side * t.major_radius() / rho)).length() - t.minor_radius()
+                };
+                if tube(-1.0).abs() < tube(1.0).abs() {
+                    -1
+                } else {
+                    1
+                }
+            }
+        }
+    }
+
     fn scale(&self, p: Point3) -> f64 {
         match self {
             Self::Cylinder(c) => {
@@ -403,15 +506,90 @@ fn piece_bound(
     piece_bound(a, b, &left, tol, depth - 1).max(piece_bound(a, b, &right, tol, depth - 1))
 }
 
-/// A cubic interpolant through `points`, points of the section of `a` and
-/// `b` in order along it, and through more points of the section where it
-/// needs them, with the points it passes through.
+/// A share of the tolerance the first pass of a fit aims each span at, so
+/// that its bound, which reads up to about twice the true miss, passes.
+const AIM: f64 = 0.25;
+
+/// Points of the section, from the first of `points` to their last, spaced
+/// so that a cubic interpolant through them misses both surfaces by about
+/// [`AIM`] of `tol` on every span. A cubic through `points` reads, a
+/// quarter, half and three quarters of the way between each two, how far it
+/// lies off either surface, `e`: the cubic's miss goes as the fourth power
+/// of the spacing, so that stretch wants `(e / (AIM tol))^(1/4)` spans, and
+/// no fewer than one, so the points are never sparser than `points`: a
+/// face's boundary drawn on its surface from a curve of fewer spans read a
+/// small dip's volume 4% low. The new points lie on that cubic at equal
+/// steps of the spans so counted, each moved onto the section by Newton
+/// steps. `None` where the cubic fails, the spacing would take more points
+/// than the fit allows, or a point does not move onto the section within
+/// half its spacing.
+fn spaced(a: &impl Carrier, b: &impl Carrier, points: &[Point3], tol: f64) -> Option<Vec<Point3>> {
+    let curve = interpolate(points, 3).ok()?;
+    let params = chord_length_params(points);
+    let off = |p: Point3| match (a.distance(p), b.distance(p)) {
+        (Some((x, _)), Some((y, _))) => x.abs().max(y.abs()),
+        _ => f64::INFINITY,
+    };
+    let want: Vec<f64> = params
+        .windows(2)
+        .map(|w| {
+            let e = [0.25, 0.5, 0.75]
+                .iter()
+                .map(|&q| off(curve.evaluate((w[1] - w[0]).madd(q, w[0]))))
+                .fold(0.0, f64::max);
+            (e / (AIM * tol)).sqrt().sqrt().max(1.0)
+        })
+        .collect();
+    let total: f64 = want.iter().sum();
+    if !total.is_finite() {
+        return None;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    if total.ceil() + 1.0 > MOST_POINTS as f64 {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let n = (total.ceil() as usize).max(1);
+    #[allow(clippy::cast_precision_loss)]
+    let per = total / n as f64;
+    let mut out = Vec::with_capacity(n + 1);
+    out.push(points[0]);
+    let (mut i, mut before) = (0, 0.0);
+    for j in 1..n {
+        #[allow(clippy::cast_precision_loss)]
+        let level = per * j as f64;
+        while i + 1 < want.len() && before + want[i] < level {
+            before += want[i];
+            i += 1;
+        }
+        let s = if want[i] > 0.0 {
+            ((level - before) / want[i]).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let from = curve.evaluate((params[i + 1] - params[i]).madd(s, params[i]));
+        let gap = (points[i + 1] - points[i]).length();
+        let on = settle_on_section(a, b, from).filter(|on| (*on - from).length() < 0.5 * gap)?;
+        if out.last().is_some_and(|&last| (on - last).length() > 0.0) {
+            out.push(on);
+        }
+    }
+    out.push(points[points.len() - 1]);
+    Some(out)
+}
+
+/// A cubic interpolant through points of the section of `a` and `b`, from
+/// the first of `points`, points of it in order along it, to their last,
+/// and through more points of the section where it needs them, with the
+/// points it passes through.
 ///
-/// Each pass bounds, on each knot span, how far the cubic strays from each
-/// surface. Where a bound exceeds `tol`, the points either side of the span
-/// get points of the section between them, as many as the bound asks for at
-/// the fourth power of their spacing, each moved onto the section from the
-/// cubic.
+/// The first pass places the points by how far a cubic through `points`
+/// lies off the surfaces between each two (see [`spaced`]), so that most
+/// spans pass at once. Each pass bounds, on each knot span, how far the
+/// cubic strays from each surface. Where a bound exceeds `tol`, the points
+/// either side of the span get points of the section between them, as many
+/// as the bound asks for at the fourth power of their spacing, each moved
+/// onto the section from the cubic.
 ///
 /// # Errors
 ///
@@ -425,7 +603,11 @@ pub(super) fn fit_section(
     points: &[Point3],
     tol: f64,
 ) -> Result<(NurbsCurve, Vec<Point3>), MathError> {
-    let mut pts = points.to_vec();
+    let mut pts = if points.len() > 4 {
+        spaced(a, b, points, tol).unwrap_or_else(|| points.to_vec())
+    } else {
+        points.to_vec()
+    };
     for pass in 1..=PASSES {
         let curve = interpolate(&pts, 3.min(pts.len().saturating_sub(1)))?;
         let params = chord_length_params(&pts);
@@ -488,4 +670,117 @@ pub(super) fn fit_section(
         pts = finer;
     }
     Err(MathError::ConvergenceFailure { iterations: PASSES })
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use crate::mat::Mat4;
+    use crate::surfaces::{CylindricalSurface, ToroidalSurface};
+
+    /// How many knot spans of a cubic through `points` the bound reads as
+    /// more than `tol` off either surface, and how many spans there are.
+    fn unproved(a: &impl Carrier, b: &impl Carrier, points: &[Point3], tol: f64) -> (usize, usize) {
+        let curve = interpolate(points, 3).unwrap();
+        let mut cuts: Vec<f64> = curve.knots().to_vec();
+        cuts.dedup_by(|x, y| (*x - *y).abs() <= 0.0);
+        let failing = cuts
+            .windows(2)
+            .filter(|s| {
+                piece_bound(
+                    a,
+                    b,
+                    &span_bezier(&curve, s[0], s[1]).unwrap(),
+                    tol,
+                    HALVINGS,
+                ) > tol
+            })
+            .count();
+        (failing, cuts.len() - 1)
+    }
+
+    /// The ring of radii 4 and 1.5 and a rod of radius 0.6 along y through
+    /// (0.5, y, 1), in three poses, meet in loops that a march samples about
+    /// 0.12 apart. A cubic through those samples misses the surfaces by more
+    /// than 1e-7 on nearly every span, and the fit halved them pass by pass,
+    /// three passes to about 250 points. The first pass now places its
+    /// points by how far that cubic misses, and all but a few spans of the
+    /// cubic through them pass at once; the fit still stays within 1e-7.
+    #[test]
+    fn a_fits_first_points_are_placed_so_most_spans_pass() {
+        let tol = 1e-7;
+        let poses = [
+            Mat4::identity(),
+            Mat4::translation(-3.7, 5.5, 14.0) * Mat4::rotation_z(0.7) * Mat4::rotation_x(-0.9),
+            Mat4::scale(-1.0, 1.0, 1.0) * Mat4::rotation_y(0.4),
+        ];
+        for (k, pose) in poses.iter().enumerate() {
+            let o = Point3::new(0.0, 0.0, 0.0);
+            let along = |v: Vec3| pose.mul_point(o + v) - pose.mul_point(o);
+            let ring = ToroidalSurface::with_axis(
+                pose.mul_point(o),
+                4.0,
+                1.5,
+                along(Vec3::new(0.0, 0.0, 1.0)),
+            )
+            .unwrap();
+            let rod = CylindricalSurface::new(
+                pose.mul_point(Point3::new(0.5, 0.0, 1.0)),
+                along(Vec3::new(0.0, 1.0, 0.0)),
+                0.6,
+            )
+            .unwrap();
+            let (a, b) = (
+                AnalyticSurface::Cylinder(&rod),
+                AnalyticSurface::Torus(&ring),
+            );
+            let tangent = |p: Point3, toward: Vec3| {
+                let t = a.distance(p).unwrap().1.cross(b.distance(p).unwrap().1);
+                let t = t * (1.0 / t.length());
+                if t.dot(toward) < 0.0 { -t } else { t }
+            };
+            let mut p =
+                settle_on_section(&a, &b, pose.mul_point(Point3::new(0.5, 3.0, 1.6))).unwrap();
+            let mut t = tangent(p, along(Vec3::new(1.0, 0.0, 0.0)));
+            let mut points = vec![p];
+            for _ in 0..40 {
+                p = settle_on_section(&a, &b, p + t * 0.12).unwrap();
+                t = tangent(p, t);
+                points.push(p);
+            }
+            let (raw, spans) = unproved(&a, &b, &points, tol);
+            assert!(
+                2 * raw > spans,
+                "pose {k}: {raw} of {spans} spans fail on the samples"
+            );
+            let placed = spaced(&a, &b, &points, tol).unwrap();
+            let (failing, spans) = unproved(&a, &b, &placed, tol);
+            assert!(
+                20 * failing <= spans,
+                "pose {k}: {failing} of {spans} spans fail"
+            );
+
+            let (curve, _) = fit_section(&a, &b, &points, tol).unwrap();
+            let (t0, t1) = curve.domain();
+            let worst = (0..=4000)
+                .map(|s| curve.evaluate((t1 - t0).madd(f64::from(s) / 4000.0, t0)))
+                .map(|q| {
+                    a.distance(q)
+                        .unwrap()
+                        .0
+                        .abs()
+                        .max(b.distance(q).unwrap().0.abs())
+                })
+                .fold(0.0, f64::max);
+            assert!(worst <= tol, "pose {k}: off by {worst:.2e}");
+
+            // At a tolerance no fit reaches, the first pass would ask for
+            // millions of points: it declines before it places any, and the
+            // fit then refuses within its own limit.
+            assert!(spaced(&a, &b, &points, 1e-30).is_none(), "pose {k}");
+            assert!(fit_section(&a, &b, &points, 1e-30).is_err(), "pose {k}");
+        }
+    }
 }
