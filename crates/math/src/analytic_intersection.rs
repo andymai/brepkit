@@ -1362,6 +1362,20 @@ pub fn plane_torus_section_point(
     d: f64,
     p: Point3,
 ) -> Option<Point3> {
+    plane_torus_newton(torus, normal, d, p, 0.0)
+}
+
+/// [`plane_torus_section_point`], but where the steps so far have moved `p`
+/// by less than `short`, the point they reach: the section's point lies
+/// within about the square of the last step times the section's curvature
+/// of it.
+fn plane_torus_newton(
+    torus: &ToroidalSurface,
+    normal: Vec3,
+    d: f64,
+    p: Point3,
+    short: f64,
+) -> Option<Point3> {
     let scale = normal.length();
     if scale <= 0.0 || !scale.is_finite() {
         return None;
@@ -1415,6 +1429,9 @@ pub fn plane_torus_section_point(
         let along_n = c.madd(-f_torus, f_plane) / det;
         let along_g = c.madd(-f_plane, f_torus) / det;
         x = x - n * along_n - g * along_g;
+        if (x - p).length() < short {
+            return Some(x);
+        }
     }
     let (f_plane, f_torus, _) = residuals(x)?;
     (f_plane.abs() <= 1e3 * rounding && f_torus.abs() <= 1e3 * rounding).then_some(x)
@@ -1486,7 +1503,7 @@ pub fn fit_plane_torus_section(
             let middle = curve.evaluate(f64::midpoint(params[i], params[i + 1]));
             // A point of the section half a spacing or more away lies on
             // another stretch of it (a thin tube's other loop).
-            let on = plane_torus_section_point(torus, normal, d, middle)
+            let on = plane_torus_newton(torus, normal, d, middle, 0.25 * tol)
                 .filter(|on| (*on - middle).length() < 0.5 * gap);
             match on {
                 Some(on) if (on - middle).length() <= tol => {}
@@ -6705,6 +6722,31 @@ mod tests {
         let torus = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 4.0, 1.5).unwrap();
         let across = [Point3::new(5.5, 0.0, 0.0), Point3::new(-5.5, 0.0, 0.0)];
         assert!(fit_plane_torus_section(&torus, Vec3::new(0.0, 0.0, 1.0), 0.0, &across).is_err());
+    }
+
+    /// The fit's check stops its Newton steps once they have moved a middle
+    /// by less than a quarter of the bound. A middle it then reads as within
+    /// the bound is within it, and a middle farther off moves onto the same
+    /// point of the section as before, so the fit keeps the same points.
+    #[test]
+    fn a_short_newton_check_reads_each_middle_as_the_full_one_does() {
+        let torus = ToroidalSurface::new(Point3::new(1.0, -2.0, 0.5), 4.0, 1.5).unwrap();
+        let (n, d) = (Vec3::new(0.0, 2.0, 0.0), 2.0 * (2.1 - 2.0));
+        let tol = PLANE_TORUS_FIT * 5.5;
+        for ipts in plane_torus_loops(&torus, n, d, 128) {
+            for (ip, power) in ipts.iter().zip((0..10).cycle()) {
+                let off = Vec3::new(0.3, -0.7, 0.2) * (1e-13 * 10f64.powi(power));
+                let p = ip.point + off;
+                let full = plane_torus_section_point(&torus, n, d, p).unwrap();
+                let short = plane_torus_newton(&torus, n, d, p, 0.25 * tol).unwrap();
+                if (short - p).length() < 0.25 * tol {
+                    assert!((full - p).length() <= tol, "{:.2e}", (full - p).length());
+                    assert!((full - short).length() < 1e-15);
+                } else {
+                    assert_eq!(full, short);
+                }
+            }
+        }
     }
 
     /// Points near a plane's section of a torus move onto it, on the plane

@@ -15,7 +15,7 @@
 
 use crate::MathError;
 use crate::madd::Madd;
-use crate::nurbs::basis::basis_funs;
+use crate::nurbs::basis::{basis_funs, basis_funs_into};
 use crate::nurbs::curve::NurbsCurve;
 use crate::vec::Point3;
 
@@ -291,23 +291,33 @@ fn solve_interpolation(
     degree: usize,
 ) -> Result<Vec<Point3>, MathError> {
     let n = points.len();
-    let mut entries = Vec::with_capacity(n);
+    let stride = degree + 1;
+    let mut firsts = Vec::with_capacity(n);
+    let mut basis = vec![0.0; n * stride];
     let (mut kl, mut ku) = (0, 0);
     for (i, &t) in params.iter().enumerate() {
         let span = find_span(t, degree, knots, n);
         let first = span - degree;
         kl = kl.max(i.saturating_sub(first));
         ku = ku.max((first + degree).min(n - 1).saturating_sub(i));
-        entries.push((first, basis_funs(span, t, degree, knots)));
+        basis_funs_into(
+            span,
+            t,
+            degree,
+            knots,
+            &mut basis[i * stride..(i + 1) * stride],
+        );
+        firsts.push(first);
     }
-    // Row `i` keeps column `j` at `j + kl - i`.
+    // Row `i` keeps column `j` at `i * width + j + kl - i`.
     let width = 2 * kl + ku + 1;
-    let mut band = vec![vec![0.0; width]; n];
-    for (i, (first, basis)) in entries.into_iter().enumerate() {
-        for (k, b) in basis.into_iter().enumerate() {
+    let at = |i: usize, j: usize| i * width + j + kl - i;
+    let mut band = vec![0.0; n * width];
+    for (i, &first) in firsts.iter().enumerate() {
+        for (k, &b) in basis[i * stride..(i + 1) * stride].iter().enumerate() {
             let col = first + k;
             if col < n {
-                band[i][col + kl - i] = b;
+                band[at(i, col)] = b;
             }
         }
     }
@@ -317,33 +327,30 @@ fn solve_interpolation(
         let below = (k + kl).min(n - 1);
         let mut pivot_row = k;
         for i in (k + 1)..=below {
-            if band[i][k + kl - i].abs() > band[pivot_row][k + kl - pivot_row].abs() {
+            if band[at(i, k)].abs() > band[at(pivot_row, k)].abs() {
                 pivot_row = i;
             }
         }
-        if band[pivot_row][k + kl - pivot_row].abs() < 1e-15 {
+        if band[at(pivot_row, k)].abs() < 1e-15 {
             return Err(MathError::SingularMatrix);
         }
         let right = (k + kl + ku).min(n - 1);
         if pivot_row != k {
             for j in k..=right {
-                let (a, b) = (j + kl - k, j + kl - pivot_row);
-                let held = band[k][a];
-                band[k][a] = band[pivot_row][b];
-                band[pivot_row][b] = held;
+                band.swap(at(k, j), at(pivot_row, j));
             }
             rhs.swap(k, pivot_row);
         }
-        let pivot = band[k][kl];
+        let pivot = band[at(k, k)];
         for i in (k + 1)..=below {
-            let factor = band[i][k + kl - i] / pivot;
+            let factor = band[at(i, k)] / pivot;
             if factor == 0.0 {
                 continue;
             }
             for j in (k + 1)..=right {
-                band[i][j + kl - i] -= factor * band[k][j + kl - k];
+                band[at(i, j)] -= factor * band[at(k, j)];
             }
-            band[i][k + kl - i] = 0.0;
+            band[at(i, k)] = 0.0;
             for c in 0..3 {
                 rhs[i][c] -= factor * rhs[k][c];
             }
@@ -353,11 +360,11 @@ fn solve_interpolation(
         let mut sum = rhs[i];
         for j in (i + 1)..=(i + kl + ku).min(n - 1) {
             for c in 0..3 {
-                sum[c] -= band[i][j + kl - i] * rhs[j][c];
+                sum[c] -= band[at(i, j)] * rhs[j][c];
             }
         }
         for c in 0..3 {
-            rhs[i][c] = sum[c] / band[i][kl];
+            rhs[i][c] = sum[c] / band[at(i, i)];
         }
     }
     Ok(rhs.iter().map(|&[x, y, z]| Point3::new(x, y, z)).collect())
