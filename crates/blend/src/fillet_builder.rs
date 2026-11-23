@@ -9159,7 +9159,15 @@ fn compute_stripe_for_spine(
         let blend = ConstRadBlend { radius: *r };
         let walker = Walker::new(&blend, ps1, ps2, &spine, topo, config);
         let start = walker.find_start(0.0)?;
-        let mut result = walker.walk(start, 0.0, spine.length())?;
+        // A closed round whose stations square to the spine fold over the
+        // curve of its ball's centres is walked along that curve instead.
+        let mut result = match walker.walk(start, 0.0, spine.length()) {
+            Ok(result) => result,
+            Err(error @ BlendError::WalkingFailure { .. }) if closed => {
+                walker.walk_by_centres(start).map_err(|_| error)?
+            }
+            Err(error) => return Err(error),
+        };
         if !closed
             && check_contacts_run_on(&result.sections).is_err()
             && let Some(cut) =

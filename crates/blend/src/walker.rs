@@ -520,10 +520,278 @@ impl<'a, F: BlendFunction> Walker<'a, F> {
         }
 
         Ok(WalkResult {
-            sections,
+            sections: self.refined(sections, Stations::Spine),
             end_params: params,
         })
     }
+
+    /// `sections` with a section added at the middle of each step where the
+    /// band through them strays from the round, until it keeps to it. The
+    /// band runs a cubic through each contact's sections (see
+    /// [`interpolate_rows`]); a step bounded only by how far its spine turns
+    /// lets that cubic stray where a contact runs straight while its face
+    /// curves across it (a contact over the top of a ring's tube left its
+    /// face by 4e-4 between steps a twentieth of its spine apart). A step
+    /// strays where the section solved at its middle station lies farther
+    /// than the walk's tolerance, in the size of the contacts, from either
+    /// side's cubic. A middle that does not solve, or whose contacts do not
+    /// lie between the step's (another branch), leaves its step as it is.
+    fn refined(&self, mut sections: Vec<CircSection>, stations: Stations) -> Vec<CircSection> {
+        const ROUNDS: usize = 8;
+        const SEARCH: usize = 48;
+        if sections.len() < 2 {
+            return sections;
+        }
+        let Some(size) = brepkit_math::aabb::Aabb3::try_from_points(
+            sections.iter().flat_map(|sec| [sec.p1, sec.p2]),
+        )
+        .map(|aabb| (aabb.max - aabb.min).length()) else {
+            return sections;
+        };
+        let tolerance = self.config.tol_3d * (1.0 + size);
+        let slack = 2.0 * self.config.tol_3d;
+        let limit = 4 * sections.len();
+        let params_of = |sec: &CircSection| BlendParams {
+            u1: sec.uv1.0,
+            v1: sec.uv1.1,
+            u2: sec.uv2.0,
+            v2: sec.uv2.1,
+        };
+        // The section at each step's middle, once solved: `None` before it
+        // is, `Some(None)` where it does not solve on the step's branch.
+        let mut middles: Vec<Option<Option<CircSection>>> = vec![None; sections.len() - 1];
+        for _ in 0..ROUNDS {
+            let (Ok(band), Some(params)) =
+                (interpolate_chamfer_band(&sections), chord_params(&sections))
+            else {
+                break;
+            };
+            let mut split = vec![false; sections.len() - 1];
+            for (i, middle) in middles.iter_mut().enumerate() {
+                let (a, b) = (&sections[i], &sections[i + 1]);
+                let found = middle.get_or_insert_with(|| {
+                    let ctx = self.middle_station(stations, a, b)?;
+                    let (from, to) = (params_of(a), params_of(b));
+                    let step = self.step_between(from, to);
+                    let seed = self.wrapped(BlendParams {
+                        u1: 0.5f64.madd(step.u1, from.u1),
+                        v1: 0.5f64.madd(step.v1, from.v1),
+                        u2: 0.5f64.madd(step.u2, from.u2),
+                        v2: 0.5f64.madd(step.v2, from.v2),
+                    });
+                    let at = self.newton_solve(seed, &ctx)?;
+                    let sec = self.func.section(self.surf1, self.surf2, &at, &ctx);
+                    let between = |p: Point3, from: Point3, to: Point3| {
+                        let bound = (to - from).length().madd(0.75, slack);
+                        (p - from).length() <= bound && (to - p).length() <= bound
+                    };
+                    (between(sec.p1, a.p1, b.p1) && between(sec.p2, a.p2, b.p2)).then_some(sec)
+                });
+                let Some(sec) = found else {
+                    continue;
+                };
+                let off = |u: f64, p: Point3| {
+                    let gap = |v: f64| (band.evaluate(u, v) - p).length();
+                    let (mut lo, mut hi) = (params[i], params[i + 1]);
+                    for _ in 0..SEARCH {
+                        let third = (hi - lo) / 3.0;
+                        if gap(lo + third) < gap(hi - third) {
+                            hi -= third;
+                        } else {
+                            lo += third;
+                        }
+                    }
+                    gap(f64::midpoint(lo, hi))
+                };
+                split[i] = off(0.0, sec.p1).max(off(1.0, sec.p2)) > tolerance;
+            }
+            let added = split.iter().filter(|&&s| s).count();
+            if added == 0 || sections.len() + added > limit {
+                break;
+            }
+            let mut next_sections = Vec::with_capacity(sections.len() + added);
+            let mut next_middles = Vec::with_capacity(middles.len() + added);
+            for (i, middle) in middles.into_iter().enumerate() {
+                next_sections.push(sections[i].clone());
+                match middle {
+                    Some(Some(sec)) if split[i] => {
+                        next_sections.push(sec);
+                        next_middles.extend([None, None]);
+                    }
+                    other => next_middles.push(other),
+                }
+            }
+            if let Some(last) = sections.last() {
+                next_sections.push(last.clone());
+            }
+            sections = next_sections;
+            middles = next_middles;
+        }
+        sections
+    }
+
+    /// The station half way through the step from `a` to `b`: on the spine
+    /// at the middle of their parameters, or, for a walk along the curve of
+    /// the ball's centres, square to the chord between their centres through
+    /// the middle of their contacts' middles.
+    fn middle_station(
+        &self,
+        stations: Stations,
+        a: &CircSection,
+        b: &CircSection,
+    ) -> Option<BlendContext> {
+        let t = f64::midpoint(a.t, b.t);
+        match stations {
+            Stations::Spine => self.make_context(t * self.spine.length()).ok(),
+            Stations::Centres => {
+                let middle = |sec: &CircSection| sec.p1 + (sec.p2 - sec.p1) * 0.5;
+                let (ma, mb) = (middle(a), middle(b));
+                Some(BlendContext {
+                    guide_point: ma + (mb - ma) * 0.5,
+                    nplan: (b.center - a.center).normalize().ok()?,
+                    t,
+                })
+            }
+        }
+    }
+
+    /// Walk the round of a closed spine along the curve of its ball's
+    /// centres, from the section `start` solves at the spine's start round
+    /// to that section again, each station square to that curve.
+    ///
+    /// [`Self::walk`] sets each station square to the spine, through it. A
+    /// spine that turns tighter than its ball's centre lies from it (the
+    /// narrow end of a ring's tube cut close to its outer side) has those
+    /// planes fold over the curve of the centres: one stands tangent to it,
+    /// the sections run back past there, and the walk cannot go on. The
+    /// curve of the centres runs where the ball's two contact normals both
+    /// stand square to it, and a plane square to it holds its section's
+    /// whole arc, so its sections run on round it once. Each section's `t`
+    /// is the share of that curve walked to it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BlendError::WalkingFailure`] where a step shrinks below
+    /// `min_step`, the step count exceeds `max_steps`, or the walk does not
+    /// come round to its start.
+    pub fn walk_by_centres(&self, start: BlendParams) -> Result<WalkResult, BlendError> {
+        let failure = |t: f64, residual: f64| BlendError::WalkingFailure {
+            edge: self.spine.edges()[0],
+            t,
+            residual,
+        };
+        let ctx0 = self.make_context(0.0)?;
+        let first = self.func.section(self.surf1, self.surf2, &start, &ctx0);
+        let middle = |sec: &CircSection| sec.p1 + (sec.p2 - sec.p1) * 0.5;
+        // The curve of the centres runs square to both contacts' normals.
+        let along = |params: &BlendParams, before: brepkit_math::vec::Vec3| {
+            let n1 = self.surf1.normal(params.u1, params.v1);
+            let n2 = self.surf2.normal(params.u2, params.v2);
+            let tangent = n1.cross(n2).normalize().ok()?;
+            Some(if tangent.dot(before) < 0.0 {
+                -tangent
+            } else {
+                tangent
+            })
+        };
+        let mut tangent = along(&start, ctx0.nplan).ok_or_else(|| failure(0.0, 0.0))?;
+        let origin = middle(&first);
+        let longest = self.config.max_step_fraction * self.spine.length();
+        let mut step = longest;
+        let mut params = start;
+        let mut previous: Option<(BlendParams, f64)> = None;
+        let mut sections = vec![first.clone()];
+        let mut farthest: f64 = 0.0;
+        let mut count = 0_usize;
+        loop {
+            count += 1;
+            let Some(last) = sections.last().cloned() else {
+                return Err(failure(0.0, 0.0));
+            };
+            let here = middle(&last);
+            if count > self.config.max_steps {
+                return Err(failure(last.t, 0.0));
+            }
+            // Come round: the start's plane lies within this step ahead.
+            let back = origin - here;
+            let ahead = back.dot(tangent);
+            if farthest > 4.0 * step && back.length() <= 2.0 * step && (0.0..=step).contains(&ahead)
+            {
+                // A last section much nearer the start than a step gives
+                // way to the start itself.
+                if sections.len() > 2 && ahead < 0.5 * previous.map_or(step, |(_, length)| length) {
+                    sections.pop();
+                }
+                sections.push(first);
+                break;
+            }
+            let ctx = BlendContext {
+                guide_point: here + tangent * step,
+                nplan: tangent,
+                t: 0.0,
+            };
+            let predicted = previous.map_or(params, |(before, length)| {
+                let d = self.step_between(before, params);
+                let ratio = step / length;
+                self.wrapped(BlendParams {
+                    u1: ratio.madd(d.u1, params.u1),
+                    v1: ratio.madd(d.v1, params.v1),
+                    u2: ratio.madd(d.u2, params.u2),
+                    v2: ratio.madd(d.v2, params.v2),
+                })
+            });
+            let solved = self
+                .newton_solve(predicted, &ctx)
+                .map(|at| (at, self.func.section(self.surf1, self.surf2, &at, &ctx)))
+                .filter(|(_, sec)| {
+                    let moved = (sec.p1 - last.p1).length().max((sec.p2 - last.p2).length());
+                    moved <= MAX_CONTACT_SPEED * step
+                })
+                .and_then(|(at, sec)| along(&at, tangent).map(|next| (at, sec, next)))
+                .filter(|(_, _, next)| {
+                    step <= MIN_TURN_STEP * longest
+                        || next.dot(tangent) >= self.config.max_turn.cos()
+                });
+            if let Some((at, sec, next)) = solved {
+                previous = Some((params, step));
+                params = at;
+                tangent = next;
+                farthest = farthest.max((middle(&sec) - origin).length());
+                sections.push(sec);
+                step = (step * 1.5).min(longest);
+            } else {
+                step *= 0.5;
+                if step < self.config.min_step {
+                    return Err(failure(last.t, 0.0));
+                }
+            }
+        }
+        // Each section's `t`: the share of the centres' path walked to it.
+        let mut walked = vec![0.0];
+        for pair in sections.windows(2) {
+            let step = (pair[1].center - pair[0].center).length();
+            walked.push(walked.last().copied().unwrap_or(0.0) + step);
+        }
+        let total = walked.last().copied().unwrap_or(0.0);
+        if total <= 0.0 {
+            return Err(failure(0.0, 0.0));
+        }
+        for (sec, at) in sections.iter_mut().zip(walked) {
+            sec.t = at / total;
+        }
+        Ok(WalkResult {
+            sections: self.refined(sections, Stations::Centres),
+            end_params: start,
+        })
+    }
+}
+
+/// Where a walk places its stations: square to the spine at its parameter,
+/// or square to the curve of the ball's centres.
+#[derive(Clone, Copy)]
+enum Stations {
+    Spine,
+    Centres,
 }
 
 /// How far a contact may move along its face for each unit the spine moves:
@@ -692,6 +960,34 @@ pub fn interpolate_chamfer_band(sections: &[CircSection]) -> Result<NurbsSurface
     )
 }
 
+/// The parameters along a band through `sections`, from 0 to 1, at which
+/// [`interpolate_rows`] passes through them: chord lengths, each step the
+/// farthest the centre or a contact moves (a ball pivoting on its centre,
+/// rounding a round's rim at the round's own radius, keeps its centre
+/// still). `None` where the sections do not move.
+fn chord_params(sections: &[CircSection]) -> Option<Vec<f64>> {
+    let mut params = Vec::with_capacity(sections.len());
+    params.push(0.0);
+    for pair in sections.windows(2) {
+        let step = (pair[1].center - pair[0].center)
+            .length()
+            .max((pair[1].p1 - pair[0].p1).length())
+            .max((pair[1].p2 - pair[0].p2).length());
+        params.push(params.last().copied().unwrap_or(0.0) + step);
+    }
+    let total = params.last().copied().unwrap_or(0.0);
+    if total <= 0.0 {
+        return None;
+    }
+    for param in &mut params {
+        *param /= total;
+    }
+    if let Some(last) = params.last_mut() {
+        *last = 1.0;
+    }
+    Some(params)
+}
+
 /// The surface whose rows across, of degree `degree_u` over `knots_u`, are
 /// `rows` of each section (homogeneous points with their weights),
 /// interpolated through the sections along the band.
@@ -708,28 +1004,8 @@ fn interpolate_rows(
         return Err(BlendError::Math(brepkit_math::MathError::EmptyInput));
     }
     let degree_v = (n - 1).min(3);
-    // Chord-length parameters, each step the farthest the centre or a
-    // contact moves (a ball pivoting on its centre, rounding a round's rim
-    // at the round's own radius, keeps its centre still).
-    let mut params = Vec::with_capacity(n);
-    params.push(0.0);
-    for pair in sections.windows(2) {
-        let step = (pair[1].center - pair[0].center)
-            .length()
-            .max((pair[1].p1 - pair[0].p1).length())
-            .max((pair[1].p2 - pair[0].p2).length());
-        params.push(params.last().copied().unwrap_or(0.0) + step);
-    }
-    let total = params.last().copied().unwrap_or(0.0);
-    if total <= 0.0 {
-        return Err(BlendError::Math(brepkit_math::MathError::EmptyInput));
-    }
-    for param in &mut params {
-        *param /= total;
-    }
-    if let Some(last) = params.last_mut() {
-        *last = 1.0;
-    }
+    let params =
+        chord_params(sections).ok_or(BlendError::Math(brepkit_math::MathError::EmptyInput))?;
     // Averaged knots (The NURBS Book, eq. 9.8).
     let mut knots_v = vec![0.0; degree_v + 1];
     for j in 1..n - degree_v {

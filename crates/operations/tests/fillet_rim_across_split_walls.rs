@@ -12,6 +12,15 @@
 //! A tilted cut has no closed form: the rounded rod is the union of the
 //! balls of radius `r` in the cut rod, and numeric integration of that
 //! union gives 9.3663916 for `t = 0.3`, `r = 0.2`, within 2e-6.
+//!
+//! The ring rounds the same way. The cut ring's volume is integrated in
+//! cylindrical coordinates about its axis, and the material the round takes
+//! off in tube coordinates about the curve of the balls' centres (each ball
+//! on both the plane and the tube): out from that curve between the two
+//! contact normals, from the ball's radius to where the line leaves the cut
+//! ring. A ring cut square to `x` at `x = 1.9` and rounded by 0.1 is then
+//! 0.957122072, and one cut at `x = 2.3` tilted 0.3 about `y` and rounded
+//! by 0.08 is 0.0895633436, each within 1e-9.
 
 #[cfg(test)]
 mod tests {
@@ -260,6 +269,66 @@ mod tests {
                 assert!(
                     (volume - volumes[0]).abs() < 1e-9 * volumes[0],
                     "{name}: the whole frustum and the split ones {volumes:?}"
+                );
+            }
+        }
+    }
+
+    /// The slab beyond the plane through `(x, 0, 3)` turned `t` about `y`,
+    /// on the side toward the ring's axis.
+    fn beside_the_axis(x: f64, t: f64) -> Mat4 {
+        Mat4::translation(x, 0.0, 3.0) * Mat4::rotation_y(t) * Mat4::translation(-8.0, -4.0, -4.0)
+    }
+
+    /// The rim of a ring cut square to `x` across its tube, where the tube
+    /// is two faces that the rim crosses between four times and a seam cuts
+    /// twice, rounds as the rim of the ring in one face, and both to the
+    /// integrated volume. The round's contact runs straight over the top of
+    /// the tube, where its face curves across it.
+    #[test]
+    fn a_level_rim_on_a_split_ring_rounds_to_the_integrated_volume() {
+        let r = 0.1;
+        let integrated = 0.957_122_072;
+        for (name, pose) in poses() {
+            let mut volumes = Vec::new();
+            for halves in [false, true] {
+                let label = format!("halves {halves}, {name}");
+                let mut topo = Topology::new();
+                let solid = ring(&mut topo, halves);
+                let (cut, rims) = cut_and_rims(&mut topo, solid, &beside_the_axis(1.9, 0.0), &pose);
+                let volume = round(&label, &mut topo, cut, &rims, r);
+                assert!(
+                    (volume - integrated).abs() < 2e-7,
+                    "{label}: volume {volume}, integrated {integrated}"
+                );
+                volumes.push(volume);
+            }
+            assert!(
+                (volumes[1] - volumes[0]).abs() < 1e-7 * volumes[0],
+                "{name}: the whole ring and the split one {volumes:?}"
+            );
+        }
+    }
+
+    /// The rim of a ring cut close to the outside of its tube, at a tilt,
+    /// rounds to the integrated volume, with the tube in one face or two.
+    /// The rim turns tighter at its narrow ends than the balls' centres lie
+    /// from it, so planes square to the rim fold over the curve of the
+    /// centres.
+    #[test]
+    fn a_rim_cut_close_to_a_rings_outside_rounds_to_the_integrated_volume() {
+        let r = 0.08;
+        let integrated = 0.089_563_343_6;
+        for (name, pose) in poses() {
+            for halves in [false, true] {
+                let label = format!("halves {halves}, {name}");
+                let mut topo = Topology::new();
+                let solid = ring(&mut topo, halves);
+                let (cut, rims) = cut_and_rims(&mut topo, solid, &beside_the_axis(2.3, 0.3), &pose);
+                let volume = round(&label, &mut topo, cut, &rims, r);
+                assert!(
+                    (volume - integrated).abs() < 2e-7,
+                    "{label}: volume {volume}, integrated {integrated}"
                 );
             }
         }
