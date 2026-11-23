@@ -4956,13 +4956,17 @@ fn conic_arc_plane_crossings(
     let mut out = Vec::new();
     for root in [phase + delta, phase - delta] {
         let t = root.rem_euclid(TAU);
-        let (settled_t, settled) =
+        let (step, settled) =
             super::phase_ef::settle_conic_crossing(evaluate(t), t, axes, normal, d, reach);
-        // The arc holds the crossing where it lies on the arc's span once
-        // settled, or within the tolerance of one of its ends: settling can
-        // move it past an end by more than the root's angle tells.
+        // The settled crossing's angle from the arc's start, the step added
+        // to the root's own: the arc holds it where that lies on its span,
+        // or where it lies within the tolerance of one of its ends.
+        let mut along = (t - ts).rem_euclid(TAU) + step;
+        if along >= TAU {
+            along -= TAU;
+        }
         if closed
-            || (settled_t - ts).rem_euclid(TAU) <= span
+            || (0.0..=span).contains(&along)
             || (settled - sp).length() <= linear
             || (settled - ep).length() <= linear
         {
@@ -12572,15 +12576,38 @@ mod tests {
             Vec3::new(0.0, 0.0, 1.0),
             0.0,
         );
-        let tol = Tolerance::new().linear;
-        for p in hits {
-            let span = ellipse.project(ep) - t0;
-            let along_arc = (ellipse.project(p) - t0).rem_euclid(std::f64::consts::TAU);
-            assert!(
-                along_arc <= span || (p - sp).length() <= tol || (p - ep).length() <= tol,
-                "crossing {p:?} off the arc"
-            );
-        }
+        assert!(hits.is_empty(), "hits {hits:?}");
+    }
+
+    /// An arc of an ellipse centred 1e12 up `z`, its major axis 2e12 along
+    /// `z`, starting at an angle of 2.0943951023931966: `z = -0.001953`
+    /// meets it 1.25e-7 behind its start, a step in angle under the
+    /// spacing of floats near the start's, so it is not the arc's.
+    #[test]
+    fn a_rim_crossing_a_sub_spacing_step_behind_the_start_is_not_the_arcs() {
+        let ellipse = brepkit_math::curves::Ellipse3D::new_with_ref(
+            Point3::new(0.0, 0.0, 1e12),
+            Vec3::new(0.0, 1.0, 0.0),
+            2e12,
+            10.0,
+            Vec3::new(0.0, 0.0, 1.0),
+        )
+        .unwrap();
+        let t0 = 2.094_395_102_393_196_6;
+        let (sp, ep) = (ellipse.evaluate(t0), ellipse.evaluate(t0 + 5e-11));
+        let hits = conic_arc_plane_crossings(
+            |t| ellipse.evaluate(t),
+            |q| ellipse.project(q),
+            (
+                ellipse.u_axis() * ellipse.semi_major(),
+                ellipse.v_axis() * ellipse.semi_minor(),
+            ),
+            sp,
+            ep,
+            Vec3::new(0.0, 0.0, 1.0),
+            -0.001_953,
+        );
+        assert!(hits.is_empty(), "hits {hits:?}");
     }
 
     #[test]

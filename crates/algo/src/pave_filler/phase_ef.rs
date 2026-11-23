@@ -1112,18 +1112,26 @@ fn conic_plane_crossings(
     } else {
         0.0
     };
+    // A closed edge runs a whole turn from its seam vertex, as
+    // `EdgeCurve::domain_with_endpoints` reads it.
+    let closed = (start_pos - end_pos).length() < 1e-9;
     let mut out: Vec<(f64, Point3)> = Vec::new();
     for &root in roots {
-        let t = t0 + (root - t0).rem_euclid(TAU);
-        let (settled, p) = match conic_axes(curve) {
+        let from_start = (root - t0).rem_euclid(TAU);
+        let t = t0 + from_start;
+        let (step, p) = match conic_axes(curve) {
             Some(axes) => settle_conic_crossing(at(t), t, axes, normal, d, reach),
-            None => (t, at(t)),
+            None => (0.0, at(t)),
         };
-        // The edge holds the crossing where it lies on the edge's span once
-        // settled, or within the tolerance of one of its ends: settling can
-        // move it past an end by more than the root's angle tells.
-        if (t0..=t1).contains(&settled) {
-            out.push((settled, p));
+        // The settled crossing's angle from the edge's start, the step
+        // added to the root's own: the edge holds it where that lies on
+        // its span, a closed edge's taken round its seam, or where it lies
+        // within the tolerance of one of the edge's ends.
+        let along = from_start + step;
+        if closed {
+            out.push((t0 + along.rem_euclid(TAU), p));
+        } else if (0.0..=t1 - t0).contains(&along) {
+            out.push((t0 + along, p));
         } else if (p - end_pos).length() <= tol.linear {
             out.push((t1, p));
         } else if (p - start_pos).length() <= tol.linear {
@@ -1145,7 +1153,11 @@ pub(super) fn conic_axes(curve: &EdgeCurve) -> Option<(Vec3, Vec3)> {
 }
 
 /// A conic's crossing of the plane `normal·p = d` from `point`, its point at
-/// `t`, a root of the closed-form solve, and the crossing's parameter.
+/// `t`, a root of the closed-form solve, and the crossing's step `δ` in
+/// parameter from `t`. The step is kept apart from `t`: it can be under the
+/// spacing of floats near `t` and still move the point by more than the
+/// tolerance, so a caller reads which side of an arc's end the crossing
+/// lies on from the step, not from `t + δ`.
 ///
 /// The conic's point carries the rounding of its centre's coordinates and
 /// the root that of the solve: a flat leaning 5e-8 off a bore's axis meets
@@ -1182,16 +1194,16 @@ pub(super) fn settle_conic_crossing(
         let slope = normal.dot(bv * s.cos() - au * s.sin());
         let step = (start + normal.dot(change(delta))) / slope;
         if !step.is_finite() {
-            return (t, point);
+            return (0.0, point);
         }
         delta -= step;
     }
     let moved = change(delta);
     let settled = point + moved;
     if moved.length() <= reach && off(settled).abs() <= start.abs() {
-        (t + delta, settled)
+        (delta, settled)
     } else {
-        (t, point)
+        (0.0, point)
     }
 }
 
@@ -3599,15 +3611,80 @@ mod tests {
             0.0,
             tol,
         );
+        assert!(crossings.is_empty(), "crossings {crossings:?}");
+    }
+
+    /// The ellipse of [`a_crossing_settled_past_an_arcs_start_is_not_the_arcs`]
+    /// whole, its seam vertex where it crosses `z = 0`: that crossing
+    /// settles just below the seam's parameter, a full turn from the end,
+    /// and both crossings stay on the plane.
+    #[test]
+    fn a_closed_long_ellipse_keeps_both_crossings() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::vec::Vec3;
+        let tilt = 5e-12;
+        let flat = Vec3::new(0.0, 1.0, tilt).normalize().unwrap();
+        let along = Vec3::new(0.0, -tilt, 1.0).normalize().unwrap();
+        let ellipse = Ellipse3D::new_with_ref(
+            Point3::new(0.0, 0.0, 5.0 / tilt),
+            flat,
+            10.0 / flat.z(),
+            10.0,
+            along,
+        )
+        .unwrap();
+        let t0 = 2.094_395_102_393_195_7;
+        let seam = ellipse.evaluate(t0);
+        let crossings = find_edge_plane_crossings(
+            &EdgeCurve::Ellipse(ellipse),
+            seam,
+            seam,
+            t0,
+            t0 + std::f64::consts::TAU,
+            Vec3::new(0.0, 0.0, 1.0),
+            0.0,
+            Tolerance::new(),
+        );
+        assert_eq!(crossings.len(), 2, "crossings {crossings:?}");
         for (t, p) in crossings {
-            let on_arc = (t0..=t1).contains(&t)
-                || (p - start).length() <= tol.linear
-                || (p - end).length() <= tol.linear;
             assert!(
-                on_arc,
-                "crossing at {t} ({p:?}) off the arc from {t0} to {t1}"
+                (t0..=t0 + std::f64::consts::TAU).contains(&t) && p.z().abs() < 1e-12,
+                "crossing at {t} ({p:?})"
             );
         }
+    }
+
+    /// An arc of an ellipse centred 1e12 up `z`, its major axis 2e12 along
+    /// `z`, that starts at an angle of 2.0943951023931966: `z = -0.001953`
+    /// meets it 1.25e-7 behind its start, a step in angle under the
+    /// spacing of floats near the start's. The step, not the rounded
+    /// angle, says the crossing is off the arc.
+    #[test]
+    fn a_crossing_a_sub_spacing_step_behind_an_arcs_start_is_not_the_arcs() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::vec::Vec3;
+        let ellipse = Ellipse3D::new_with_ref(
+            Point3::new(0.0, 0.0, 1e12),
+            Vec3::new(0.0, 1.0, 0.0),
+            2e12,
+            10.0,
+            Vec3::new(0.0, 0.0, 1.0),
+        )
+        .unwrap();
+        let t0 = 2.094_395_102_393_196_6;
+        let t1 = t0 + 5e-11;
+        let (start, end) = (ellipse.evaluate(t0), ellipse.evaluate(t1));
+        let crossings = find_edge_plane_crossings(
+            &EdgeCurve::Ellipse(ellipse),
+            start,
+            end,
+            t0,
+            t1,
+            Vec3::new(0.0, 0.0, 1.0),
+            -0.001_953,
+            Tolerance::new(),
+        );
+        assert!(crossings.is_empty(), "crossings {crossings:?}");
     }
 
     /// A ball's equator turned 1.57 about `x`, against a rod of the ball's
