@@ -75,8 +75,9 @@ pub(super) trait Carrier {
     /// bound on it.
     fn bound(&self, ctrl: &[Point3; 4]) -> Option<f64>;
 
-    /// A length that sizes the rounding of the distance near the surface.
-    fn reach(&self) -> f64;
+    /// A length that sizes the rounding of the distance at `p`: the
+    /// surface's own size and `p`'s distance from its frame.
+    fn scale(&self, p: Point3) -> f64;
 }
 
 /// The degree-6 Bernstein coefficients of the product of two cubics.
@@ -154,17 +155,22 @@ impl Carrier for AnalyticSurface<'_> {
                 let r = w.length();
                 (r > 0.0).then(|| (r - s.radius(), w * (1.0 / r)))
             }
-            // The distance from the ruling through `p`'s side of the axis,
-            // which lies on the cone and is the nearest ruling near it.
+            // The distance from the ruling on `p`'s side of the axis and on
+            // `p`'s nappe, which lies on the cone and is the nearest ruling
+            // near it.
             Self::Cone(c) => {
                 let (sin, cos) = c.half_angle().sin_cos();
                 let w = p - c.apex();
                 let h = c.axis().dot(w);
                 let across = w - c.axis() * h;
                 let rho = across.length();
+                let nappe = if h < 0.0 { -1.0 } else { 1.0 };
                 (rho > 0.0).then(|| {
                     let out = across * (1.0 / rho);
-                    (rho.madd(sin, -h * cos), out * sin - c.axis() * cos)
+                    (
+                        rho.madd(sin, -h.abs() * cos),
+                        out * sin - c.axis() * (nappe * cos),
+                    )
                 })
             }
             // The distance from the tube about the centre circle's point on
@@ -220,8 +226,13 @@ impl Carrier for AnalyticSurface<'_> {
                 let slack = 64.0 * eps * r.madd(r, largest(&r2));
                 (floor > 0.0).then(|| (largest(&f) + slack) / floor + point_rounding(ctrl, o))
             }
-            // F = h² cos² − ρ² sin² = (h cos − ρ sin)(h cos + ρ sin): the
-            // first factor is the distance from the ruling on `p`'s side.
+            // F = h² cos² − ρ² sin² = (|h| cos − ρ sin)(|h| cos + ρ sin): the
+            // first factor is the distance from the ruling on `p`'s side and
+            // nappe. `|h|` is no less than the least `|h_i|` where every
+            // `h_i` has one sign, and no less than 0 where the piece may
+            // cross the apex's plane; there the bound rests on `ρ` alone,
+            // and a piece that may also reach the axis, through the apex,
+            // has none.
             Self::Cone(c) => {
                 let o = c.apex();
                 let (sin, cos) = c.half_angle().sin_cos();
@@ -230,7 +241,14 @@ impl Carrier for AnalyticSurface<'_> {
                 let h2 = product_3(&h, &h);
                 let f: [f64; 7] =
                     std::array::from_fn(|k| (cos * cos).madd(h2[k], -(sin * sin) * rho2[k]));
-                let floor = cos.madd(least(&h), sin * least(&rho2).max(0.0).sqrt());
+                let h_least = if h.iter().all(|&x| x > 0.0) {
+                    least(&h)
+                } else if h.iter().all(|&x| x < 0.0) {
+                    least(&h.map(|x| -x))
+                } else {
+                    0.0
+                };
+                let floor = cos.madd(h_least, sin * least(&rho2).max(0.0).sqrt());
                 let slack = 128.0 * eps * far * far;
                 (floor > 0.0).then(|| (largest(&f) + slack) / floor + point_rounding(ctrl, o))
             }
@@ -265,13 +283,12 @@ impl Carrier for AnalyticSurface<'_> {
         }
     }
 
-    fn reach(&self) -> f64 {
-        let size = |p: Point3| p.x().abs().max(p.y().abs()).max(p.z().abs());
+    fn scale(&self, p: Point3) -> f64 {
         match self {
-            Self::Cylinder(c) => size(c.origin()) + c.radius(),
-            Self::Sphere(s) => size(s.center()) + s.radius(),
-            Self::Cone(c) => size(c.apex()),
-            Self::Torus(t) => size(t.center()) + t.major_radius() + t.minor_radius(),
+            Self::Cylinder(c) => (p - c.origin()).length() + c.radius(),
+            Self::Sphere(s) => (p - s.center()).length() + s.radius(),
+            Self::Cone(c) => (p - c.apex()).length(),
+            Self::Torus(t) => (p - t.center()).length() + t.major_radius() + t.minor_radius(),
         }
     }
 }
@@ -282,18 +299,22 @@ impl Carrier for AnalyticSurface<'_> {
 /// it. `None` where the two surfaces meet at a tangent (their normals within
 /// about 1e-6 of parallel), where a distance has no gradient, or where the
 /// steps do not settle.
+///
+/// The steps settle when one is shorter than the rounding of the distances,
+/// sized by the surfaces' own sizes and the point's distance from their
+/// frames, or than the spacing of floats at the point, below which no point
+/// can be placed. A short step, not small distances, ends them: where the
+/// normals lie near each other a step is the distances over the sine of the
+/// angle between them, so distances within rounding can leave the point far
+/// off the section, near a touch with no section at all.
 pub(super) fn settle_on_section(a: &impl Carrier, b: &impl Carrier, p: Point3) -> Option<Point3> {
-    let size = |q: Point3| q.x().abs().max(q.y().abs()).max(q.z().abs());
-    let rounding = 64.0 * f64::EPSILON * (1.0 + size(p) + a.reach() + b.reach());
+    let spacing = |q: Point3| q.x().abs().max(q.y().abs()).max(q.z().abs());
     let mut x = p;
-    for _ in 0..32 {
+    for _ in 0..48 {
         let (fa, ga) = a.distance(x)?;
         let (fb, gb) = b.distance(x)?;
         if !(fa.is_finite() && fb.is_finite()) {
             return None;
-        }
-        if fa.abs() <= rounding && fb.abs() <= rounding {
-            return Some(x);
         }
         let c = ga.dot(gb);
         let det = c.madd(-c, 1.0);
@@ -302,11 +323,15 @@ pub(super) fn settle_on_section(a: &impl Carrier, b: &impl Carrier, p: Point3) -
         }
         let along_a = c.madd(-fb, fa) / det;
         let along_b = c.madd(-fa, fb) / det;
+        let step = (ga * along_a + gb * along_b).length();
         x = x - ga * along_a - gb * along_b;
+        let rounding =
+            (64.0 * f64::EPSILON).madd(a.scale(x) + b.scale(x), 8.0 * f64::EPSILON * spacing(x));
+        if step <= rounding {
+            return Some(x);
+        }
     }
-    let (fa, _) = a.distance(x)?;
-    let (fb, _) = b.distance(x)?;
-    (fa.abs() <= 1e3 * rounding && fb.abs() <= 1e3 * rounding).then_some(x)
+    None
 }
 
 /// Whether `a` and `b` cross at `p`, a point on both: their normals there lie
