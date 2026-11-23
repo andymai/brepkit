@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795455181643,
+  "lastUpdate": 1795464563485,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -76895,6 +76895,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19372711,
             "range": "± 28669",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ad9083b2db7593ffffd10788c5549c5669156b8f",
+          "message": "chore(main): release 4.11.44 (#2766)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.44](https://github.com/andymai/brepkit/compare/v4.11.43...v4.11.44)\n(2026-11-23)\n\n\n### Bug Fixes\n\n* **algo:** fuse nearly opposite rods at a ball exactly or refuse, and\ncut sections where three faces meet in fuse_n\n([#2759](https://github.com/andymai/brepkit/issues/2759))\n([46aa427](https://github.com/andymai/brepkit/commit/46aa4279d14805f90b799d15c3d29c29605689e9))\n* **check,blend:** report a face wire that runs twice round its surface,\nand cap a round's corner below a right angle\n([#2756](https://github.com/andymai/brepkit/issues/2756))\n([df69ed2](https://github.com/andymai/brepkit/commit/df69ed2412df9d6f25808933944cca080fdb58cd))\n* **math:** bound a marched section's fit off both surfaces, start each\nmarch on the curve, and fit plane-torus sections faster\n([#2749](https://github.com/andymai/brepkit/issues/2749))\n([c1cf9e4](https://github.com/andymai/brepkit/commit/c1cf9e44790b287f134284d8ec9bd9f3f8523eec))\n* **operations:** bound a torus face along its axis by one point per\nextreme circle, and drop a lone sample beside an edge's end before the\nmesh weld ([#2767](https://github.com/andymai/brepkit/issues/2767))\n([b3e0949](https://github.com/andymai/brepkit/commit/b3e0949ad6b8aeb8e2ed1f93ad64b34d932cf867))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-23T20:05:31Z",
+          "tree_id": "3603ad63348bf20f6fde19a09d111a76b50e9b63",
+          "url": "https://github.com/andymai/brepkit/commit/ad9083b2db7593ffffd10788c5549c5669156b8f"
+        },
+        "date": 1795464549791,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 849107,
+            "range": "± 22290",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 947848,
+            "range": "± 16165",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9840,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 581173,
+            "range": "± 10375",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19832629,
+            "range": "± 104920",
             "unit": "ns/iter"
           }
         ]
