@@ -8410,7 +8410,15 @@ fn split_face_2d_impl(
             tol.linear,
         )
     {
+        let held: Vec<usize> = pieces.iter().map(|p| p.inner_wires.len()).collect();
         attach_whole_holes(&mut pieces, &original_inner_wires);
+        // Each piece's cached interior point was found clear of the section
+        // loops alone, and can lie in a hole it now holds.
+        for (piece, held) in pieces.iter_mut().zip(held) {
+            if piece.inner_wires.len() > held {
+                piece.precomputed_interior = None;
+            }
+        }
         return pieces;
     }
 
