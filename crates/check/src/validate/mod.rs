@@ -165,16 +165,6 @@ fn validate_shell_checks(
                 {
                     issues.extend(wire::check_wire_redundant(topo, wid)?);
                 }
-                if !options
-                    .disabled_checks
-                    .contains(&CheckId::WireSelfIntersection)
-                {
-                    issues.extend(wire::check_wire_self_intersection(
-                        topo,
-                        wid,
-                        options.tolerance_scale * 1e-6,
-                    )?);
-                }
             }
         }
     }
@@ -203,6 +193,16 @@ fn validate_shell_checks(
             }
             if !options.disabled_checks.contains(&CheckId::FaceWireTurns) {
                 issues.extend(face_wires::check_face_wire_turns(topo, fid)?);
+            }
+            if !options
+                .disabled_checks
+                .contains(&CheckId::WireSelfIntersection)
+            {
+                issues.extend(face_wires::check_face_wire_crossings(
+                    topo,
+                    fid,
+                    options.tolerance_scale * 1e-6,
+                )?);
             }
         }
     }

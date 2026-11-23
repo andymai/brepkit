@@ -48,20 +48,58 @@ struct Arc<'a> {
 }
 
 impl<'a> Arc<'a> {
-    fn of(topo: &'a Topology, edge_id: EdgeId, forward: bool) -> Result<Self, CheckError> {
+    /// The edge in the wire's direction, from the wire's point where it
+    /// starts. A closed curve is read from its vertex: a closed circle's
+    /// parameters start at its frame's origin, and a closed B-spline's at
+    /// its first knot, which need not be the vertex. A closed B-spline whose
+    /// vertex lies inside its span is read in two pieces, from the vertex to
+    /// the span's end and on from the span's start back to the vertex.
+    fn of(topo: &'a Topology, edge_id: EdgeId, forward: bool) -> Result<Vec<Self>, CheckError> {
+        // The gap below which an edge's two ends read as one point, as
+        // `EdgeCurve::domain_with_endpoints` reads them.
+        const CLOSED: f64 = 1e-9;
+        // How far off its curve a vertex may lie and still split it.
+        const ON_CURVE: f64 = 1e-5;
         let edge = topo.edge(edge_id)?;
         let ends = (
             topo.vertex(edge.start())?.point(),
             topo.vertex(edge.end())?.point(),
         );
         let curve = edge.curve();
-        Ok(Self::spanning(
-            edge_id,
-            curve,
-            ends,
-            curve.domain_with_endpoints(ends.0, ends.1),
-            forward,
-        ))
+        let span = curve.domain_with_endpoints(ends.0, ends.1);
+        let closed = (ends.0 - ends.1).length() < CLOSED;
+        let mut spans = match curve {
+            EdgeCurve::Circle(c) if closed => {
+                let from = c.project(ends.0);
+                vec![(from, from + TAU)]
+            }
+            EdgeCurve::NurbsCurve(nurbs)
+                if closed
+                    && (curve.evaluate_with_endpoints(span.0, ends.0, ends.1) - ends.0)
+                        .length()
+                        > CLOSED =>
+            {
+                let (d0, d1) = span;
+                let width = (d1 - d0).abs();
+                let at =
+                    brepkit_math::nurbs::projection::project_point_to_curve(nurbs, ends.0, 1e-12)
+                        .ok()
+                        .filter(|found| found.distance < ON_CURVE)
+                        .map(|found| found.parameter)
+                        .filter(|&t| {
+                            (t - d0).abs() > 1e-9 * width && (d1 - t).abs() > 1e-9 * width
+                        });
+                at.map_or_else(|| vec![span], |t| vec![(t, d1), (d0, t)])
+            }
+            _ => vec![span],
+        };
+        if !forward {
+            spans.reverse();
+        }
+        Ok(spans
+            .into_iter()
+            .map(|span| Self::spanning(edge_id, curve, ends, span, forward))
+            .collect())
     }
 
     /// The edge's stretch over the parameters `span`, run as `forward` says.
@@ -881,12 +919,10 @@ fn face_wires_issue(
         .collect();
     let mut wires = Vec::with_capacity(wire_ids.len());
     for &wid in &wire_ids {
-        let arcs = topo
-            .wire(wid)?
-            .edges()
-            .iter()
-            .map(|oe| Arc::of(topo, oe.edge(), oe.is_forward()))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut arcs = Vec::new();
+        for oe in topo.wire(wid)?.edges() {
+            arcs.extend(Arc::of(topo, oe.edge(), oe.is_forward())?);
+        }
         wires.push(arcs);
     }
     let bounds: Vec<Bounds> = wires.iter().map(|w| Bounds::of(w)).collect();
@@ -944,9 +980,11 @@ fn wire_stretches(
     let mut stretches = Vec::new();
     let mut uses = Vec::new();
     for (place, oe) in topo.wire(wire_id)?.edges().iter().enumerate() {
-        for stretch in Arc::of(topo, oe.edge(), oe.is_forward())?.stretches() {
-            stretches.push(stretch);
-            uses.push(place);
+        for piece in Arc::of(topo, oe.edge(), oe.is_forward())? {
+            for stretch in piece.stretches() {
+                stretches.push(stretch);
+                uses.push(place);
+            }
         }
     }
     Ok((stretches, uses))
@@ -986,7 +1024,12 @@ fn convex_loop(topo: &Topology, normal: Vec3, wire_id: WireId) -> Result<bool, C
                 if (along.abs() - 1.0).abs() > STRAIGHT {
                     return Ok(false);
                 }
-                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+                let (t0, t1) = if (a - b).length() < 1e-9 {
+                    let from = c.project(a);
+                    (from, from + TAU)
+                } else {
+                    edge.curve().domain_with_endpoints(a, b)
+                };
                 let (s, e) = (c.tangent(t0), c.tangent(t1));
                 let span = (t1 - t0) * along.signum();
                 if oe.is_forward() {
@@ -1105,13 +1148,32 @@ fn convex_spline(
     (one_way && total.abs() <= most).then_some((start, end, total))
 }
 
-/// Check that no wire of a plane face crosses itself.
-///
-/// No edge of a wire may cross another edge of the same wire. Edges that
-/// meet at a vertex, run along each other, or touch without crossing are
-/// not reported. `tolerance` is the gap within which two edges meet. A
-/// curved face is not read: on cones, frustums and tori the side test
-/// reported crossings of wires that do not cross.
+/// The first wire of the face that crosses itself, as
+/// [`check_face_wire_crossings`] reads it.
+fn crossed_wire(
+    topo: &Topology,
+    face_id: FaceId,
+    tolerance: f64,
+) -> Result<Option<WireId>, CheckError> {
+    let face = topo.face(face_id)?;
+    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        if let FaceSurface::Plane { normal, .. } = face.surface()
+            && convex_loop(topo, *normal, wire_id)?
+        {
+            continue;
+        }
+        let (stretches, uses) = wire_stretches(topo, wire_id)?;
+        if stretches.len() > 1 && wire_crosses_itself(face.surface(), &stretches, &uses, tolerance)
+        {
+            return Ok(Some(wire_id));
+        }
+    }
+    Ok(None)
+}
+
+/// Check that no wire of a plane face crosses itself, as
+/// [`check_face_wire_crossings`] reads it, and report it as a face whose
+/// wires do not keep clear of each other. A curved face is not read.
 ///
 /// # Errors
 ///
@@ -1121,24 +1183,48 @@ pub fn check_face_wires_simple(
     face_id: FaceId,
     tolerance: f64,
 ) -> Result<Vec<ValidationIssue>, CheckError> {
-    let face = topo.face(face_id)?;
-    let FaceSurface::Plane { normal, .. } = face.surface() else {
+    if !topo.face(face_id)?.surface().is_planar() {
         return Ok(vec![]);
-    };
-    for wire_id in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
-        if convex_loop(topo, *normal, wire_id)? {
-            continue;
-        }
-        let (stretches, uses) = wire_stretches(topo, wire_id)?;
-        if stretches.len() > 1 && wire_crosses_itself(face.surface(), &stretches, &uses, tolerance)
-        {
-            return Ok(vec![issue(
-                face_id,
-                format!("wire {} crosses itself", wire_id.index()),
-            )]);
-        }
     }
-    Ok(vec![])
+    Ok(crossed_wire(topo, face_id, tolerance)?
+        .map(|wire_id| issue(face_id, format!("wire {} crosses itself", wire_id.index())))
+        .into_iter()
+        .collect())
+}
+
+/// Check that no wire of a face crosses itself, on a plane or a curved
+/// surface.
+///
+/// No edge of a wire may cross another edge of the same wire. Edges that
+/// meet at a vertex, run along each other, or touch without crossing are
+/// not reported. A seam, the one edge that a wire uses once each way, lies
+/// along itself and is not a crossing. Where two edges come within
+/// `tolerance` of each other, the wire is followed a short way to each side
+/// of that point, and the crossing is read in the surface's tangent plane
+/// there.
+///
+/// # Errors
+///
+/// Returns an error if topology lookups fail.
+pub fn check_face_wire_crossings(
+    topo: &Topology,
+    face_id: FaceId,
+    tolerance: f64,
+) -> Result<Vec<ValidationIssue>, CheckError> {
+    Ok(crossed_wire(topo, face_id, tolerance)?
+        .map(|wire_id| ValidationIssue {
+            check: CheckId::WireSelfIntersection,
+            severity: Severity::Error,
+            entity: EntityRef::Wire(wire_id),
+            description: format!(
+                "wire {} of face {} crosses itself",
+                wire_id.index(),
+                face_id.index()
+            ),
+            deviation: None,
+        })
+        .into_iter()
+        .collect())
 }
 
 #[cfg(test)]
@@ -1398,6 +1484,163 @@ mod tests {
         let mut topo = Topology::new();
         let face = windowed_band(&mut topo, 0.3, 2.0, 3.0);
         assert_eq!(crossed(&topo, face), None);
+        assert!(
+            check_face_wire_crossings(&topo, face, 1e-6)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    const RADIUS: f64 = 3.0;
+
+    fn on_wall(topo: &mut Topology, (turn, z): (f64, f64)) -> VertexId {
+        vertex(topo, [RADIUS * turn.cos(), RADIUS * turn.sin(), z])
+    }
+
+    /// A wire on the wall of a cylinder of radius 3 about z through the
+    /// corners `(angle, height)`: each step at one height runs along that
+    /// height's circle, and each step at one angle up or down the wall.
+    /// The circles' frames start at `from`, which need not be a corner.
+    fn wall_wire(topo: &mut Topology, corners: &[(f64, f64)], from: f64) -> WireId {
+        let ids: Vec<VertexId> = corners.iter().map(|&c| on_wall(topo, c)).collect();
+        let mut edges = Vec::new();
+        for k in 0..corners.len() {
+            let (i, j) = (k, (k + 1) % corners.len());
+            let ((ta, za), (tb, zb)) = (corners[i], corners[j]);
+            if (za - zb).abs() < 1e-12 {
+                let along = Vec3::new(from.cos(), from.sin(), 0.0);
+                let ring =
+                    Circle3D::new_with_ref(Point3::new(0.0, 0.0, za), Z, RADIUS, along).unwrap();
+                // The circle runs counter-clockwise about z.
+                let (start, end, forward) = if tb > ta {
+                    (ids[i], ids[j], true)
+                } else {
+                    (ids[j], ids[i], false)
+                };
+                let e = topo.add_edge(Edge::new(start, end, EdgeCurve::Circle(ring)));
+                edges.push(OrientedEdge::new(e, forward));
+            } else {
+                let e = topo.add_edge(Edge::new(ids[i], ids[j], EdgeCurve::Line));
+                edges.push(OrientedEdge::new(e, true));
+            }
+        }
+        topo.add_wire(Wire::new(edges, true).unwrap())
+    }
+
+    fn wall_surfaces() -> [FaceSurface; 2] {
+        let wall = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Z, RADIUS).unwrap();
+        let spline =
+            brepkit_geometry::convert::surface_to_nurbs::cylinder_to_nurbs(&wall, (-1.0, 3.0))
+                .unwrap();
+        [FaceSurface::Cylinder(wall), FaceSurface::Nurbs(spline)]
+    }
+
+    /// A wire on a cylinder's wall that runs up a line of the wall, round
+    /// and down, then back across that line along a circle and round
+    /// again: a figure eight, which crosses itself where the circle crosses
+    /// the line. The check crate's `validate_solid` reports it, on the
+    /// cylinder and on its B-spline form. A loop round the same corners
+    /// that does not cross itself passes.
+    #[test]
+    fn a_figure_eight_on_a_cylinder_is_reported() {
+        let eight = [
+            (0.0, 0.0),
+            (0.0, 2.0),
+            (1.0, 2.0),
+            (1.0, 1.0),
+            (-1.0, 1.0),
+            (-1.0, 0.0),
+        ];
+        let simple = [(-1.0, 0.0), (1.0, 0.0), (1.0, 2.0), (-1.0, 2.0)];
+        for surface in wall_surfaces() {
+            for (corners, crosses) in [(&eight[..], true), (&simple[..], false)] {
+                let mut topo = Topology::new();
+                let wire = wall_wire(&mut topo, corners, 0.0);
+                let face = topo.add_face(Face::new(wire, vec![], surface.clone()));
+                let found = check_face_wire_crossings(&topo, face, 1e-6).unwrap();
+                assert_eq!(!found.is_empty(), crosses, "{corners:?}: {found:?}");
+                let shell =
+                    topo.add_shell(brepkit_topology::shell::Shell::new(vec![face]).unwrap());
+                let solid = topo.add_solid(brepkit_topology::solid::Solid::new(shell, vec![]));
+                let report = crate::validate::validate_solid(
+                    &topo,
+                    solid,
+                    &crate::validate::ValidateOptions::default(),
+                )
+                .unwrap();
+                let reported = report
+                    .issues
+                    .iter()
+                    .any(|i| i.check == CheckId::WireSelfIntersection);
+                assert_eq!(reported, crosses, "{corners:?}: {:?}", report.issues);
+            }
+        }
+    }
+
+    /// A band of a cone between two whole circles and up a line of the
+    /// cone, its seam, on the cone and on its B-spline form, with the
+    /// circles as circles or as B-splines. Each circle's frame, or each
+    /// B-spline's first knot, starts away from the seam's vertex, where the
+    /// wire does not run. Read from there, the circles broke the wire at the
+    /// vertex, and the band read as crossing itself; read from their
+    /// vertices, it crosses nothing, whichever way round it runs.
+    #[test]
+    fn a_band_whose_circles_start_away_from_its_seam_does_not_cross_itself() {
+        let half_angle = 0.6_f64;
+        let slope = half_angle.cos() / half_angle.sin();
+        let cone =
+            brepkit_math::surfaces::ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), Z, half_angle)
+                .unwrap();
+        let reach = (1.0 / half_angle.sin(), 5.0 / half_angle.sin());
+        let spline =
+            brepkit_geometry::convert::surface_to_nurbs::cone_to_nurbs(&cone, reach).unwrap();
+        for surface in [FaceSurface::Cone(cone), FaceSurface::Nurbs(spline)] {
+            for (from, nurbs) in [1.0_f64, std::f64::consts::FRAC_PI_2, 3.0, -2.5]
+                .into_iter()
+                .flat_map(|from| [(from, false), (from, true)])
+            {
+                let mut topo = Topology::new();
+                let a = vertex(&mut topo, [2.0 * slope, 0.0, 2.0]);
+                let b = vertex(&mut topo, [4.0 * slope, 0.0, 4.0]);
+                let along = Vec3::new(from.cos(), from.sin(), 0.0);
+                let ring = |z: f64| {
+                    let circle =
+                        Circle3D::new_with_ref(Point3::new(0.0, 0.0, z), Z, z * slope, along)
+                            .unwrap();
+                    if nurbs {
+                        EdgeCurve::NurbsCurve(
+                            brepkit_geometry::convert::curve_to_nurbs::circle_to_nurbs(
+                                &circle, 0.0, TAU,
+                            )
+                            .unwrap(),
+                        )
+                    } else {
+                        EdgeCurve::Circle(circle)
+                    }
+                };
+                let low = topo.add_edge(Edge::new(a, a, ring(2.0)));
+                let high = topo.add_edge(Edge::new(b, b, ring(4.0)));
+                let seam = topo.add_edge(Edge::new(a, b, EdgeCurve::Line));
+                for turned in [false, true] {
+                    let uses = [(low, true), (seam, true), (high, false), (seam, false)];
+                    let edges: Vec<OrientedEdge> = if turned {
+                        uses.iter()
+                            .rev()
+                            .map(|&(e, f)| OrientedEdge::new(e, !f))
+                            .collect()
+                    } else {
+                        uses.iter().map(|&(e, f)| OrientedEdge::new(e, f)).collect()
+                    };
+                    let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+                    let face = topo.add_face(Face::new(wire, vec![], surface.clone()));
+                    let found = check_face_wire_crossings(&topo, face, 1e-6).unwrap();
+                    assert!(
+                        found.is_empty(),
+                        "from {from} spline rims {nurbs} turned {turned}: {found:?}"
+                    );
+                }
+            }
+        }
     }
 
     /// A cubic and the line between its ends, on a plane.
@@ -1521,9 +1764,8 @@ mod tests {
                 .unwrap()
                 .edges()
                 .iter()
-                .map(|oe| Arc::of(&topo, oe.edge(), oe.is_forward()))
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
+                .flat_map(|oe| Arc::of(&topo, oe.edge(), oe.is_forward()).unwrap())
+                .collect::<Vec<_>>();
             let every_pair = wires_cross(&surface, &arcs, &arcs, 1e-6);
             assert_eq!(
                 wire_crosses_itself(&surface, &arcs, &(0..arcs.len()).collect::<Vec<_>>(), 1e-6),
