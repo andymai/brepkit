@@ -13,8 +13,8 @@
 //! The walking chamfer of `chamfer_v2` refuses two chamfers that meet in a
 //! mitre, so it refuses the rim of either L at its first outer corner,
 //! before the seams count. The flat-bevel rebuild of `chamfer` builds the
-//! extruded L's rim to the closed form. On the fused L it gives an open
-//! shell with 3 boundary edges, of 186.75 at d 0.5 against 187.1667.
+//! rim of either L to the closed form: on the fused L, with the faces of one
+//! plane that a seam divides at a pick merged first.
 
 #[cfg(test)]
 mod tests {
@@ -24,7 +24,7 @@ mod tests {
     use brepkit_math::vec::{Point3, Vec3};
     use brepkit_operations::blend_ops::{all_blended, chamfer_v2};
     use brepkit_operations::boolean::{BooleanOp, boolean};
-    use brepkit_operations::chamfer::chamfer;
+    use brepkit_operations::chamfer::{chamfer, chamfer_two_on};
     use brepkit_operations::extrude::extrude;
     use brepkit_operations::measure::solid_volume;
     use brepkit_operations::primitives::make_box;
@@ -34,7 +34,8 @@ mod tests {
     use brepkit_topology::Topology;
     use brepkit_topology::builder::{make_planar_face_from_wire, make_polygon_wire};
     use brepkit_topology::edge::EdgeId;
-    use brepkit_topology::explorer::solid_edges;
+    use brepkit_topology::explorer::{edge_to_face_map, solid_edges};
+    use brepkit_topology::face::FaceId;
     use brepkit_topology::solid::SolidId;
 
     const HEIGHT: f64 = 3.0;
@@ -180,15 +181,85 @@ mod tests {
         }
     }
 
+    /// The flat-bevel rebuild chamfers the fused L's rim, in eight pieces,
+    /// as the extruded L's, in each pose.
     #[test]
-    #[ignore = "ready repro: the flat-bevel rebuild of the rim across the seams leaves 3 boundary edges"]
     fn the_flat_bevels_of_a_fused_ls_rim_meet_the_closed_form() {
-        let d = 0.5;
-        let mut topo = Topology::new();
-        let l = fused_l(&mut topo);
-        let rim = edges_where(&topo, l, |a, b| on_top(a, b) && !on_seam(a, b));
-        let result = chamfer(&mut topo, l, &rim, d).unwrap();
-        holds("fused", &topo, result, VOLUME - rim_chamfers_take(d));
+        for d in [0.5, 1.0] {
+            for (pose_name, pose) in poses() {
+                let label = format!("{pose_name} d {d}");
+                let mut topo = Topology::new();
+                let l = fused_l(&mut topo);
+                let rim = edges_where(&topo, l, |a, b| on_top(a, b) && !on_seam(a, b));
+                assert_eq!(rim.len(), 8, "{label}: the rim's pieces");
+                transform_solid(&mut topo, l, &pose).unwrap();
+                let result = chamfer(&mut topo, l, &rim, d).unwrap();
+                holds(&label, &topo, result, VOLUME - rim_chamfers_take(d));
+            }
+        }
+    }
+
+    /// The volume the rim's chamfers take off the L, `top` into the top and
+    /// `wall` down each wall: the cross-section `top * wall / 2` swept along
+    /// the rim moved in by its centroid's `top / 3`.
+    fn rim_chamfers_of_two_distances_take(top: f64, wall: f64) -> f64 {
+        0.5 * top * wall * (40.0 - 8.0 * top / 3.0)
+    }
+
+    /// `edges` of `solid`, each with its face on the top.
+    fn on_the_top(topo: &Topology, solid: SolidId, edges: &[EdgeId]) -> Vec<(EdgeId, FaceId)> {
+        let uses = edge_to_face_map(topo, solid).unwrap();
+        edges
+            .iter()
+            .map(|&edge| {
+                let top = uses[&edge.index()]
+                    .iter()
+                    .copied()
+                    .find(|&f| {
+                        topo.face(f)
+                            .unwrap()
+                            .effective_plane_normal()
+                            .is_some_and(|n| n.z() > 0.5)
+                    })
+                    .unwrap();
+                (edge, top)
+            })
+            .collect()
+    }
+
+    /// The flat-bevel rebuild of two distances, one into the top and one
+    /// down the walls, chamfers either L's rim to the closed form, in each
+    /// pose.
+    #[test]
+    fn the_flat_bevels_of_two_distances_meet_the_closed_form_on_either_l() {
+        for (top, wall) in [(0.5, 1.0), (1.0, 0.5)] {
+            for (pose_name, pose) in poses() {
+                for fused in [false, true] {
+                    let label = format!("{pose_name} fused {fused} top {top} wall {wall}");
+                    let mut topo = Topology::new();
+                    let (l, rim) = if fused {
+                        let l = fused_l(&mut topo);
+                        (
+                            l,
+                            edges_where(&topo, l, |a, b| on_top(a, b) && !on_seam(a, b)),
+                        )
+                    } else {
+                        let l = extruded_l(&mut topo);
+                        (l, edges_where(&topo, l, on_top))
+                    };
+                    let picks = on_the_top(&topo, l, &rim);
+                    transform_solid(&mut topo, l, &pose).unwrap();
+                    let result = chamfer_two_on(&mut topo, l, &picks, top, wall)
+                        .unwrap_or_else(|e| panic!("{label}: {e}"));
+                    holds(
+                        &label,
+                        &topo,
+                        result,
+                        VOLUME - rim_chamfers_of_two_distances_take(top, wall),
+                    );
+                }
+            }
+        }
     }
 
     /// The extruded L's rim chamfers to the closed form.
