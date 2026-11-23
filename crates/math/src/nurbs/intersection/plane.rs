@@ -1431,13 +1431,22 @@ impl RegionReach {
     /// meets, so a gap whose cell meets no span reaching the region stays
     /// clear of it. The chord's box, padded by half the chord, answers first.
     fn gap_meets(&self, a: &IntersectionPoint, b: &IntersectionPoint) -> bool {
+        self.chord_meets(a, b) || self.cell_meets(a, b)
+    }
+
+    /// Whether the box of the chord between two points of a section, padded
+    /// by half the chord, meets the region.
+    fn chord_meets(&self, a: &IntersectionPoint, b: &IntersectionPoint) -> bool {
         let pad = 0.5 * (b.point - a.point).length();
-        if Aabb3::from_points([a.point, b.point])
+        Aabb3::from_points([a.point, b.point])
             .expanded(pad)
             .intersects(self.region)
-        {
-            return true;
-        }
+    }
+
+    /// Whether the grid cell two points of a section cross meets a knot span
+    /// whose control box reaches the region (true where the spans are not
+    /// indexed).
+    fn cell_meets(&self, a: &IntersectionPoint, b: &IntersectionPoint) -> bool {
         let Some(spans) = &self.spans else {
             return true;
         };
@@ -1495,7 +1504,19 @@ fn runs_through_region(
         while g < gaps && keep[g] {
             g += 1;
         }
-        runs.push(pts[first..=g].to_vec());
+        // Where chords reach the region the run is theirs, with a gap
+        // beyond on either side: a cell's spans reach well past the section
+        // through it, and a run carried out to them leaves the faces' trim a
+        // longer curve to cut. Cells alone keep a run where no chord meets
+        // the region (a bump between two samples).
+        let chord: Vec<usize> = (first..g)
+            .filter(|&k| reach.chord_meets(&pts[k], &pts[k + 1]))
+            .collect();
+        let (lo, hi) = match (chord.first(), chord.last()) {
+            (Some(&c0), Some(&c1)) => (c0.saturating_sub(1).max(first), (c1 + 1).min(g - 1)),
+            _ => (first, g - 1),
+        };
+        runs.push(pts[lo..=hi + 1].to_vec());
     }
     runs
 }
