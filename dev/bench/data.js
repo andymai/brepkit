@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795421179470,
+  "lastUpdate": 1795422888600,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -76409,6 +76409,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19566719,
             "range": "± 76936",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "37cca0173383553694f904d9a840f4f44e9b6883",
+          "message": "fix(operations): give a boolean with an empty operand its trivial result, drop a piece inside the tool from a cut per piece, and mesh two rod footprints closed (#2738)\n\n## Summary\n\nOn main:\n\n- a boolean with an empty solid as an operand refuses with the mesh\nfallback off. With the fallback on, the fuse of an empty solid and a\nball gives a 272-face mesh (#2733);\n- when one piece of a solid in separate pieces lies inside the tool, the\ncut per piece keeps that piece whole (#2734);\n- two results of the random sweep are valid with the right volume, but\ntheir meshes have 3 and 7 open edges (#2732).\n\nWith this change, a boolean with an empty operand gives its trivial\nresult. The cut per piece drops a piece inside the tool, and both meshes\nclose. Over sweep seeds 1 to 10, errors go from 344 to 295. The pose\nsweep and the truth audit give the same output as main.\n\nFixes #2733, fixes #2734, fixes #2732.\n\n## The change\n\n- **An empty operand (#2733).** `boolean_inner` now checks for an empty\noperand (`Topology::is_empty_solid`) before the engine runs.\n- A fuse gives a copy of the other operand, and a cut by an empty tool\ngives a copy of the solid.\n- A cut of an empty solid and an intersect with an empty operand give a\nnew empty solid.\n- It resolves both operands and their shells first, so an invalid handle\nstill fails.\n- `boolean_with_evolution` has its own path for an empty operand. Each\nface of a copied operand, cavities included, maps to its copy, and each\nface of a dropped operand is deleted.\n- **A piece inside the tool (#2734).** In `cut_multi_region_input`, a\npiece whose cut returns `EmptyResult` now drops out. When every piece\ndrops out, the cut returns `EmptyResult`. A piece whose cut fails with\n`InvalidInput` no longer stays uncut: the cut fails, and the boolean\ngoes on to its next path.\n- **Two open meshes (#2732).** The mesher only, with no change to any\nB-Rep.\n- A drum's top rim starts 3.9° from the wall's seam vertex. The mesher\nmoved the seam to the nearest rim sample, across a rod's footprint\n0.0056 rad from the real seam. `sample_seam_vertices_on_rims` now gives\neach closed circle or ellipse edge that a seam meets its vertex as a\nsample.\n- The equator of `make_sphere` is 32 straight chords. A rod's footprint\ncrosses latitude 0 by 4.9e-4 rad but misses the chord by 2e-4. So the\nboolean keeps it as one hole of the southern face. Each straight outline\nedge of a sphere face now takes the hole samples just past it, within\nthe chord's sag, as shared samples. It takes them from every hole of\nboth faces on the chord, in order along it, and updates the chord once.\nThe outline runs round those points, and the face beyond the chord\nleaves them out.\n\n## Tests\n\n- `an_empty_operand_gives_the_trivial_result` runs each operation with\nan empty first operand, an empty second operand and both empty, in five\nposes. It runs with the mesh fallback on and off, and through\n`boolean_with_evolution`. `a_chain_goes_on_past_an_empty_step` runs a\nchain through an empty step in five poses.\n`an_empty_operand_does_not_hide_an_invalid_one` and\n`an_empty_operand_tracks_every_face_of_a_hollow_solid` pin the handles\nand the evolution map.\n- `cut_per_piece_drops_a_piece_inside_the_tool` cuts a ball and a\nseparate box by a tool that holds the box and takes a cap off the ball,\nin five poses. Each result is one valid piece with a closed mesh and the\nclosed-form volume within 1e-6. On main the direct call keeps 2 pieces.\n- `rod_footprint_beside_a_drums_seam_meshes_closed` and\n`rod_footprint_past_a_balls_equator_meshes_closed` run five poses at\ndeflections 0.01 and 0.05: 0 open and 0 non-manifold edges. Each\ntriangle faces out, and its two triangles run each edge in opposite\ndirections. Both fail on main.\n`two_holes_past_one_equator_chord_mesh_closed` checks two holes past one\nchord, on a B-Rep built by hand.\n`holes_from_both_hemispheres_past_one_chord_mesh_closed` puts one hole\non each side, and\n`a_chord_takes_the_runs_of_both_hemispheres_in_either_order` checks that\nface order does not change the result.\n- The seam samples change four pinned meshes. On main, the seam ended on\nthe nearest rim sample, so it ran as a chord, and 1 or 2 seam vertices\nhad no triangles. Each new mesh is closed and nearer the exact volume.\n- `cross_source_baseline_and_selection` now pins 64989.768943, against\n64989.530446 on main. Its exact volume is 64998.742977, and the error at\ndeflection 0.01 goes from -3.989 to -1.959.\n- The golden files for a cylinder, a cone and a box less a cylinder gain\n4, 2 and 4 triangles, with the same vertex counts.\n- Over sweep seeds 1 to 10, GOOD goes from 1072 to 1101, errors from 344\nto 295, and BAD from 2 to 1. Seed 4, case 35 now reaches its step 2 and\nreads BAD. But the fused volume matches its closed form within 1e-12, so\nthe sweep's oracle is off there.\n- brepkit-algo (558) passes, and so do all brepkit-io and\nbrepkit-operations tests (3254, 26 skipped).\n\n## Still open\n\n- `cut_multi_region_input` is not reached by the public cut in 7\nconfigurations that were tried. The test calls it directly.\n- A cut of an empty solid now returns an empty solid, while a cut of a\nsolid inside the tool still returns `EmptyResult`.\n- A hole on a sphere face can cross its face's outline, because the\nboolean tests sections against the equator's chords and not the sphere.\nA crossing deeper than the sag still meshes open.",
+          "timestamp": "2026-11-23T08:30:45Z",
+          "tree_id": "eb9fb3e166f2244e7e03bb20752b8ab6a2545df0",
+          "url": "https://github.com/andymai/brepkit/commit/37cca0173383553694f904d9a840f4f44e9b6883"
+        },
+        "date": 1795422874763,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1193099,
+            "range": "± 7458",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1249247,
+            "range": "± 28325",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13577,
+            "range": "± 40",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 794668,
+            "range": "± 2944",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26621365,
+            "range": "± 85486",
             "unit": "ns/iter"
           }
         ]
