@@ -751,6 +751,36 @@ fn piece_turn(
     Some([round, round_tube])
 }
 
+/// An edge's parameter span in traversal order, cut as [`edge_pieces`]
+/// cuts it, but a B-spline curve at every distinct knot inside it however
+/// near another or an end, so that each piece lies in one knot span. `None`
+/// for more than `most` pieces.
+fn turn_spans(edge: &BoundaryEdge<'_>, most: usize) -> Option<Vec<(f64, f64)>> {
+    let EdgeCurve::NurbsCurve(nc) = edge.curve else {
+        let spans = edge_pieces(edge);
+        return (spans.len() <= most).then_some(spans);
+    };
+    let (lo, hi) = (edge.from.min(edge.to), edge.from.max(edge.to));
+    let mut ends = vec![lo];
+    for &k in nc.knots() {
+        if k > lo && k < hi && ends.last().is_some_and(|&last| k > last) {
+            if ends.len() > most {
+                return None;
+            }
+            ends.push(k);
+        }
+    }
+    ends.push(hi);
+    let mut spans: Vec<(f64, f64)> = ends.windows(2).map(|w| (w[0], w[1])).collect();
+    if spans.len() > most {
+        return None;
+    }
+    if edge.to < edge.from {
+        spans = spans.into_iter().rev().map(|(a, b)| (b, a)).collect();
+    }
+    Some(spans)
+}
+
 /// How many whole times `wire` runs round `winding`: round its axis, and
 /// round a ring's tube. Each piece of an edge is cut until the hull of its
 /// Bezier points spans less than half a turn round the axis, and round the
@@ -768,10 +798,7 @@ fn turns_of(wire: &[BoundaryEdge<'_>], winding: Winding) -> Option<(i64, i64)> {
     let mut pieces = 0_usize;
     for edge in wire {
         let at = |t: f64| edge.curve.evaluate_with_endpoints(t, edge.start, edge.end);
-        let spans = edge_pieces(edge);
-        if pieces.saturating_add(spans.len()) > MOST_TURN_PIECES {
-            return None;
-        }
+        let spans = turn_spans(edge, MOST_TURN_PIECES - pieces)?;
         for (ta, tb) in spans {
             let start = at(ta);
             if let Some(end) = last {

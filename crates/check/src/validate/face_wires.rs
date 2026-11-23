@@ -3011,8 +3011,8 @@ mod tests {
 
     /// A circle round the z axis at height 5, radius 3, run twice as a
     /// rational B-spline of quarter arcs: the first turn's four arcs on knot
-    /// spans of width `1e-10`, the second's on spans of a quarter.
-    fn twice_on_short_spans(topo: &mut Topology) -> EdgeId {
+    /// spans `width` wide, the second's on spans of a quarter.
+    fn twice_on_short_spans(topo: &mut Topology, width: f64) -> EdgeId {
         let s = std::f64::consts::FRAC_1_SQRT_2;
         let corners = [
             (3.0, 0.0),
@@ -3035,7 +3035,15 @@ mod tests {
         points.push(Point3::new(3.0, 0.0, 5.0));
         weights.push(1.0);
         let mut knots = vec![0.0; 3];
-        for k in [1e-10, 2e-10, 3e-10, 4e-10, 0.25, 0.5, 0.75] {
+        for k in [
+            width,
+            2.0 * width,
+            3.0 * width,
+            4.0 * width,
+            0.25,
+            0.5,
+            0.75,
+        ] {
             knots.extend([k, k]);
         }
         knots.extend([1.0; 3]);
@@ -3046,18 +3054,23 @@ mod tests {
 
     /// A closed edge that runs twice round a cylinder, its first turn on
     /// knot spans far shorter than the rounding a piece's ends are read
-    /// within, reads as twice round and is reported.
+    /// within (`1e-10` of the domain), or than the gap within which the
+    /// boundary integral's cuts merge knots (`1e-13`), reads as twice round
+    /// and is reported.
     #[test]
     fn a_turn_on_short_knot_spans_is_counted() {
-        let mut topo = Topology::default();
-        let edge = twice_on_short_spans(&mut topo);
-        let wire = alone(&mut topo, edge);
-        let face = topo.add_face(Face::new(wire, vec![], cylinder()));
-        assert_eq!(
-            crate::face_loops::wire_turns(&topo, face).unwrap(),
-            Some(vec![Some(Turns::Round(2))])
-        );
-        assert!(turns(&topo, face).is_some_and(|d| d.contains("2 times")));
+        for width in [1e-10, 1e-13] {
+            let mut topo = Topology::default();
+            let edge = twice_on_short_spans(&mut topo, width);
+            let wire = alone(&mut topo, edge);
+            let face = topo.add_face(Face::new(wire, vec![], cylinder()));
+            assert_eq!(
+                crate::face_loops::wire_turns(&topo, face).unwrap(),
+                Some(vec![Some(Turns::Round(2))]),
+                "{width}"
+            );
+            assert!(turns(&topo, face).is_some_and(|d| d.contains("2 times")));
+        }
     }
 
     /// An edge along a cylinder's axis turns no way round it that a hull can
