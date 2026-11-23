@@ -681,10 +681,18 @@ fn split_sections_at_triple_points(
         closed: bool,
         /// The vertices at its start and its end.
         ends: [VertexId; 2],
+        curve: EdgeCurve,
     }
     /// A section a crossing lies on, where the crossing cuts it, and its
     /// vertex there where the crossing is at one of its ends.
     type Side = (usize, Option<f64>, Option<VertexId>);
+    /// The vertex for the crossings at one place, the point it stands for,
+    /// and the sections those crossings lie on.
+    struct Place {
+        at: Point3,
+        vertex: Option<VertexId>,
+        sections: Vec<usize>,
+    }
 
     if sources.len() < 3 {
         return Ok(());
@@ -732,6 +740,7 @@ fn split_sections_at_triple_points(
             bbox: phase_ee::proven_span_box(edge.curve(), start, end).map(|b| b.expanded(WELD)),
             closed,
             ends: [pb.start.vertex, pb.end.vertex],
+            curve: edge.curve().clone(),
         });
         for face in [curve.face_a, curve.face_b] {
             on_face.entry(face).or_default().push(k);
@@ -751,10 +760,28 @@ fn split_sections_at_triple_points(
         };
         (lo < at && at < hi).then_some(at)
     };
+    // How far `q` lies from a section's curve.
+    let off_curve = |s: &Section, q: Point3| -> f64 {
+        match &s.curve {
+            EdgeCurve::Line => {
+                let d = s.end - s.start;
+                let w = q - s.start;
+                (w - d * (w.dot(d) / d.dot(d).max(f64::MIN_POSITIVE))).length()
+            }
+            EdgeCurve::Circle(c) => (c.evaluate(c.project(q)) - q).length(),
+            EdgeCurve::Ellipse(e) => (e.evaluate(e.project(q)) - q).length(),
+            EdgeCurve::NurbsCurve(n) => {
+                brepkit_math::nurbs::projection::project_point_to_curve(n, q, 1e-12)
+                    .map_or(f64::INFINITY, |r| r.distance)
+            }
+        }
+    };
+    let on_all =
+        |q: Point3, ks: &[usize]| ks.iter().all(|&k| off_curve(&sections[k], q) <= tol.linear);
 
     // Each crossing with, for both sections, where it cuts the section (a
     // crossing inside its span) and the section's vertex there (a crossing
-    // at one of its ends).
+    // within the tolerance of one of its ends).
     let mut hits: Vec<(Point3, [Side; 2])> = Vec::new();
     for (&face, here) in &on_face {
         let Some(&own) = source_of.get(&face) else {
@@ -785,9 +812,9 @@ fn split_sections_at_triple_points(
                 }
                 for (ta, tb, p) in phase_ee::edge_crossings(topo, a.edge, b.edge, tol)? {
                     let side = |k: usize, s: &Section, t: f64| -> Side {
-                        let end = if (p - s.start).length() <= WELD {
+                        let end = if (p - s.start).length() <= tol.linear {
                             Some(s.ends[0])
-                        } else if (p - s.end).length() <= WELD {
+                        } else if (p - s.end).length() <= tol.linear {
                             Some(s.ends[1])
                         } else {
                             None
@@ -808,27 +835,51 @@ fn split_sections_at_triple_points(
         }
     }
 
-    // One vertex for the crossings at one place: a section's own vertex where
-    // one ends there, else a new one.
-    let mut places: Vec<(Point3, Option<VertexId>)> = Vec::new();
-    let place_of: Vec<usize> = hits
-        .iter()
-        .map(|&(p, sides)| {
-            let end = sides.iter().find_map(|&(_, _, end)| end);
-            if let Some(k) = places.iter().position(|(q, _)| (*q - p).length() <= WELD) {
-                if places[k].1.is_none() {
-                    places[k].1 = end;
+    // One vertex for the crossings at one place. A crossing joins a place
+    // whose point lies near it and within the tolerance of both its curves
+    // (two curves can cross more than once), and a
+    // section's own end vertex stands for the place only where it lies
+    // within the tolerance of every curve there; else the place keeps a new
+    // vertex at the refined crossing. A crossing within the tolerance of a
+    // section's end never cuts that section, so no piece is shorter than the
+    // tolerance.
+    let mut places: Vec<Place> = Vec::new();
+    let mut place_of: Vec<usize> = Vec::with_capacity(hits.len());
+    for &(p, sides) in &hits {
+        let ks = [sides[0].0, sides[1].0];
+        let place = if let Some(k) = places
+            .iter()
+            .position(|place| (place.at - p).length() <= WELD && on_all(place.at, &ks))
+        {
+            places[k].sections.extend(ks);
+            k
+        } else {
+            places.push(Place {
+                at: p,
+                vertex: None,
+                sections: ks.to_vec(),
+            });
+            places.len() - 1
+        };
+        if places[place].vertex.is_none() {
+            for end in sides.iter().filter_map(|&(_, _, end)| end) {
+                let q = topo.vertex(end)?.point();
+                if on_all(q, &places[place].sections) {
+                    places[place].vertex = Some(end);
+                    places[place].at = q;
+                    break;
                 }
-                k
-            } else {
-                places.push((p, end));
-                places.len() - 1
             }
-        })
-        .collect();
+        }
+        place_of.push(place);
+    }
     let vertices: Vec<VertexId> = places
         .iter()
-        .map(|&(p, end)| end.unwrap_or_else(|| topo.add_vertex(Vertex::new(p, tol.linear))))
+        .map(|place| {
+            place
+                .vertex
+                .unwrap_or_else(|| topo.add_vertex(Vertex::new(place.at, tol.linear)))
+        })
         .collect();
     let mut cuts: BTreeMap<usize, Vec<(f64, VertexId)>> = BTreeMap::new();
     for ((_, sides), &place) in hits.iter().zip(&place_of) {

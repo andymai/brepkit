@@ -3016,3 +3016,66 @@ fn an_arc_ending_on_another_cuts_it_at_its_end() {
         .count();
     assert_eq!(whole, 1, "the arc that ends there is cut");
 }
+
+/// A section crossing another 9e-6 from that one's end is cut at the
+/// crossing, not at the end: the end lies 9e-6 off the crossing section,
+/// well past the tolerance. Both sections are cut at one vertex on both.
+#[test]
+fn a_crossing_near_a_sections_end_keeps_its_own_vertex() {
+    use brepkit_topology::explorer::solid_faces;
+
+    let mut topo = Topology::new();
+    let a = make_box(&mut topo, [0.0, 0.0, 0.0], [1.0, 1.0, 1.0]);
+    let b = make_box(&mut topo, [0.2, 0.4, 0.5], [0.8, 0.6, 1.5]);
+    let c = make_box(&mut topo, [0.4, 0.2, 0.5], [0.6, 0.8, 1.5]);
+    let face = |solid| solid_faces(&topo, solid).unwrap()[0];
+    let (fa, fb, fc) = (face(a), face(b), face(c));
+    let x = 0.2 + 9e-6;
+    let mut arena = GfaArena::new();
+    for (other, from, to) in [
+        (fb, Point3::new(0.2, 0.5, 1.0), Point3::new(0.8, 0.5, 1.0)),
+        (fc, Point3::new(x, 0.3, 1.0), Point3::new(x, 0.7, 1.0)),
+    ] {
+        push_section(
+            &mut topo,
+            &mut arena,
+            (fa, other),
+            EdgeCurve::Line,
+            (0.0, (to - from).length()),
+            (from, to),
+        );
+    }
+
+    super::split_sections_at_triple_points(
+        &mut topo,
+        &[a, b, c],
+        brepkit_math::tolerance::Tolerance::new(),
+        &mut arena,
+    )
+    .unwrap();
+
+    let crossing = Point3::new(x, 0.5, 1.0);
+    let mut cut_at = Vec::new();
+    for (curve, ends) in arena.curves.iter().zip(section_vertices(&arena)) {
+        for v in ends {
+            if (topo.vertex(v).unwrap().point() - crossing).length() < 1e-7 {
+                cut_at.push((curve.face_b, v));
+            }
+        }
+    }
+    let on = |face| cut_at.iter().filter(|&&(f, _)| f == face).count();
+    assert_eq!(
+        on(fb),
+        2,
+        "the first section is not cut at the crossing: {cut_at:?}"
+    );
+    assert_eq!(
+        on(fc),
+        2,
+        "the second section is not cut at the crossing: {cut_at:?}"
+    );
+    assert!(
+        cut_at.iter().all(|&(_, v)| v == cut_at[0].1),
+        "the cuts do not share one vertex: {cut_at:?}"
+    );
+}
