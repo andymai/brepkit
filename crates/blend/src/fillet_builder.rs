@@ -154,33 +154,40 @@ impl<'a> FilletBuilder<'a> {
             .iter()
             .flat_map(|(edges, _)| edges.iter().copied())
             .collect();
-        // The edges the joins took out of the shell lie between faces tangent
-        // along them, which the plan drops from the selection.
-        let result =
-            one_sphere::join_sphere_faces_the_rim_crosses(topo, solid, &picked).and_then(|gone| {
-                let edge_sets = edge_sets
-                    .into_iter()
-                    .map(|(edges, law)| {
-                        let edges = edges.into_iter().filter(|e| !gone.contains(e)).collect();
-                        (edges, law)
-                    })
-                    .collect();
-                build_in_place(topo, solid, edge_sets)
-            });
-        match result {
-            Ok(result) => {
-                let preserve = snapshot.clone_result_source_faces(topo, result.solid);
-                let restore = snapshot.restore(topo);
-                match (preserve, restore) {
-                    (Ok(()), Ok(())) => Ok(result),
-                    (Err(error), _) | (_, Err(error)) => Err(error),
-                }
-            }
-            Err(error) => {
-                snapshot.restore(topo)?;
-                Err(error)
-            }
+        let shared: Vec<(Vec<EdgeId>, std::sync::Arc<RadiusLaw>)> = edge_sets
+            .into_iter()
+            .map(|(edges, law)| (edges, std::sync::Arc::new(law)))
+            .collect();
+        let first = build_after_joins(topo, solid, &snapshot, &shared, |topo| {
+            one_sphere::join_sphere_faces_the_rim_crosses(topo, solid, &picked).map(Some)
+        })
+        .and_then(|built| {
+            built.ok_or_else(|| BlendError::PlanningFailure {
+                reason: "the fillet was not built".into(),
+            })
+        });
+        if first.as_ref().is_ok_and(|result| result.failed.is_empty()) {
+            return first;
         }
+        // A round of a rim on a sphere's narrow band whose contact runs past
+        // the band's far loop in part is made again with the band and the
+        // face beyond joined. It is kept only where it rounds every edge.
+        let joined = topo.transaction(|topo| {
+            let built = build_after_joins(topo, solid, &snapshot, &shared, |topo| {
+                let bands = one_sphere::join_sphere_bands_at_picked_rims(topo, solid, &picked)?;
+                if bands.is_empty() {
+                    return Ok(None);
+                }
+                let mut gone = one_sphere::join_sphere_faces_the_rim_crosses(topo, solid, &picked)?;
+                gone.extend(bands);
+                Ok(Some(gone))
+            });
+            match built {
+                Ok(Some(result)) if result.failed.is_empty() => Ok(result),
+                _ => Err(()),
+            }
+        });
+        joined.or(first)
     }
 
     fn build_in_place(self) -> Result<BlendResult, BlendError> {
@@ -4382,6 +4389,67 @@ fn build_in_place(
         edge_sets,
     }
     .build_in_place()
+}
+
+/// The fillet of `shared` built in place on `solid` after `join` edits its
+/// shell, with `solid` then put back as `snapshot` holds it. `join` returns
+/// the edges it took out of the shell, which lie between faces tangent along
+/// them and leave the selection, or `None` to build nothing.
+fn build_after_joins(
+    topo: &mut Topology,
+    solid: SolidId,
+    snapshot: &SolidSnapshot,
+    shared: &[(Vec<EdgeId>, std::sync::Arc<RadiusLaw>)],
+    join: impl FnOnce(&mut Topology) -> Result<Option<HashSet<EdgeId>>, BlendError>,
+) -> Result<Option<BlendResult>, BlendError> {
+    let built = join(topo).and_then(|gone| {
+        let Some(gone) = gone else {
+            return Ok(None);
+        };
+        let edge_sets = shared
+            .iter()
+            .map(|(edges, law)| {
+                let edges = edges
+                    .iter()
+                    .copied()
+                    .filter(|e| !gone.contains(e))
+                    .collect();
+                (edges, read_law(law))
+            })
+            .collect();
+        build_in_place(topo, solid, edge_sets).map(Some)
+    });
+    match built {
+        Ok(Some(result)) => {
+            let preserve = snapshot.clone_result_source_faces(topo, result.solid);
+            let restore = snapshot.restore(topo);
+            match (preserve, restore) {
+                (Ok(()), Ok(())) => Ok(Some(result)),
+                (Err(error), _) | (_, Err(error)) => Err(error),
+            }
+        }
+        Ok(None) => {
+            snapshot.restore(topo)?;
+            Ok(None)
+        }
+        Err(error) => {
+            snapshot.restore(topo)?;
+            Err(error)
+        }
+    }
+}
+
+/// A law that reads as `law` does, for one more build.
+fn read_law(law: &std::sync::Arc<RadiusLaw>) -> RadiusLaw {
+    match **law {
+        RadiusLaw::Constant(r) => RadiusLaw::Constant(r),
+        RadiusLaw::Linear { start, end } => RadiusLaw::Linear { start, end },
+        RadiusLaw::SCurve { start, end } => RadiusLaw::SCurve { start, end },
+        RadiusLaw::Custom(_) => {
+            let law = std::sync::Arc::clone(law);
+            RadiusLaw::Custom(Box::new(move |t| law.evaluate(t)))
+        }
+    }
 }
 
 /// Geometry of a full-revolution rim fillet (a closed circular edge between a

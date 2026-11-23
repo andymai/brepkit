@@ -232,12 +232,12 @@ fn fillet_across_flat_seams(
 
 /// A copy of a solid with the flat seams at some picked edges merged away,
 /// and the picks on it.
-struct WithoutFlatSeams {
-    copy: SolidId,
+pub(crate) struct WithoutFlatSeams {
+    pub(crate) copy: SolidId,
     /// The picks that are not seams, each once, in the order given.
-    picks: Vec<EdgeId>,
+    pub(crate) picks: Vec<EdgeId>,
     /// The copy's edge for each of `picks`.
-    targets: Vec<EdgeId>,
+    pub(crate) targets: Vec<EdgeId>,
 }
 
 impl WithoutFlatSeams {
@@ -268,7 +268,7 @@ impl WithoutFlatSeams {
 /// A picked seam is passed over, as the walking engine passes it over. `None`
 /// where a pick is not an edge of `solid`, or where no flat seam meets a
 /// pick.
-fn without_flat_seams(
+pub(crate) fn without_flat_seams(
     topo: &mut Topology,
     solid: SolidId,
     edges: &[EdgeId],

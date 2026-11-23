@@ -71,7 +71,7 @@ pub fn chamfer(
         let result = crate::blend_ops::chamfer_v2_walking(topo, solid, edges, distance, distance)?;
         return crate::blend_ops::all_blended(result);
     }
-    chamfer_core(topo, solid, edges, ChamferDistances::Symmetric(distance))
+    chamfer_planar(topo, solid, edges, ChamferDistances::Symmetric(distance))
 }
 
 /// Chamfer `edges` exactly, `d1` into each edge's reference face and `d2`
@@ -142,7 +142,7 @@ pub fn chamfer_asymmetric(
             reason: "no edges specified for chamfer".into(),
         });
     }
-    chamfer_core(topo, solid, edges, ChamferDistances::Asymmetric { d1, d2 })
+    chamfer_planar(topo, solid, edges, ChamferDistances::Asymmetric { d1, d2 })
 }
 
 /// Two-distance chamfer, `d1` on each edge's reference face and `d2` on its
@@ -232,7 +232,7 @@ pub fn chamfer_two_on(
                 return Err(error);
             }
             let reference = edges.iter().map(|&(e, f)| (e.index(), f)).collect();
-            chamfer_core(
+            chamfer_planar(
                 topo,
                 solid,
                 &ids,
@@ -407,7 +407,85 @@ fn join_picked_pieces(
     Ok(Some((copy, out)))
 }
 
+/// [`chamfer_core`] of `edges`, or where it fails, of the same edges on a
+/// copy of `solid` with the flat seams at them merged away (see
+/// [`crate::blend_ops::without_flat_seams`]). The rebuild sets back the
+/// corners of each face on its own, so two bevels that meet where a seam
+/// cuts their face (an L's inside corner, its top in pieces after a fuse)
+/// leave a gap between the pieces. The first error is the one returned.
+fn chamfer_planar(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[EdgeId],
+    distances: ChamferDistances,
+) -> Result<SolidId, crate::OperationsError> {
+    let error = match chamfer_core(topo, solid, edges, distances.clone()) {
+        Ok(result) => return Ok(result),
+        Err(error) => error,
+    };
+    let Some(merged) = crate::blend_ops::without_flat_seams(topo, solid, edges)? else {
+        return Err(error);
+    };
+    let Some(distances) = distances_on_copy(topo, solid, &merged, distances)? else {
+        return Err(error);
+    };
+    chamfer_core(topo, merged.copy, &merged.targets, distances).map_err(|_| error)
+}
+
+/// `distances` for the picks moved to the copy of `solid` in `merged`. A
+/// face each pick's distance is read from (its reference face, or its first
+/// face) becomes the copy's face on that pick of the same outward normal.
+/// `None` when a pick has no such face.
+fn distances_on_copy(
+    topo: &Topology,
+    solid: SolidId,
+    merged: &crate::blend_ops::WithoutFlatSeams,
+    distances: ChamferDistances,
+) -> Result<Option<ChamferDistances>, crate::OperationsError> {
+    let (d1, d2, read_from) = match distances {
+        ChamferDistances::Symmetric(d) => return Ok(Some(ChamferDistances::Symmetric(d))),
+        ChamferDistances::Asymmetric { d1, d2 } => {
+            let first: HashMap<usize, FaceId> =
+                brepkit_topology::explorer::edge_to_face_map(topo, solid)?
+                    .into_iter()
+                    .filter_map(|(edge, faces)| faces.first().map(|&face| (edge, face)))
+                    .collect();
+            (d1, d2, first)
+        }
+        ChamferDistances::Referenced { d1, d2, reference } => (d1, d2, reference),
+    };
+    let uses = brepkit_topology::explorer::edge_to_face_map(topo, merged.copy)?;
+    let mut reference = HashMap::with_capacity(merged.picks.len());
+    for (&pick, &target) in merged.picks.iter().zip(&merged.targets) {
+        let Some(&face) = read_from.get(&pick.index()) else {
+            return Ok(None);
+        };
+        let Some(normal) = topo.face(face)?.effective_plane_normal() else {
+            return Ok(None);
+        };
+        let mut on_copy = None;
+        for &f in uses
+            .get(&target.index())
+            .map_or(&[][..], |faces| faces.as_slice())
+        {
+            if topo
+                .face(f)?
+                .effective_plane_normal()
+                .is_some_and(|n| n.dot(normal) > 1.0 - 1e-9)
+            {
+                on_copy = Some(f);
+            }
+        }
+        let Some(f) = on_copy else {
+            return Ok(None);
+        };
+        reference.insert(target.index(), f);
+    }
+    Ok(Some(ChamferDistances::Referenced { d1, d2, reference }))
+}
+
 /// How chamfer distances are assigned to edges.
+#[derive(Clone)]
 enum ChamferDistances {
     /// Same distance on both adjacent faces.
     Symmetric(f64),
@@ -1137,7 +1215,21 @@ fn chamfer_core(
     // Every cut sets back at most `max_distance` along its faces from a
     // chamfered edge, so the material taken off lies that near one.
     let result = assemble_solid_mixed(topo, &result_specs, tol)?;
-    crate::cavities::keep_cavities(topo, solid, result, "chamfer")
+    let result = crate::cavities::keep_cavities(topo, solid, result, "chamfer")?;
+    // The faces are rebuilt one at a time from their own corners, and the
+    // shell is assembled from where those corners lie. Where two faces set
+    // a shared corner back to different points, the shell does not close.
+    let report = crate::validate::validate_solid(topo, result)?;
+    if let Some(issue) = report
+        .issues
+        .iter()
+        .find(|issue| issue.severity == crate::validate::Severity::Error)
+    {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: format!("the chamfer leaves an invalid solid: {}", issue.description),
+        });
+    }
+    Ok(result)
 }
 
 /// Per-face polygon data collected from the solid.
@@ -2088,5 +2180,38 @@ mod tests {
 
         let result = chamfer_asymmetric(&mut topo, cube, &[edges[0]], 0.2, -0.1);
         assert!(result.is_err(), "negative d2 should fail");
+    }
+
+    /// The rebuild of a fused L's top rim, with the top in three pieces,
+    /// leaves a gap at the inside corner, where two pieces set the corner
+    /// back along their seams. It returns an error, not the open solid.
+    #[test]
+    fn the_rebuild_refuses_a_shell_it_leaves_open() {
+        use crate::boolean::{BooleanOp, boolean};
+        let mut topo = Topology::new();
+        let a = crate::primitives::make_box(&mut topo, 10.0, 4.0, 3.0).unwrap();
+        let b = crate::primitives::make_box(&mut topo, 4.0, 10.0, 3.0).unwrap();
+        let l = boolean(&mut topo, BooleanOp::Fuse, a, b).unwrap();
+        let mut rim = Vec::new();
+        for edge in brepkit_topology::explorer::solid_edges(&topo, l).unwrap() {
+            let data = topo.edge(edge).unwrap();
+            let (p, q) = (
+                topo.vertex(data.start()).unwrap().point(),
+                topo.vertex(data.end()).unwrap().point(),
+            );
+            let at = |a: f64, b: f64, c: f64| (a - c).abs() < 1e-9 && (b - c).abs() < 1e-9;
+            let seam = (at(p.x(), q.x(), 4.0) && f64::midpoint(p.y(), q.y()) < 4.0)
+                || (at(p.y(), q.y(), 4.0) && f64::midpoint(p.x(), q.x()) < 4.0);
+            if at(p.z(), q.z(), 3.0) && !seam {
+                rim.push(edge);
+            }
+        }
+        assert_eq!(rim.len(), 8, "the rim's pieces");
+        let result = chamfer_core(&mut topo, l, &rim, ChamferDistances::Symmetric(0.5));
+        let error = result.expect_err("the rebuild across the seams is open");
+        assert!(
+            error.to_string().contains("invalid solid"),
+            "unexpected error: {error}"
+        );
     }
 }
