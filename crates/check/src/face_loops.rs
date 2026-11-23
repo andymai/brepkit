@@ -32,6 +32,8 @@ use std::collections::HashMap;
 use std::f64::consts::TAU;
 
 use brepkit_math::madd::Madd;
+use brepkit_math::nurbs::curve::NurbsCurve;
+use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::region2d::{Boundary2, distance_to_boundary, point_in_region};
 use brepkit_math::traits::ParametricSurface;
 use brepkit_math::vec::{Point2, Point3, Vec2, Vec3};
@@ -436,6 +438,608 @@ impl FaceLoops {
             .map(|hole| Some(left_of(0, hole)? != left_of(hole, 0)?))
             .collect()
     }
+}
+
+/// How many whole times a wire runs round the surface of its face.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Turns {
+    /// Round the axis of a cylinder or a cone, round a pole of a sphere, or
+    /// round a B-spline surface that closes on itself in one parameter.
+    Round(i64),
+    /// Along each parameter of a torus, or of a B-spline surface that
+    /// closes on itself in both.
+    Torus(i64, i64),
+}
+
+impl Turns {
+    /// Whether a wire that turns so can bound a face. A face lies on one
+    /// side of its wire all the way along it. Where a wire runs round the
+    /// surface by two rims joined by a seam, the face lies between the rims,
+    /// so the rims run opposite ways round and the wire turns no times.
+    /// So a wire runs round at most once. On a torus a loop that does not
+    /// cross itself runs along each period a number of times with no common
+    /// factor, so the two counts have no common factor larger than one.
+    #[must_use]
+    pub fn bound_a_face(self) -> bool {
+        match self {
+            Self::Round(k) => k.unsigned_abs() <= 1,
+            Self::Torus(a, b) => common_factor(a.unsigned_abs(), b.unsigned_abs()) <= 1,
+        }
+    }
+}
+
+fn common_factor(mut a: u64, mut b: u64) -> u64 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a
+}
+
+/// The most times a piece of an edge is halved before its turning is
+/// bounded.
+const MOST_TURN_HALVINGS: u32 = 24;
+
+/// The most pieces of edges a wire's turns are read in, cut or not: a curve
+/// that runs along or through an axis is cut at every depth and could take
+/// `2^MOST_TURN_HALVINGS` of them. It is more than ten times the most that
+/// any wire of the test suite is read in.
+pub(crate) const MOST_TURN_PIECES: usize = 16384;
+
+/// How near the centre of a ring's tube, as a fraction of the tube's radius,
+/// a wire may come and still be read: there its turn round the tube has no
+/// bound.
+const TUBE_CLEAR: f64 = 1e-6;
+
+#[cfg(test)]
+thread_local! {
+    /// The pieces the last wire's turns were read in, so far.
+    pub(crate) static PIECES_READ: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The most two points read as one place along a wire (where one edge ends
+/// and the next starts) may lie apart round the surface, in turns.
+const JOIN_TURN: f64 = 1.0 / 16.0;
+
+/// What a surface is gone round by: an axis, or a ring's axis and its tube.
+#[derive(Clone, Copy, Debug)]
+enum Winding {
+    Axis {
+        origin: Point3,
+        axis: Vec3,
+        across: Vec3,
+    },
+    Ring {
+        center: Point3,
+        axis: Vec3,
+        across: Vec3,
+        major: f64,
+        minor: f64,
+    },
+}
+
+/// How a wire's turns round the [`Winding`] give its turns round the face's
+/// surface.
+#[derive(Clone, Copy, Debug)]
+enum Reading {
+    /// The turns round the axis, or the ring's axis.
+    Round,
+    /// The turns round the ring's tube.
+    Tube,
+    /// The turns round the ring's axis and round its tube.
+    Both,
+}
+
+impl Winding {
+    fn axis_of(origin: Point3, axis: Vec3) -> Option<Self> {
+        let axis = axis.normalize().ok()?;
+        Some(Self::Axis {
+            origin,
+            axis,
+            across: square_to(axis)?,
+        })
+    }
+
+    fn ring_of(center: Point3, axis: Vec3, major: f64, minor: f64) -> Option<Self> {
+        let axis = axis.normalize().ok()?;
+        Some(Self::Ring {
+            center,
+            axis,
+            across: square_to(axis)?,
+            major,
+            minor,
+        })
+    }
+
+    /// Whether `p` lies next to a ring's tube's centre.
+    fn at_tube_centre(self, p: Point3) -> bool {
+        match (self, self.in_tube(p)) {
+            (Self::Ring { minor, .. }, Some(place)) => place.length() <= TUBE_CLEAR * minor,
+            _ => false,
+        }
+    }
+
+    /// `p` in the plane square to the axis through its origin or centre.
+    fn flat(self, p: Point3) -> Vec2 {
+        let (origin, axis, across) = match self {
+            Self::Axis {
+                origin,
+                axis,
+                across,
+            }
+            | Self::Ring {
+                center: origin,
+                axis,
+                across,
+                ..
+            } => (origin, axis, across),
+        };
+        let d = p - origin;
+        Vec2::new(d.dot(across), d.dot(axis.cross(across)))
+    }
+
+    /// `p` in its half plane through the ring's axis: out from the tube's
+    /// centre and along the axis.
+    fn in_tube(self, p: Point3) -> Option<Vec2> {
+        let Self::Ring {
+            center,
+            axis,
+            major,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        Some(Vec2::new(
+            self.flat(p).length() - major,
+            (p - center).dot(axis),
+        ))
+    }
+
+    /// The turn from `a` to `b`, two points read as one place: round the
+    /// axis, and round the tube.
+    fn join(self, a: Point3, b: Point3) -> Option<[f64; 2]> {
+        let round = small_turn(self.flat(a), self.flat(b))?;
+        let tube = match (self.in_tube(a), self.in_tube(b)) {
+            (Some(a), Some(b)) => small_turn(a, b)?,
+            _ => 0.0,
+        };
+        (round.abs() <= JOIN_TURN && tube.abs() <= JOIN_TURN).then_some([round, tube])
+    }
+}
+
+/// A unit vector square to `axis`.
+fn square_to(axis: Vec3) -> Option<Vec3> {
+    let other = if axis.x().abs() < 0.9 {
+        Vec3::new(1.0, 0.0, 0.0)
+    } else {
+        Vec3::new(0.0, 1.0, 0.0)
+    };
+    axis.cross(other).normalize().ok()
+}
+
+/// The turn, as a fraction of a whole turn, from `a` to `b` round the
+/// origin, the smaller way round. `None` at the origin.
+fn small_turn(a: Vec2, b: Vec2) -> Option<f64> {
+    if !(a.length() > 0.0 && b.length() > 0.0) {
+        return None;
+    }
+    let cross = a.x().madd(b.y(), -(a.y() * b.x()));
+    let dot = a.x().madd(b.x(), a.y() * b.y());
+    Some(cross.atan2(dot) / TAU)
+}
+
+/// Where `points` all lie less than half a turn apart round the origin:
+/// the turn from the first to the last, the direction half way across them
+/// and half the angle they span. Every point of their hull lies within that
+/// angle, so a curve in the hull from the first to the last turns that much,
+/// and no more. `None` where a point lies at the origin or they span half a
+/// turn or more.
+fn wedge(points: &[Vec2]) -> Option<(f64, Vec2, f64)> {
+    let first = *points.first()?;
+    let (mut lo, mut hi) = (0.0_f64, 0.0_f64);
+    let mut last = 0.0;
+    for &p in points {
+        last = small_turn(first, p)? * TAU;
+        lo = lo.min(last);
+        hi = hi.max(last);
+    }
+    if hi - lo >= std::f64::consts::PI * (1.0 - 1e-9) {
+        return None;
+    }
+    let unit = Vec2::new(first.x() / first.length(), first.y() / first.length());
+    let mid = 0.5 * (lo + hi);
+    let (s, c) = mid.sin_cos();
+    let middle = Vec2::new(
+        unit.x().madd(c, -(unit.y() * s)),
+        unit.x().madd(s, unit.y() * c),
+    );
+    Some((last / TAU, middle, 0.5 * (hi - lo)))
+}
+
+/// The points whose hull holds the piece of `curve` from `a` to `b`, the
+/// first at `a` and the last at `b`: a line's ends, a conic arc's ends and
+/// the meeting of its tangents there (no more than a quarter turn), or a
+/// B-spline piece's Bezier points (inside one knot span, weights positive).
+fn piece_hull(
+    curve: &EdgeCurve,
+    (a, b): (f64, f64),
+    span: Option<(f64, f64)>,
+    at: &dyn Fn(f64) -> Point3,
+) -> Option<Vec<Point3>> {
+    let arc = |center: Point3| {
+        let half = 0.5 * (b - a);
+        if half.abs() > std::f64::consts::FRAC_PI_4 {
+            return None;
+        }
+        let tip = center + (at(a + half) - center) * (1.0 / half.cos());
+        Some(vec![at(a), tip, at(b)])
+    };
+    match curve {
+        EdgeCurve::Line => Some(vec![at(a), at(b)]),
+        EdgeCurve::Circle(c) => arc(c.center()),
+        EdgeCurve::Ellipse(e) => arc(e.center()),
+        EdgeCurve::NurbsCurve(n) => {
+            let (d0, d1) = n.domain();
+            let near = 1e-9 * (d1 - d0).abs();
+            // The piece lies in the knot span `span`. An end that lies just
+            // outside it, by rounding, is read at its knot; an end inside it
+            // is read where it is, however short the span.
+            let (lo, hi) = span?;
+            let inside = |t: f64| {
+                if t < lo && lo - t <= near {
+                    lo
+                } else if t > hi && t - hi <= near {
+                    hi
+                } else {
+                    t
+                }
+            };
+            let hull =
+                brepkit_math::nurbs::decompose::curve_bezier_between(n, inside(a), inside(b))
+                    .ok()?;
+            hull.iter()
+                .map(|&[x, y, z, w]| (w > 0.0).then(|| Point3::new(x / w, y / w, z / w)))
+                .collect()
+        }
+    }
+}
+
+/// How far the piece of `curve` from `a` to `b` turns round `winding`,
+/// where its hull bounds the turn to less than half a turn each way round.
+fn piece_turn(
+    curve: &EdgeCurve,
+    (a, b): (f64, f64),
+    span: Option<(f64, f64)>,
+    at: &dyn Fn(f64) -> Point3,
+    winding: Winding,
+) -> Option<[f64; 2]> {
+    let hull = piece_hull(curve, (a, b), span, at)?;
+    let flat: Vec<Vec2> = hull.iter().map(|&p| winding.flat(p)).collect();
+    let (round, middle, half) = wedge(&flat)?;
+    let Winding::Ring { .. } = winding else {
+        return Some([round, 0.0]);
+    };
+    // A point of the piece is a mix of the hull's points. Its height is the
+    // mix of theirs, and its distance from the axis lies between that mix of
+    // theirs and `c` times it, `c` the cosine of half the angle they span
+    // round the axis: each lies within that angle of their middle direction.
+    // So in its half plane through the axis the point lies in the hull of
+    // each hull point's two places, at `c rho_i` and at `rho_i` out.
+    let c = half.cos();
+    let first = winding.in_tube(*hull.first()?)?;
+    let last = winding.in_tube(*hull.last()?)?;
+    let mut tube = vec![first];
+    for (&p, q) in hull.iter().zip(&flat) {
+        let place = winding.in_tube(p)?;
+        let along = q.x().madd(middle.x(), q.y() * middle.y());
+        if along <= 0.0 {
+            return None;
+        }
+        tube.push(Vec2::new(
+            c.madd(q.length(), place.x() - q.length()),
+            place.y(),
+        ));
+        tube.push(place);
+    }
+    tube.push(last);
+    let (round_tube, _, _) = wedge(&tube)?;
+    Some([round, round_tube])
+}
+
+/// A piece of an edge: its parameter span in traversal order and, on a
+/// B-spline curve, the knot span it lies in.
+type TurnPiece = (f64, f64, Option<(f64, f64)>);
+
+/// An edge's parameter span in traversal order, cut as [`edge_pieces`]
+/// cuts it, but a B-spline curve at every distinct knot inside it however
+/// near another or an end, so that each piece lies in one knot span, which
+/// comes with it: the span its lower end starts. `None` for more than
+/// `most` pieces.
+fn turn_spans(edge: &BoundaryEdge<'_>, most: usize) -> Option<Vec<TurnPiece>> {
+    let EdgeCurve::NurbsCurve(nc) = edge.curve else {
+        let spans = edge_pieces(edge);
+        return (spans.len() <= most)
+            .then(|| spans.into_iter().map(|(a, b)| (a, b, None)).collect());
+    };
+    let (lo, hi) = (edge.from.min(edge.to), edge.from.max(edge.to));
+    let knots = nc.knots();
+    let mut ends = vec![lo];
+    for &k in knots {
+        if k > lo && k < hi && ends.last().is_some_and(|&last| k > last) {
+            if ends.len() > most {
+                return None;
+            }
+            ends.push(k);
+        }
+    }
+    ends.push(hi);
+    if ends.len() - 1 > most {
+        return None;
+    }
+    // The knot span from the last knot at or below `x` to the next: the
+    // pieces hold no knot inside, so it holds the piece from `x` on.
+    let (p, n) = (nc.degree(), nc.control_points().len());
+    let span_from = |x: f64| -> Option<(f64, f64)> {
+        let j = knots.partition_point(|&k| k <= x).clamp(p + 1, n);
+        Some((*knots.get(j - 1)?, *knots.get(j)?))
+    };
+    let mut spans = Vec::with_capacity(ends.len() - 1);
+    for w in ends.windows(2) {
+        spans.push((w[0], w[1], Some(span_from(w[0])?)));
+    }
+    if edge.to < edge.from {
+        spans = spans.into_iter().rev().map(|(a, b, k)| (b, a, k)).collect();
+    }
+    Some(spans)
+}
+
+/// How many whole times `wire` runs round `winding`: round its axis, and
+/// round a ring's tube. Each piece of an edge is cut until the hull of its
+/// Bezier points spans less than half a turn round the axis, and round the
+/// tube, so the piece turns as far as its ends do. `None` where a piece
+/// does not come within that however finely it is cut (it runs through or
+/// next to the axis), where two edges do not meet, or where the turns do
+/// not come to a whole number.
+fn turns_of(wire: &[BoundaryEdge<'_>], winding: Winding) -> Option<(i64, i64)> {
+    let mut total = [0.0_f64; 2];
+    let mut add = |turn: [f64; 2]| {
+        total[0] += turn[0];
+        total[1] += turn[1];
+    };
+    let (mut first, mut last): (Option<Point3>, Option<Point3>) = (None, None);
+    let mut pieces = 0_usize;
+    for edge in wire {
+        let at = |t: f64| edge.curve.evaluate_with_endpoints(t, edge.start, edge.end);
+        let spans = turn_spans(edge, MOST_TURN_PIECES - pieces)?;
+        for (ta, tb, span) in spans {
+            let start = at(ta);
+            if let Some(end) = last {
+                add(winding.join(end, start)?);
+            }
+            first.get_or_insert(start);
+            let mut pending = vec![(ta, tb, 0_u32)];
+            while let Some((a, b, depth)) = pending.pop() {
+                if pieces >= MOST_TURN_PIECES
+                    || winding.at_tube_centre(at(a))
+                    || winding.at_tube_centre(at(b))
+                {
+                    return None;
+                }
+                pieces += 1;
+                #[cfg(test)]
+                PIECES_READ.with(|read| read.set(pieces));
+                if let Some(turn) = piece_turn(edge.curve, (a, b), span, &at, winding) {
+                    add(turn);
+                    continue;
+                }
+                let mid = f64::midpoint(a, b);
+                // A piece of two neighbouring numbers has no middle to cut
+                // at.
+                if depth >= MOST_TURN_HALVINGS || mid <= a.min(b) || mid >= a.max(b) {
+                    return None;
+                }
+                pending.push((mid, b, depth + 1));
+                pending.push((a, mid, depth + 1));
+            }
+            last = Some(at(tb));
+        }
+    }
+    add(winding.join(last?, first?)?);
+    let whole = |x: f64| {
+        let k = x.round();
+        #[allow(clippy::cast_possible_truncation)]
+        ((x - k).abs() <= 1e-3 && k.abs() < 1e6).then_some(k as i64)
+    };
+    Some((whole(total[0])?, whole(total[1])?))
+}
+
+/// The surface's [`Winding`] and how a wire's turns round it read as its
+/// turns round the surface: a cylinder's or a cone's axis, a sphere's axis
+/// clear of `samples`, a torus's axis and tube. A B-spline surface that
+/// closes on itself is read as the cylinder, cone, sphere or torus it
+/// matches, where each of its lines of constant parameter that closes runs
+/// once round that one's axis or tube. `None` for any other surface.
+fn winding_of(
+    surface: &FaceSurface,
+    samples: &dyn Fn() -> Vec<Point3>,
+) -> Option<(Winding, Reading)> {
+    use brepkit_geometry::convert::recognize_surface::{RecognizedSurface, recognize_surface};
+    let round = |w: Option<Winding>| w.map(|w| (w, Reading::Round));
+    match surface {
+        FaceSurface::Plane { .. } => None,
+        FaceSurface::Cylinder(s) => round(Winding::axis_of(s.origin(), s.axis())),
+        FaceSurface::Cone(s) => round(Winding::axis_of(s.apex(), s.axis())),
+        FaceSurface::Sphere(s) => round(Winding::axis_of(
+            s.center(),
+            clear_direction(&samples(), s.center())?,
+        )),
+        FaceSurface::Torus(t) => {
+            Winding::ring_of(t.center(), t.z_axis(), t.major_radius(), t.minor_radius())
+                .map(|w| (w, Reading::Both))
+        }
+        FaceSurface::Nurbs(s) => {
+            let (closed_u, closed_v) = (s.is_periodic_u(), s.is_periodic_v());
+            if !closed_u && !closed_v {
+                return None;
+            }
+            let size = s.aabb().max - s.aabb().min;
+            let winding = match recognize_surface(s, 1e-7 * (1.0 + size.length())) {
+                RecognizedSurface::Cylinder { origin, axis, .. } => Winding::axis_of(origin, axis)?,
+                RecognizedSurface::Cone { apex, axis, .. } => Winding::axis_of(apex, axis)?,
+                RecognizedSurface::Sphere { center, .. } => {
+                    Winding::axis_of(center, clear_direction(&samples(), center)?)?
+                }
+                RecognizedSurface::Torus {
+                    center,
+                    axis,
+                    major_radius,
+                    minor_radius,
+                } => Winding::ring_of(center, axis, major_radius, minor_radius)?,
+                RecognizedSurface::Plane { .. } | RecognizedSurface::NotRecognized => {
+                    return None;
+                }
+            };
+            let (u0, u1) = s.domain_u();
+            let (v0, v1) = s.domain_v();
+            let once = |iso: Option<NurbsCurve>| -> Option<(i64, i64)> {
+                let iso = EdgeCurve::NurbsCurve(iso?);
+                let EdgeCurve::NurbsCurve(n) = &iso else {
+                    return None;
+                };
+                let (d0, d1) = n.domain();
+                let edge = BoundaryEdge {
+                    curve: &iso,
+                    start: n.evaluate(d0),
+                    end: n.evaluate(d1),
+                    from: d0,
+                    to: d1,
+                };
+                let (a, b) = turns_of(std::slice::from_ref(&edge), winding)?;
+                Some((a.abs(), b.abs()))
+            };
+            let along_u = closed_u.then(|| once(iso_at_v(s, 0.5 * (v0 + v1))));
+            let along_v = closed_v.then(|| once(iso_at_u(s, 0.5 * (u0 + u1))));
+            // The closed lines of constant parameter, each as its turns
+            // round the axis and round the tube.
+            let closed: Vec<(i64, i64)> = [along_u, along_v]
+                .into_iter()
+                .flatten()
+                .collect::<Option<Vec<_>>>()?;
+            let ring = matches!(winding, Winding::Ring { .. });
+            let reading = match closed[..] {
+                [(1, 0)] => Reading::Round,
+                [(0, 1)] if ring => Reading::Tube,
+                [a, b] if ring && (a == (1, 0) && b == (0, 1) || a == (0, 1) && b == (1, 0)) => {
+                    Reading::Both
+                }
+                _ => return None,
+            };
+            Some((winding, reading))
+        }
+    }
+}
+
+/// The surface's line of constant `v`, as a curve over its `u`.
+fn iso_at_v(s: &NurbsSurface, v: f64) -> Option<NurbsCurve> {
+    let (rows, weights) = (s.control_points(), s.weights());
+    let (pv, knots) = (s.degree_v(), s.knots_v());
+    let span = brepkit_math::nurbs::basis::find_span(rows.first()?.len(), pv, v, knots);
+    let basis = brepkit_math::nurbs::basis::basis_funs(span, v, pv, knots);
+    let mut points = Vec::with_capacity(rows.len());
+    let mut mix = Vec::with_capacity(rows.len());
+    for (row, w) in rows.iter().zip(weights) {
+        let (mut sum, mut weight) = (Vec3::new(0.0, 0.0, 0.0), 0.0);
+        for (k, &n) in basis.iter().enumerate() {
+            let j = span.checked_sub(pv)? + k;
+            let wj = *w.get(j)?;
+            sum += (*row.get(j)? - Point3::new(0.0, 0.0, 0.0)) * (n * wj);
+            weight += n * wj;
+        }
+        if weight.is_nan() || weight <= 0.0 {
+            return None;
+        }
+        points.push(Point3::new(0.0, 0.0, 0.0) + sum * (1.0 / weight));
+        mix.push(weight);
+    }
+    NurbsCurve::new(s.degree_u(), s.knots_u().to_vec(), points, mix).ok()
+}
+
+/// The surface's line of constant `u`, as a curve over its `v`.
+fn iso_at_u(s: &NurbsSurface, u: f64) -> Option<NurbsCurve> {
+    let (rows, weights) = (s.control_points(), s.weights());
+    let (pu, knots) = (s.degree_u(), s.knots_u());
+    let span = brepkit_math::nurbs::basis::find_span(rows.len(), pu, u, knots);
+    let basis = brepkit_math::nurbs::basis::basis_funs(span, u, pu, knots);
+    let columns = rows.first()?.len();
+    let mut points = Vec::with_capacity(columns);
+    let mut mix = Vec::with_capacity(columns);
+    for j in 0..columns {
+        let (mut sum, mut weight) = (Vec3::new(0.0, 0.0, 0.0), 0.0);
+        for (k, &n) in basis.iter().enumerate() {
+            let i = span.checked_sub(pu)? + k;
+            let wi = *weights.get(i)?.get(j)?;
+            sum += (*rows.get(i)?.get(j)? - Point3::new(0.0, 0.0, 0.0)) * (n * wi);
+            weight += n * wi;
+        }
+        if weight.is_nan() || weight <= 0.0 {
+            return None;
+        }
+        points.push(Point3::new(0.0, 0.0, 0.0) + sum * (1.0 / weight));
+        mix.push(weight);
+    }
+    NurbsCurve::new(s.degree_v(), s.knots_v().to_vec(), points, mix).ok()
+}
+
+/// How many times each wire of a face runs round its surface, outline
+/// first.
+///
+/// `None` where the surface does not close on itself (a plane, or a
+/// B-spline surface open in both parameters), or is a B-spline surface that
+/// does not read as a cylinder, cone, sphere or torus each of whose closed
+/// lines of constant parameter runs once round it. `None` for a wire that
+/// does not read: one with a piece whose turning no cut bounds (it runs
+/// through or next to the axis), or whose edges do not meet.
+///
+/// # Errors
+///
+/// Returns an error if topology lookups fail.
+pub fn wire_turns(
+    topo: &Topology,
+    face_id: FaceId,
+) -> Result<Option<Vec<Option<Turns>>>, CheckError> {
+    let face = topo.face(face_id)?;
+    match face.surface() {
+        FaceSurface::Plane { .. } => return Ok(None),
+        FaceSurface::Nurbs(s) if !s.is_periodic_u() && !s.is_periodic_v() => return Ok(None),
+        _ => {}
+    }
+    let wire_ids: Vec<WireId> = std::iter::once(face.outer_wire())
+        .chain(face.inner_wires().iter().copied())
+        .collect();
+    let mut wires: Vec<Option<Vec<BoundaryEdge<'_>>>> = Vec::with_capacity(wire_ids.len());
+    for &wid in &wire_ids {
+        wires.push(wires_of(topo, &[wid])?.and_then(|mut w| w.pop()));
+    }
+    if wires.iter().flatten().all(Vec::is_empty) {
+        return Ok(None);
+    }
+    let all = || -> Vec<Point3> { wires.iter().flatten().flat_map(|w| samples(w)).collect() };
+    let Some((winding, reading)) = winding_of(face.surface(), &all) else {
+        return Ok(None);
+    };
+    Ok(Some(
+        wires
+            .iter()
+            .map(|w| {
+                let (round, tube) = turns_of(w.as_ref()?, winding)?;
+                Some(match reading {
+                    Reading::Round => Turns::Round(round),
+                    Reading::Tube => Turns::Round(tube),
+                    Reading::Both => Turns::Torus(round, tube),
+                })
+            })
+            .collect(),
+    ))
 }
 
 /// Where a hole lies off its face.

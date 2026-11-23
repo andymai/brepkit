@@ -5327,6 +5327,46 @@ struct CappedCorner {
     t_cap_curve: Option<EdgeCurve>,
 }
 
+/// Everything [`apply_capped_corner_on_cap`] changes, worked out before it
+/// changes anything.
+struct CappedOnCap {
+    /// The cap round's face, its contact on the wall and on `P`, and its
+    /// end section between them.
+    t_face: FaceId,
+    t_wall: EdgeId,
+    t_cap: EdgeId,
+    t_section: EdgeId,
+    /// The extrusion round's face, its contact on the wall, and its end
+    /// section on `P`.
+    k_face: FaceId,
+    k_wall: EdgeId,
+    k_section: EdgeId,
+    /// The wall and `P`, as trimmed.
+    wall: FaceId,
+    cap: FaceId,
+    /// The retained sharp edge's piece the extrusion round's section ends
+    /// on.
+    retained: EdgeId,
+    /// The vertices the corner's old edges end at: the cap round's ends
+    /// on the wall and on `P`, the extrusion round's on the wall and on `Q`.
+    t_wall_end: VertexId,
+    t_cap_end: VertexId,
+    k_wall_end: VertexId,
+    k_side_end: VertexId,
+    /// The contacts' crossing on the wall, and where the crease meets `P`.
+    x: Point3,
+    g: Point3,
+    /// The crease from `x` to `g`, an arc of an ellipse running up its
+    /// angle.
+    crease: EdgeCurve,
+}
+
+/// A capped corner whose crease ends on `Q` or on `P`.
+enum CappedPlan {
+    OnSide(Box<CappedCorner>),
+    OnCap(Box<CappedOnCap>),
+}
+
 /// The edge of `face`'s outer wire whose two ends lie at `a` and `b`.
 fn wire_edge_between(
     topo: &Topology,
@@ -5534,7 +5574,7 @@ fn plan_capped_corner(
     (t, k): (usize, usize),
     support_faces: &[(FaceId, FaceId)],
     stripe_faces: &[Option<FaceId>],
-) -> Option<CappedCorner> {
+) -> Option<CappedPlan> {
     let (st, sk) = (stripes.get(t)?, stripes.get(k)?);
     let (t_face, k_face) = ((*stripe_faces.get(t)?)?, (*stripe_faces.get(k)?)?);
     let &[retained_source] = junction.unselected_sharp_edges.as_slice() else {
@@ -5690,10 +5730,11 @@ fn plan_capped_corner(
     if theta <= 1e-6 || theta >= std::f64::consts::PI - 1e-6 {
         return None;
     }
+    // The crease meets `Q` below `P` where the wall and `Q` meet at more
+    // than a right angle, and meets `P` short of `Q` where they meet at
+    // less.
     let reach_side = spine.reach(k_side_point);
-    // Only the corner whose crease meets `Q` below `P` (the wall and `Q`
-    // meeting at more than a right angle) is built here.
-    if reach_side <= tol || reach_side > r || spine.reach(centre).abs() > tol {
+    if reach_side.abs() <= tol || reach_side > r || spine.reach(centre).abs() > tol {
         return None;
     }
     let flat = |v: Vec3| (v - n * v.dot(n)).normalize().ok();
@@ -5709,10 +5750,95 @@ fn plan_capped_corner(
     .ok()?;
     // `phi` is the ellipse's angle plus a right angle.
     let half_turn = std::f64::consts::FRAC_PI_2;
-    let (x, e) = (
-        crease.evaluate(-half_turn),
-        crease.evaluate(theta - half_turn),
-    );
+    let x = crease.evaluate(-half_turn);
+
+    // The edges at the corner as the trim left them.
+    let (t_section, t_cap_end, t_wall_end) =
+        wire_edge_between(topo, t_face, t_cap_point, t_wall_point, tol)?;
+    let (k_section, k_wall_end, k_side_end) =
+        wire_edge_between(topo, k_face, k_wall_point, k_side_point, tol)?;
+    let t_wall = wire_neighbour_at(topo, t_face, t_section, t_wall_end)?;
+    let t_cap = wire_neighbour_at(topo, t_face, t_section, t_cap_end)?;
+    let k_wall = wire_neighbour_at(topo, k_face, k_section, k_wall_end)?;
+    let k_side = wire_neighbour_at(topo, k_face, k_section, k_side_end)?;
+    if !in_outer_wire(topo, wall, t_wall)
+        || !in_outer_wire(topo, wall, k_wall)
+        || !in_outer_wire(topo, cap, t_cap)
+        || !in_outer_wire(topo, side, k_side)
+    {
+        return None;
+    }
+    let retained_piece = wire_neighbour_at(topo, side, k_side, k_side_end)?;
+    let piece = topo.edge(retained_piece).ok()?;
+    if !matches!(piece.curve(), EdgeCurve::Line)
+        || !in_outer_wire(topo, cap, retained_piece)
+        || !edge_passes(topo, t_wall, x, tol)
+        || !edge_passes(topo, k_wall, x, tol)
+    {
+        return None;
+    }
+
+    if reach_side < 0.0 {
+        // The extrusion round's quarter runs on past the cap round's
+        // contact on `P`: the crease ends on `P` at `g`, where that contact
+        // meets the extrusion round's section, a radius from the section's
+        // centre square to the wall. The extrusion round ends on its section
+        // from `g` to `Q`, and the cap round's contact on `P` ends at `g`.
+        let g = crease.evaluate(0.0);
+        // The contact on `P` is a ruling of the cap round, rebuilt as the
+        // line from its far end to `g`.
+        let contact = topo.edge(t_cap).ok()?;
+        let far_end = if contact.start() == t_cap_end {
+            contact.end()
+        } else {
+            contact.start()
+        };
+        let far_end = topo.vertex(far_end).ok()?.point();
+        // `g` lies a quarter turn round the section's circle from its
+        // contact on the wall, and its contact on `Q` lies `theta`, more
+        // than a quarter turn, round: `g` is on the section's arc where the
+        // section's edge is that circle.
+        let on_section = match topo.edge(k_section).ok()?.curve() {
+            EdgeCurve::Circle(c) => {
+                (c.center() - centre).length() <= tol
+                    && (c.radius() - r).abs() <= tol
+                    && c.normal().cross(n).length() <= 1e-9
+            }
+            EdgeCurve::NurbsCurve(_) => edge_passes(topo, k_section, g, tol),
+            EdgeCurve::Line | EdgeCurve::Ellipse(_) => false,
+        };
+        if !on_section
+            || !on_cap(g, tol)
+            || spine.reach(g).abs() > tol
+            || ((g - centre).length() - r).abs() > tol
+            || !on_cap(far_end, tol)
+            || spine.reach(far_end).abs() > tol
+            || !edge_passes(topo, t_cap, g, tol)
+        {
+            return None;
+        }
+        return Some(CappedPlan::OnCap(Box::new(CappedOnCap {
+            t_face,
+            t_wall,
+            t_cap,
+            t_section,
+            k_face,
+            k_wall,
+            k_section,
+            wall,
+            cap,
+            retained: retained_piece,
+            t_wall_end,
+            t_cap_end,
+            k_wall_end,
+            k_side_end,
+            x,
+            g,
+            crease: EdgeCurve::Ellipse(crease),
+        })));
+    }
+
+    let e = crease.evaluate(theta - half_turn);
     // The notch: the cap round's trace on `Q`, from where the crease meets
     // `Q` along the retained edge to where the round's contact on `P` does.
     let start = (k_side_point - vertex).dot(along);
@@ -5755,39 +5881,13 @@ fn plan_capped_corner(
     )
     .ok()?;
     let psi_side = (reach_side / r).clamp(-1.0, 1.0).acos();
-    if (notch.evaluate(psi_side) - e).length() > tol {
-        return None;
-    }
-
-    // The edges at the corner as the trim left them.
-    let (t_section, t_cap_end, t_wall_end) =
-        wire_edge_between(topo, t_face, t_cap_point, t_wall_point, tol)?;
-    let (k_section, k_wall_end, k_side_end) =
-        wire_edge_between(topo, k_face, k_wall_point, k_side_point, tol)?;
-    let t_wall = wire_neighbour_at(topo, t_face, t_section, t_wall_end)?;
-    let t_cap = wire_neighbour_at(topo, t_face, t_section, t_cap_end)?;
-    let k_wall = wire_neighbour_at(topo, k_face, k_section, k_wall_end)?;
-    let k_side = wire_neighbour_at(topo, k_face, k_section, k_side_end)?;
-    if !in_outer_wire(topo, wall, t_wall)
-        || !in_outer_wire(topo, wall, k_wall)
-        || !in_outer_wire(topo, cap, t_cap)
-        || !in_outer_wire(topo, side, k_side)
-    {
-        return None;
-    }
-    let retained_piece = wire_neighbour_at(topo, side, k_side, k_side_end)?;
-    let piece = topo.edge(retained_piece).ok()?;
-    if !matches!(piece.curve(), EdgeCurve::Line) || !in_outer_wire(topo, cap, retained_piece) {
-        return None;
-    }
-    if !edge_passes(topo, retained_piece, f, tol)
-        || !edge_passes(topo, t_wall, x, tol)
-        || !edge_passes(topo, k_wall, x, tol)
+    if (notch.evaluate(psi_side) - e).length() > tol
+        || !edge_passes(topo, retained_piece, f, tol)
         || !edge_passes(topo, k_side, e, tol)
     {
         return None;
     }
-    Some(CappedCorner {
+    Some(CappedPlan::OnSide(Box::new(CappedCorner {
         t_face,
         t_wall,
         t_cap,
@@ -5810,7 +5910,7 @@ fn plan_capped_corner(
         crease: EdgeCurve::Ellipse(crease),
         notch: EdgeCurve::Ellipse(notch),
         t_cap_curve: None,
-    })
+    })))
 }
 
 /// Work out the capped corner at `junction` (see [`apply_capped_corner`])
@@ -6201,19 +6301,21 @@ fn drop_from_outer_wire(
 /// wall `C` meets an end plane `P` and a plane side `Q`, both standing
 /// square to `P`: `P ∩ C` is rounded (a cylinder), `C ∩ Q` is rounded
 /// (the extrusion's round, a cylinder square to `P`), and `P ∩ Q` is left
-/// sharp, the wall meeting `Q` at more than a right angle. A curved wall
-/// whose round along `P` is a torus is built the same way, its crease and
-/// notch fitted (see [`plan_capped_torus_corner`]).
+/// sharp. A curved wall whose round along `P` is a torus is built the same
+/// way, its crease and notch fitted (see [`plan_capped_torus_corner`]).
 ///
 /// At depth `t` below `P` the cap round is the wall's trace inset by
 /// `w = r - sqrt(r^2 - (r - t)^2)`, and the extrusion round is its one
 /// circle. So the rounds meet along a crease from where their contacts
-/// on the wall cross (`t = r`) round the extrusion round's quarter, down
-/// to where it meets `Q`; from there the cap round runs on to `Q`,
-/// notching it, up to the retained edge, where its contact on `P` ends.
-/// The extrusion round never reaches `P`, so neither round ends on its
-/// own section at the corner: the crease and the notch take the place of
-/// the cap round's section, and the crease that of the extrusion round's.
+/// on the wall cross (`t = r`) round the extrusion round's quarter. Where
+/// the wall meets `Q` at more than a right angle, the crease runs down to
+/// where it meets `Q`; from there the cap round runs on to `Q`, notching
+/// it, up to the retained edge, where its contact on `P` ends. The
+/// extrusion round never reaches `P`, so neither round ends on its own
+/// section at the corner: the crease and the notch take the place of the
+/// cap round's section, and the crease that of the extrusion round's.
+/// Where they meet at less than a right angle, see
+/// [`apply_capped_corner_on_cap`].
 ///
 /// Returns whether the corner was built so.
 fn apply_capped_corner(
@@ -6233,10 +6335,20 @@ fn apply_capped_corner(
     }
     let Some(plan) = [(a, b), (b, a)].into_iter().find_map(|pair| {
         plan_capped_corner(topo, junction, stripes, pair, support_faces, stripe_faces).or_else(
-            || plan_capped_torus_corner(topo, junction, stripes, pair, support_faces, stripe_faces),
+            || {
+                plan_capped_torus_corner(topo, junction, stripes, pair, support_faces, stripe_faces)
+                    .map(|plan| CappedPlan::OnSide(Box::new(plan)))
+            },
         )
     }) else {
         return Ok(false);
+    };
+    let plan = match plan {
+        CappedPlan::OnSide(plan) => *plan,
+        CappedPlan::OnCap(plan) => {
+            apply_capped_corner_on_cap(topo, junction, &plan, registry)?;
+            return Ok(true);
+        }
     };
     let fail = || BlendError::CornerFailure {
         vertex: junction.vertex,
@@ -6351,6 +6463,130 @@ fn apply_capped_corner(
         }
     }
     Ok(true)
+}
+
+/// The capped corner where the wall meets `Q` at less than a right angle
+/// (see [`apply_capped_corner`]). The extrusion round's quarter then runs on
+/// past the cap round's contact on `P`, so the crease runs from where the
+/// contacts cross on the wall (`x`) to where it meets that contact on `P`
+/// (`g`). From `g` the extrusion round reaches `P` and ends on its own
+/// section down to `Q`, and the cap round's contact on `P` ends at `g`.
+/// The crease takes the place of the cap round's section, and of the
+/// extrusion round's section from its contact on the wall to `g`.
+fn apply_capped_corner_on_cap(
+    topo: &mut Topology,
+    junction: &VertexJunction,
+    plan: &CappedOnCap,
+    registry: &mut BoundaryRegistry,
+) -> Result<(), BlendError> {
+    let fail = || BlendError::CornerFailure {
+        vertex: junction.vertex,
+    };
+    let wall_run = wire_run_between(
+        topo,
+        plan.wall,
+        (plan.t_wall, plan.t_wall_end),
+        (plan.k_wall, plan.k_wall_end),
+    )
+    .ok_or_else(fail)?;
+    let cap_run = wire_run_between(
+        topo,
+        plan.cap,
+        (plan.t_cap, plan.t_cap_end),
+        (plan.retained, plan.k_side_end),
+    )
+    .ok_or_else(fail)?;
+    // The section stays an edge of `P` from `g`: it may be one of the
+    // edges between the cap round's contact and the retained edge, and no
+    // other edge of `P`.
+    if in_outer_wire(topo, plan.cap, plan.k_section) && !cap_run.contains(&plan.k_section) {
+        return Err(fail());
+    }
+    let k_runs_from_wall = topo.edge(plan.k_section)?.start() == plan.k_wall_end;
+    let t_runs_from_cap = topo.edge(plan.t_section)?.start() == plan.t_cap_end;
+
+    let vx = topo.add_vertex(Vertex::new(plan.x, TOL));
+    let vg = topo.add_vertex(Vertex::new(plan.g, TOL));
+    cut_edge_at(topo, plan.t_wall, plan.t_wall_end, vx, plan.x)?;
+    cut_edge_at(topo, plan.k_wall, plan.k_wall_end, vx, plan.x)?;
+    cut_edge_at(topo, plan.k_section, plan.k_wall_end, vg, plan.g)?;
+    {
+        let edge = topo.edge_mut(plan.t_cap)?;
+        if edge.start() == plan.t_cap_end {
+            edge.set_start(vg);
+        } else {
+            edge.set_end(vg);
+        }
+        edge.set_curve(EdgeCurve::Line);
+    }
+    for (edge, faces) in [
+        (plan.t_wall, [plan.wall, plan.t_face]),
+        (plan.k_wall, [plan.wall, plan.k_face]),
+        (plan.t_cap, [plan.cap, plan.t_face]),
+        (plan.k_section, [plan.cap, plan.k_face]),
+    ] {
+        for face in faces {
+            topo.pcurves_mut().remove(edge, face);
+        }
+    }
+    let crease = topo.add_edge(Edge::new(vx, vg, plan.crease.clone()));
+
+    // The cap round's section ran between its contacts on `P` and on the
+    // wall; the crease now runs from the wall's to `g`.
+    replace_in_outer_wire(
+        topo,
+        plan.t_face,
+        plan.t_section,
+        &[(crease, !t_runs_from_cap)],
+    )?;
+    // The extrusion round's section ran between its contacts on the wall
+    // and on `Q`; it is now the crease on to `g` and the section's piece
+    // from `g` to `Q`, or back.
+    let k_new = if k_runs_from_wall {
+        vec![(crease, true), (plan.k_section, true)]
+    } else {
+        vec![(plan.k_section, true), (crease, false)]
+    };
+    replace_in_outer_wire(topo, plan.k_face, plan.k_section, &k_new)?;
+    drop_from_outer_wire(topo, plan.wall, &wall_run)?;
+    // `P` runs from the cap round's contact, now ending at `g`, along the
+    // section's piece to the retained edge, or back.
+    let cap_edges: Vec<OrientedEdge> = topo
+        .wire(topo.face(plan.cap)?.outer_wire())?
+        .edges()
+        .iter()
+        .copied()
+        .filter(|oe| !cap_run.contains(&oe.edge()))
+        .collect();
+    let at = cap_edges
+        .iter()
+        .position(|oe| oe.edge() == plan.t_cap)
+        .ok_or_else(fail)?;
+    let t_cap_edge = topo.edge(plan.t_cap)?;
+    let section = topo.edge(plan.k_section)?;
+    let mut out = cap_edges.clone();
+    if cap_edges[at].oriented_end(t_cap_edge) == vg {
+        out.insert(
+            at + 1,
+            OrientedEdge::new(plan.k_section, section.start() == vg),
+        );
+    } else if cap_edges[at].oriented_start(t_cap_edge) == vg {
+        out.insert(at, OrientedEdge::new(plan.k_section, section.end() == vg));
+    } else {
+        return Err(fail());
+    }
+    let wire = topo.add_wire(Wire::new(out, true)?);
+    topo.face_mut(plan.cap)?.set_outer_wire(wire);
+
+    for edge in std::iter::once(plan.t_section)
+        .chain(wall_run)
+        .chain(cap_run.into_iter().filter(|&e| e != plan.k_section))
+    {
+        if let Some(handle) = registry.handle_for_edge(edge) {
+            registry.retire(handle);
+        }
+    }
+    Ok(())
 }
 
 /// Two rounds whose ends meet across a short edge left sharp.

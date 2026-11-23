@@ -39,6 +39,9 @@ pub enum CheckId {
     /// An inner wire crosses another wire of its face, lies outside the
     /// outer wire, or lies inside another inner wire.
     FaceWiresIntersect,
+    /// A wire of a face on a surface that closes on itself runs round the
+    /// surface more than once, so it bounds no region of the surface.
+    FaceWireTurns,
     /// Shell contains no faces.
     ShellEmpty,
     /// Shell faces not all connected via shared edges.
