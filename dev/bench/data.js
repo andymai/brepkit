@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795422888600,
+  "lastUpdate": 1795426211258,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -76463,6 +76463,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26621365,
             "range": "± 85486",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "86e36b46827b6e43f91260bb429174c458d86e4b",
+          "message": "chore(main): release 4.11.42 (#2746)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.42](https://github.com/andymai/brepkit/compare/v4.11.41...v4.11.42)\n(2026-11-23)\n\n\n### Bug Fixes\n\n* **operations:** give a boolean with an empty operand its trivial\nresult, drop a piece inside the tool from a cut per piece, and mesh two\nrod footprints closed\n([#2738](https://github.com/andymai/brepkit/issues/2738))\n([37cca01](https://github.com/andymai/brepkit/commit/37cca0173383553694f904d9a840f4f44e9b6883))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nReleases version 4.11.42, bumping the workspace and all crate versions\nin `Cargo.toml` and updating the changelog and release manifest.\n\nIncludes bug fixes in `brepkit-operations`: boolean operations with an\nempty operand now return their trivial result, a piece inside the tool\nis dropped from a cut per piece, and two rod footprints now mesh closed.\n\n<sup>Written for commit c26058e1054f3019f5d22f04c4a61d05d0bbd94e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2746?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2746?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2746&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-23T09:26:26Z",
+          "tree_id": "aa4439bfddc6d6f20f83669a353518988c535a4e",
+          "url": "https://github.com/andymai/brepkit/commit/86e36b46827b6e43f91260bb429174c458d86e4b"
+        },
+        "date": 1795426197080,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 867160,
+            "range": "± 15299",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 915034,
+            "range": "± 21054",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9807,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 573329,
+            "range": "± 9548",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19323551,
+            "range": "± 20577",
             "unit": "ns/iter"
           }
         ]
