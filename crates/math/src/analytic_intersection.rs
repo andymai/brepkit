@@ -2658,7 +2658,7 @@ fn marched_sections_near(
             k += 1;
             past_edges[k - 1 - candidates.len()]
         };
-        if marched.iter().any(|m| on_march(seed.p, seed.gap, m)) {
+        if marched.iter().any(|m| on_march(&a, &b, seed.p, m)) {
             continue;
         }
 
@@ -2685,8 +2685,7 @@ fn marched_sections_near(
 
         if march_result.len() >= 2 {
             let middle = march_result[march_result.len() / 2];
-            let gap = station(&a, &b, middle, Vec3::new(0.0, 0.0, 0.0)).map_or(seed.gap, |s| s.gap);
-            if marched.iter().any(|m| on_march(middle, gap, m)) {
+            if marched.iter().any(|m| on_march(&a, &b, middle, m)) {
                 continue;
             }
             marched.push(march_result.clone());
@@ -2745,22 +2744,69 @@ fn cell_reach(surface: &AnalyticSurface<'_>, (du, dv): (f64, f64), v: f64) -> f6
     }
 }
 
-/// Whether `p`, a point of the section whose next branch lies `gap` away,
-/// lies on the curve a march traced through `points`: a chord of the march
-/// passes nearer it than a step's sag, and nearer than the next branch. A
-/// point on another branch, however near, does not.
-fn on_march(p: Point3, gap: f64, points: &[Point3]) -> bool {
-    points.windows(2).any(|w| {
-        let chord = w[1] - w[0];
-        let len2 = chord.dot(chord);
-        let s = if len2 > 0.0 {
-            ((p - w[0]).dot(chord) / len2).clamp(0.0, 1.0)
-        } else {
-            0.0
+/// Whether `p`, a point of the section of `a` and `b`, lies on the branch
+/// a march traced through `points`. The chord of the march nearest `p` must
+/// pass no farther from it than a fifth of its length, four times the sag
+/// of an arc that turns as far as a step may (twice [`MARCH_TURN`]). From
+/// that chord's nearest point, Newton steps move onto the section and along
+/// its tangent toward `p`, each on the sheets `p` and the chord's ends lie
+/// on (a cone's nappe, a torus's tube): `p` lies on the branch where they
+/// come within the linear tolerance of it. A point of another branch,
+/// however near the chord (another nappe 1e-4 away), stays that far from
+/// where they settle.
+fn on_march(
+    a: &AnalyticSurface<'_>,
+    b: &AnalyticSurface<'_>,
+    p: Point3,
+    points: &[Point3],
+) -> bool {
+    use section_fit::Carrier;
+    let nearest = points
+        .windows(2)
+        .map(|w| {
+            let chord = w[1] - w[0];
+            let len2 = chord.dot(chord);
+            let s = if len2 > 0.0 {
+                ((p - w[0]).dot(chord) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let foot = w[0] + chord * s;
+            ((p - foot).length(), len2.sqrt(), foot, w)
+        })
+        .min_by(|x, y| x.0.total_cmp(&y.0));
+    let Some((off, len, foot, w)) = nearest else {
+        return false;
+    };
+    let sheets = |q: Point3| (a.sheet(q), b.sheet(q));
+    if off > MARCH_TURN * len || sheets(w[0]) != sheets(p) || sheets(w[1]) != sheets(p) {
+        return false;
+    }
+    let tol = Tolerance::new().linear;
+    let mut guess = foot;
+    for _ in 0..8 {
+        let Some(q) = settle_on_section(a, b, guess) else {
+            return false;
         };
-        let off = (p - (w[0] + chord * s)).length();
-        off <= MARCH_BASIN * gap && off <= MARCH_TURN * len2.sqrt()
-    })
+        if sheets(q) != sheets(p) {
+            return false;
+        }
+        let miss = p - q;
+        if miss.length() <= tol {
+            return true;
+        }
+        let (Some((_, na)), Some((_, nb))) = (a.distance(q), b.distance(q)) else {
+            return false;
+        };
+        let t = na.cross(nb);
+        let sin = t.length();
+        if sin <= 0.0 {
+            return false;
+        }
+        let t = t * (1.0 / sin);
+        guess = q + t * miss.dot(t);
+    }
+    false
 }
 
 /// The diagonal of the patch `surf` spans over `u_range` by `v_range`: the
@@ -5599,8 +5645,9 @@ impl Station {
 /// Each step goes along the tangent, no farther than [`Station::reach`],
 /// and moves onto the section by Newton steps. It is taken again at half the
 /// length unless the move onto the section stays within [`MARCH_BASIN`] of
-/// the gap at both ends (so the step stays on its branch), the tangent turns
-/// by less than twice [`MARCH_TURN`], and the step goes forward by at least
+/// the gap at both ends and on the sheets the seed lies on (a cone's nappe,
+/// a torus's tube), so the step stays on its branch, the tangent turns by
+/// less than twice [`MARCH_TURN`], and the step goes forward by at least
 /// half its length (so it does not pass a turn of the section). A march
 /// closes where the seed lies within its next step, ahead along the
 /// tangent and near it, and the section there runs the way it ran from the
@@ -5672,6 +5719,12 @@ fn march_analytic_intersection(
     };
 
     let start = station(a, b, seed, Vec3::new(0.0, 0.0, 0.0))?;
+    // The sheets of both surfaces a point lies on: a step stays on its own.
+    let sheets = |q: Point3| {
+        use section_fit::Carrier;
+        (a.sheet(q), b.sheet(q))
+    };
+    let home_sheets = sheets(seed);
 
     // March forward from seed, collecting points.
     let mut forward = Vec::new();
@@ -5726,6 +5779,7 @@ fn march_analytic_intersection(
                             && missed <= 0.5 * h
                             && next.t.dot(here.t) >= (2.0 * MARCH_TURN).cos()
                             && (next.p - here.p).dot(here.t) >= 0.5 * h
+                            && sheets(next.p) == home_sheets
                     });
                 match taken {
                     Some(next) => break Some(next),
@@ -10153,6 +10207,81 @@ mod tests {
                             .fold(f64::INFINITY, f64::min);
                         assert!(near < 1e-5, "{label}: {t:?} lies {near:.1e} off");
                     }
+                }
+            }
+        }
+    }
+
+    /// A cone lying 0.001 off its radial plane, its apex at the origin, and
+    /// a rod of radius 0.05 along x through the apex meet in four curves
+    /// along the rod, two on each nappe, a nappe's 1e-4 from the other's.
+    /// With both nappes in the cone's patch, a march step hopped to the other
+    /// nappe and the fit was refused; with each step kept on its nappe, a
+    /// seed on one nappe still lay within the estimated gap of a curve
+    /// marched on the other and started no march, and two of the four curves
+    /// were lost with no error. A seed now joins a marched curve only on its
+    /// nappe and where Newton steps from the curve's chord reach it within
+    /// the linear tolerance.
+    #[test]
+    fn sections_on_both_nappes_of_a_flat_cone_are_each_marched() {
+        let (half, r) = (0.001_f64, 0.05_f64);
+        let lin = Tolerance::new().linear;
+        let t2 = half.tan() * half.tan();
+        for (k, pose) in three_poses().iter().enumerate() {
+            let o = Point3::new(0.0, 0.0, 0.0);
+            let along = |v: Vec3| pose.mul_point(o + v) - pose.mul_point(o);
+            let cone =
+                ConicalSurface::new(pose.mul_point(o), along(Vec3::new(0.0, 0.0, 1.0)), half)
+                    .unwrap();
+            let rod =
+                CylindricalSurface::new(pose.mul_point(o), along(Vec3::new(1.0, 0.0, 0.0)), r)
+                    .unwrap();
+            let mut truth = Vec::new();
+            for j in 0..=90 {
+                let x = 0.9 * (f64::from(j) / 45.0 - 1.0);
+                let z = (t2 * x.madd(x, r * r) / (1.0 + t2)).sqrt();
+                let y = z.madd(-z, r * r).sqrt();
+                for (sy, sz) in [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+                    truth.push(pose.mul_point(Point3::new(x, sy * y, sz * z)));
+                }
+            }
+            let off_rod = |p: Point3| {
+                let (w, ax) = (p - rod.origin(), rod.axis());
+                ((w - ax * ax.dot(w)).length() - r).abs()
+            };
+            for cone_first in [true, false] {
+                let label = format!("pose {k} cone first {cone_first}");
+                let (a, b) = if cone_first {
+                    (
+                        AnalyticSurface::Cone(&cone),
+                        AnalyticSurface::Cylinder(&rod),
+                    )
+                } else {
+                    (
+                        AnalyticSurface::Cylinder(&rod),
+                        AnalyticSurface::Cone(&cone),
+                    )
+                };
+                let result = marched_sections(a, b, 32, Some((-1.0, 1.0)), Some((-1.0, 1.0)), None);
+                assert!(result.is_ok(), "{label}: {:?}", result.as_ref().err());
+                let curves = result.unwrap();
+                assert_eq!(curves.len(), 4, "{label}: curves");
+                for c in &curves {
+                    let worst = farthest_along(&c.curve, 4000, |p| {
+                        off_double_cone(&cone, p).max(off_rod(p))
+                    });
+                    assert!(worst <= lin, "{label}: off by {worst:.2e}");
+                }
+                for &t in &truth {
+                    let near = curves
+                        .iter()
+                        .map(|c| {
+                            crate::nurbs::projection::project_point_to_curve(&c.curve, t, 1e-12)
+                                .unwrap()
+                                .distance
+                        })
+                        .fold(f64::INFINITY, f64::min);
+                    assert!(near < 1e-5, "{label}: {t:?} lies {near:.1e} off");
                 }
             }
         }

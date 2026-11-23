@@ -85,6 +85,11 @@ pub(super) trait Carrier {
     /// to it, its curvature along `v`, positive where it bends away from
     /// the gradient. `None` where the distance has no second derivative.
     fn bend(&self, p: Point3, v: Vec3) -> Option<f64>;
+
+    /// Which sheet of the surface [`Self::distance`] reads at `p`: a cone's
+    /// nappe or a torus's tube on `p`'s side of the axis or the far one, as
+    /// 1 or -1; 0 for a surface of one sheet.
+    fn sheet(&self, p: Point3) -> i8;
 }
 
 /// The degree-6 Bernstein coefficients of the product of two cubics.
@@ -348,6 +353,35 @@ impl Carrier for AnalyticSurface<'_> {
         }
     }
 
+    fn sheet(&self, p: Point3) -> i8 {
+        match self {
+            Self::Cylinder(_) | Self::Sphere(_) => 0,
+            Self::Cone(c) => {
+                if c.axis().dot(p - c.apex()) < 0.0 {
+                    -1
+                } else {
+                    1
+                }
+            }
+            Self::Torus(t) => {
+                let w = p - t.center();
+                let across = w - t.z_axis() * t.z_axis().dot(w);
+                let rho = across.length();
+                if rho <= 0.0 {
+                    return 1;
+                }
+                let tube = |side: f64| {
+                    (w - across * (side * t.major_radius() / rho)).length() - t.minor_radius()
+                };
+                if tube(-1.0).abs() < tube(1.0).abs() {
+                    -1
+                } else {
+                    1
+                }
+            }
+        }
+    }
+
     fn scale(&self, p: Point3) -> f64 {
         match self {
             Self::Cylinder(c) => {
@@ -481,8 +515,9 @@ const AIM: f64 = 0.25;
 /// face's boundary drawn on its surface from a curve of fewer spans read a
 /// small dip's volume 4% low. The new points lie on that cubic at equal
 /// steps of the spans so counted, each moved onto the section by Newton
-/// steps. `None` where the cubic fails or a point does not move onto the
-/// section within half its spacing.
+/// steps. `None` where the cubic fails, the spacing would take more points
+/// than the fit allows, or a point does not move onto the section within
+/// half its spacing.
 fn spaced(a: &impl Carrier, b: &impl Carrier, points: &[Point3], tol: f64) -> Option<Vec<Point3>> {
     let curve = interpolate(points, 3).ok()?;
     let params = chord_length_params(points);
@@ -502,6 +537,10 @@ fn spaced(a: &impl Carrier, b: &impl Carrier, points: &[Point3], tol: f64) -> Op
         .collect();
     let total: f64 = want.iter().sum();
     if !total.is_finite() {
+        return None;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    if total.ceil() + 1.0 > MOST_POINTS as f64 {
         return None;
     }
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -731,6 +770,12 @@ mod tests {
                 })
                 .fold(0.0, f64::max);
             assert!(worst <= tol, "pose {k}: off by {worst:.2e}");
+
+            // At a tolerance no fit reaches, the first pass would ask for
+            // millions of points: it declines before it places any, and the
+            // fit then refuses within its own limit.
+            assert!(spaced(&a, &b, &points, 1e-30).is_none(), "pose {k}");
+            assert!(fit_section(&a, &b, &points, 1e-30).is_err(), "pose {k}");
         }
     }
 }
