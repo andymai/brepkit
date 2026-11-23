@@ -627,6 +627,348 @@ fn split_co_endpoint_sections(
     Ok(())
 }
 
+/// Split the sections at the points where the faces of three solids meet.
+///
+/// Two sections on one face, from partner faces of two other solids, cross
+/// where the three faces meet, and the third pair's section runs through the
+/// same point. A pairwise boolean meets that point where an edge of its
+/// first result crosses the third solid's face; a single pass over three or
+/// more solids has no such edge. Each section is cut there at one vertex the
+/// three share, so the faces split along whole pieces that meet end to end.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a topology lookup fails.
+#[allow(clippy::too_many_lines)]
+fn split_sections_at_triple_points(
+    topo: &mut Topology,
+    sources: &[SolidId],
+    tol: Tolerance,
+    arena: &mut GfaArena,
+) -> Result<(), AlgoError> {
+    use std::collections::{BTreeMap, HashMap};
+
+    use brepkit_math::vec::Point3;
+    use brepkit_topology::edge::{Edge, EdgeCurve};
+    use brepkit_topology::face::FaceId;
+    use brepkit_topology::vertex::{Vertex, VertexId};
+
+    use crate::ds::{Interference, Pave, PaveBlock};
+
+    /// The band two copies of one point are welded at downstream; a crossing
+    /// this near a section's end is that end.
+    const WELD: f64 = 1e-5;
+
+    /// How a section's edge parameter maps to its paves'.
+    enum Reading {
+        /// The fraction of the span.
+        Fraction,
+        /// An angle, in any turn.
+        Angle,
+        /// The curve's own parameter.
+        Own,
+    }
+    struct Section {
+        index: usize,
+        edge: brepkit_topology::edge::EdgeId,
+        start: Point3,
+        end: Point3,
+        params: (f64, f64),
+        reading: Reading,
+        /// A box proven to hold the section, where one can be read.
+        bbox: Option<brepkit_math::aabb::Aabb3>,
+        /// A whole loop, from its one vertex round to it.
+        closed: bool,
+        /// The vertices at its start and its end.
+        ends: [VertexId; 2],
+        curve: EdgeCurve,
+    }
+    /// A section a crossing lies on, where the crossing cuts it, and its
+    /// vertex there where the crossing is at one of its ends.
+    type Side = (usize, Option<f64>, Option<VertexId>);
+    /// The vertex for the crossings at one place, the point it stands for,
+    /// and the sections those crossings lie on.
+    struct Place {
+        at: Point3,
+        vertex: Option<VertexId>,
+        sections: Vec<usize>,
+    }
+
+    if sources.len() < 3 {
+        return Ok(());
+    }
+    let mut source_of: HashMap<FaceId, usize> = HashMap::new();
+    for (i, &solid) in sources.iter().enumerate() {
+        for face in brepkit_topology::explorer::solid_faces(topo, solid)? {
+            source_of.insert(face, i);
+        }
+    }
+
+    let mut sections: Vec<Section> = Vec::new();
+    let mut on_face: BTreeMap<FaceId, Vec<usize>> = BTreeMap::new();
+    for (index, curve) in arena.curves.iter().enumerate() {
+        let &[pb_id] = curve.pave_blocks.as_slice() else {
+            continue;
+        };
+        let Some(pb) = arena.pave_blocks.get(pb_id) else {
+            continue;
+        };
+        let edge = topo.edge(pb.original_edge)?;
+        let start = topo.vertex(edge.start())?.point();
+        let end = topo.vertex(edge.end())?.point();
+        // Ends that meet bound a whole loop (a circle round a wall) when the
+        // curve turns between them, and a section of no length otherwise.
+        let closed = (edge.start() == edge.end() || (start - end).length() < 1e-9)
+            && !matches!(edge.curve(), EdgeCurve::Line)
+            && (pb.end.parameter - pb.start.parameter).abs() > 1e-9;
+        if (start - end).length() <= WELD && !closed {
+            continue;
+        }
+        let reading = match edge.curve() {
+            EdgeCurve::Line => Reading::Fraction,
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => Reading::Angle,
+            EdgeCurve::NurbsCurve(_) => Reading::Own,
+        };
+        let k = sections.len();
+        sections.push(Section {
+            index,
+            edge: pb.original_edge,
+            start,
+            end,
+            params: (pb.start.parameter, pb.end.parameter),
+            reading,
+            bbox: phase_ee::proven_span_box(edge.curve(), start, end).map(|b| b.expanded(WELD)),
+            closed,
+            ends: [pb.start.vertex, pb.end.vertex],
+            curve: edge.curve().clone(),
+        });
+        for face in [curve.face_a, curve.face_b] {
+            on_face.entry(face).or_default().push(k);
+        }
+    }
+
+    // The section's pave parameter of a crossing read along its edge: a line
+    // edge reads the fraction of its span, a circle or an ellipse its angle
+    // in any turn.
+    let pave_parameter = |s: &Section, t: f64| -> Option<f64> {
+        let (p0, p1) = s.params;
+        let (lo, hi) = (p0.min(p1), p0.max(p1));
+        let at = match s.reading {
+            Reading::Fraction => t.madd(p1 - p0, p0),
+            Reading::Angle => lo + (t - lo).rem_euclid(std::f64::consts::TAU),
+            Reading::Own => t,
+        };
+        (lo < at && at < hi).then_some(at)
+    };
+    // How far `q` lies from a section's curve.
+    let off_curve = |s: &Section, q: Point3| -> f64 {
+        match &s.curve {
+            EdgeCurve::Line => {
+                let d = s.end - s.start;
+                let w = q - s.start;
+                (w - d * (w.dot(d) / d.dot(d).max(f64::MIN_POSITIVE))).length()
+            }
+            EdgeCurve::Circle(c) => (c.evaluate(c.project(q)) - q).length(),
+            EdgeCurve::Ellipse(e) => (e.evaluate(e.project(q)) - q).length(),
+            EdgeCurve::NurbsCurve(n) => {
+                brepkit_math::nurbs::projection::project_point_to_curve(n, q, 1e-12)
+                    .map_or(f64::INFINITY, |r| r.distance)
+            }
+        }
+    };
+    let on_all =
+        |q: Point3, ks: &[usize]| ks.iter().all(|&k| off_curve(&sections[k], q) <= tol.linear);
+
+    // Each crossing with, for both sections, where it cuts the section (a
+    // crossing inside its span) and the section's vertex there (a crossing
+    // within the tolerance of one of its ends).
+    let mut hits: Vec<(Point3, [Side; 2])> = Vec::new();
+    for (&face, here) in &on_face {
+        let Some(&own) = source_of.get(&face) else {
+            continue;
+        };
+        let partner = |k: usize| {
+            let curve = &arena.curves[sections[k].index];
+            let other = if curve.face_a == face {
+                curve.face_b
+            } else {
+                curve.face_a
+            };
+            source_of.get(&other).copied()
+        };
+        for (n, &i) in here.iter().enumerate() {
+            for &j in &here[n + 1..] {
+                let (Some(si), Some(sj)) = (partner(i), partner(j)) else {
+                    continue;
+                };
+                if si == sj || si == own || sj == own {
+                    continue;
+                }
+                let (a, b) = (&sections[i], &sections[j]);
+                if let (Some(box_a), Some(box_b)) = (a.bbox, b.bbox)
+                    && !box_a.intersects(box_b)
+                {
+                    continue;
+                }
+                for (ta, tb, p) in phase_ee::edge_crossings(topo, a.edge, b.edge, tol)? {
+                    let side = |k: usize, s: &Section, t: f64| -> Side {
+                        let end = if (p - s.start).length() <= tol.linear {
+                            Some(s.ends[0])
+                        } else if (p - s.end).length() <= tol.linear {
+                            Some(s.ends[1])
+                        } else {
+                            None
+                        };
+                        let cut = if end.is_none() {
+                            pave_parameter(s, t)
+                        } else {
+                            None
+                        };
+                        (k, cut, end)
+                    };
+                    let sides = [side(i, a, ta), side(j, b, tb)];
+                    if sides.iter().any(|&(_, cut, _)| cut.is_some()) {
+                        hits.push((p, sides));
+                    }
+                }
+            }
+        }
+    }
+
+    // One vertex for the crossings at one place. A crossing joins a place
+    // whose point lies near it and within the tolerance of both its curves
+    // (two curves can cross more than once), and a
+    // section's own end vertex stands for the place only where it lies
+    // within the tolerance of every curve there; else the place keeps a new
+    // vertex at the refined crossing. A crossing within the tolerance of a
+    // section's end never cuts that section, so no piece is shorter than the
+    // tolerance.
+    let mut places: Vec<Place> = Vec::new();
+    let mut place_of: Vec<usize> = Vec::with_capacity(hits.len());
+    for &(p, sides) in &hits {
+        let ks = [sides[0].0, sides[1].0];
+        let place = if let Some(k) = places
+            .iter()
+            .position(|place| (place.at - p).length() <= WELD && on_all(place.at, &ks))
+        {
+            places[k].sections.extend(ks);
+            k
+        } else {
+            places.push(Place {
+                at: p,
+                vertex: None,
+                sections: ks.to_vec(),
+            });
+            places.len() - 1
+        };
+        if places[place].vertex.is_none() {
+            for end in sides.iter().filter_map(|&(_, _, end)| end) {
+                let q = topo.vertex(end)?.point();
+                if on_all(q, &places[place].sections) {
+                    places[place].vertex = Some(end);
+                    places[place].at = q;
+                    break;
+                }
+            }
+        }
+        place_of.push(place);
+    }
+    let vertices: Vec<VertexId> = places
+        .iter()
+        .map(|place| {
+            place
+                .vertex
+                .unwrap_or_else(|| topo.add_vertex(Vertex::new(place.at, tol.linear)))
+        })
+        .collect();
+    let mut cuts: BTreeMap<usize, Vec<(f64, VertexId)>> = BTreeMap::new();
+    for ((_, sides), &place) in hits.iter().zip(&place_of) {
+        let vertex = vertices[place];
+        for &(k, cut, _) in sides {
+            let Some(at) = cut else {
+                continue;
+            };
+            let list = cuts.entry(k).or_default();
+            if !list.iter().any(|&(_, v)| v == vertex) {
+                list.push((at, vertex));
+            }
+        }
+    }
+
+    for (k, mut list) in cuts {
+        let index = sections[k].index;
+        let original = arena.curves[index].clone();
+        let Some(&pb_id) = original.pave_blocks.first() else {
+            continue;
+        };
+        let Some(pb) = arena.pave_blocks.get(pb_id) else {
+            continue;
+        };
+        let (start, end) = (pb.start, pb.end);
+        let ascending = start.parameter <= end.parameter;
+        list.sort_by(|x, y| {
+            if ascending {
+                x.0.total_cmp(&y.0)
+            } else {
+                y.0.total_cmp(&x.0)
+            }
+        });
+        let mut cut_at = vec![start];
+        cut_at.extend(list.into_iter().map(|(at, v)| Pave::new(v, at)));
+        cut_at.push(end);
+        // A loop's pieces each run less than half its turn: an open arc of a
+        // circle or an ellipse is read the shorter way round between its
+        // ends, and two pieces of a loop cut once would share both ends.
+        let turn = (end.parameter - start.parameter).abs();
+        let mut paves = vec![start];
+        for w in cut_at.windows(2) {
+            let span = w[1].parameter - w[0].parameter;
+            if sections[k].closed {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let parts = (span.abs() / (0.499 * turn)).ceil().max(1.0) as u32;
+                for m in 1..parts {
+                    let t = span.madd(f64::from(m) / f64::from(parts), w[0].parameter);
+                    let p = original.curve.evaluate_with_endpoints(
+                        t,
+                        sections[k].start,
+                        sections[k].end,
+                    );
+                    paves.push(Pave::new(topo.add_vertex(Vertex::new(p, tol.linear)), t));
+                }
+            }
+            paves.push(w[1]);
+        }
+        for (n, w) in paves.windows(2).enumerate() {
+            let edge = topo.add_edge(Edge::new(w[0].vertex, w[1].vertex, original.curve.clone()));
+            let piece = arena.pave_blocks.alloc(PaveBlock::new(edge, w[0], w[1]));
+            let t_range = (w[0].parameter, w[1].parameter);
+            if n == 0 {
+                let first = &mut arena.curves[index];
+                first.pave_blocks = vec![piece];
+                first.t_range = t_range;
+                continue;
+            }
+            let next = arena.curves.len();
+            let mut curve = original.clone();
+            curve.pave_blocks = vec![piece];
+            curve.t_range = t_range;
+            arena.curves.push(curve);
+            arena.interference.ff.push(Interference::FF {
+                f1: original.face_a,
+                f2: original.face_b,
+                curve_index: next,
+            });
+            if let Some(skipped) = arena.curve_skip_faces.get(&index).cloned() {
+                arena.curve_skip_faces.insert(next, skipped);
+            }
+            if let Some(extra) = arena.curve_extra_faces.get(&index).cloned() {
+                arena.curve_extra_faces.insert(next, extra);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Split each open circle section at the vertices of the boundary arcs of
 /// its two faces that run along its circle, inside its span. A section along
 /// a chain of rim arcs (a cone's rim on a coaxial wall, broken where two
@@ -933,7 +1275,7 @@ pub fn run_pave_filler_n(
     tol: Tolerance,
     arena: &mut GfaArena,
 ) -> Result<(), AlgoError> {
-    run_pave_filler_with_edges(topo, sources, &[], tol, arena)
+    run_pave_filler_over(topo, sources, &[], tol, arena, true)
 }
 
 /// [`run_pave_filler_n`] with loose edges among the tools, for imprinting them
@@ -949,6 +1291,22 @@ pub fn run_pave_filler_with_edges(
     tool_edges: &[brepkit_topology::edge::EdgeId],
     tol: Tolerance,
     arena: &mut GfaArena,
+) -> Result<(), AlgoError> {
+    run_pave_filler_over(topo, sources, tool_edges, tol, arena, false)
+}
+
+/// The pave filler over `sources` and loose `tool_edges`. With `fuse`, the
+/// sections are also cut where the faces of three sources meet
+/// ([`split_sections_at_triple_points`]). An imprint or a split by faces
+/// takes each tool face as a source of its own and splits the tools'
+/// crossing sections in its own builders, so it skips that cut.
+fn run_pave_filler_over(
+    topo: &mut Topology,
+    sources: &[SolidId],
+    tool_edges: &[brepkit_topology::edge::EdgeId],
+    tol: Tolerance,
+    arena: &mut GfaArena,
+    fuse: bool,
 ) -> Result<(), AlgoError> {
     let Some(&body) = sources.first() else {
         return Err(AlgoError::AssemblyFailed(
@@ -1014,6 +1372,9 @@ pub fn run_pave_filler_with_edges(
     }
     for &(i, j) in &pairs {
         phase_ff_coplanar::perform(topo, sources[i], sources[j], tol, arena)?;
+    }
+    if fuse {
+        split_sections_at_triple_points(topo, sources, tol, arena)?;
     }
     pave_co_endpoint_curves(topo, sources, tol, arena)?;
     pave_chords_across_conics(topo, tol, arena)?;

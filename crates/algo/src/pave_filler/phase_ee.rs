@@ -113,6 +113,68 @@ pub(super) fn check_edge_edge_pairs(
     Ok(())
 }
 
+/// Where two edges cross: each crossing's parameter on `a`, on `b`, and its
+/// point. A place [`check_edge_edge_pairs`] reads from the chords alone is
+/// refined on both curves, and kept only where they meet there within the
+/// linear tolerance: two arcs about one centre whose chords cross meet
+/// nowhere.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a topology lookup fails.
+pub(super) fn edge_crossings(
+    topo: &Topology,
+    a: EdgeId,
+    b: EdgeId,
+    tol: Tolerance,
+) -> Result<Vec<(f64, f64, Point3)>, AlgoError> {
+    let data = collect_edge_data(topo, &[a, b])?;
+    let [data_a, data_b] = data.as_slice() else {
+        return Ok(Vec::new());
+    };
+    if !aabbs_overlap(
+        &data_a.bbox_min,
+        &data_a.bbox_max,
+        &data_b.bbox_min,
+        &data_b.bbox_max,
+        tol.linear,
+    ) {
+        return Ok(Vec::new());
+    }
+    let (curve_a, curve_b) = (topo.edge(a)?.curve(), topo.edge(b)?.curve());
+    Ok(find_edge_edge_crossings(topo, a, data_a, b, data_b, tol)?
+        .into_iter()
+        .filter_map(|(t_a, t_b, _)| {
+            let (t_a, t_b, p) =
+                refine_on_curves((curve_a, data_a), (curve_b, data_b), (t_a, t_b), tol.linear)?;
+            let on_a = curve_a.evaluate_with_endpoints(t_a, data_a.start_pos, data_a.end_pos);
+            let on_b = curve_b.evaluate_with_endpoints(t_b, data_b.start_pos, data_b.end_pos);
+            ((on_a - on_b).length() <= tol.linear
+                && (p - on_a).length() <= tol.linear
+                && (p - on_b).length() <= tol.linear)
+                .then_some((t_a, t_b, p))
+        })
+        .collect())
+}
+
+/// A box that holds an edge's curve between its ends: the exact box of a
+/// line, circle or ellipse arc, and the box of a B-spline's Bezier poles.
+/// `None` where a B-spline's poles cannot be read.
+pub(super) fn proven_span_box(
+    curve: &EdgeCurve,
+    start: Point3,
+    end: Point3,
+) -> Option<brepkit_math::aabb::Aabb3> {
+    match curve {
+        EdgeCurve::NurbsCurve(nurbs) => {
+            nurbs_pole_box(nurbs, curve.domain_with_endpoints(start, end))
+        }
+        EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+            Some(super::helpers::edge_span_box(curve, start, end, 0))
+        }
+    }
+}
+
 /// Pre-computed edge data for fast intersection checks.
 struct EdgeData {
     /// Start vertex position.

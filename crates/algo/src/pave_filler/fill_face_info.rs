@@ -200,6 +200,62 @@ fn dist_to_surface(
     }
 }
 
+/// How far an edge's whole curve strays from `surface`: a line between the
+/// edge's ends, a circle or an ellipse over its whole turn. A cone is read
+/// with both its nappes, so a ruling that runs on through the apex stays on
+/// it. `None` for a NURBS curve or a surface that cannot be measured.
+fn whole_curve_off_surface(
+    curve: &brepkit_topology::edge::EdgeCurve,
+    start: brepkit_math::vec::Point3,
+    end: brepkit_math::vec::Point3,
+    surface: &FaceSurface,
+) -> Option<f64> {
+    use brepkit_topology::edge::EdgeCurve;
+    const SAMPLES: u32 = 32;
+    let at = |k: u32| {
+        let f = f64::from(k) / f64::from(SAMPLES);
+        match curve {
+            EdgeCurve::Line => Some(start + (end - start) * f),
+            EdgeCurve::Circle(c) => Some(c.evaluate(std::f64::consts::TAU * f)),
+            EdgeCurve::Ellipse(e) => Some(e.evaluate(std::f64::consts::TAU * f)),
+            EdgeCurve::NurbsCurve(_) => None,
+        }
+    };
+    let off = |p: brepkit_math::vec::Point3| match surface {
+        FaceSurface::Cone(cone) => Some(double_cone_distance(cone, p)),
+        other => dist_to_surface(other, p),
+    };
+    let mut worst = 0.0_f64;
+    for k in 0..=SAMPLES {
+        worst = worst.max(off(at(k)?)?);
+    }
+    Some(worst)
+}
+
+/// The distance from `p` to the cone and its mirror through the apex: the
+/// two rulings in `p`'s half-plane through the axis, each a ray from the
+/// apex.
+fn double_cone_distance(
+    cone: &brepkit_math::surfaces::ConicalSurface,
+    p: brepkit_math::vec::Point3,
+) -> f64 {
+    let w = p - cone.apex();
+    let h = cone.axis().dot(w);
+    let rho = (w - cone.axis() * h).length();
+    let (sin_a, cos_a) = cone.half_angle().sin_cos();
+    // Each ruling runs from the apex along (cos a, +-sin a) in (rho, h).
+    [h, -h]
+        .into_iter()
+        .map(|h| {
+            if rho.madd(cos_a, h * sin_a) >= 0.0 {
+                rho.madd(sin_a, -(h * cos_a)).abs()
+            } else {
+                rho.hypot(h)
+            }
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
 /// A planar face's boundary in its own plane, read on its lines and arcs.
 pub(super) struct PlaneRegion {
     origin: brepkit_math::vec::Point3,
@@ -522,7 +578,22 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
                     } else {
                         IN_FACE_MAX_DEVIATION_RATIO * chord
                     };
-                    dev <= on_band.max(band)
+                    let band = on_band.max(band);
+                    if dev > band {
+                        return false;
+                    }
+                    // A line, circle or ellipse lies on a quadric along its
+                    // whole length or meets it at a few points only. A leaf
+                    // hugging the face beside such a point (a rod's rim or
+                    // seam by a second rod's wall, where the two walls touch)
+                    // lies in no face, though it stays within the band. A
+                    // circle or ellipse is exact over its whole turn; a line
+                    // runs between its vertices, which stand off by as much
+                    // as a leaf's ends.
+                    let whole_band = if straight { band } else { on_band };
+                    !quadric
+                        || whole_curve_off_surface(edge.curve(), osp, oep, &surface)
+                            .is_none_or(|off| off <= whole_band)
                 })
                 .collect();
             let fi = arena.face_info_mut(face_id);
@@ -619,5 +690,78 @@ mod tests {
             .collect();
         got.sort_by_key(|pb| pb.index());
         assert_eq!(got, leaves[1..5].to_vec());
+    }
+
+    /// A line through a cone's apex along one of its rulings lies on the
+    /// cone along its whole length, on both nappes: its piece on the face's
+    /// nappe lies in the face, though the line runs on through the apex.
+    #[test]
+    fn a_ruling_through_a_cones_apex_lies_in_the_cone() {
+        use brepkit_math::surfaces::ConicalSurface;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        // The cone opens along +z from the origin at 45 degrees, so the line
+        // from (-1, 0, -1) to (1, 0, 1) runs along it on both nappes.
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            std::f64::consts::FRAC_PI_4,
+        )
+        .unwrap();
+        let rim: Vec<_> = [(2.0, 0.0), (0.0, 2.0), (-2.0, 0.0)]
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 2.0), 1e-7)))
+            .collect();
+        let rim_edges: Vec<_> = (0..3)
+            .map(|k| topo.add_edge(Edge::new(rim[k], rim[(k + 1) % 3], EdgeCurve::Line)))
+            .collect();
+        let wire = topo.add_wire(
+            Wire::new(
+                rim_edges
+                    .iter()
+                    .map(|&e| OrientedEdge::new(e, true))
+                    .collect(),
+                true,
+            )
+            .unwrap(),
+        );
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Cone(cone)));
+
+        let at = |t: f64| Point3::new(2.0_f64.madd(t, -1.0), 0.0, 2.0_f64.madd(t, -1.0));
+        let ts = [0.0, 0.5, 1.0];
+        let verts: Vec<_> = ts
+            .iter()
+            .map(|&t| topo.add_vertex(Vertex::new(at(t), 1e-7)))
+            .collect();
+        let edge = topo.add_edge(Edge::new(verts[0], verts[2], EdgeCurve::Line));
+        let mut arena = GfaArena::new();
+        let leaves: Vec<PaveBlockId> = (0..2)
+            .map(|k| {
+                arena.pave_blocks.alloc(PaveBlock::new(
+                    edge,
+                    Pave::new(verts[k], ts[k]),
+                    Pave::new(verts[k + 1], ts[k + 1]),
+                ))
+            })
+            .collect();
+        arena.edge_pave_blocks.insert(edge, leaves.clone());
+        arena.interference.ef.push(Interference::EF {
+            edge,
+            face,
+            new_vertex: None,
+            parameter: None,
+            run: Some((0.5, 1.0)),
+        });
+
+        fill_ef_in(&topo, &mut arena);
+
+        let got: Vec<_> = arena
+            .face_info(face)
+            .map(|info| info.pave_blocks_in.iter().copied().collect())
+            .unwrap_or_default();
+        assert_eq!(got, vec![leaves[1]]);
     }
 }
