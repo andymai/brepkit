@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795442621296,
+  "lastUpdate": 1795446868074,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -76679,6 +76679,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27016842,
             "range": "± 475362",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "df69ed2412df9d6f25808933944cca080fdb58cd",
+          "message": "fix(check,blend): report a face wire that runs twice round its surface, and cap a round's corner below a right angle (#2756)\n\n## Summary\n\nOn main:\n\n- `validate_solid` passes a chamfer result whose wire on its B-spline\nwall runs twice round the wall and bounds no region of it. The solid\nreads 39.684588 where the correct chamfer reads 112.181038 (#2634);\n- `fillet_v2` refuses the top rim of a box whose top slopes, where the\nslope meets a side at less than a right angle. The capped corner was\nbuilt only above a right angle, and below it the patch's outline crossed\nitself (#2661).\n\nWith this change, `validate_solid` reports such a wire, and the rim of a\nplain sloped box rounds to its closed form. The pose sweep and the truth\naudit give the same output as main.\n\nFixes #2634. For #2661, the corner where the rising round meets the\ncorner's arc is still refused. For #2702, a test pins every gated entry\npoint.\n\n## The change\n\n- **A wire that runs twice round its surface (#2634).** In the solid\nfrom #2634, every use of the chamfer's two contact edges is reversed.\nEach shared edge is still used once each way, so the shell checks pass.\nBut on the wall, the uncut rim and the contact then run the same way\nround.\n- The new `face_loops::wire_turns` counts how many times each wire of a\nface on a cylinder, cone, sphere or torus runs round it. A closed\nB-spline face counts where it matches one of those surfaces.\n- A B-spline edge is first cut at every distinct knot, however narrow\nits span. Each piece of an edge is then cut until the hull of its\ncontrol points spans less than half a turn. So the sum of the pieces'\nend angles is the true turn count. A piece that no cut brings under half\na turn leaves its wire unread. So does a wire that needs more than 16384\npieces, about 11 times the most any test, sweep or audit needs (1410).\n- `check_face_wire_turns` (`CheckId::FaceWireTurns`) reports a wire that\nruns round more than once, and on a torus, turn counts with a common\nfactor above one. Both `validate_solid` entry points and the fillet gate\nrun it.\n- **A capped corner below a right angle (#2661).** The wall can meet the\nside at less than a right angle. There the crease now ends on the top,\nwhere it meets the cap round's contact. The extrusion round then ends on\nits own end section from there down (`CappedPlan::OnCap`,\n`apply_capped_corner_on_cap`).\n- **The gated entry points (#2702).** `FilletBuilder::build` called\nalone returns an invalid solid with no failed edge on all five inputs of\n#2702. `fillet_v2`, `fillet_v2_variable`, `chamfer_v2`, `chamfer_v2_on`\nand `chamfer_distance_angle` never do: each refuses, or builds a valid,\nwatertight solid. `FilletBuilder` and `ChamferBuilder` stay public and\nunchecked, since brepkit-blend cannot depend on brepkit-check, and their\ndocs point callers to the gated wrappers.\n\n## Tests\n\n- `validate_wire_turns.rs` rebuilds the bad chamfer for 3 rims in 4\nposes and checks that `validate_solid` reports each. The old commit's 12\nchamfers gave the same volumes, to 6 digits. Unit tests report bands on\na cylinder, a cone and a torus whose rims run one way round. They also\nreport a closed one-span edge that runs twice round a cylinder or a\ntorus's tube. A turn on knot spans 1e-10 or 1e-13 of the domain wide\ncounts. An edge along a cylinder's axis stops within the piece budget.\n- `the_rim_of_a_plain_sloped_box_rounds_to_its_sections` rounds the rim\nat r 1 and 2, and with the slope reversed, within 1e-6 of a slice\nintegral (3383.155714582587 at r 1).\n`a_trapezoid_s_slant_leaning_in_ends_the_crease_on_the_top` rounds a\ntrapezoid prism leaning at 30, 60, 80 and 87 degrees in three poses.\nBoth fail on main.\n- `blend_entry_points_on_refused_rounds.rs` runs every gated entry point\non the inputs of #2702 in three poses.\n- brepkit-blend and brepkit-check pass, and so do all brepkit-operations\nand brepkit-io tests (3268, 26 skipped).\n\n## Still open\n\n- #2661: at the tangent joint where the rising round runs onto the round\nof the corner's arc, the two rounds' end sections use different balls.\nThe filler patch's wire then crosses itself, so the fillet refuses. Both\nrounds should end at the ball that touches the tangent line.\n- #2702: `chamfer_v2` fails on a fused L's rim where two chamfers meet\nin a mitre. That waits on #2721.\n- The operations `validate_solid` does not compare pcurves with their\nedges. In 5 of the 8 cylinder cases of #2634, the contact's pcurve also\nruns over the wrong span, 5.98 off.\n- The check crate's `validate_solid` reports `WireSelfIntersection` on a\nvalid wall with a seam, such as a `make_cylinder` with its wall in\nB-spline form.",
+          "timestamp": "2026-11-23T15:11:03Z",
+          "tree_id": "fab1b2447133ff28d9c4f4f0db9620bd70a6a194",
+          "url": "https://github.com/andymai/brepkit/commit/df69ed2412df9d6f25808933944cca080fdb58cd"
+        },
+        "date": 1795446858057,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 865052,
+            "range": "± 88391",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 921249,
+            "range": "± 99985",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8875,
+            "range": "± 855",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 467483,
+            "range": "± 9401",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 16314215,
+            "range": "± 263455",
             "unit": "ns/iter"
           }
         ]
