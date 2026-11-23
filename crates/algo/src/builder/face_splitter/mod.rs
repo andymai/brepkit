@@ -6889,7 +6889,7 @@ enum BallChart {
     /// pole of every axis tried.
     Unclear,
     /// The face's own chart, whose poles keep clear of its wires and
-    /// sections.
+    /// sections. A face that holds one of them winds the chart.
     Own,
     /// A chart whose poles lie off the face, as far from its wires and
     /// sections as a spread of axes allows; `clear` when that is as far as
@@ -6964,11 +6964,37 @@ fn pole_clear_chart(
     // The cosine of the angle from the nearer pole about `axis` to the
     // nearest sample.
     let nearest = |axis: Vec3| dirs.iter().fold(0.0_f64, |m, d| m.max(d.dot(axis).abs()));
-    if nearest(sphere.z_axis()) < 0.1_f64.cos() {
-        return Some(BallChart::Own);
-    }
-    let trim = crate::classifier::SphereFaceTrim::new(topo, face_id).ok()??;
     let radius = sphere.radius();
+    let trim = crate::classifier::SphereFaceTrim::new(topo, face_id)
+        .ok()
+        .flatten();
+    // A face that holds a pole of its own chart winds the chart, however
+    // far its wires keep from the pole: it takes a chart whose poles lie off
+    // it and clear of its wires where one is found.
+    if nearest(sphere.z_axis()) < 0.1_f64.cos() {
+        let z = sphere.z_axis();
+        let turned = trim.as_ref().and_then(|t| {
+            let holds_pole = [z, -z]
+                .iter()
+                .any(|&a| t.holds(center + a * radius, 1e-6 * radius));
+            holds_pole
+                .then(|| clear_ball_axis(center, radius, &dirs, t))
+                .flatten()
+                .filter(|&axis| nearest(axis) < 0.1_f64.cos())
+        });
+        return Some(
+            match turned.and_then(|axis| {
+                brepkit_math::surfaces::SphericalSurface::with_axis(center, radius, axis).ok()
+            }) {
+                Some(chart) => BallChart::Turned {
+                    chart: FaceSurface::Sphere(chart),
+                    clear: true,
+                },
+                None => BallChart::Own,
+            },
+        );
+    }
+    let trim = trim?;
     let best = clear_ball_axis(center, radius, &dirs, &trim)?;
     brepkit_math::surfaces::SphericalSurface::with_axis(center, radius, best)
         .ok()
