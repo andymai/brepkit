@@ -20,6 +20,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
 use brepkit_topology::face::{Face, FaceId, FaceSurface};
@@ -156,11 +157,7 @@ pub(super) fn join_sphere_faces_the_rim_crosses(
 }
 
 /// The unit tangent of `edge` at its end `vertex`, along its curve.
-fn tangent_at(
-    topo: &Topology,
-    edge: EdgeId,
-    vertex: VertexId,
-) -> Result<Option<brepkit_math::vec::Vec3>, BlendError> {
+fn tangent_at(topo: &Topology, edge: EdgeId, vertex: VertexId) -> Result<Option<Vec3>, BlendError> {
     let data = topo.edge(edge)?;
     let (start, end) = (
         topo.vertex(data.start())?.point(),
@@ -347,21 +344,52 @@ fn one_surface(a: &FaceSurface, b: &FaceSurface) -> bool {
     ) && read_alike(a, b)
 }
 
-/// Whether two surfaces take the same point at each of a spread of
-/// parameter pairs.
+/// Whether two surfaces are one sphere, cylinder, cone or torus in one
+/// frame: the same centre, origin or apex, the same axes, and the same radii
+/// or half-angle. Lengths agree within a part in 1e9 of the surface's own
+/// size (its radius, a torus's major radius, 1 for a cone), so where the
+/// surface lies does not change the answer. Then each takes the same point at
+/// each parameter pair.
 fn read_alike(a: &FaceSurface, b: &FaceSurface) -> bool {
-    (0..6).all(|i| {
-        (-2..=2).all(|j| {
-            let (u, v) = (1.1 * f64::from(i), 0.6 * f64::from(j));
-            match (a.evaluate(u, v), b.evaluate(u, v)) {
-                (Some(p), Some(q)) => {
-                    let scale = p.x().abs().max(p.y().abs()).max(p.z().abs());
-                    (p - q).length() <= 1e-9 * (1.0 + scale)
-                }
-                _ => false,
-            }
-        })
-    })
+    const PART: f64 = 1e-9;
+    let near = |p: Point3, q: Point3, size: f64| (p - q).length() <= PART * size;
+    let along = |u: Vec3, v: Vec3| (u - v).length() <= PART;
+    let equal = |x: f64, y: f64, size: f64| (x - y).abs() <= PART * size;
+    match (a, b) {
+        (FaceSurface::Sphere(a), FaceSurface::Sphere(b)) => {
+            let size = a.radius();
+            near(a.center(), b.center(), size)
+                && equal(a.radius(), b.radius(), size)
+                && along(a.x_axis(), b.x_axis())
+                && along(a.y_axis(), b.y_axis())
+                && along(a.z_axis(), b.z_axis())
+        }
+        (FaceSurface::Cylinder(a), FaceSurface::Cylinder(b)) => {
+            let size = a.radius();
+            near(a.origin(), b.origin(), size)
+                && equal(a.radius(), b.radius(), size)
+                && along(a.axis(), b.axis())
+                && along(a.x_axis(), b.x_axis())
+                && along(a.y_axis(), b.y_axis())
+        }
+        (FaceSurface::Cone(a), FaceSurface::Cone(b)) => {
+            near(a.apex(), b.apex(), 1.0)
+                && equal(a.half_angle(), b.half_angle(), 1.0)
+                && along(a.axis(), b.axis())
+                && along(a.x_axis(), b.x_axis())
+                && along(a.y_axis(), b.y_axis())
+        }
+        (FaceSurface::Torus(a), FaceSurface::Torus(b)) => {
+            let size = a.major_radius();
+            near(a.center(), b.center(), size)
+                && equal(a.major_radius(), b.major_radius(), size)
+                && equal(a.minor_radius(), b.minor_radius(), size)
+                && along(a.x_axis(), b.x_axis())
+                && along(a.y_axis(), b.y_axis())
+                && along(a.z_axis(), b.z_axis())
+        }
+        _ => false,
+    }
 }
 
 /// The edges both faces' outer wires run.
@@ -500,4 +528,59 @@ fn join(
         }
     }
     Ok(Some((face, along)))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use brepkit_math::surfaces::{
+        ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface,
+    };
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::face::FaceSurface;
+
+    use super::{one_sphere, one_surface};
+
+    const PLACES: [f64; 2] = [0.0, 1e6];
+
+    fn ball(x: f64) -> FaceSurface {
+        FaceSurface::Sphere(SphericalSurface::new(Point3::new(x, 0.0, 0.0), 1.0).unwrap())
+    }
+
+    /// Two unit balls 1e-4 apart are two spheres wherever they lie, and the
+    /// two faces of one ball are one sphere wherever it lies.
+    #[test]
+    fn balls_apart_stay_apart_and_one_ball_joins_at_any_place() {
+        for x in PLACES {
+            assert!(!one_sphere(&ball(x), &ball(x + 1e-4)), "apart at {x}");
+            assert!(!one_surface(&ball(x), &ball(x + 1e-4)), "apart at {x}");
+            assert!(one_sphere(&ball(x), &ball(x)), "one ball at {x}");
+            assert!(one_surface(&ball(x), &ball(x)), "one ball at {x}");
+        }
+    }
+
+    /// The same for two rods, cones and rings 1e-4 apart, and for one of
+    /// each.
+    #[test]
+    fn rods_cones_and_rings_apart_stay_apart_at_any_place() {
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let rod = |x: f64| {
+            FaceSurface::Cylinder(
+                CylindricalSurface::new(Point3::new(x, 0.0, 0.0), up, 1.0).unwrap(),
+            )
+        };
+        let cone = |x: f64| {
+            FaceSurface::Cone(ConicalSurface::new(Point3::new(x, 0.0, 0.0), up, 0.4).unwrap())
+        };
+        let ring = |x: f64| {
+            FaceSurface::Torus(ToroidalSurface::new(Point3::new(x, 0.0, 0.0), 2.0, 0.5).unwrap())
+        };
+        for x in PLACES {
+            for make in [&rod as &dyn Fn(f64) -> FaceSurface, &cone, &ring] {
+                assert!(!one_surface(&make(x), &make(x + 1e-4)), "apart at {x}");
+                assert!(one_surface(&make(x), &make(x)), "one at {x}");
+            }
+        }
+    }
 }
