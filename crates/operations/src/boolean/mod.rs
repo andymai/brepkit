@@ -844,7 +844,9 @@ fn boolean_inner(
                 // raw Euler here rejected every pocketed piece. This mirrors the
                 // `euler_balanced` correction the single-component gate above
                 // applies — which is why the bound below is `2 * components`
-                // rather than an equality against it.
+                // rather than an equality against it. A cavity's shell adds 2
+                // to the count, as it does for one piece, so the bound takes
+                // `euler_eff`.
                 let components_vec = crate::boolean::assembly::face_components(topo, result);
                 let components = components_vec.len();
                 // For Cut, also verify no component is a "B-interior piece" —
@@ -908,12 +910,12 @@ fn boolean_inner(
                 if matches!(op, BooleanOp::Cut | BooleanOp::Fuse | BooleanOp::Intersect)
                     && components >= 2
                     && (euler_balanced(
-                        euler,
+                        euler_eff,
                         inner_wire_count,
                         i64::try_from(components).unwrap_or(i64::MAX),
                     ) || (extra_fans > 0
                         && euler_balanced(
-                            euler + extra_fans,
+                            euler_eff + extra_fans,
                             inner_wire_count,
                             i64::try_from(components).unwrap_or(i64::MAX),
                         )
@@ -1017,11 +1019,11 @@ fn boolean_inner(
                      cut_safe={cut_safe} intersect_safe={intersect_safe} \
                      euler_multi_ok={} surplus={} bound={} disjoint={}",
                     euler_balanced(
-                        euler,
+                        euler_eff,
                         inner_wire_count,
                         i64::try_from(components).unwrap_or(i64::MAX)
                     ),
-                    euler - inner_wire_count,
+                    euler_eff - inner_wire_count,
                     i64::try_from(components)
                         .unwrap_or(i64::MAX)
                         .saturating_mul(2),
@@ -4566,14 +4568,22 @@ fn cut_multi_region_input(
     b: SolidId,
     comp_count: usize,
 ) -> Result<SolidId, crate::OperationsError> {
+    use brepkit_topology::shell::Shell;
+
     let components = crate::boolean::assembly::face_components(topo, a);
     debug_assert_eq!(components.len(), comp_count);
+    let cavities = component_cavities(topo, a, &components)?;
 
     let mut per_component_results: Vec<SolidId> = Vec::with_capacity(components.len());
-    for comp_faces in components {
+    for (comp_faces, comp_cavities) in components.iter().zip(cavities) {
         // Copy the component's faces into a fresh single-component solid
         // so the boolean engine sees a connected manifold.
-        let comp_solid_raw = make_solid_from_face_subset(topo, &comp_faces)?;
+        let comp_solid_raw = make_solid_from_face_subset(topo, comp_faces)?;
+        for faces in comp_cavities {
+            let shell = Shell::new(faces).map_err(crate::OperationsError::Topology)?;
+            let shell = topo.add_shell(shell);
+            topo.solid_mut(comp_solid_raw)?.add_inner_shell(shell);
+        }
         // Deep-copy the component into a fresh solid so its faces/edges/
         // vertices have fresh IDs disjoint from the original multi-region
         // input — GFA's pavefiller can stumble on shared vertex IDs across
@@ -4595,15 +4605,61 @@ fn cut_multi_region_input(
     // Collect every face from every result into one outer shell. The
     // results are pairwise disjoint by construction (each came from a
     // disjoint input component cut by the same tool), so a single shell
-    // containing all their faces is a valid manifold representation.
+    // containing all their faces is a valid manifold representation. Each
+    // result's cavities stay inner shells.
     let mut all_faces: Vec<brepkit_topology::face::FaceId> = Vec::new();
+    let mut cavity_faces: Vec<Vec<brepkit_topology::face::FaceId>> = Vec::new();
     for &r in &per_component_results {
         let r_data = topo.solid(r)?;
         for &fid in topo.shell(r_data.outer_shell())?.faces() {
             all_faces.push(fid);
         }
+        for &shell in r_data.inner_shells() {
+            cavity_faces.push(topo.shell(shell)?.faces().to_vec());
+        }
     }
-    make_solid_from_face_subset(topo, &all_faces)
+    let combined = make_solid_from_face_subset(topo, &all_faces)?;
+    for faces in cavity_faces {
+        let shell = Shell::new(faces).map_err(crate::OperationsError::Topology)?;
+        let shell = topo.add_shell(shell);
+        topo.solid_mut(combined)?.add_inner_shell(shell);
+    }
+    Ok(combined)
+}
+
+/// The faces of each cavity of `solid`, given to the piece of `components`
+/// (the sets of its outer shell's faces) that holds it. A cavity that no
+/// piece holds, or a piece inside a cavity, is an error.
+fn component_cavities(
+    topo: &mut Topology,
+    solid: SolidId,
+    components: &[Vec<FaceId>],
+) -> Result<Vec<Vec<Vec<FaceId>>>, crate::OperationsError> {
+    let mut out: Vec<Vec<Vec<FaceId>>> = vec![Vec::new(); components.len()];
+    let count = topo.solid(solid)?.inner_shells().len();
+    if count == 0 {
+        return Ok(out);
+    }
+    let unplaced = || crate::OperationsError::InvalidInput {
+        reason: "a cavity of a solid in separate pieces lies in none of them".into(),
+    };
+    let mut placed = 0;
+    for piece in crate::compound_ops::solid_pieces(topo, solid)? {
+        let data = topo.solid(piece)?;
+        let first = topo.shell(data.outer_shell())?.faces().first().copied();
+        let k = first
+            .and_then(|f| components.iter().position(|c| c.contains(&f)))
+            .ok_or_else(unplaced)?;
+        for &shell in data.inner_shells() {
+            out[k].push(topo.shell(shell)?.faces().to_vec());
+            placed += 1;
+        }
+    }
+    if placed == count {
+        Ok(out)
+    } else {
+        Err(unplaced())
+    }
 }
 
 /// Build a new solid whose outer shell consists exactly of the given
