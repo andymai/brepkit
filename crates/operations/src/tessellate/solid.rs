@@ -912,11 +912,13 @@ pub(super) fn split_crossing_spline_chords(
 /// A ball's equator is a polygon of chords, each within its sag of the
 /// sphere. A boolean finds where a section crosses such an edge on the
 /// chord, so a section that passes between a chord and the sphere does not
-/// split there, and the face's hole can reach past the outline into the face
-/// beyond. The hole's samples past the chord, by no more than its sag, become
-/// samples of the chord as well. The outline then runs round them, the face
-/// beyond leaves them out, and the two faces and the hole's other face meet
-/// along the same points. An outline keeps its face on its left, seen from
+/// split there, and the face's holes can reach past the outline into the
+/// face beyond. The holes' samples past the chord, by no more than its sag,
+/// become samples of the chord as well, all at once and in order along it.
+/// The outline then runs round them, the face beyond leaves them out, and the
+/// two faces and each hole's other face meet along the same points. Holes
+/// whose samples past one chord overlap along it leave the chord as it is.
+/// An outline keeps its face on its left, seen from
 /// the side the surface's normal points to, so a sample past a chord lies on
 /// the right of the great circle through it.
 pub(super) fn sample_holes_past_sphere_chords(
@@ -992,17 +994,20 @@ pub(super) fn sample_holes_past_sphere_chords(
                 (past >= -tol && past <= sag && off <= 2.0 * sag && t > 1e-9 && t < 1.0 - 1e-9)
                     .then_some(t)
             };
+            // Each hole's run of consecutive samples past the chord, in
+            // order along it. The runs must not overlap along the chord, or
+            // the outline through them would cross a hole.
+            let mut runs: Vec<Vec<(f64, Point3)>> = Vec::new();
             for samples in &loops {
                 let n = samples.len();
                 let hits: Vec<Option<f64>> = samples.iter().map(|&h| along(h)).collect();
                 let starts: Vec<usize> = (0..n)
                     .filter(|&i| hits[i].is_some() && hits[(i + n - 1) % n].is_none())
                     .collect();
-                // One run of consecutive samples, in order along the chord.
                 let &[i0] = starts.as_slice() else {
                     continue;
                 };
-                let run: Vec<(f64, Point3)> = (0..n)
+                let mut run: Vec<(f64, Point3)> = (0..n)
                     .map(|k| (i0 + k) % n)
                     .map_while(|i| hits[i].map(|t| (t, samples[i])))
                     .collect();
@@ -1011,17 +1016,26 @@ pub(super) fn sample_holes_past_sphere_chords(
                 if !(rising || falling) {
                     continue;
                 }
-                let mut inside: Vec<(f64, Point3)> = run;
-                inside.sort_by(|a, b| a.0.total_cmp(&b.0));
-                let mut points = vec![p];
-                points.extend(inside.into_iter().map(|(_, h)| h));
-                points.push(q);
-                if !oe.is_forward() {
-                    points.reverse();
-                }
-                split.push((oe.edge().index(), points));
-                break;
+                run.sort_by(|a, b| a.0.total_cmp(&b.0));
+                runs.push(run);
             }
+            if runs.is_empty() {
+                continue;
+            }
+            runs.sort_by(|a, b| a[0].0.total_cmp(&b[0].0));
+            if runs
+                .windows(2)
+                .any(|w| w[0].last().is_none_or(|last| last.0 >= w[1][0].0))
+            {
+                continue;
+            }
+            let mut points = vec![p];
+            points.extend(runs.into_iter().flatten().map(|(_, h)| h));
+            points.push(q);
+            if !oe.is_forward() {
+                points.reverse();
+            }
+            split.push((oe.edge().index(), points));
         }
         for (index, points) in split {
             edge_points.insert(index, points);
