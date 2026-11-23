@@ -982,12 +982,72 @@ fn assert_filled(
     assert_eq!(at(result, beyond), PointClassification::Outside, "{what}");
 }
 
+/// The chord from the ridge whose foot is `ridge` (before the pose, in `z =
+/// 0`) to the chamfer's contact on the wall about the axis and on the wall
+/// about `x = 3`: the edges of `result` that run straight along `z` (ends
+/// and middle over one point of the plane), read back through `undo`, on
+/// each wall within 1 of the ridge.
+fn contact_chords(
+    topo: &Topology,
+    result: SolidId,
+    undo: &Mat4,
+    ridge: (f64, f64),
+) -> (Vec<f64>, Vec<f64>) {
+    let (mut on_a, mut on_b) = (Vec::new(), Vec::new());
+    for e in solid_edges(topo, result).unwrap() {
+        let edge = topo.edge(e).unwrap();
+        let (a, b) = (
+            topo.vertex(edge.start()).unwrap().point(),
+            topo.vertex(edge.end()).unwrap().point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+        let middle = edge
+            .curve()
+            .evaluate_with_endpoints(f64::midpoint(t0, t1), a, b);
+        let [p, m, q] = [a, middle, b].map(|point| undo.mul_point(point));
+        let apart = |u: Point3, w: Point3| (u.x() - w.x()).hypot(u.y() - w.y());
+        if apart(p, q) > 1e-6 || apart(p, m) > 1e-6 || (p.z() - q.z()).abs() < 1.0 {
+            continue;
+        }
+        let chord = (p.x() - ridge.0).hypot(p.y() - ridge.1);
+        if chord > 1.0 {
+            continue;
+        }
+        if (p.x().hypot(p.y()) - 2.0).abs() < 1e-6 {
+            on_a.push(chord);
+        } else if ((p.x() - 3.0).hypot(p.y()) - 2.0).abs() < 1e-6 {
+            on_b.push(chord);
+        }
+    }
+    (on_a, on_b)
+}
+
+/// The chamfer's contacts in `result` lie `on_a` along the wall about the
+/// axis and `on_b` along the wall about `x = 3` from the ridge at `ridge`.
+fn assert_chords(
+    topo: &Topology,
+    result: SolidId,
+    undo: &Mat4,
+    ridge: (f64, f64),
+    (on_a, on_b): (f64, f64),
+    what: &str,
+) {
+    let (a, b) = contact_chords(topo, result, undo, ridge);
+    let one = |found: &[f64], want: f64| matches!(found, [c] if (c - want).abs() < 1e-9);
+    assert!(
+        one(&a, on_a) && one(&b, on_b),
+        "{what}: chords {a:?} on the wall about the axis and {b:?} on the other, expected {on_a} and {on_b}"
+    );
+}
+
 /// A ridge where two parallel cylinders meet on their union, a concave
 /// edge, takes a plane chamfer that adds the section between the ridge and
 /// its chord along the height, with one distance and with two, by
 /// `chamfer_v2`, `chamfer_v2_on` and `chamfer_distance_angle`, each ridge
 /// alone and both together. The union's caps are each three faces of one
-/// plane that meet at the ridge's ends.
+/// plane that meet at the ridge's ends. The walls have one radius, so the
+/// volume does not tell which wall takes which distance: each contact's
+/// chord from the ridge along its own wall does.
 #[test]
 fn a_union_ridge_takes_a_plane_chamfer() {
     let height = 4.0;
@@ -1003,10 +1063,12 @@ fn a_union_ridge_takes_a_plane_chamfer() {
                 pose.mul_point(Point3::new(1.5, 1.45 * side, 2.0)),
                 pose.mul_point(Point3::new(1.5, 1.6 * side, 2.0)),
             );
+            let foot = (1.5, side * 1.75_f64.sqrt());
             let built = chamfer_v2(&mut topo, solid, &[ridge], 0.3, 0.3).unwrap();
             assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
             let one = height * union_ridge_section(0.3, 0.3);
             assert_filled(&topo, (solid, built.solid), (before, one), probes, &what);
+            assert_chords(&topo, built.solid, &undo, foot, (0.3, 0.3), &what);
 
             // The first face along the ridge takes 0.3, the other 0.2.
             let around = AdjacencyIndex::build(&topo, solid)
@@ -1028,10 +1090,12 @@ fn a_union_ridge_takes_a_plane_chamfer() {
             let built = chamfer_v2(&mut topo, solid, &[ridge], 0.3, 0.2).unwrap();
             assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
             assert_filled(&topo, (solid, built.solid), (before, two), probes, &what);
+            assert_chords(&topo, built.solid, &undo, foot, (on_a, on_b), &what);
             let angle = (2.0_f64 / 3.0).atan();
             let built = chamfer_distance_angle(&mut topo, solid, &[ridge], 0.3, angle).unwrap();
             assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
             assert_filled(&topo, (solid, built.solid), (before, two), probes, &what);
+            assert_chords(&topo, built.solid, &undo, foot, (on_a, on_b), &what);
 
             // Measured from the wall about `x = 3`.
             let wall_b = if first_about_a { around[1] } else { around[0] };
@@ -1039,6 +1103,7 @@ fn a_union_ridge_takes_a_plane_chamfer() {
             assert!(built.failed.is_empty(), "{what}: {:?}", built.failed);
             let on_b = height * union_ridge_section(0.2, 0.3);
             assert_filled(&topo, (solid, built.solid), (before, on_b), probes, &what);
+            assert_chords(&topo, built.solid, &undo, foot, (0.2, 0.3), &what);
         }
         let both: Vec<EdgeId> = ridges.iter().map(|&(ridge, _)| ridge).collect();
         let built = chamfer_v2(&mut topo, solid, &both, 0.3, 0.3).unwrap();
