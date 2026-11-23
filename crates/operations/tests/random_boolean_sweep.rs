@@ -15,17 +15,26 @@
 //! ```
 //!
 //! and add `SWEEP_ONLY=17` to run case 17 of that seed alone. Each case
-//! prints one line: `SWEEP <case> <base> [<pose>] <verdict> ... :: <solids>
-//! <ops>`.
+//! prints one line: `SWEEP <case> <base> [<pose>] <verdict> steps=<codes>
+//! final=<verdict> ... :: <solids> <ops>`.
 //!
-//! - `GOOD`: the result is valid, its mesh has no open edge, and its volume
-//!   is within 2e-4 of the oracle's.
-//! - `BAD`: a boolean gave an exact solid that fails one of these. The line
-//!   gives `valid`, the faces by surface type, `not2` (edges that two faces do
-//!   not share), `open` (open mesh edges), `rel` (the relative volume error)
-//!   and the axes of the sphere faces.
-//! - `ERR@<k>`: boolean `k` returned an error. `EMPTYEXP`: the exact result
-//!   is empty, so nothing is measured. `PANIC`: a boolean panicked.
+//! Each step of a case is scored: the result of boolean `k` is held against
+//! the oracle for the solids and operations up to `k`. A step is `G` (good),
+//! `B` (bad), `E` (an error), `0` (the exact result is empty, so nothing is
+//! measured) or `P` (a panic).
+//!
+//! - `GOOD`: each step whose exact result is not empty is valid, its mesh
+//!   has no open edge, and its volume is within 2e-4 of the oracle's.
+//! - `BAD`: a boolean gave an exact solid that fails one of these, at any
+//!   step. The line gives the step, `valid`, the faces by surface type,
+//!   `not2` (edges that two faces do not share), `open` (open mesh edges),
+//!   `rel` (the relative volume error) and the axes of the sphere faces.
+//! - `ERR@<k>`: boolean `k` returned an error. `EMPTYEXP`: the exact final
+//!   result is empty, so nothing is measured. `PANIC`: a boolean panicked.
+//!
+//! `final=` gives the verdict on the final result alone. The run ends with a
+//! `SUMMARY` line that counts the verdicts of the cases, the verdicts on the
+//! final results alone, and the bad steps.
 
 #![allow(
     clippy::unwrap_used,
@@ -589,10 +598,68 @@ fn random_case(rng: &mut Lcg) -> (Vec<Prim>, Vec<Op3>, &'static str) {
     (prims, ops, tag)
 }
 
+/// Holds the result `s` of a step against the oracle's volume `expected`:
+/// whether it is good, and the numbers.
+fn score(topo: &Topology, s: SolidId, expected: f64) -> (bool, String) {
+    let valid = validate_solid(topo, s).is_ok_and(|r| r.is_valid());
+    let vol = solid_volume(topo, s, 0.0005).unwrap_or(f64::NAN);
+    let rel = (vol - expected) / expected;
+    let open = tessellate_solid(topo, s, 0.01)
+        .map(|m| boundary_edge_count(&m))
+        .unwrap_or(usize::MAX);
+    let good = valid && rel.abs() < 2e-4 && open == 0;
+    let detail = format!(
+        "valid={valid} faces={} not2={} open={open} rel={rel:.2e} axes={}",
+        census(topo, s),
+        not_twice(topo, s),
+        sphere_axes(topo, s)
+    );
+    (good, detail)
+}
+
+/// The verdict of a case's final step alone, as it reads in a case's line.
+enum Final {
+    Good,
+    Bad,
+    Err(usize, String),
+    Empty,
+}
+
+/// Counts of verdicts over a run.
+#[derive(Default)]
+struct Tally {
+    cases: BTreeMap<&'static str, usize>,
+    finals: BTreeMap<&'static str, usize>,
+    steps: usize,
+    bad_steps: usize,
+    bad_middle_steps: usize,
+}
+
+impl Tally {
+    fn line(&self, seed: u64) -> String {
+        let fmt = |m: &BTreeMap<&str, usize>| {
+            ["GOOD", "BAD", "ERR", "EMPTYEXP", "PANIC"]
+                .iter()
+                .map(|k| format!("{k}={}", m.get(k).copied().unwrap_or(0)))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        format!(
+            "SUMMARY seed={seed} cases: {} | final only: {} | steps={} bad={} bad-middle={}",
+            fmt(&self.cases),
+            fmt(&self.finals),
+            self.steps,
+            self.bad_steps,
+            self.bad_middle_steps
+        )
+    }
+}
+
 /// Runs `SWEEP_N` cases (none by default) from `SWEEP_SEED` (1 by default),
 /// or only case `SWEEP_ONLY` of them. See the module notes.
 #[test]
 #[ignore = "a random sweep that reports cases; run it by hand with SWEEP_N"]
+#[allow(clippy::too_many_lines)]
 fn sweep() {
     let n: u64 = std::env::var("SWEEP_N")
         .ok()
@@ -607,21 +674,25 @@ fn sweep() {
         .and_then(|s| s.parse().ok());
     let mut rng = Lcg(seed);
     let poses = poses();
+    let mut tally = Tally::default();
     for i in 0..n {
         let (prims, ops, tag) = random_case(&mut rng);
         let pose_k = rng.pick(poses.len());
         if only.is_some_and(|o| o != i) {
             continue;
         }
-        let expected = oracle(&prims, &ops);
         let (pname, pose) = poses[pose_k];
-        let line = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let mut codes = String::new();
+        let mut first_bad: Option<(usize, String)> = None;
+        let mut last_detail = String::new();
+        let fin = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut topo = Topology::new();
             let ids: Vec<SolidId> = prims.iter().map(|p| p.build(&mut topo)).collect();
             for &s in &ids {
                 transform_solid(&mut topo, s, &pose).unwrap();
             }
             let mut cur = ids[0];
+            let mut fin = Final::Empty;
             for (k, o) in ops.iter().enumerate() {
                 let bo = match o {
                     Op3::Cut => BooleanOp::Cut,
@@ -631,35 +702,64 @@ fn sweep() {
                 match op(&mut topo, bo, cur, ids[k + 1]) {
                     Ok(s) => cur = s,
                     Err(e) => {
-                        return format!("ERR@{k} {}", e.chars().take(60).collect::<String>());
+                        codes.push('E');
+                        return Final::Err(k, e.chars().take(60).collect());
                     }
                 }
+                let expected = oracle(&prims[..k + 2], &ops[..=k]);
+                if expected < 1e-9 {
+                    codes.push('0');
+                    fin = Final::Empty;
+                    continue;
+                }
+                let (good, detail) = score(&topo, cur, expected);
+                codes.push(if good { 'G' } else { 'B' });
+                if !good && first_bad.is_none() {
+                    first_bad = Some((k, detail.clone()));
+                }
+                fin = if good { Final::Good } else { Final::Bad };
+                last_detail = detail;
             }
-            let s = cur;
-            if expected < 1e-9 {
-                return "EMPTYEXP".to_string();
+            fin
+        }));
+        let fin_key = match &fin {
+            Err(_) => {
+                codes.push('P');
+                "PANIC"
             }
-            let valid = validate_solid(&topo, s).is_ok_and(|r| r.is_valid());
-            let vol = solid_volume(&topo, s, 0.0005).unwrap_or(f64::NAN);
-            let rel = (vol - expected) / expected;
-            let open = tessellate_solid(&topo, s, 0.01)
-                .map(|m| boundary_edge_count(&m))
-                .unwrap_or(usize::MAX);
-            let verdict = if valid && rel.abs() < 2e-4 && open == 0 {
-                "GOOD"
-            } else {
-                "BAD"
+            Ok(Final::Good) => "GOOD",
+            Ok(Final::Bad) => "BAD",
+            Ok(Final::Empty) => "EMPTYEXP",
+            Ok(Final::Err(..)) => "ERR",
+        };
+        let fin_word = match &fin {
+            Ok(Final::Err(k, _)) => format!("ERR@{k}"),
+            _ => fin_key.to_string(),
+        };
+        let (case_key, verdict, detail) = if let Some((k, d)) = &first_bad {
+            ("BAD", "BAD".to_string(), format!("step={k} {d}"))
+        } else {
+            let detail = match &fin {
+                Ok(Final::Err(_, e)) => e.clone(),
+                Ok(Final::Good) => last_detail.clone(),
+                _ => String::new(),
             };
-            format!(
-                "{verdict} valid={valid} faces={} not2={} open={open} rel={rel:.2e} axes={}",
-                census(&topo, s),
-                not_twice(&topo, s),
-                sphere_axes(&topo, s)
-            )
-        }))
-        .unwrap_or_else(|_| "PANIC".to_string());
-        println!("SWEEP {i} {tag} [{pname}] {line} :: {prims:?} {ops:?}");
+            (fin_key, fin_word.clone(), detail)
+        };
+        *tally.cases.entry(case_key).or_default() += 1;
+        *tally.finals.entry(fin_key).or_default() += 1;
+        tally.steps += codes.chars().filter(|&c| c == 'G' || c == 'B').count();
+        tally.bad_steps += codes.chars().filter(|&c| c == 'B').count();
+        tally.bad_middle_steps += codes
+            .chars()
+            .take(ops.len().saturating_sub(1))
+            .filter(|&c| c == 'B')
+            .count();
+        println!(
+            "SWEEP {i} {tag} [{pname}] {verdict} steps={codes} final={fin_word} {detail} :: {prims:?} {ops:?}"
+        );
     }
+    println!("{}", tally.line(seed));
 }
 
 /// The oracle against closed forms and one-dimensional integrals: a ball, a
