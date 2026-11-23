@@ -79,6 +79,12 @@ pub(super) trait Carrier {
     /// surface's own size and `p`'s distance from its frame, or for a
     /// cylinder, whose frame can sit anywhere along its axis, from its axis.
     fn scale(&self, p: Point3) -> f64;
+
+    /// The second derivative of the signed distance of [`Self::distance`]
+    /// along the unit vector `v` at `p`: on the surface, with `v` tangent
+    /// to it, its curvature along `v`, positive where it bends away from
+    /// the gradient. `None` where the distance has no second derivative.
+    fn bend(&self, p: Point3, v: Vec3) -> Option<f64>;
 }
 
 /// The degree-6 Bernstein coefficients of the product of two cubics.
@@ -280,6 +286,64 @@ impl Carrier for AnalyticSurface<'_> {
                 let size = far.madd(far, big.madd(big, small * small));
                 let slack = 512.0 * eps * size * size;
                 (floor > 0.0).then(|| (largest(&f) + slack) / floor + point_rounding(ctrl, o))
+            }
+        }
+    }
+
+    // The distance from an axis is `rho`, whose second derivative along `v`
+    // is the square of `v`'s part across the axis and across the point's
+    // direction from it, over `rho`. A sphere's is the same with its centre
+    // for the axis; a cone's distance is `rho sin` less a term linear in the
+    // point. A torus's is the distance `q` from a point of its centre
+    // circle, which moves with the point by `R / rho` times the part across
+    // the axis and across the point's direction.
+    fn bend(&self, p: Point3, v: Vec3) -> Option<f64> {
+        let across_of = |w: Vec3, axis: Vec3| w - axis * axis.dot(w);
+        let turn = |v_across: Vec3, e: Vec3| {
+            let along = v_across.dot(e);
+            v_across.dot(v_across) - along * along
+        };
+        match self {
+            Self::Cylinder(c) => {
+                let across = across_of(p - c.origin(), c.axis());
+                let rho = across.length();
+                (rho > 0.0).then(|| turn(across_of(v, c.axis()), across * (1.0 / rho)) / rho)
+            }
+            Self::Sphere(s) => {
+                let w = p - s.center();
+                let r = w.length();
+                (r > 0.0).then(|| turn(v, w * (1.0 / r)) / r)
+            }
+            Self::Cone(c) => {
+                let across = across_of(p - c.apex(), c.axis());
+                let rho = across.length();
+                (rho > 0.0).then(|| {
+                    c.half_angle().sin() * turn(across_of(v, c.axis()), across * (1.0 / rho)) / rho
+                })
+            }
+            Self::Torus(t) => {
+                let w = p - t.center();
+                let across = across_of(w, t.z_axis());
+                let rho = across.length();
+                if rho <= 0.0 {
+                    return None;
+                }
+                let tube = |side: f64| {
+                    let to = w - across * (side * t.major_radius() / rho);
+                    (to.length() - t.minor_radius(), to, side)
+                };
+                let (near, far) = (tube(1.0), tube(-1.0));
+                let (_, to, side) = if far.0.abs() < near.0.abs() {
+                    far
+                } else {
+                    near
+                };
+                let q = to.length();
+                (q > 0.0).then(|| {
+                    let centre = side * t.major_radius() / rho;
+                    let spread = turn(across_of(v, t.z_axis()), across * (1.0 / rho));
+                    centre.madd(-spread, turn(v, to * (1.0 / q))) / q
+                })
             }
         }
     }
