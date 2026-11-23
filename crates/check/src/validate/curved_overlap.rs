@@ -24,8 +24,8 @@ use crate::classify::boundary::{Holes, SphereRegion, face_contains_each};
 /// The places along each edge a face is read beside, as fractions of it.
 const ALONG: [f64; 2] = [0.25, 0.75];
 
-/// The distances from an edge a face is read at, as fractions of the face's
-/// size.
+/// The distances from an edge a face is read at, as fractions of the size
+/// of the face's outline.
 const BESIDE: [f64; 2] = [0.125, 0.0625];
 
 /// A face on a sphere, a cylinder, a cone or a torus.
@@ -81,7 +81,7 @@ fn one_surface(a: &FaceSurface, b: &FaceSurface, tol: f64, size: f64) -> bool {
 /// along each edge and each side of it, a pair of points at the distances
 /// of [`BESIDE`], each brought onto the surface.
 fn probes(topo: &Topology, face: &Curved) -> Result<Vec<[Point3; 2]>, CheckError> {
-    let size = face.size();
+    let size = outline_size(topo, face.face)?;
     let surface = &face.surface;
     let onto = |p: Point3| {
         surface
@@ -119,6 +119,33 @@ fn probes(topo: &Topology, face: &Curved) -> Result<Vec<[Point3; 2]>, CheckError
         }
     }
     Ok(runs)
+}
+
+/// The diagonal of the box of points along a face's outline. A face's own
+/// box can be far larger: a cap's box is its whole sphere's.
+fn outline_size(topo: &Topology, face_id: FaceId) -> Result<f64, CheckError> {
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for oe in topo.wire(topo.face(face_id)?.outer_wire())?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        let (a, b) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let curve = edge.curve();
+        let (t0, t1) = curve.domain_with_endpoints(a, b);
+        for k in 0..=8 {
+            let p = curve.evaluate_with_endpoints((t1 - t0).madd(f64::from(k) / 8.0, t0), a, b);
+            for (c, x) in [p.x(), p.y(), p.z()].into_iter().enumerate() {
+                lo[c] = lo[c].min(x);
+                hi[c] = hi[c].max(x);
+            }
+        }
+    }
+    Ok((0..3)
+        .map(|c| (hi[c] - lo[c]).max(0.0).powi(2))
+        .sum::<f64>()
+        .sqrt())
 }
 
 /// Which of `points` lie on `face`, or `None` for a sphere face whose
@@ -350,6 +377,22 @@ mod tests {
             "{:?}",
             report.issues
         );
+    }
+
+    /// Two faces of the small cap past `z = √99`, 2 across on a sphere whose
+    /// box is 20 across: read at distances from the cap's own rim, not its
+    /// box's, they are reported.
+    #[test]
+    fn a_small_cap_and_its_copy_are_reported() {
+        let mut topo = Topology::new();
+        let edge = rim(&mut topo, z(), 99f64.sqrt());
+        let (a, b) = (
+            on_sphere(&mut topo, edge, true),
+            on_sphere(&mut topo, edge, true),
+        );
+        let lens = solid(&mut topo, vec![a, b]);
+        let got = found(&topo, lens);
+        assert_eq!(got.len(), 1, "{got:?}");
     }
 
     /// The caps past `z = 5` and past `x = 5` share the part of the sphere
