@@ -130,6 +130,9 @@ impl EdgeCurve {
         const END_EPS: f64 = 1e-6;
         // NURBS sub-span on-curve band (the weld scale).
         const WELD_EPS: f64 = 1e-5;
+        // How far, at least, a vertex may stand off the curve's own end and
+        // still be read as it: a file's edge tolerance.
+        const FILE_EPS: f64 = 1e-4;
         match self {
             Self::Line => (0.0, 1.0),
             Self::Circle(c) => {
@@ -197,6 +200,34 @@ impl EdgeCurve {
                         && (dt > 0.0 || curve_open || backward_shorter)
                     {
                         return (pa.parameter, pb.parameter);
+                    }
+                    // On an open curve, an endpoint standing off it past the
+                    // weld band but near one of the curve's own ends is that
+                    // end, when the other lies on the curve: a section run to
+                    // a file's vertex, which stands off the face's surface by
+                    // up to its tolerance (5e-5 to 7.5e-3 on B-spline walls),
+                    // ends there. Read whole instead, the edge would be the
+                    // whole curve, through its other end's vertex. Allowed up
+                    // to a hundredth of the edge's chord.
+                    let snap = FILE_EPS.max(1e-2 * (end - start).length());
+                    let to_end = |p: Point3| {
+                        if (p - p0).length() < snap {
+                            Some(d0)
+                        } else if (p - p1).length() < snap {
+                            Some(d1)
+                        } else {
+                            None
+                        }
+                    };
+                    let snapped = match (pa.distance < WELD_EPS, pb.distance < WELD_EPS) {
+                        (true, false) => to_end(end).map(|t| (pa.parameter, t)),
+                        (false, true) => to_end(start).map(|t| (t, pb.parameter)),
+                        _ => None,
+                    };
+                    if let Some((t0, t1)) =
+                        snapped.filter(|&(t0, t1)| curve_open && (t1 - t0).abs() > 1e-6 * (d1 - d0))
+                    {
+                        return (t0, t1);
                     }
                     // The forward sub-arc across the seam has a `(t0, t1)`
                     // form too when it ends or starts on the closure point,
@@ -378,6 +409,46 @@ mod tests {
     use crate::arena::Arena;
     use crate::vertex::Vertex;
     use brepkit_math::vec::Point3;
+
+    /// A piece of an open B-spline section from a point on it to a vertex
+    /// standing 5e-3 off the curve's end (a file's vertex, off its face's
+    /// surface by its tolerance) runs from that point to the curve's end:
+    /// read whole, it would be the whole curve, through the other piece.
+    #[test]
+    fn a_piece_to_a_vertex_off_the_curve_s_end_ends_there() {
+        let knots = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let curve = EdgeCurve::NurbsCurve(
+            brepkit_math::nurbs::curve::NurbsCurve::new(
+                2,
+                knots,
+                vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(5.0, 10.0, 0.0),
+                    Point3::new(10.0, 0.0, 0.0),
+                ],
+                vec![1.0; 3],
+            )
+            .unwrap(),
+        );
+        let middle = curve.evaluate_with_endpoints(
+            0.5,
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(10.0, 0.0, 0.0),
+        );
+        let off = Point3::new(10.0, 0.0, 5e-3);
+        let (t0, t1) = curve.domain_with_endpoints(middle, off);
+        assert!(
+            (t0 - 0.5).abs() < 1e-9 && (t1 - 1.0).abs() < 1e-12,
+            "{t0} {t1}"
+        );
+        let (t0, t1) = curve.domain_with_endpoints(Point3::new(0.0, 0.0, -5e-3), middle);
+        assert!(t0.abs() < 1e-12 && (t1 - 0.5).abs() < 1e-9, "{t0} {t1}");
+        // Both ends off the curve: nothing to read the piece from.
+        assert_eq!(
+            curve.domain_with_endpoints(Point3::new(0.0, 0.0, -5e-3), off),
+            (0.0, 1.0)
+        );
+    }
 
     /// A line, and a NURBS curve whose control points lie on the segment
     /// between its ends, are straight; a NURBS curve with a control point
