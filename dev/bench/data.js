@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795464563485,
+  "lastUpdate": 1795464815266,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -76949,6 +76949,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19832629,
             "range": "± 104920",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "07356e9808f87e0e8dfefae525f880565bd1a3b6",
+          "message": "fix(algo): trace crossing circles on a plane face, cut sections at a notched wall's edge, and split a ball face round a pole (#2775)\n\n## Summary\n\nOn main:\n\n- `fuse_n` of a plate and two posts whose circles cross on the plate's\ntop gives an invalid solid. With the posts 1.9 apart, `fuse_all` returns\nthat solid as a success, with the wrong Euler count (#2763);\n- three struts that end at one point fall back to the mesh in all 6\norders when fused one strut at a time (#2761);\n- a ball, a box on its equator and a slab across the equator fall back\nto the mesh when fused one at a time (#2762).\n\nWith this change, the plate and posts fuse exactly through `fuse_n`,\n`fuse_all` and every pairwise order. The struts fuse exactly in all 6\norders. The ball, box and slab fuse exactly when the ball and the box\nfuse first. The pose sweep and the truth audit give the same output as\nmain.\n\nFixes #2763, fixes #2761. For #2762, `fuse_n` and some orders still\nfail.\n\n## The change\n\n- **Two circles that cross on a plane face (#2763).** The triple-point\npass cuts both circles at their crossings. At a crossing inside the\nface, the greedy walk turned right. So it traced the outline of both\ndiscs as one region, and each whole circle as a hole. The plane face's\nDCEL trace, which served only pinched loops, now also serves loops that\n`greedy_outer_loops_nested` finds nested.\n- **A section past a notched wall's edge (#2761).** After the first\nfuse, the curve where two walls meet is a boundary edge. The third wall\ncrosses it at the triple point. The section on the third wall ran past\nthat point to the old rim, off the face.\n- The new `split_sections_at_boundary_crossings` cuts line, circle and\nellipse sections between two curved faces at their pair's edge\ncrossings. It runs in the pairwise and the `fuse_n` pave filler. Plane\nfaces are left alone.\n- The notched wall's boundary ellipse, split at the triple point, took\nthe principal `u`. With only the cut, a mirrored order gave a valid\nsolid of 95651.696 against 153934.309. An open ellipse arc on a cylinder\nor cone now splits on the turn its own run reaches (`ellipse_split_u`).\n- **A ball face round a pole (#2762).** The ball and the box fuse with\nfaces unified. Then the ball is one face round its north pole. The\nslab's sections end on its outline. The region round the pole closes a\nturn of `u` from where it starts, and the walk rejected that as a false\nclosure. Now sections on such a face go into the outline's turn, and the\nwalk closes a loop that runs one whole turn.\n\n## Tests\n\n- `two_posts_whose_circles_cross_on_a_plate_fuse_exactly` runs posts\n1.2, 0.5 and 1.9 apart in three poses, through `fuse_n`, `fuse_all` and\nthree pairwise orders. Each result is valid with plane and cylinder\nfaces, a closed manifold mesh, the closed-form volume within 1e-6, and 8\npoint probes.\n- `struts_that_end_at_one_point_fuse_one_at_a_time` runs 6 orders in 3\nposes, pairwise with the mesh fallback off, and `fuse_all`. Each reads\n153934.309, the `fuse_n` volume within 1e-8.\n- `a_ball_and_a_box_on_its_equator_then_a_slab_fuse_one_at_a_time` runs\n3 slabs in 3 poses, in both orders that fuse the ball and the box first.\nEach is valid with a closed mesh, within 1e-6 of an inclusion-exclusion\noracle.\n- brepkit-algo (581) passes, and so do all brepkit-operations and\nbrepkit-io tests (3275, 26 skipped). Random sweep seeds 1 to 3 give the\nsame verdict as main for every case.\n\n## Still open\n\n- For #2762, `fuse_n` fails in 5 of 6 cases, and `fuse_all` with it,\nbecause `make_sphere`'s hemispheres end at 32 chords of the equator\n(#2739). Where the ball and the slab fuse first, the sphere face holds\nboth poles of every chart, and the splitter cannot split it.\n- `fuse_cluster` accepted the Euler-invalid result above. Its check is\nstill too lenient for other inputs.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\n**Fixes three boolean-fuse failures where exact fusing previously fell\nback to the mesh or produced invalid solids.**\n\n- A plate and two posts whose circles cross on the plate's top now fuse\nexactly through `fuse_n`, `fuse_all`, and every pairwise order (fixes\n#2763).\n- Three struts ending at one point fuse exactly in all 6 pairwise orders\n(fixes #2761).\n- A ball, a box on its equator, and a slab fuse exactly when the ball\nand box fuse first; `fuse_n` and some orders still fail (refs #2762).\n\n**Implementation notes**\n\n- Plane faces now take the face trace when greedy regions nest without a\nhole between them, which handles crossing section circles.\n- `split_sections_at_boundary_crossings` cuts sections between curved\nfaces at their edge-face crossings, at the vertex the edge's blocks\nkeep; crossings at one place cut once.\n- Open ellipse arcs on walls split on the turn their own run reaches,\nand ball faces holding one pole of their chart close loops that run a\nwhole turn via `build_wire_loops_round_a_pole`.\n\n**Still open**\n\n- For #2762, `fuse_n` fails in 5 of 6 cases because `make_sphere`'s\nhemispheres end at 32 chords (#2739).\n- `fuse_cluster`'s Euler check is still too lenient for other inputs.\n\n<sup>Written for commit 37de9093f71d7df439646fd35aa6cc4dad844daa.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2775?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2775?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2775&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-23T20:05:54Z",
+          "tree_id": "f67bd497377ac7b59a07aa6d1d941def9bffe038",
+          "url": "https://github.com/andymai/brepkit/commit/07356e9808f87e0e8dfefae525f880565bd1a3b6"
+        },
+        "date": 1795464803364,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1165278,
+            "range": "± 7351",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1226844,
+            "range": "± 11349",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12204,
+            "range": "± 216",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 790646,
+            "range": "± 12977",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 24742102,
+            "range": "± 91317",
             "unit": "ns/iter"
           }
         ]
