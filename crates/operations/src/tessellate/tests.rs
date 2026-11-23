@@ -6615,3 +6615,37 @@ fn a_chord_takes_the_runs_of_both_hemispheres_in_either_order() {
         assert!(same, "{cuts:?}: the order of the faces matters");
     }
 }
+
+/// A closed rim of radius 4e-7 has every sample within 1e-6 of its one
+/// vertex. Its cap and the wall beside it must still mesh, and meet.
+#[test]
+fn a_tiny_closed_rim_meshes_closed() {
+    let mut topo = Topology::new();
+    let solids = [
+        crate::primitives::make_cylinder(&mut topo, 4e-7, 1e-6).unwrap(),
+        crate::primitives::make_cylinder(&mut topo, 4e-7, 1.0).unwrap(),
+        crate::primitives::make_cone(&mut topo, 1.0, 4e-7, 2.0).unwrap(),
+    ];
+    for (k, solid) in solids.into_iter().enumerate() {
+        for deflection in [0.01, 0.05] {
+            let mesh = tessellate_solid(&topo, solid, deflection).unwrap();
+            let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+            assert!(
+                mesh.indices.len() / 3 >= faces.len(),
+                "solid {k} at {deflection}: {} triangles for {} faces",
+                mesh.indices.len() / 3,
+                faces.len()
+            );
+            assert_eq!(
+                boundary_edge_count(&mesh),
+                0,
+                "solid {k} at {deflection}: open mesh"
+            );
+            assert_eq!(
+                non_manifold_edge_count(&mesh),
+                0,
+                "solid {k} at {deflection}: non-manifold mesh"
+            );
+        }
+    }
+}

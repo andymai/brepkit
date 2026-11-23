@@ -1153,6 +1153,12 @@ fn drop_lone_samples_beside_end_vertices(
             topo.vertex(edge.start())?.point(),
             topo.vertex(edge.end())?.point(),
         ];
+        // A closed edge, or one whose ends lie this near each other, can
+        // have every inner sample beside an end (a rim of radius under
+        // `reach`): it keeps them all, as it needs them to bound its faces.
+        if edge.start() == edge.end() || (ends[0] - ends[1]).length() < 2.0 * reach {
+            continue;
+        }
         let points = &edge_points[&idx];
         let near: Vec<usize> = (1..points.len().saturating_sub(1))
             .filter(|&i| ends.iter().any(|&end| (points[i] - end).length() < reach))
