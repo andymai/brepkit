@@ -208,6 +208,11 @@ fn split_edges_at_3d_points(
                 };
                 if edge.forward { native } else { -native }
             });
+        // An open ellipse arc on a wall (where an earlier cut's wall met
+        // this one) splits on the turn its run from its start reaches: a
+        // projected split takes the principal copy, which can lie a turn
+        // off the arc's own ends, and the face's outline then jumps there.
+        let open_wall_ellipse = ellipse_rim && closed_ring_dir.is_none() && frame.is_none();
         let mut prev_uv = edge.start_uv;
         let mut prev_3d = edge.start_3d;
         // A woven hole keeps its new vertices and its pieces' pcurves on the
@@ -335,6 +340,16 @@ fn split_edges_at_3d_points(
                     EdgeCurve::Line | EdgeCurve::Circle(_) => None,
                 };
                 on_copy_near(split_uv, near.unwrap_or(along), periods)
+            } else if open_wall_ellipse
+                && !nurbs_by_projection
+                && let EdgeCurve::Ellipse(ellipse) = &edge.curve_3d
+                && let Some(u) = ellipse_split_u(ellipse, &edge, (t, split_uv.x()), surface, tol)
+            {
+                on_copy_near(
+                    split_uv,
+                    brepkit_math::vec::Point2::new(u, split_uv.y()),
+                    periods,
+                )
             } else if let (EdgeCurve::Circle(circle), FaceSurface::Sphere(sphere)) =
                 (&edge.curve_3d, surface)
                 && clear_ball
@@ -353,7 +368,7 @@ fn split_edges_at_3d_points(
                 split_uv
             };
             let mut pcurve = boundary_piece_pcurve(&edge, prev_3d, split_3d, surface, frame);
-            if nurbs_by_projection || clear_ball {
+            if nurbs_by_projection || clear_ball || open_wall_ellipse {
                 pcurve = on_copy_of(pcurve, prev_uv, periods);
             }
             result.push(OrientedPCurveEdge {
@@ -371,7 +386,7 @@ fn split_edges_at_3d_points(
             prev_3d = split_3d;
         }
         let mut pcurve = boundary_piece_pcurve(&edge, prev_3d, edge.end_3d, surface, frame);
-        if nurbs_by_projection || clear_ball {
+        if nurbs_by_projection || clear_ball || open_wall_ellipse {
             pcurve = on_copy_of(pcurve, prev_uv, periods);
         }
         // The stored `end_uv` of a closed rim follows the CURVE's direction
