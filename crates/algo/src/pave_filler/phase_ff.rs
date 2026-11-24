@@ -6822,7 +6822,9 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
         // A NURBS face can bulge far past its boundary (a lofted wall
         // between its two rims); its control net bounds it.
         FaceSurface::Nurbs(n) => Some(n.aabb()),
-        _ => None,
+        // A cone's tip rises past the wire round its base.
+        FaceSurface::Cone(_) => super::helpers::analytic_face_box(topo, face_id, tol)?,
+        FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) => None,
     };
 
     let bounds = match (points.is_empty(), surface_bbox) {
@@ -6851,7 +6853,7 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
 /// wire's edges exactly (`torus_edge_reach`); a wire with an edge that does
 /// not read so takes the whole torus's box. `None` on a horn or spindle
 /// torus, whose far sheet's points do not project to their own angles.
-fn torus_patch_box(
+pub(super) fn torus_patch_box(
     topo: &Topology,
     face_id: FaceId,
     torus: &brepkit_math::surfaces::ToroidalSurface,
@@ -7080,8 +7082,9 @@ fn turn_left_by(arcs: &[(f64, f64)]) -> Option<(f64, f64)> {
 /// center into the face's hemisphere, reversed faces included: their wire
 /// still runs about the sphere's outward normal. Returns `None` when the wire
 /// is degenerate or near-planar through the center, so the side is
-/// ambiguous. Shared by the broad-phase AABB and the section in-both filter
-/// so the two stay consistent.
+/// ambiguous, and when the wire does not lie on the side the axis points
+/// to, so the face reaches past that hemisphere. Shared by the broad-phase
+/// AABB and the section in-both filter so the two stay consistent.
 fn sphere_region_axis(
     topo: &Topology,
     face_id: FaceId,
@@ -7143,7 +7146,76 @@ fn sphere_region_axis(
     if scale < tol.linear * tol.linear || len < scale * tol.linear {
         return None;
     }
-    Some(axis * (1.0 / len))
+    let axis = axis * (1.0 / len);
+    // The wire runs round the side of the face, which lies in the half-ball
+    // the axis points into only where the whole wire does: the wire of a ball
+    // less a small cap runs round the cap, and the face holds both sides.
+    let lowest = lowest_along_wire(topo, face.outer_wire(), center, axis)?;
+    (lowest >= -10.0 * tol.linear).then_some(axis)
+}
+
+/// The least that `(p - center) . axis` takes over the points `p` of a
+/// wire's edges: exact on lines, circles and ellipses, and over the control
+/// points of a B-spline edge, whose curve lies in their hull. `None` where a
+/// B-spline edge has a weight that is not a positive normal float: one below
+/// the least normal float can carry the curve out of that hull.
+fn lowest_along_wire(
+    topo: &Topology,
+    wire_id: brepkit_topology::wire::WireId,
+    center: Point3,
+    axis: Vec3,
+) -> Option<f64> {
+    use std::f64::consts::{PI, TAU};
+    let height = |p: Point3| (p - center).dot(axis);
+    let mut lowest = f64::INFINITY;
+    for oe in topo.wire(wire_id).ok()?.edges() {
+        let edge = topo.edge(oe.edge()).ok()?;
+        let (start, end) = (
+            topo.vertex(edge.start()).ok()?.point(),
+            topo.vertex(edge.end()).ok()?.point(),
+        );
+        lowest = lowest.min(height(start)).min(height(end));
+        let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+        // A conic `o + a cos t u + b sin t v` stands at `k + A cos t + B sin t`,
+        // least where `t` is the angle of `(A, B)` turned half a turn.
+        let conic = |o: Point3, (a, u): (f64, Vec3), (b, v): (f64, Vec3)| {
+            let (k, big_a, big_b) = (height(o), a * u.dot(axis), b * v.dot(axis));
+            let (lo, hi) = (t0.min(t1), t0.max(t1));
+            let at = |t: f64| big_b.madd(t.sin(), big_a.madd(t.cos(), k));
+            let least = big_b.atan2(big_a) + PI;
+            let inside = hi - lo >= TAU || lo + (least - lo).rem_euclid(TAU) <= hi;
+            let ends = at(lo).min(at(hi));
+            if inside {
+                ends.min(k - big_a.hypot(big_b))
+            } else {
+                ends
+            }
+        };
+        let least = match edge.curve() {
+            EdgeCurve::Line => height(start).min(height(end)),
+            EdgeCurve::Circle(c) => conic(
+                c.center(),
+                (c.radius(), c.u_axis()),
+                (c.radius(), c.v_axis()),
+            ),
+            EdgeCurve::Ellipse(e) => conic(
+                e.center(),
+                (e.semi_major(), e.u_axis()),
+                (e.semi_minor(), e.v_axis()),
+            ),
+            EdgeCurve::NurbsCurve(n) => {
+                if n.weights().iter().any(|&w| w <= 0.0 || !w.is_normal()) {
+                    return None;
+                }
+                n.control_points()
+                    .iter()
+                    .map(|&p| height(p))
+                    .fold(f64::INFINITY, f64::min)
+            }
+        };
+        lowest = lowest.min(least);
+    }
+    Some(lowest)
 }
 
 /// True when every edge of the face has zero spatial extent (a degenerate seam
@@ -13046,6 +13118,38 @@ mod tests {
         // join at the seam where the closed curve's endpoints coincide.
         assert!((out[0].t_range.1 - d1).abs() < 1e-9);
         assert!((out[1].t_range.0 - d0).abs() < 1e-9);
+    }
+
+    /// A wire of one straight B-spline edge whose control points stand at
+    /// height 1 over a unit ball's centre: with weights of 1 its least
+    /// height is 1, and with weights below the least normal float it is not
+    /// read, as the curve can then fall out of its control points' hull.
+    #[test]
+    fn a_wire_with_subnormal_weights_has_no_least_height() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let least = |weight: f64| {
+            let mut topo = Topology::default();
+            let (a, b) = (Point3::new(-1.0, 0.0, 1.0), Point3::new(1.0, 0.0, 1.0));
+            let curve =
+                NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![a, b], vec![weight; 2]).unwrap();
+            let (va, vb) = (
+                topo.add_vertex(Vertex::new(a, 1e-7)),
+                topo.add_vertex(Vertex::new(b, 1e-7)),
+            );
+            let edge = topo.add_edge(Edge::new(va, vb, EdgeCurve::NurbsCurve(curve)));
+            let wire =
+                topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], false).unwrap());
+            lowest_along_wire(
+                &topo,
+                wire,
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            )
+        };
+        assert!(least(1.0).is_some_and(|h| (h - 1.0).abs() < 1e-12));
+        assert_eq!(least(f64::from_bits(1)), None);
+        assert_eq!(least(f64::MIN_POSITIVE * 0.5), None);
     }
 
     #[test]

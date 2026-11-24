@@ -317,9 +317,14 @@ fn build_face_containment(
         });
     }
 
-    // Curved faces can bulge past their boundary AABB (e.g. a hemisphere
-    // bounded by its equator), so expand generously by half the diagonal. A
-    // NURBS face can rise further, which its control points bound.
+    if let Some(held) = super::helpers::analytic_face_box(topo, fid, tol)? {
+        return Ok(FaceContainment {
+            bbox: held.expanded(face_tolerance(topo, fid, tol)?),
+            planar: None,
+        });
+    }
+    // A NURBS face takes its boundary's box grown by half its diagonal; its
+    // control points bound how far past that it rises.
     let bbox = bbox.expanded((diag * 0.5).max(tol.linear * 10.0));
     Ok(FaceContainment {
         bbox: match &surface {
@@ -328,6 +333,51 @@ fn build_face_containment(
         },
         planar: None,
     })
+}
+
+/// How far a point found on a face's surface may lie past the face's box
+/// and still be on the face: ten tolerances, or more where the face's edges
+/// or vertices carry a wider tolerance of their own.
+fn face_tolerance(topo: &Topology, fid: FaceId, tol: Tolerance) -> Result<f64, AlgoError> {
+    let mut widest = 10.0 * tol.linear;
+    for eid in brepkit_topology::explorer::face_edges(topo, fid)? {
+        let edge = topo.edge(eid)?;
+        if let Some(t) = edge.tolerance() {
+            widest = widest.max(t.min(crate::ds::shape_store::MAX_WIDEN));
+        }
+        for v in [edge.start(), edge.end()] {
+            widest = widest.max(topo.vertex(v)?.tolerance());
+        }
+    }
+    Ok(widest)
+}
+
+/// A box that holds an edge's curve from `t0` to `t1`, grown by the
+/// tolerance: exact on a line, a circle or an ellipse, and the hulls of a
+/// B-spline's Bezier pieces, or its samples where those cannot be read.
+/// A sample of an arc misses the arc's extreme by up to its chord's sag.
+fn edge_box(
+    curve: &EdgeCurve,
+    start_pos: Point3,
+    end_pos: Point3,
+    t0: f64,
+    t1: f64,
+    tol: Tolerance,
+) -> Option<Aabb3> {
+    let at = |t: f64| curve.evaluate_with_endpoints(t, start_pos, end_pos);
+    let held = match curve {
+        EdgeCurve::Line => Some(Aabb3::from_points([at(t0), at(t1)])),
+        EdgeCurve::Circle(c) => Some(c.arc_aabb(t0, t1)),
+        EdgeCurve::Ellipse(e) => Some(e.arc_aabb(t0, t1)),
+        EdgeCurve::NurbsCurve(_) => curve_piece_boxes(curve, start_pos, end_pos, t0, t1)
+            .and_then(|boxes| boxes.into_iter().reduce(Aabb3::union)),
+    };
+    held.or_else(|| {
+        Aabb3::try_from_points(
+            (0..=N_SAMPLES).map(|i| at(t0 + (t1 - t0) * (i as f64 / N_SAMPLES as f64))),
+        )
+    })
+    .map(|a| a.expanded(tol.linear))
 }
 
 /// Distance from `p` to the segment `a`-`b`.
@@ -485,18 +535,9 @@ fn check_edge_face_pairs(
         // majority of (edge, face) pairs are spatially disjoint; testing each
         // edge sample against every face surface (an iterative projection for
         // curved faces) is the dominant cost in booleans on solids with many
-        // curved faces. Sampling the edge into an AABB once and rejecting
-        // disjoint faces collapses that quadratic to the pairs that actually
-        // overlap. Sampled densely enough that the inter-sample sagitta is
-        // negligible for the analytic edge curves used here.
-        let edge_aabb = {
-            let mut pts = Vec::with_capacity(N_SAMPLES + 1);
-            for i in 0..=N_SAMPLES {
-                let t = t0 + (t1 - t0) * (i as f64 / N_SAMPLES as f64);
-                pts.push(curve.evaluate_with_endpoints(t, start_pos, end_pos));
-            }
-            Aabb3::try_from_points(pts).map(|a| a.expanded(tol.linear))
-        };
+        // curved faces. Boxing the edge once and rejecting disjoint faces
+        // collapses that quadratic to the pairs that actually overlap.
+        let edge_aabb = edge_box(&curve, start_pos, end_pos, t0, t1, tol);
 
         for (face_idx, &fid) in faces.iter().enumerate() {
             if face_boundary_edges[face_idx].contains(&eid) {
@@ -1320,14 +1361,7 @@ fn survey_pairs(
             continue;
         };
         // The same box and the same rejections as the pass.
-        let edge_aabb = {
-            let mut pts = Vec::with_capacity(N_SAMPLES + 1);
-            for i in 0..=N_SAMPLES {
-                let t = t0 + (t1 - t0) * (i as f64 / N_SAMPLES as f64);
-                pts.push(curve.evaluate_with_endpoints(t, start_pos, end_pos));
-            }
-            Aabb3::try_from_points(pts).map(|a| a.expanded(tol.linear))
-        };
+        let edge_aabb = edge_box(curve, start_pos, end_pos, t0, t1, tol);
         // An edge's piece boxes serve only its pairs with B-spline faces,
         // so they are made for the first such pair that is kept.
         let mut boxed = false;
@@ -4771,5 +4805,579 @@ mod tests {
             );
             assert!(ts.iter().all(|t| t.abs() < 0.06), "{ts:?}");
         }
+    }
+
+    /// The points where phase EF puts a vertex on `curve`, a closed edge
+    /// from `start` back to it when `end` is `None`, against `face`.
+    fn ef_vertices(
+        topo: &mut Topology,
+        face: FaceId,
+        curve: EdgeCurve,
+        start: Point3,
+        end: Option<Point3>,
+    ) -> Vec<Point3> {
+        use brepkit_topology::edge::Edge;
+        let a = topo.add_vertex(Vertex::new(start, 1e-7));
+        let b = end.map_or(a, |end| topo.add_vertex(Vertex::new(end, 1e-7)));
+        let edge = topo.add_edge(Edge::new(a, b, curve));
+        let mut arena = GfaArena::new();
+        check_edge_face_pairs(
+            topo,
+            &[edge],
+            (&[], &[]),
+            &[face],
+            &[HashSet::new()],
+            Tolerance::new(),
+            &mut arena,
+        )
+        .unwrap();
+        arena
+            .interference
+            .ef
+            .iter()
+            .filter_map(|i| match i {
+                Interference::EF {
+                    new_vertex: Some(v),
+                    ..
+                } => topo.vertex(*v).ok().map(Vertex::point),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `v` turned by the rotation `turn`.
+    fn turned(
+        turn: brepkit_math::mat::Mat4,
+        v: brepkit_math::vec::Vec3,
+    ) -> brepkit_math::vec::Vec3 {
+        let p = turn.mul_point(Point3::new(v.x(), v.y(), v.z()));
+        brepkit_math::vec::Vec3::new(p.x(), p.y(), p.z())
+    }
+
+    /// The face of a ball of radius 2 at `centre`, turned by `turn`, less
+    /// the cap past the plane `0.95 r` out along the turned `z`: bounded by
+    /// the cap's circle alone, run so the face is the rest of the ball.
+    fn ball_less_a_cap(
+        topo: &mut Topology,
+        centre: Point3,
+        turn: brepkit_math::mat::Mat4,
+    ) -> FaceId {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let (r, h) = (2.0_f64, 0.95 * 2.0);
+        let up = turned(turn, Vec3::new(0.0, 0.0, 1.0));
+        let across = turned(turn, Vec3::new(1.0, 0.0, 0.0));
+        let small = r.madd(r, -h * h).sqrt();
+        let rim = Circle3D::new_with_ref(centre + up * h, up, small, across).unwrap();
+        let v = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
+        let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(rim)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, false)], true).unwrap());
+        let ball = SphericalSurface::new(centre, r).unwrap();
+        topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(ball)))
+    }
+
+    /// A line, a circle and an ellipse crossing a ball less a small cap far
+    /// from the cap, in three poses: phase EF puts a vertex at each crossing,
+    /// on the ball, though the face's only wire is the cap's small circle.
+    #[test]
+    fn edges_crossing_a_ball_less_a_small_cap_far_from_it_find_it() {
+        use brepkit_math::curves::{Circle3D, Ellipse3D};
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::vec::Vec3;
+        let poses = [
+            (Point3::new(0.0, 0.0, 0.0), Mat4::identity()),
+            (
+                Point3::new(0.4, -1.3, 2.2),
+                Mat4::rotation_z(0.7) * Mat4::rotation_x(1.1) * Mat4::rotation_y(0.3),
+            ),
+            (
+                Point3::new(-3.0, 0.5, 0.0),
+                Mat4::rotation_x(std::f64::consts::PI),
+            ),
+        ];
+        for (centre, turn) in poses {
+            let at = |x: f64, y: f64, z: f64| centre + turned(turn, Vec3::new(x, y, z));
+            let dir = |x: f64, y: f64, z: f64| turned(turn, Vec3::new(x, y, z));
+            let mut topo = Topology::new();
+            let face = ball_less_a_cap(&mut topo, centre, turn);
+            // A line along x at height -1, through the ball at x = ±√3.
+            let line = ef_vertices(
+                &mut topo,
+                face,
+                EdgeCurve::Line,
+                at(-3.0, 0.0, -1.0),
+                Some(at(3.0, 0.0, -1.0)),
+            );
+            // A circle about x at height -1 of radius 1.6: 2.56 + 1 - 3.2 sin t = 4.
+            let circle = Circle3D::new_with_ref(
+                at(0.0, 0.0, -1.0),
+                dir(1.0, 0.0, 0.0),
+                1.6,
+                dir(0.0, 1.0, 0.0),
+            )
+            .unwrap();
+            let start = circle.evaluate(0.0);
+            let circle = ef_vertices(&mut topo, face, EdgeCurve::Circle(circle), start, None);
+            // An ellipse at height -1 of semi-axes 2.4 along x and 0.8 along
+            // y: 5.76 cos² t + 0.64 sin² t = 3 four times.
+            let ellipse = Ellipse3D::new_with_ref(
+                at(0.0, 0.0, -1.0),
+                dir(0.0, 0.0, 1.0),
+                2.4,
+                0.8,
+                dir(1.0, 0.0, 0.0),
+            )
+            .unwrap();
+            let start = ellipse.evaluate(0.3);
+            let ellipse = ef_vertices(&mut topo, face, EdgeCurve::Ellipse(ellipse), start, None);
+            for (what, found, count) in [
+                ("line", line, 2),
+                ("circle", circle, 2),
+                ("ellipse", ellipse, 4),
+            ] {
+                assert_eq!(found.len(), count, "{what} {centre:?}: {found:?}");
+                for p in &found {
+                    let off = (*p - centre).length() - 2.0;
+                    assert!(off.abs() < 1e-7, "{what}: {p:?} lies {off} off the ball");
+                    let height = (*p - centre).dot(dir(0.0, 0.0, 1.0));
+                    assert!(height < 0.0, "{what}: {p:?} at height {height}");
+                }
+            }
+        }
+    }
+
+    /// A patch of a cylinder of radius 2 inside a small loop, from 60 to 120
+    /// degrees round it and 2 to 4 up it: the box phase EF holds it in holds
+    /// every point of the patch, its bulge at 90 degrees too.
+    #[test]
+    fn a_cylinder_patch_inside_a_small_loop_is_boxed_whole() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let z_axis = Vec3::new(0.0, 0.0, 1.0);
+        let at = |deg: f64, z: f64| {
+            let a = deg.to_radians();
+            Point3::new(2.0 * a.cos(), 2.0 * a.sin(), z)
+        };
+        let circle = |z: f64| {
+            EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, z), z_axis, 2.0).unwrap())
+        };
+        let mut topo = Topology::new();
+        let corner = [at(60.0, 2.0), at(120.0, 2.0), at(120.0, 4.0), at(60.0, 4.0)];
+        let v = corner.map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+        let low = topo.add_edge(Edge::new(v[0], v[1], circle(2.0)));
+        let right = topo.add_edge(Edge::new(v[1], v[2], EdgeCurve::Line));
+        let high = topo.add_edge(Edge::new(v[3], v[2], circle(4.0)));
+        let left = topo.add_edge(Edge::new(v[0], v[3], EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(low, true),
+                    OrientedEdge::new(right, true),
+                    OrientedEdge::new(high, false),
+                    OrientedEdge::new(left, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let wall = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z_axis, 2.0).unwrap();
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Cylinder(wall)));
+        let held = build_face_containment(&topo, face, Tolerance::new())
+            .unwrap()
+            .bbox;
+        for i in 0..=12_u32 {
+            for j in 0..=4_u32 {
+                let p = at(60.0 + 5.0 * f64::from(i), 2.0 + 0.5 * f64::from(j));
+                assert!(held.contains_point(p), "{p:?} off {held:?}");
+            }
+        }
+    }
+
+    /// An arc of the circle about `centre` on the axes `u` and `v` of
+    /// radius `radius`, from angle `a0` to `a1` (less than half a turn), as a
+    /// rational quadratic B-spline whose weights all lie below the least
+    /// normal float, which its pieces' boxes cannot bound. Its points come
+    /// out within 1e-12 of the circle.
+    fn subnormal_arc(
+        centre: Point3,
+        (u, v): (brepkit_math::vec::Vec3, brepkit_math::vec::Vec3),
+        radius: f64,
+        (a0, a1): (f64, f64),
+    ) -> EdgeCurve {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let at = |a: f64, r: f64| centre + u * (r * a.cos()) + v * (r * a.sin());
+        let half = 0.5 * (a1 - a0);
+        let tiny = 1e-308_f64;
+        assert!(!tiny.is_normal() && tiny > 0.0);
+        let curve = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![
+                at(a0, radius),
+                at(a0 + half, radius / half.cos()),
+                at(a1, radius),
+            ],
+            vec![tiny, tiny * half.cos(), tiny],
+        )
+        .unwrap();
+        let (start, end) = (at(a0, radius), at(a1, radius));
+        let edge = EdgeCurve::NurbsCurve(curve);
+        let (t0, t1) = edge.domain_with_endpoints(start, end);
+        assert!(curve_piece_boxes(&edge, start, end, t0, t1).is_none());
+        for k in 0..=16_u32 {
+            let p =
+                edge.evaluate_with_endpoints((t1 - t0).madd(f64::from(k) / 16.0, t0), start, end);
+            let off = (p - centre).length() - radius;
+            assert!(off.abs() < 1e-12, "{p:?} lies {off} off the circle");
+        }
+        edge
+    }
+
+    /// A hole in a ring about `z`, the window from ring angle `u.0` to `u.1`
+    /// and tube angle `v.0` to `v.1`: two arcs about the axis and two round
+    /// the tube, run clockwise about the ring's outward normal; the lower
+    /// arc about the axis is a [`subnormal_arc`] where `unboxable` is set.
+    /// Each arc is read along its span to lie on the ring and in the window.
+    fn ring_window(
+        topo: &mut Topology,
+        ring: &brepkit_math::surfaces::ToroidalSurface,
+        (u0, u1): (f64, f64),
+        (v0, v1): (f64, f64),
+        unboxable: bool,
+    ) -> brepkit_topology::wire::WireId {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let (big, small) = (ring.major_radius(), ring.minor_radius());
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        // About the axis at tube angle `v`, its angle the ring angle.
+        let along = |v: f64| {
+            let (sin, cos) = v.sin_cos();
+            Circle3D::new_with_ref(
+                Point3::new(0.0, 0.0, small * sin),
+                z,
+                small.madd(cos, big),
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap()
+        };
+        // Round the tube at ring angle `u`, its angle the tube angle.
+        let round = |u: f64| {
+            let (sin, cos) = u.sin_cos();
+            Circle3D::new_with_ref(
+                Point3::new(big * cos, big * sin, 0.0),
+                Vec3::new(sin, -cos, 0.0),
+                small,
+                Vec3::new(cos, sin, 0.0),
+            )
+            .unwrap()
+        };
+        let corner = |topo: &mut Topology, u: f64, v: f64| {
+            topo.add_vertex(Vertex::new(ring.evaluate(u, v), 1e-7))
+        };
+        let (a, b, c, d) = (
+            corner(topo, u0, v0),
+            corner(topo, u1, v0),
+            corner(topo, u1, v1),
+            corner(topo, u0, v1),
+        );
+        let left = topo.add_edge(Edge::new(a, d, EdgeCurve::Circle(round(u0))));
+        let top = topo.add_edge(Edge::new(d, c, EdgeCurve::Circle(along(v1))));
+        let right = topo.add_edge(Edge::new(b, c, EdgeCurve::Circle(round(u1))));
+        let low = if unboxable {
+            let (sin, cos) = v0.sin_cos();
+            subnormal_arc(
+                Point3::new(0.0, 0.0, small * sin),
+                (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0)),
+                small.madd(cos, big),
+                (u0, u1),
+            )
+        } else {
+            EdgeCurve::Circle(along(v0))
+        };
+        let bottom = topo.add_edge(Edge::new(a, b, low));
+        for e in [left, top, right, bottom] {
+            let edge = topo.edge(e).unwrap();
+            let (p, q) = (
+                topo.vertex(edge.start()).unwrap().point(),
+                topo.vertex(edge.end()).unwrap().point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(p, q);
+            for k in 0..=16_u32 {
+                let x = edge.curve().evaluate_with_endpoints(
+                    (t1 - t0).madd(f64::from(k) / 16.0, t0),
+                    p,
+                    q,
+                );
+                let off = (x.x().hypot(x.y()) - big).hypot(x.z()) - small;
+                assert!(off.abs() < 1e-12, "{x:?} lies {off} off the ring");
+                let (u, v) = (x.y().atan2(x.x()), x.z().atan2(x.x().hypot(x.y()) - big));
+                assert!(
+                    u > u0 - 1e-9 && u < u1 + 1e-9 && v > v0 - 1e-9 && v < v1 + 1e-9,
+                    "{x:?} at ({u}, {v}) is out of the window"
+                );
+            }
+        }
+        topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(left, true),
+                    OrientedEdge::new(top, true),
+                    OrientedEdge::new(right, false),
+                    OrientedEdge::new(bottom, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        )
+    }
+
+    /// A whole ring, its one face bounded by its seams collapsed to a point,
+    /// and the ring less a small window on top of its tube: the box phase EF
+    /// holds each face in holds every point of the ring.
+    #[test]
+    fn a_ring_bounded_by_small_loops_is_boxed_whole() {
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let ring = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 2.0, 0.5).unwrap();
+        for windowed in [true, false] {
+            let mut topo = Topology::new();
+            let v = topo.add_vertex(Vertex::new(Point3::new(2.5, 0.0, 0.0), 1e-7));
+            let a = topo.add_edge(Edge::new(v, v, EdgeCurve::Line));
+            let b = topo.add_edge(Edge::new(v, v, EdgeCurve::Line));
+            let wire = topo.add_wire(
+                Wire::new(
+                    vec![
+                        OrientedEdge::new(a, true),
+                        OrientedEdge::new(b, true),
+                        OrientedEdge::new(a, false),
+                        OrientedEdge::new(b, false),
+                    ],
+                    true,
+                )
+                .unwrap(),
+            );
+            let holes = if windowed {
+                vec![ring_window(&mut topo, &ring, (0.3, 0.6), (1.2, 1.9), false)]
+            } else {
+                Vec::new()
+            };
+            let face = topo.add_face(Face::new(wire, holes, FaceSurface::Torus(ring.clone())));
+            let held = build_face_containment(&topo, face, Tolerance::new())
+                .unwrap()
+                .bbox;
+            for i in 0..24_u32 {
+                for j in 0..24_u32 {
+                    let (u, v) = (
+                        std::f64::consts::TAU * f64::from(i) / 24.0,
+                        std::f64::consts::TAU * f64::from(j) / 24.0,
+                    );
+                    let p = ring.evaluate(u, v);
+                    assert!(
+                        held.contains_point(p),
+                        "windowed {windowed}: {p:?} off {held:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A slender cone's tip, bounded by the circle at its base alone: a line
+    /// across it one unit under the apex, ten from the base, crosses it
+    /// twice, and phase EF puts a vertex at each crossing, on the cone.
+    #[test]
+    fn a_line_across_a_cones_tip_far_from_its_base_finds_it() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::ConicalSurface;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let angle = std::f64::consts::FRAC_PI_2 - 0.1;
+        let cone = ConicalSurface::new(
+            Point3::new(0.0, 0.0, 10.0),
+            Vec3::new(0.0, 0.0, -1.0),
+            angle,
+        )
+        .unwrap();
+        let base = 10.0 * angle.cos() / angle.sin();
+        let mut topo = Topology::new();
+        let rim =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), base).unwrap();
+        let v = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
+        let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(rim)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Cone(cone)));
+        let found = ef_vertices(
+            &mut topo,
+            face,
+            EdgeCurve::Line,
+            Point3::new(-2.0, 0.02, 9.0),
+            Some(Point3::new(2.0, 0.02, 9.0)),
+        );
+        assert_eq!(found.len(), 2, "{found:?}");
+        let radius = 0.1 * base;
+        for p in &found {
+            let off = p.x().hypot(p.y()) - radius;
+            assert!(off.abs() < 1e-7, "{p:?} lies {off} off the cone");
+        }
+    }
+
+    /// A ball less a small cap whose rim is three quarters of a circle and
+    /// a quarter as a B-spline that cannot be boxed, and a whole ring less a
+    /// window with such an edge: a line and a circle across the ball far
+    /// from the cap, and a line across the ring far from the window, each
+    /// cross it twice, and phase EF puts a vertex at each crossing. Along
+    /// the ring's line, its crossings fall on its samples.
+    #[test]
+    fn edges_crossing_faces_whose_wires_cannot_be_boxed_find_them() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::{SphericalSurface, ToroidalSurface};
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+
+        let mut topo = Topology::new();
+        let (r, h) = (2.0_f64, 1.9);
+        let small = r.madd(r, -h * h).sqrt();
+        let centre = Point3::new(0.0, 0.0, h);
+        let first = topo.add_vertex(Vertex::new(centre + x * small, 1e-7));
+        let quarter = topo.add_vertex(Vertex::new(centre + y * small, 1e-7));
+        let rest = Circle3D::new_with_ref(centre, z, small, x).unwrap();
+        let rest = topo.add_edge(Edge::new(quarter, first, EdgeCurve::Circle(rest)));
+        let spline = subnormal_arc(centre, (x, y), small, (0.0, std::f64::consts::FRAC_PI_2));
+        let spline = topo.add_edge(Edge::new(first, quarter, spline));
+        // Clockwise seen from above: the face is the rest of the ball.
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(rest, false),
+                    OrientedEdge::new(spline, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let ball = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), r).unwrap();
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(ball)));
+        let line = ef_vertices(
+            &mut topo,
+            face,
+            EdgeCurve::Line,
+            Point3::new(-3.0, 0.0, -1.0),
+            Some(Point3::new(3.0, 0.0, -1.0)),
+        );
+        let circle = Circle3D::new_with_ref(Point3::new(0.0, 0.0, -1.0), x, 1.6, y).unwrap();
+        let start = circle.evaluate(0.0);
+        let circle = ef_vertices(&mut topo, face, EdgeCurve::Circle(circle), start, None);
+        for (what, found) in [("line", line), ("circle", circle)] {
+            assert_eq!(found.len(), 2, "{what}: {found:?}");
+            for p in &found {
+                let off = (*p - Point3::new(0.0, 0.0, 0.0)).length() - r;
+                assert!(off.abs() < 1e-7, "{what}: {p:?} lies {off} off the ball");
+                assert!(p.z() < 0.0, "{what}: {p:?}");
+            }
+        }
+
+        let mut topo = Topology::new();
+        let ring = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 2.0, 0.5).unwrap();
+        let v = topo.add_vertex(Vertex::new(Point3::new(2.5, 0.0, 0.0), 1e-7));
+        let a = topo.add_edge(Edge::new(v, v, EdgeCurve::Line));
+        let b = topo.add_edge(Edge::new(v, v, EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(a, true),
+                    OrientedEdge::new(b, true),
+                    OrientedEdge::new(a, false),
+                    OrientedEdge::new(b, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let window = ring_window(&mut topo, &ring, (0.3, 0.6), (1.2, 1.9), true);
+        let face = topo.add_face(Face::new(wire, vec![window], FaceSurface::Torus(ring)));
+        let found = ef_vertices(
+            &mut topo,
+            face,
+            EdgeCurve::Line,
+            Point3::new(-2.0, -3.0, 0.0),
+            Some(Point3::new(-2.0, 3.0, 0.0)),
+        );
+        assert_eq!(found.len(), 2, "ring: {found:?}");
+        for p in &found {
+            let off = (p.x().hypot(p.y()) - 2.0).hypot(p.z()) - 0.5;
+            assert!(off.abs() < 1e-7, "ring: {p:?} lies {off} off the ring");
+            assert!((p.y().abs() - 1.5).abs() < 1e-7, "ring: {p:?}");
+        }
+    }
+
+    /// The cylinder patch of [`a_cylinder_patch_inside_a_small_loop_is_boxed_whole`]
+    /// with one of its arcs a B-spline that cannot be boxed: nothing bounds
+    /// the patch along the axis, so phase EF refuses the face.
+    #[test]
+    fn a_wall_with_an_edge_that_cannot_be_boxed_is_refused() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let at = |deg: f64, h: f64| {
+            let a = deg.to_radians();
+            Point3::new(2.0 * a.cos(), 2.0 * a.sin(), h)
+        };
+        let mut topo = Topology::new();
+        let corner = [at(60.0, 2.0), at(120.0, 2.0), at(120.0, 4.0), at(60.0, 4.0)];
+        let v = corner.map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+        let low = subnormal_arc(
+            Point3::new(0.0, 0.0, 2.0),
+            (x, y),
+            2.0,
+            (60.0_f64.to_radians(), 120.0_f64.to_radians()),
+        );
+        let low = topo.add_edge(Edge::new(v[0], v[1], low));
+        let right = topo.add_edge(Edge::new(v[1], v[2], EdgeCurve::Line));
+        let high = Circle3D::new(Point3::new(0.0, 0.0, 4.0), z, 2.0).unwrap();
+        let high = topo.add_edge(Edge::new(v[3], v[2], EdgeCurve::Circle(high)));
+        let left = topo.add_edge(Edge::new(v[0], v[3], EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(low, true),
+                    OrientedEdge::new(right, true),
+                    OrientedEdge::new(high, false),
+                    OrientedEdge::new(left, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let wall = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z, 2.0).unwrap();
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Cylinder(wall)));
+        assert!(build_face_containment(&topo, face, Tolerance::new()).is_err());
     }
 }

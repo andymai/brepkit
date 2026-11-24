@@ -39,6 +39,122 @@ pub(super) fn edge_span_box(
     }
 }
 
+/// The box of every wire of a face: exact on lines, circles and ellipses,
+/// each B-spline edge in the hulls of its Bezier pieces' nets, and each
+/// edge's end vertices, which lie within their tolerance of its curve.
+/// `None` where a B-spline edge has no such boxes, or the face has no edge.
+fn wires_box(topo: &Topology, face_id: FaceId) -> Result<Option<Aabb3>, AlgoError> {
+    let face = topo.face(face_id)?;
+    let mut held: Option<Aabb3> = None;
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(wid)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let (start, end) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let span = match edge.curve() {
+                EdgeCurve::NurbsCurve(_) => {
+                    let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+                    let Some(span) =
+                        super::phase_ef::curve_piece_boxes(edge.curve(), start, end, t0, t1)
+                            .and_then(|boxes| boxes.into_iter().reduce(Aabb3::union))
+                    else {
+                        return Ok(None);
+                    };
+                    span
+                }
+                EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                    edge_span_box(edge.curve(), start, end, 0)
+                }
+            };
+            let span = span.union(Aabb3::from_points([start, end]));
+            held = Some(held.map_or(span, |b| b.union(span)));
+        }
+    }
+    Ok(held)
+}
+
+/// A box that holds the whole of a face on a cylinder, cone, sphere or
+/// torus; `None` for a plane or a NURBS face. A face's boundary alone does
+/// not bound it: a ball less a small cap is bounded by the cap's circle,
+/// and holds nearly all of the ball.
+///
+/// Along any axis, the highest and lowest points of a face lie on its
+/// boundary or at a point inside it where the surface's normal is along
+/// the axis. On a cylinder or a cone such points fill whole rulings, at one
+/// height along each, and a ruling leaves a bounded face through its
+/// boundary, at that height; a cone's apex is the one point of its own. On
+/// a sphere they are the poles along each axis, counted where the face's
+/// wires hold them. A torus face takes the box of its patch.
+///
+/// Where a wire has an edge that cannot be boxed, a ball or a ring face
+/// takes the box of its whole surface.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a topology lookup fails, or if a cylinder or a
+/// cone face has a wire edge that cannot be boxed: nothing then bounds the
+/// face along the axis.
+pub(super) fn analytic_face_box(
+    topo: &Topology,
+    face_id: FaceId,
+    tol: Tolerance,
+) -> Result<Option<Aabb3>, AlgoError> {
+    use brepkit_topology::face::FaceSurface;
+    let surface = topo.face(face_id)?.surface();
+    if matches!(surface, FaceSurface::Plane { .. } | FaceSurface::Nurbs(_)) {
+        return Ok(None);
+    }
+    let Some(wires) = wires_box(topo, face_id)? else {
+        return match surface {
+            FaceSurface::Sphere(ball) => Ok(Some(ball.aabb())),
+            FaceSurface::Torus(ring) => Ok(Some(ring.aabb())),
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => Err(AlgoError::IntersectionFailed(
+                format!("face {face_id:?} has a wire edge whose span cannot be bounded"),
+            )),
+            FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => Ok(None),
+        };
+    };
+    let near = 10.0 * tol.linear;
+    let with = |b: Aabb3, p: Point3| b.union(Aabb3::from_points([p]));
+    Ok(Some(match surface {
+        FaceSurface::Cylinder(_) => wires,
+        FaceSurface::Cone(cone) => {
+            let apex = cone.apex();
+            let trim = crate::classifier::LateralTrim::new(topo, face_id)?;
+            if trim.is_none_or(|trim| trim.holds(apex, near)) {
+                with(wires, apex)
+            } else {
+                wires
+            }
+        }
+        FaceSurface::Sphere(ball) => {
+            let trim = crate::classifier::SphereFaceTrim::new(topo, face_id)?;
+            let (c, r) = (ball.center(), ball.radius());
+            let mut held = wires;
+            for (x, y, z) in [
+                (r, 0.0, 0.0),
+                (-r, 0.0, 0.0),
+                (0.0, r, 0.0),
+                (0.0, -r, 0.0),
+                (0.0, 0.0, r),
+                (0.0, 0.0, -r),
+            ] {
+                let pole = Point3::new(c.x() + x, c.y() + y, c.z() + z);
+                if trim.as_ref().is_none_or(|trim| trim.holds(pole, near)) {
+                    held = with(held, pole);
+                }
+            }
+            held
+        }
+        FaceSurface::Torus(ring) => wires.union(
+            super::phase_ff::torus_patch_box(topo, face_id, ring).unwrap_or_else(|| ring.aabb()),
+        ),
+        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => return Ok(None),
+    }))
+}
+
 /// A NURBS face's box grown to where its surface rises off the boundary
 /// between its edges (a lid flat along its rim), past `bounds`, the box of
 /// its boundary. Each knot span lies in the box of the control points it
