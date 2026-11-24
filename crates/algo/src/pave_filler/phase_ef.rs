@@ -317,17 +317,13 @@ fn build_face_containment(
         });
     }
 
-    // An analytic surface's point sums its centre and three rounded terms
-    // along its frame, each of a sine or cosine, a radius and an axis, and
-    // so stands within sixteen roundings of its largest coordinate of where
-    // its box's corners, read the same way, put it.
     let held = match &surface {
         FaceSurface::Nurbs(n) => {
             let reach = face_tolerance(topo, fid, tol)?;
             Some(super::helpers::nurbs_face_box(topo, fid, n, tol, reach)?)
         }
         _ => super::helpers::analytic_face_box(topo, fid, tol)?
-            .map(|b| b.expanded(super::helpers::rounding_reach(b, 16.0))),
+            .map(|b| super::helpers::analytic_rounding_box(&surface, b)),
     };
     Ok(FaceContainment {
         bbox: match held {
@@ -8043,8 +8039,9 @@ mod tests {
     /// evaluators return over the faces, read densely, in a turned pose at
     /// the origin, a million from it and ten billion from it: a ball less a
     /// cap, a whole ring, a slender cone's tip, and a B-spline sheet cut to
-    /// its pcurves' square and whole. Each box grows by roundings of its
-    /// coordinates' size, past which an evaluated point can stand.
+    /// its pcurves' square and whole. Each box grows by roundings of the
+    /// size of the terms its surface's evaluator sums, past which an
+    /// evaluated point can stand.
     #[test]
     fn face_boxes_hold_the_evaluated_surface_far_from_the_origin() {
         use brepkit_math::curves::Circle3D;
@@ -8140,5 +8137,149 @@ mod tests {
             misread.len(),
             &misread[..misread.len().min(5)]
         );
+    }
+
+    /// A flat bilinear sheet whose control points stand at `x = ±1e12`, so
+    /// that `x = 2e12 (u - 0.5)`, and its face cut by pcurves to `u` from
+    /// `0.5 + 2^-40` to `0.5 + 2^-38` and `v` from 0.25 to 0.75, near
+    /// `x` from 1.8 to 7.3. The evaluator reads `x` with the rounding of the
+    /// control points' size, 1e12, far past the size of the face's own
+    /// coordinates: the face's box holds every point it returns over the
+    /// face, and a line across the face finds its crossing.
+    #[test]
+    fn a_face_cut_from_a_far_reaching_sheet_holds_its_evaluated_points() {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::Point2;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::pcurve::PCurve;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let tol = Tolerance::new();
+        let rows = vec![
+            vec![Point3::new(-1e12, 0.0, 0.0), Point3::new(-1e12, 1.0, 0.0)],
+            vec![Point3::new(1e12, 0.0, 0.0), Point3::new(1e12, 1.0, 0.0)],
+        ];
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let sheet =
+            NurbsSurface::new(1, 1, knots.clone(), knots, rows, vec![vec![1.0; 2]; 2]).unwrap();
+        let (u0, u1) = (0.5 + 2f64.powi(-40), 0.5 + 2f64.powi(-38));
+        let corners = [(u0, 0.25), (u1, 0.25), (u1, 0.75), (u0, 0.75)];
+        let mut topo = Topology::new();
+        let v = corners.map(|(u, w)| topo.add_vertex(Vertex::new(sheet.evaluate(u, w), 1e-7)));
+        let mut sides = Vec::new();
+        let mut lines = Vec::new();
+        for k in 0..4 {
+            let (a, b) = (corners[k], corners[(k + 1) % 4]);
+            let e = topo.add_edge(Edge::new(v[k], v[(k + 1) % 4], EdgeCurve::Line));
+            sides.push(OrientedEdge::new(e, true));
+            let (from, to) = (Point2::new(a.0, a.1), Point2::new(b.0, b.1));
+            let line = Line2D::new(from, to - from).unwrap();
+            lines.push((
+                e,
+                PCurve::new(Curve2D::Line(line), 0.0, (to - from).length()),
+            ));
+        }
+        let wire = topo.add_wire(Wire::new(sides, true).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(sheet.clone())));
+        for (e, pcurve) in lines {
+            topo.pcurves_mut().set(e, face, pcurve);
+        }
+        let held = build_face_containment(&topo, face, tol).unwrap().bbox;
+        let mut worst = 0.0_f64;
+        for i in 0..=256_u32 {
+            for j in 0..=8_u32 {
+                let p = sheet.evaluate(
+                    (u1 - u0).madd(f64::from(i) / 256.0, u0),
+                    0.5f64.madd(f64::from(j) / 8.0, 0.25),
+                );
+                let gap = |x: f64, lo: f64, hi: f64| (lo - x).max(x - hi).max(0.0);
+                worst = worst.max(gap(p.x(), held.min.x(), held.max.x()));
+            }
+        }
+        assert!(worst == 0.0, "points stand {worst} past {held:?}");
+        let at = sheet.evaluate(u0 + 1e-9 * 2f64.powi(-40), 0.5);
+        let found = ef_vertices(
+            &mut topo,
+            face,
+            EdgeCurve::Line,
+            at + brepkit_math::vec::Vec3::new(0.0, 0.0, 1.0),
+            Some(at - brepkit_math::vec::Vec3::new(0.0, 0.0, 1.0)),
+        );
+        assert_eq!(found.len(), 1, "{found:?}");
+    }
+
+    /// Strips of width 2 and height 2 near the origin on a cylinder of
+    /// radius 1e12 whose axis stands 1e12 from them, on a turned axis, each
+    /// on the rims' greatest `x`. The evaluator sums the axis's origin and
+    /// the radius along the frame, terms of size 1e12 that cancel, so it
+    /// reads a strip with their rounding: each strip's box holds every
+    /// point the evaluator returns over the strip.
+    #[test]
+    fn a_small_strip_of_a_vast_wall_holds_its_evaluated_points() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let tol = Tolerance::new();
+        let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(1.1) * Mat4::rotation_y(0.3);
+        let axis = turned(turn, Vec3::new(0.0, 0.0, 1.0));
+        let out = (Vec3::new(1.0, 0.0, 0.0) - axis * axis.x())
+            .normalize()
+            .unwrap();
+        let big = 1e12;
+        let mut worst = 0.0_f64;
+        for k in 0..16_u32 {
+            let k = f64::from(k);
+            let top = Point3::new(
+                0.37f64.madd(k, 0.1),
+                0.11f64.madd(-k, 0.2),
+                0.05f64.madd(k, 0.3),
+            );
+            let wall = CylindricalSurface::new(top - out * big, axis, big).unwrap();
+            let (u0, v0) = wall.project_point(top);
+            let a = 1.0 / big;
+            let corners = [
+                (u0 - a, v0 - 1.0),
+                (u0 + a, v0 - 1.0),
+                (u0 + a, v0 + 1.0),
+                (u0 - a, v0 + 1.0),
+            ];
+            let mut topo = Topology::new();
+            let v = corners.map(|(u, h)| topo.add_vertex(Vertex::new(wall.evaluate(u, h), 1e-7)));
+            let arc = |h: f64| {
+                EdgeCurve::Circle(Circle3D::new(wall.origin() + axis * h, axis, big).unwrap())
+            };
+            let low = topo.add_edge(Edge::new(v[0], v[1], arc(v0 - 1.0)));
+            let right = topo.add_edge(Edge::new(v[1], v[2], EdgeCurve::Line));
+            let high = topo.add_edge(Edge::new(v[3], v[2], arc(v0 + 1.0)));
+            let left = topo.add_edge(Edge::new(v[3], v[0], EdgeCurve::Line));
+            let sides = vec![
+                OrientedEdge::new(low, true),
+                OrientedEdge::new(right, true),
+                OrientedEdge::new(high, false),
+                OrientedEdge::new(left, true),
+            ];
+            let wire = topo.add_wire(Wire::new(sides, true).unwrap());
+            let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Cylinder(wall.clone())));
+            let held = build_face_containment(&topo, face, tol).unwrap().bbox;
+            for i in 0..=256_u32 {
+                for j in 0..=64_u32 {
+                    let p = wall.evaluate(
+                        (2.0 * a).madd(f64::from(i) / 256.0, u0 - a),
+                        2.0f64.madd(f64::from(j) / 64.0, v0 - 1.0),
+                    );
+                    let gap = |x: f64, lo: f64, hi: f64| (lo - x).max(x - hi).max(0.0);
+                    worst = worst
+                        .max(gap(p.x(), held.min.x(), held.max.x()))
+                        .max(gap(p.y(), held.min.y(), held.max.y()))
+                        .max(gap(p.z(), held.min.z(), held.max.z()));
+                }
+            }
+        }
+        assert!(worst == 0.0, "points stand {worst} past their boxes");
     }
 }

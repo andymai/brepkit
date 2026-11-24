@@ -162,11 +162,17 @@ pub(super) fn analytic_face_box(
 /// control points the span holds, with weights that are positive and sum to
 /// one, so it lies in their box, whether or not the knots are clamped. The
 /// box is grown by a bound on the rounding of the knot insertion and of the
-/// surface's evaluation, as a share of the size of its coordinates
-/// ([`rounding_reach`]): an evaluated point sums `(p + 1)(q + 1)` products
-/// of basis functions, each read to a few roundings for degrees `p` and
-/// `q`, and each knot inserted takes `p` or `q` steps of a rounded blend.
-/// Over dense evaluation of a sheet a million and ten billion from the
+/// surface's evaluation, as a share of the largest coordinate of the
+/// surface's control points ([`rounding_reach`]): an evaluated point sums
+/// `(p + 1)(q + 1)` products of basis functions and weighted control
+/// points, each read to a few roundings for degrees `p` and `q`, over the
+/// sum of the weighted basis functions, and each knot inserted takes `p` or
+/// `q` steps of a rounded blend. The weights are positive, so the quotient
+/// is rounded as a share of the control points' size, whatever the weights.
+/// The terms can cancel, so a face far smaller than its control points is
+/// read with their rounding: on a sheet with control points 1e12 from the
+/// origin, a face of size 5 stood 0.28 roundings of 1e12 outside its cut
+/// box. Over dense evaluation of a sheet a million and ten billion from the
 /// origin, points stood outside the cut box by up to 2 roundings of their
 /// coordinates, and outside the whole control box by 1. `reach` is how far
 /// the face's own edges and vertices may stand off the surface.
@@ -202,18 +208,47 @@ pub(super) fn nurbs_face_box(
         let (p, q) = (surface.degree_u(), surface.degree_v());
         (4 * (p + 1) * (q + 1) + 16 * (p + q + 1)) as f64
     };
-    Ok(held.expanded(rounding_reach(held, roundings)))
+    let size = surface
+        .control_points()
+        .iter()
+        .flatten()
+        .fold(0.0_f64, |m, p| m.max(largest_coordinate(*p)));
+    Ok(held.expanded(rounding_reach(size, roundings)))
 }
 
-/// `roundings` roundings of the largest coordinate of `held`'s corners: how
-/// far a point that a surface's evaluator computes, a sum of terms each
-/// rounded no more than that many times all told, can stand past a box
-/// whose corners hold the exact point.
-pub(super) fn rounding_reach(held: Aabb3, roundings: f64) -> f64 {
-    let size = [held.min, held.max]
-        .iter()
-        .flat_map(|p| [p.x(), p.y(), p.z()])
-        .fold(0.0_f64, |m, c| m.max(c.abs()));
+/// A box that holds a face of an analytic surface, `held`, grown by a bound
+/// on the rounding of the surface's evaluator. A point sums the surface's
+/// centre, origin or apex and three rounded terms along its frame, each a
+/// sine or cosine times a radius, or a height along the axis no longer than
+/// the point's reach from the centre, so it stands within sixteen roundings
+/// of the sum of those terms' sizes of where the box's corners put it. The
+/// terms can cancel, so the bound scales by their sizes, not by the box's.
+pub(super) fn analytic_rounding_box(
+    surface: &brepkit_topology::face::FaceSurface,
+    held: Aabb3,
+) -> Aabb3 {
+    use brepkit_topology::face::FaceSurface;
+    let (centre, radii) = match surface {
+        FaceSurface::Cylinder(c) => (c.origin(), c.radius()),
+        FaceSurface::Cone(c) => (c.apex(), 0.0),
+        FaceSurface::Sphere(s) => (s.center(), s.radius()),
+        FaceSurface::Torus(t) => (t.center(), t.major_radius() + t.minor_radius()),
+        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => (Point3::new(0.0, 0.0, 0.0), 0.0),
+    };
+    let frame = largest_coordinate(centre);
+    let reach = largest_coordinate(held.min).max(largest_coordinate(held.max)) + frame;
+    held.expanded(rounding_reach(2.0 * (reach + frame + radii.abs()), 16.0))
+}
+
+fn largest_coordinate(p: Point3) -> f64 {
+    p.x().abs().max(p.y().abs()).max(p.z().abs())
+}
+
+/// `roundings` roundings of `size`, the largest size of the terms that a
+/// surface's evaluator sums for a coordinate: how far a point it computes,
+/// with each term rounded no more than that many times all told, can stand
+/// past a box whose corners hold the exact point.
+fn rounding_reach(size: f64, roundings: f64) -> f64 {
     roundings * f64::EPSILON * size.max(f64::MIN_POSITIVE)
 }
 
