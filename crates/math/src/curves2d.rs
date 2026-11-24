@@ -460,9 +460,9 @@ impl Curve2D {
     ///
     /// Every number is finite. A line's direction is not zero, and a
     /// circle's radius and an ellipse's semi-axes are positive. A NURBS
-    /// curve has fewer degrees than control points, a knot for each control
-    /// point and the degree and one more, knots that do not fall, a span of
-    /// positive length, and a positive weight for each control point.
+    /// curve's knots pass [`crate::nurbs::basis::knots_are_sound`] for its
+    /// degree and number of control points, and each control point has a
+    /// weight that passes [`crate::nurbs::basis::weight_is_sound`].
     #[must_use]
     pub fn is_well_formed(&self) -> bool {
         let point = |p: Point2| p.x().is_finite() && p.y().is_finite();
@@ -480,15 +480,10 @@ impl Curve2D {
                     && c.rotation.is_finite()
             }
             Self::Nurbs(c) => {
-                let n = c.control_points.len();
-                let p = c.degree;
-                n > p
-                    && c.knots.len() == n + p + 1
-                    && c.weights.len() == n
-                    && c.knots.iter().all(|k| k.is_finite())
-                    && c.knots.windows(2).all(|pair| pair[0] <= pair[1])
-                    && c.knots[p] < c.knots[n]
-                    && c.weights.iter().all(|&w| w.is_finite() && w > 0.0)
+                use crate::nurbs::basis::{knots_are_sound, weight_is_sound};
+                knots_are_sound(c.degree, c.control_points.len(), &c.knots)
+                    && c.weights.len() == c.control_points.len()
+                    && c.weights.iter().all(|&w| weight_is_sound(w))
                     && c.control_points.iter().all(|&q| point(q))
             }
         }
@@ -548,6 +543,8 @@ mod tests {
             cubic(3, vec![0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0], 4, 1.0),
             cubic(3, vec![0.0, 0.0, 0.0, 0.0, f64::NAN, 1.0, 1.0, 1.0], 4, 1.0),
             cubic(3, vec![0.0; 8], 4, 1.0),
+            cubic(3, vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0], 5, 1.0),
+            cubic(3, unit.clone(), 4, 1e-310),
             cubic(3, unit, 4, 0.0),
         ] {
             assert!(!bad.is_well_formed(), "{bad:?}");

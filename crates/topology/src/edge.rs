@@ -24,7 +24,55 @@ pub enum EdgeCurve {
     Ellipse(Ellipse3D),
 }
 
+/// How far from 1 the length of a frame's axis may be.
+const UNIT_SLACK: f64 = 1e-6;
+
+/// Whether `v` is finite and of unit length.
+pub(crate) fn is_unit(v: Vec3) -> bool {
+    [v.x(), v.y(), v.z()].iter().all(|c| c.is_finite()) && (v.length() - 1.0).abs() <= UNIT_SLACK
+}
+
+/// Whether each coordinate of `p` is finite.
+pub(crate) fn is_finite_point(p: Point3) -> bool {
+    p.x().is_finite() && p.y().is_finite() && p.z().is_finite()
+}
+
+/// Whether `r` is a finite positive length.
+pub(crate) fn is_length(r: f64) -> bool {
+    r.is_finite() && r > 0.0
+}
+
 impl EdgeCurve {
+    /// Whether the curve gives a finite point at each parameter of its
+    /// domain, on the shape its type names. A curve read from data, and not
+    /// built by a constructor, can hold any values.
+    ///
+    /// A NURBS curve passes [`NurbsCurve::is_well_formed`]. A circle's
+    /// radius and an ellipse's semi-axes are finite and positive, the centre
+    /// is finite, and the normal and both axes are unit vectors.
+    #[must_use]
+    pub fn is_well_formed(&self) -> bool {
+        match self {
+            Self::Line => true,
+            Self::NurbsCurve(n) => n.is_well_formed(),
+            Self::Circle(c) => {
+                is_finite_point(c.center())
+                    && is_length(c.radius())
+                    && [c.normal(), c.u_axis(), c.v_axis()]
+                        .into_iter()
+                        .all(is_unit)
+            }
+            Self::Ellipse(e) => {
+                is_finite_point(e.center())
+                    && is_length(e.semi_major())
+                    && is_length(e.semi_minor())
+                    && [e.normal(), e.u_axis(), e.v_axis()]
+                        .into_iter()
+                        .all(is_unit)
+            }
+        }
+    }
+
     /// The same point set traversed the opposite way.
     ///
     /// A circle or ellipse runs counter-clockwise about its normal, so

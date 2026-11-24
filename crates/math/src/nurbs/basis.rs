@@ -42,6 +42,36 @@ pub fn find_span(n: usize, degree: usize, u: f64, knots: &[f64]) -> usize {
     mid
 }
 
+/// Whether [`find_span`] and the basis functions can walk `knots` for a
+/// spline of `degree` over `points` control points, and give finite values
+/// over the whole domain, `knots[degree]` to `knots[points]`.
+///
+/// There are more points than degrees, and one knot for each point and the
+/// degree and one more. Every knot is finite. The knots the basis functions
+/// read, all but the first and the last, do not fall: falling knots can
+/// turn the domain round or divide by zero. The first and the last span of
+/// the domain have positive length, because the span search takes them at
+/// the domain's ends with no test of their length.
+#[must_use]
+pub fn knots_are_sound(degree: usize, points: usize, knots: &[f64]) -> bool {
+    points > degree
+        && knots.len() == points + degree + 1
+        && knots.iter().all(|k| k.is_finite())
+        && knots[1..knots.len() - 1]
+            .windows(2)
+            .all(|pair| pair[0] <= pair[1])
+        && knots[degree] < knots[degree + 1]
+        && knots[points - 1] < knots[points]
+}
+
+/// Whether `weight` can weigh a control point: a positive normal float, so
+/// a sum of weighted basis values never falls to zero or into the subnormal
+/// range, where the divide by it overflows.
+#[must_use]
+pub fn weight_is_sound(weight: f64) -> bool {
+    weight.is_normal() && weight > 0.0
+}
+
 /// O(1) span lookup for uniform knot vectors.
 ///
 /// `step` is the constant spacing between internal knots (as returned by

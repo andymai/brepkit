@@ -89,6 +89,25 @@ impl NurbsCurve {
         })
     }
 
+    /// Whether the curve can be evaluated without reading past its arrays,
+    /// and gives a finite point at each parameter of its domain. [`Self::new`]
+    /// checks only the counts, and a curve read from data with no constructor
+    /// can hold any values.
+    ///
+    /// The knots pass [`basis::knots_are_sound`] for the degree and the
+    /// number of control points, each control point has a weight that passes
+    /// [`basis::weight_is_sound`], and every coordinate is finite.
+    #[must_use]
+    pub fn is_well_formed(&self) -> bool {
+        basis::knots_are_sound(self.degree, self.control_points.len(), &self.knots)
+            && self.weights.len() == self.control_points.len()
+            && self.weights.iter().all(|&w| basis::weight_is_sound(w))
+            && self
+                .control_points
+                .iter()
+                .all(|q| q.x().is_finite() && q.y().is_finite() && q.z().is_finite())
+    }
+
     /// The points of knot span `k` (between `knots[k]` and `knots[k + 1]`)
     /// that `sample` gives, kept: a curve is never changed once made.
     pub(crate) fn span_samples(
@@ -329,6 +348,64 @@ use super::basis::binomial;
 #[allow(clippy::expect_used, clippy::cast_lossless, clippy::suboptimal_flops)]
 mod tests {
     use super::*;
+
+    /// [`NurbsCurve::new`] accepts curves whose counts agree but whose
+    /// values no evaluation can walk. Those are told from well formed ones.
+    /// The last knot, which no evaluation reads, may fall by rounding: solids
+    /// the kernel made hold such curves.
+    #[test]
+    fn malformed_curves_are_told_from_well_formed_ones() {
+        let curve = |degree: usize, knots: Vec<f64>, n: usize, weight: f64| {
+            let points = (0..n).map(|k| Point3::new(k as f64, 1.0, 0.0)).collect();
+            NurbsCurve::new(degree, knots, points, vec![weight; n]).expect("counts agree")
+        };
+        let unit = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        for good in [
+            cubic_bezier(),
+            curve(3, unit.clone(), 4, 2.0),
+            curve(1, vec![0.0, 0.0, 0.5, 1.0, 1.0], 3, 1.0),
+            curve(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0 + f64::EPSILON, 1.0],
+                4,
+                1.0,
+            ),
+        ] {
+            assert!(good.is_well_formed(), "{good:?}");
+        }
+        let mut off = cubic_bezier();
+        off.control_points[1] = Point3::new(f64::NAN, 0.0, 0.0);
+        let mut short = cubic_bezier();
+        short.weights.pop();
+        for bad in [
+            curve(3, vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0], 3, 1.0),
+            curve(0, vec![0.0], 0, 1.0),
+            curve(3, vec![0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0], 4, 1.0),
+            curve(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0 + f64::EPSILON, 1.0, 1.0],
+                4,
+                1.0,
+            ),
+            curve(3, vec![0.0, 0.0, 0.0, 0.0, f64::NAN, 1.0, 1.0, 1.0], 4, 1.0),
+            curve(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, f64::INFINITY],
+                4,
+                1.0,
+            ),
+            curve(3, vec![0.0; 8], 4, 1.0),
+            curve(3, vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0], 5, 1.0),
+            curve(3, unit.clone(), 4, 0.0),
+            curve(3, unit.clone(), 4, -1.0),
+            curve(3, unit.clone(), 4, 1e-310),
+            curve(3, unit, 4, f64::INFINITY),
+            off,
+            short,
+        ] {
+            assert!(!bad.is_well_formed(), "{bad:?}");
+        }
+    }
 
     /// A cubic Bezier curve (single span): control points form a simple shape.
     fn cubic_bezier() -> NurbsCurve {

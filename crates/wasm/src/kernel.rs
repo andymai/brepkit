@@ -691,6 +691,14 @@ impl BrepKernel {
                         })
                         .collect::<Result<_, _>>()?;
                     let nc = NurbsCurve::new(degree, knots, control_points, weights)?;
+                    if !nc.is_well_formed() {
+                        return Err(WasmError::InvalidInput {
+                            reason: format!(
+                                "edge {id}: nurbs curve has a degree, knots, weights or \
+                                 points it cannot be evaluated with"
+                            ),
+                        });
+                    }
                     EdgeCurve::NurbsCurve(nc)
                 }
                 other => {
@@ -992,6 +1000,13 @@ impl BrepKernel {
                         control_points,
                         weights,
                     )?;
+                    if !ns.is_well_formed() {
+                        return Err(WasmError::InvalidInput {
+                            reason: "nurbs surface has degrees, knots, weights or points \
+                                     it cannot be evaluated with"
+                                .into(),
+                        });
+                    }
                     FaceSurface::Nurbs(ns)
                 }
                 other => {
@@ -1672,5 +1687,101 @@ mod lift_curve2d_tests {
             )
             .unwrap_err();
         assert!(err.to_string().contains("Circle expects 3 params"));
+    }
+}
+
+#[cfg(test)]
+mod from_brep_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::error::WasmError;
+
+    /// A unit square on a bilinear B-spline patch, its first side a
+    /// B-spline line.
+    fn square() -> Value {
+        let vertex = |id: u32, x: f64, y: f64| json!({"id": id, "position": [x, y, 0.0]});
+        let line = |id: u32, from: u32, to: u32| json!({"id": id, "startVertex": from, "endVertex": to, "curveType": "line"});
+        json!({
+            "vertices": [vertex(0, 0.0, 0.0), vertex(1, 1.0, 0.0), vertex(2, 1.0, 1.0), vertex(3, 0.0, 1.0)],
+            "edges": [
+                {
+                    "id": 0, "startVertex": 0, "endVertex": 1, "curveType": "nurbs",
+                    "curveParams": {
+                        "degree": 1,
+                        "knots": [0.0, 0.0, 1.0, 1.0],
+                        "weights": [1.0, 1.0],
+                        "controlPoints": [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+                    },
+                },
+                line(1, 1, 2),
+                line(2, 2, 3),
+                line(3, 3, 0),
+            ],
+            "faces": [{
+                "outerWireEdges": [0, 1, 2, 3],
+                "surfaceType": "nurbs",
+                "surfaceParams": {
+                    "degreeU": 1,
+                    "degreeV": 1,
+                    "knotsU": [0.0, 0.0, 1.0, 1.0],
+                    "knotsV": [0.0, 0.0, 1.0, 1.0],
+                    "controlPoints": [
+                        [[0.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+                        [[1.0, 0.0, 0.0], [1.0, 1.0, 0.0]],
+                    ],
+                    "weights": [[1.0, 1.0], [1.0, 1.0]],
+                },
+            }],
+        })
+    }
+
+    /// A B-spline in a BREP document comes from the caller, and one no
+    /// evaluation can walk is refused, not built. The document it was made
+    /// from reads.
+    #[test]
+    fn a_bspline_no_evaluation_can_walk_is_refused() {
+        assert!(
+            BrepKernel::new()
+                .from_brep_impl(&square().to_string())
+                .is_ok()
+        );
+        let edit = |change: &dyn Fn(&mut Value, &mut Value)| {
+            let mut document = square();
+            let mut curve = document["edges"][0]["curveParams"].take();
+            let mut surface = document["faces"][0]["surfaceParams"].take();
+            change(&mut curve, &mut surface);
+            document["edges"][0]["curveParams"] = curve;
+            document["faces"][0]["surfaceParams"] = surface;
+            document.to_string()
+        };
+        let malformed = [
+            edit(&|c, _| {
+                c["degree"] = json!(2);
+                c["knots"] = json!([0.0, 0.0, 0.0, 1.0, 1.0]);
+            }),
+            edit(&|c, _| c["knots"] = json!([1.0, 1.0, 0.0, 0.0])),
+            edit(&|c, _| c["knots"] = json!([0.0, 0.0, 0.0, 0.0])),
+            edit(&|c, _| c["weights"] = json!([1.0, 0.0])),
+            edit(&|c, _| c["weights"] = json!([1.0, -1.0])),
+            edit(&|c, _| c["weights"] = json!([1.0, 1e-310])),
+            edit(&|_, s| {
+                s["degreeU"] = json!(2);
+                s["knotsU"] = json!([0.0, 0.0, 0.0, 1.0, 1.0]);
+            }),
+            edit(&|_, s| s["knotsV"] = json!([1.0, 1.0, 0.0, 0.0])),
+            edit(&|_, s| s["weights"] = json!([[1.0, 0.0], [1.0, 1.0]])),
+            edit(&|_, s| s["weights"] = json!([[1.0, -2.0], [1.0, 1.0]])),
+            edit(&|_, s| s["weights"] = json!([[1.0, 1e-310], [1.0, 1.0]])),
+        ];
+        for bad in &malformed {
+            let found = BrepKernel::new().from_brep_impl(bad);
+            assert!(
+                matches!(&found, Err(WasmError::InvalidInput { reason }) if reason.contains("cannot be evaluated")),
+                "{bad}: {found:?}"
+            );
+        }
     }
 }

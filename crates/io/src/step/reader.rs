@@ -1472,6 +1472,14 @@ impl<'a> StepBuilder<'a> {
             .map_err(|e| IoError::ParseError {
                 reason: format!("B_SPLINE_CURVE #{curve_ref}: {e}"),
             })?;
+        if !nurbs.is_well_formed() {
+            return Err(IoError::ParseError {
+                reason: format!(
+                    "B_SPLINE_CURVE #{curve_ref} has a degree, knots, weights or points \
+                     it cannot be evaluated with"
+                ),
+            });
+        }
         Ok(EdgeCurve::NurbsCurve(nurbs))
     }
 
@@ -1882,6 +1890,14 @@ impl<'a> StepBuilder<'a> {
         .map_err(|e| IoError::ParseError {
             reason: format!("B_SPLINE_SURFACE #{surface_ref}: {e}"),
         })?;
+        if !nurbs.is_well_formed() {
+            return Err(IoError::ParseError {
+                reason: format!(
+                    "B_SPLINE_SURFACE #{surface_ref} has degrees, knots, weights or points \
+                     it cannot be evaluated with"
+                ),
+            });
+        }
         Ok(FaceSurface::Nurbs(nurbs))
     }
 
@@ -2943,6 +2959,153 @@ mod tests {
                 "sample at {u} moved"
             );
         }
+    }
+
+    /// The first B-spline curve and surface `step` holds, each as the reader
+    /// builds it.
+    fn build_first_bsplines(
+        step: &str,
+    ) -> (Result<EdgeCurve, IoError>, Result<FaceSurface, IoError>) {
+        let entities = parse_step_entities(step).unwrap();
+        let first = |name: &str| {
+            entities
+                .iter()
+                .filter(|(_, e)| {
+                    e.entity_type == format!("{name}_WITH_KNOTS")
+                        || (e.entity_type.is_empty() && e.attrs.contains(&format!("{name}(")))
+                })
+                .map(|(&id, _)| id)
+                .min()
+        };
+        let mut imported = Topology::new();
+        let builder = StepBuilder::new(&mut imported, &entities, false);
+        let curve = first("B_SPLINE_CURVE").map_or_else(
+            || {
+                Err(IoError::ParseError {
+                    reason: "no curve".into(),
+                })
+            },
+            |id| builder.build_curve_geometry(id),
+        );
+        let surface = first("B_SPLINE_SURFACE").map_or_else(
+            || {
+                Err(IoError::ParseError {
+                    reason: "no surface".into(),
+                })
+            },
+            |id| builder.build_surface(id),
+        );
+        (curve, surface)
+    }
+
+    /// A B-spline's degree, knots, weights and points come from the file,
+    /// and a set no evaluation can walk panics, hangs or gives a wrong solid
+    /// when it is evaluated: the reader refuses it. The file it was made from
+    /// reads. Each edit replaces one number the file holds once in the curve
+    /// and once in the surface (a knot of 0.375, a coordinate of 0.625, a
+    /// weight of 0.875), or a degree and the multiplicities its knots then
+    /// need.
+    #[test]
+    fn a_bspline_the_reader_cannot_evaluate_is_refused() {
+        use brepkit_math::nurbs::{NurbsCurve, NurbsSurface};
+
+        let knots = vec![0.0, 0.0, 0.0, 0.375, 1.0, 1.0, 1.0];
+        let row = |x: f64, y: f64| {
+            vec![
+                Point3::new(x, 0.0, 0.0),
+                Point3::new(x, y, 1.0),
+                Point3::new(x, 1.5, 1.0),
+                Point3::new(x, 2.0, 0.0),
+            ]
+        };
+        let weights = vec![1.0, 0.875, 1.0, 1.0];
+        let curve = NurbsCurve::new(2, knots.clone(), row(0.0, 0.625), weights.clone()).unwrap();
+        let surface = NurbsSurface::new(
+            1,
+            2,
+            vec![0.0, 0.0, 1.0, 1.0],
+            knots,
+            vec![row(0.0, 0.625), row(3.0, 0.75)],
+            vec![weights, vec![1.0; 4]],
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let cube = make_unit_cube_non_manifold(&mut topo);
+        let eid = brepkit_topology::explorer::solid_edges(&topo, cube).unwrap()[0];
+        topo.edge_mut(eid)
+            .unwrap()
+            .set_curve(EdgeCurve::NurbsCurve(curve));
+        let fid = brepkit_topology::explorer::solid_faces(&topo, cube).unwrap()[0];
+        topo.face_mut(fid)
+            .unwrap()
+            .set_surface(FaceSurface::Nurbs(surface));
+        let step = writer::write_step(&topo, &[cube]).unwrap();
+        let (knot, point, weight) = (fmt(0.375), fmt(0.625), fmt(0.875));
+        for text in [&knot, &point, &weight] {
+            assert_eq!(step.matches(text.as_str()).count(), 2, "{text}");
+        }
+        let (curve, surface) = build_first_bsplines(&step);
+        assert!(curve.unwrap().is_well_formed());
+        assert!(surface.unwrap().is_well_formed());
+
+        // `text` with `from` replaced by `to` on each line that holds `marker`.
+        let on_lines = |text: &str, marker: &str, from: &str, to: &str| {
+            text.lines()
+                .map(|line| {
+                    if line.contains(marker) {
+                        line.replace(from, to)
+                    } else {
+                        line.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        // Two more degrees on the curve over its four points, and one more
+        // on the surface over its two rows; their first knots repeat as many
+        // times more.
+        let past_points = {
+            let text = on_lines(
+                &step,
+                "B_SPLINE_CURVE(",
+                "B_SPLINE_CURVE(2,",
+                "B_SPLINE_CURVE(4,",
+            );
+            let text = on_lines(&text, "B_SPLINE_CURVE(", "(3, 1, 3)", "(5, 1, 3)");
+            let text = on_lines(
+                &text,
+                "B_SPLINE_SURFACE(",
+                "B_SPLINE_SURFACE(1, 2,",
+                "B_SPLINE_SURFACE(2, 2,",
+            );
+            on_lines(&text, "B_SPLINE_SURFACE(", "(2, 2)", "(3, 2)")
+        };
+        let malformed = [
+            past_points,
+            step.replace(&knot, "2.0"),
+            step.replace(&knot, "NaN"),
+            step.replace(&knot, "1E400"),
+            step.replace(&point, "1E400"),
+            step.replace(&point, "-inf"),
+            step.replace(&weight, "1E-310"),
+            step.replace(&weight, "0."),
+            step.replace(&weight, "-1."),
+        ];
+        for bad in &malformed {
+            let (curve, surface) = build_first_bsplines(bad);
+            assert!(
+                matches!(curve, Err(IoError::ParseError { .. })),
+                "{curve:?}"
+            );
+            assert!(
+                matches!(surface, Err(IoError::ParseError { .. })),
+                "{surface:?}"
+            );
+        }
+    }
+
+    fn fmt(v: f64) -> String {
+        format!("{v:.15E}")
     }
 
     /// `plain` with each edge's curve reference moved onto a new entity that
