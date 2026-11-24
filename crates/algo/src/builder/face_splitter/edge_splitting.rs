@@ -1103,10 +1103,13 @@ pub(super) fn find_splits_on_nurbs_section(
     let mut splits: Vec<(f64, Point3)> = Vec::new();
     for &sp in split_pts_3d {
         crate::perf::bump_face_split_probe();
-        // The edge's own end splits nothing off it. Found by its samples on
-        // a spline whose parameter runs unevenly, it can read at a middle
-        // parameter, and mint a piece that ends where it starts.
-        if (sp - edge.start_3d).length() <= fine_band || (sp - edge.end_3d).length() <= fine_band {
+        // A closed edge's own vertex splits nothing off it. Found by its
+        // samples on a spline whose parameter runs unevenly, it can read at a
+        // middle parameter, and mint a piece that ends where it starts and
+        // reads as the whole loop. An open edge keeps these splits: on a
+        // section a micron long its own ends read at middle parameters too,
+        // and its arrangement depends on the pieces.
+        if (edge.start_3d - edge.end_3d).length() <= tol && (sp - edge.start_3d).length() <= tol {
             continue;
         }
         // Nearest sample, then ternary-refine the distance over the two
