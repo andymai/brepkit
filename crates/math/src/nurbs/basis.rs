@@ -42,6 +42,17 @@ pub fn find_span(n: usize, degree: usize, u: f64, knots: &[f64]) -> usize {
     mid
 }
 
+/// The number of knots a spline of `degree` over `points` control points
+/// holds, `points + degree + 1`, or `None` if that count passes the largest
+/// `usize`. A degree from outside data can be any number.
+#[must_use]
+pub const fn knot_count(points: usize, degree: usize) -> Option<usize> {
+    match points.checked_add(degree) {
+        Some(sum) => sum.checked_add(1),
+        None => None,
+    }
+}
+
 /// The largest magnitude a knot may have: a quarter of the largest float.
 ///
 /// The basis functions subtract a knot from a parameter of the domain, and

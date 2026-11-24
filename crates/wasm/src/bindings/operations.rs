@@ -20,8 +20,8 @@ use crate::handles::{
 use brepkit_geometry::extrema::point_to_nurbs_surface;
 
 use crate::helpers::{
-    classify_to_string, handles_in, loft_with_points, panic_message, parse_points, try_fillet,
-    well_formed_nurbs,
+    classify_to_string, handles_in, loft_with_points, panic_message, parse_points, spline_degree,
+    try_fillet, well_formed_nurbs,
 };
 use crate::kernel::BrepKernel;
 
@@ -1915,13 +1915,9 @@ impl BrepKernel {
             .map(|c| Point3::new(c[0], c[1], c[2]))
             .collect();
 
+        let degree = spline_degree(path_degree.into(), control_points.len(), "sweep path")?;
         let path_curve = well_formed_nurbs(
-            NurbsCurve::new(
-                path_degree as usize,
-                path_knots,
-                control_points,
-                path_weights,
-            )?,
+            NurbsCurve::new(degree, path_knots, control_points, path_weights)?,
             "sweep path",
         )?;
 
@@ -1987,13 +1983,13 @@ impl BrepKernel {
             .chunks_exact(3)
             .map(|c| Point3::new(c[0], c[1], c[2]))
             .collect();
+        let degree = spline_degree(
+            spine_degree.into(),
+            control_points.len(),
+            "multiSectionSweep spine",
+        )?;
         let spine = well_formed_nurbs(
-            NurbsCurve::new(
-                spine_degree as usize,
-                spine_knots,
-                control_points,
-                spine_weights,
-            )?,
+            NurbsCurve::new(degree, spine_knots, control_points, spine_weights)?,
             "multiSectionSweep spine",
         )?;
 
@@ -2049,8 +2045,9 @@ impl BrepKernel {
             path_weights
         };
 
+        let degree = spline_degree(path_degree.into(), control_points.len(), "sweepSmooth path")?;
         let path_curve = well_formed_nurbs(
-            NurbsCurve::new(path_degree as usize, path_knots, control_points, weights)?,
+            NurbsCurve::new(degree, path_knots, control_points, weights)?,
             "sweepSmooth path",
         )?;
 
@@ -2084,13 +2081,9 @@ impl BrepKernel {
             .map(|c| Point3::new(c[0], c[1], c[2]))
             .collect();
 
+        let degree = spline_degree(path_degree.into(), control_points.len(), "pipe path")?;
         let path_curve = well_formed_nurbs(
-            NurbsCurve::new(
-                path_degree as usize,
-                path_knots,
-                control_points,
-                path_weights,
-            )?,
+            NurbsCurve::new(degree, path_knots, control_points, path_weights)?,
             "pipe path",
         )?;
 
@@ -2148,9 +2141,11 @@ impl BrepKernel {
                 .chunks_exact(3)
                 .map(|c| Point3::new(c[0], c[1], c[2]))
                 .collect();
+            let what = format!("guidedSweep {label}");
+            let degree = spline_degree(degree.into(), control_points.len(), &what)?;
             well_formed_nurbs(
-                NurbsCurve::new(degree as usize, knots, control_points, weights)?,
-                &format!("guidedSweep {label}"),
+                NurbsCurve::new(degree, knots, control_points, weights)?,
+                &what,
             )
         };
 

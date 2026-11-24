@@ -271,7 +271,8 @@ impl NurbsCurve2D {
     ///
     /// # Errors
     /// Returns an error if knot vector or weights are inconsistent with
-    /// the number of control points and degree.
+    /// the number of control points and degree, or the count of knots they
+    /// ask for passes the largest `usize`.
     pub fn new(
         degree: usize,
         knots: Vec<f64>,
@@ -279,7 +280,11 @@ impl NurbsCurve2D {
         weights: Vec<f64>,
     ) -> Result<Self, MathError> {
         let n = control_points.len();
-        let expected_knots = n + degree + 1;
+        let expected_knots =
+            crate::nurbs::basis::knot_count(n, degree).ok_or(MathError::InvalidKnotVector {
+                expected: usize::MAX,
+                got: knots.len(),
+            })?;
         if knots.len() != expected_knots {
             return Err(MathError::InvalidKnotVector {
                 expected: expected_knots,
@@ -649,6 +654,21 @@ mod tests {
             direction: Vec2::new(1.0, 0.0),
         });
         assert!(!line.is_well_formed());
+    }
+
+    /// A degree from outside data can be any number, and the count of knots
+    /// it asks for can pass the largest `usize`: the constructor refuses it
+    /// with an error, and does not overflow.
+    #[test]
+    fn a_degree_whose_knot_count_overflows_is_refused() {
+        let points = vec![Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)];
+        for degree in [usize::MAX, usize::MAX - 1, usize::MAX - 2] {
+            let found = NurbsCurve2D::new(degree, vec![0.0; 4], points.clone(), vec![1.0; 2]);
+            assert!(
+                matches!(found, Err(MathError::InvalidKnotVector { .. })),
+                "{degree}: {found:?}"
+            );
+        }
     }
 
     const TOL: f64 = 1e-10;

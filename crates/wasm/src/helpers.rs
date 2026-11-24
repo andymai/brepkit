@@ -37,6 +37,22 @@ fn not_evaluable(what: &str) -> WasmError {
     }
 }
 
+/// The caller's `degree`, if it is less than the number of control points
+/// `points`. No spline has a larger one, and its count of knots, the points
+/// and the degree and one more, can pass the largest `usize` of a 32-bit
+/// target.
+pub fn spline_degree(degree: u64, points: usize, what: &str) -> Result<usize, WasmError> {
+    usize::try_from(degree)
+        .ok()
+        .filter(|&d| d < points)
+        .ok_or_else(|| WasmError::InvalidInput {
+            reason: format!(
+                "{what} has degree {degree} over {points} control points, which it \
+                 cannot be evaluated with: the degree must be less than the count"
+            ),
+        })
+}
+
 /// `curve`, if it gives a finite point at each parameter of its domain on
 /// the shape its type names.
 pub fn well_formed_curve(

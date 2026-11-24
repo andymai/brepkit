@@ -32,7 +32,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::error::{WasmError, validate_finite};
 use crate::handles::{edge_id_to_u32, solid_id_to_u32};
-use crate::helpers::{TOL, well_formed_curve, well_formed_nurbs};
+use crate::helpers::{TOL, spline_degree, well_formed_curve, well_formed_nurbs};
 use crate::state::{Checkpoint, SketchState};
 
 /// The B-Rep modeling kernel.
@@ -380,6 +380,11 @@ impl BrepKernel {
                     .collect();
                 let weights = curve_params[weights_start..weights_start + n_cp].to_vec();
 
+                let degree = spline_degree(
+                    degree as u64,
+                    control_points_3d.len(),
+                    "liftCurve2dToPlane NURBS curve",
+                )?;
                 let curve = NurbsCurve::new(degree, knots, control_points_3d, weights)?;
                 let curve = well_formed_nurbs(curve, "liftCurve2dToPlane NURBS curve")?;
                 let start_3d = curve.evaluate(t_start);
@@ -646,7 +651,7 @@ impl BrepKernel {
                         WasmError::InvalidInput {
                             reason: format!("edge {id}: nurbs missing degree"),
                         }
-                    })? as usize;
+                    })?;
                     let knots_arr = p.get("knots").and_then(|v| v.as_array()).ok_or_else(|| {
                         WasmError::InvalidInput {
                             reason: format!("edge {id}: nurbs missing knots"),
@@ -692,6 +697,11 @@ impl BrepKernel {
                             Self::parse_point3(arr, &format!("controlPoints[{i}]"))
                         })
                         .collect::<Result<_, _>>()?;
+                    let degree = spline_degree(
+                        degree,
+                        control_points.len(),
+                        &format!("edge {id}: nurbs curve"),
+                    )?;
                     let nc = NurbsCurve::new(degree, knots, control_points, weights)?;
                     if !nc.is_well_formed() {
                         return Err(WasmError::InvalidInput {
@@ -903,12 +913,12 @@ impl BrepKernel {
                         WasmError::InvalidInput {
                             reason: "nurbs surface missing degreeU".into(),
                         }
-                    })? as usize;
+                    })?;
                     let degree_v = p.get("degreeV").and_then(|v| v.as_u64()).ok_or_else(|| {
                         WasmError::InvalidInput {
                             reason: "nurbs surface missing degreeV".into(),
                         }
-                    })? as usize;
+                    })?;
                     let knots_u_arr =
                         p.get("knotsU").and_then(|v| v.as_array()).ok_or_else(|| {
                             WasmError::InvalidInput {
@@ -995,6 +1005,13 @@ impl BrepKernel {
                                 .collect::<Result<_, _>>()
                         })
                         .collect::<Result<_, _>>()?;
+                    let degree_u =
+                        spline_degree(degree_u, control_points.len(), "nurbs surface along u")?;
+                    let degree_v = spline_degree(
+                        degree_v,
+                        control_points.first().map_or(0, Vec::len),
+                        "nurbs surface along v",
+                    )?;
                     let ns = NurbsSurface::new(
                         degree_u,
                         degree_v,
@@ -1712,7 +1729,7 @@ mod from_brep_tests {
 
     /// A unit square on a bilinear B-spline patch, its first side a
     /// B-spline line.
-    fn square() -> Value {
+    pub(super) fn square() -> Value {
         let vertex = |id: u32, x: f64, y: f64| json!({"id": id, "position": [x, y, 0.0]});
         let line = |id: u32, from: u32, to: u32| json!({"id": id, "startVertex": from, "endVertex": to, "curveType": "line"});
         json!({
@@ -1949,6 +1966,51 @@ mod js_curve_tests {
             let found = batch_one(&mut k, "makeNurbsEdge", &args(spline));
             let error = found["error"].as_str().unwrap_or_default();
             assert!(error.contains("cannot be evaluated"), "{what}: {found}");
+        }
+    }
+
+    /// A degree from JS can be any `u32`. One past the control points is
+    /// refused before the curve is built: on a 32-bit target, the knot count
+    /// of `u32::MAX`, the points and the degree and one more, overflows.
+    #[test]
+    fn a_degree_past_the_points_is_refused_before_the_curve_is_built() {
+        let past = |found: &str| found.contains("the degree must be less than the count");
+        let (_, knots, points, weights) = quadratic();
+        let mut k = BrepKernel::new();
+        let face = k.make_rectangle(1.0, 1.0).unwrap();
+        for degree in [4, u32::MAX] {
+            let args = json!({
+                "startX": 0.0, "startY": 0.0, "startZ": 0.0,
+                "endX": 3.0, "endY": 0.0, "endZ": 0.0,
+                "degree": degree, "knots": knots, "controlPoints": points, "weights": weights,
+            });
+            let found = batch_one(&mut k, "makeNurbsEdge", &args);
+            assert!(past(found["error"].as_str().unwrap_or_default()), "{found}");
+            let edge = k.make_nurbs_edge_impl(
+                [0.0; 3],
+                [3.0, 0.0, 0.0],
+                degree,
+                knots.clone(),
+                &points,
+                weights.clone(),
+            );
+            assert!(past(&format!("{edge:?}")), "{edge:?}");
+            let swept =
+                k.sweep_face_impl(face, degree, knots.clone(), points.clone(), weights.clone());
+            assert!(past(&format!("{swept:?}")), "{swept:?}");
+            let piped =
+                k.pipe_solid_impl(face, degree, knots.clone(), points.clone(), weights.clone());
+            assert!(past(&format!("{piped:?}")), "{piped:?}");
+        }
+        for degree in [u64::from(u32::MAX), 1 << 40] {
+            let mut document = super::from_brep_tests::square();
+            document["edges"][0]["curveParams"]["degree"] = json!(degree);
+            let found = BrepKernel::new().from_brep_impl(&document.to_string());
+            assert!(past(&format!("{found:?}")), "{found:?}");
+            let mut document = super::from_brep_tests::square();
+            document["faces"][0]["surfaceParams"]["degreeV"] = json!(degree);
+            let found = BrepKernel::new().from_brep_impl(&document.to_string());
+            assert!(past(&format!("{found:?}")), "{found:?}");
         }
     }
 

@@ -1465,13 +1465,20 @@ impl<'a> StepBuilder<'a> {
             reason: format!("B_SPLINE_CURVE #{curve_ref} could not parse attributes"),
         })?;
         let (degree, cp_refs, mults, knot_vals) = parsed;
+        let knots = expand_knots(&mults, &knot_vals, cp_refs.len(), degree).ok_or_else(|| {
+            IoError::ParseError {
+                reason: format!(
+                    "B_SPLINE_CURVE #{curve_ref} has a degree of {degree} over {} points, or \
+                     knot multiplicities that do not add up to them",
+                    cp_refs.len()
+                ),
+            }
+        })?;
 
         let mut control_points = Vec::with_capacity(cp_refs.len());
         for &cp_ref in &cp_refs {
             control_points.push(self.build_cartesian_point(cp_ref)?);
         }
-
-        let knots = expand_knots(&mults, &knot_vals);
 
         let n_cps = control_points.len();
         let weights = if let Some(weights) = rational_attrs {
@@ -1872,6 +1879,19 @@ impl<'a> StepBuilder<'a> {
             reason: format!("B_SPLINE_SURFACE #{surface_ref} could not parse attributes"),
         })?;
         let (degree_u, degree_v, cp_grid_refs, u_mults, v_mults, u_knots, v_knots) = parsed;
+        let (rows, cols) = (cp_grid_refs.len(), cp_grid_refs.first().map_or(0, Vec::len));
+        let (Some(knots_u), Some(knots_v)) = (
+            expand_knots(&u_mults, &u_knots, rows, degree_u),
+            expand_knots(&v_mults, &v_knots, cols, degree_v),
+        ) else {
+            return Err(IoError::ParseError {
+                reason: format!(
+                    "B_SPLINE_SURFACE #{surface_ref} has degrees of {degree_u} and {degree_v} \
+                     over {rows} by {cols} points, or knot multiplicities that do not add up \
+                     to them"
+                ),
+            });
+        };
 
         let mut cp_grid: Vec<Vec<Point3>> = Vec::new();
         for row_refs in &cp_grid_refs {
@@ -1881,9 +1901,6 @@ impl<'a> StepBuilder<'a> {
             }
             cp_grid.push(row);
         }
-
-        let knots_u = expand_knots(&u_mults, &u_knots);
-        let knots_v = expand_knots(&v_mults, &v_knots);
 
         let n_rows = cp_grid.len();
         let n_cols = cp_grid.first().map_or(0, Vec::len);
@@ -2672,15 +2689,23 @@ fn parse_nested_refs(s: &str) -> Vec<Vec<u64>> {
 /// Expand knot multiplicities and unique values into a flat knot vector.
 ///
 /// Given `mults = [3, 1, 3]` and `vals = [0.0, 0.5, 1.0]`, produces
-/// `[0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0]`.
-fn expand_knots(mults: &[u32], vals: &[f64]) -> Vec<f64> {
-    let mut knots = Vec::new();
-    for (&m, &v) in mults.iter().zip(vals.iter()) {
-        for _ in 0..m {
-            knots.push(v);
-        }
+/// `[0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0]`. The file gives the degree and each
+/// multiplicity: `None` unless the degree is less than the number of
+/// `points` and the multiplicities add up to the points, the degree and one
+/// more, so a count from the file cannot overflow or fill memory.
+fn expand_knots(mults: &[u32], vals: &[f64], points: usize, degree: usize) -> Option<Vec<f64>> {
+    let want = brepkit_math::nurbs::basis::knot_count(points, degree)?;
+    let total = mults.iter().zip(vals).try_fold(0_usize, |sum, (&m, _)| {
+        sum.checked_add(usize::try_from(m).ok()?)
+    })?;
+    if degree >= points || total != want {
+        return None;
     }
-    knots
+    let mut knots = Vec::with_capacity(want);
+    for (&m, &v) in mults.iter().zip(vals) {
+        knots.extend(std::iter::repeat_n(v, usize::try_from(m).ok()?));
+    }
+    Some(knots)
 }
 
 /// Parse a B_SPLINE_CURVE_WITH_KNOTS attribute string.
@@ -3127,8 +3152,30 @@ mod tests {
             );
             on_lines(&text, "B_SPLINE_SURFACE(", "(2, 2)", "(3, 2)")
         };
+        // A degree whose knot count passes the largest `usize`, and a knot
+        // repeated so often that its knots would fill memory.
+        let huge_degree = {
+            let text = on_lines(
+                &step,
+                "B_SPLINE_CURVE(",
+                "B_SPLINE_CURVE(2,",
+                "B_SPLINE_CURVE(18446744073709551615,",
+            );
+            on_lines(
+                &text,
+                "B_SPLINE_SURFACE(",
+                "B_SPLINE_SURFACE(1, 2,",
+                "B_SPLINE_SURFACE(18446744073709551615, 2,",
+            )
+        };
+        let huge_repeat = {
+            let text = on_lines(&step, "B_SPLINE_CURVE(", "(3, 1, 3)", "(3, 4000000000, 3)");
+            on_lines(&text, "B_SPLINE_SURFACE(", "(2, 2)", "(2, 4000000000)")
+        };
         let malformed = [
             past_points,
+            huge_degree,
+            huge_repeat,
             step.replace(&knot, "2.0"),
             step.replace(&knot, "NaN"),
             step.replace(&knot, "1E400"),
@@ -4659,8 +4706,12 @@ mod tests {
     fn expand_knots_basic() {
         let mults = [3, 1, 3];
         let vals = [0.0, 0.5, 1.0];
-        let flat = expand_knots(&mults, &vals);
+        let flat = expand_knots(&mults, &vals, 4, 2).unwrap();
         assert_eq!(flat, vec![0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0]);
+        assert!(expand_knots(&mults, &vals, 4, 3).is_none());
+        assert!(expand_knots(&mults, &vals, 2, 4).is_none());
+        assert!(expand_knots(&[3, u32::MAX, 3], &vals, 4, 2).is_none());
+        assert!(expand_knots(&mults, &vals, 4, usize::MAX).is_none());
     }
 
     #[test]

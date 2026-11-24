@@ -15,7 +15,7 @@ use crate::error::{WasmError, validate_finite, validate_positive};
 use crate::handles::{
     edge_id_to_u32, face_id_to_u32, solid_id_to_u32, vertex_id_to_u32, wire_id_to_u32,
 };
-use crate::helpers::{TOL, parse_points, well_formed_curve, well_formed_nurbs};
+use crate::helpers::{TOL, parse_points, spline_degree, well_formed_curve, well_formed_nurbs};
 use crate::kernel::BrepKernel;
 
 #[wasm_bindgen]
@@ -913,7 +913,8 @@ impl BrepKernel {
             .chunks_exact(3)
             .map(|c| Point3::new(c[0], c[1], c[2]))
             .collect();
-        let curve = NurbsCurve::new(degree as usize, knots, cp, weights)?;
+        let degree = spline_degree(degree.into(), cp.len(), "makeNurbsEdge curve")?;
+        let curve = NurbsCurve::new(degree, knots, cp, weights)?;
         let curve = well_formed_nurbs(curve, "makeNurbsEdge curve")?;
 
         let start_pt = Point3::new(start[0], start[1], start[2]);

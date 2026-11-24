@@ -498,15 +498,22 @@ fn insert_along_rows(
 /// # Errors
 ///
 /// Returns [`MathError::PoleAtInfinity`] if an elevated control point is at
-/// infinity, as weights of mixed sign can blend to, or another error if the
-/// resulting curve cannot be constructed.
+/// infinity, as weights of mixed sign can blend to,
+/// [`MathError::InvalidKnotVector`] if the elevated degree passes the
+/// largest `usize`, or another error if the resulting curve cannot be
+/// constructed.
 pub fn curve_degree_elevate(curve: &NurbsCurve, t: usize) -> Result<NurbsCurve, MathError> {
     if t == 0 {
         return Ok(curve.clone());
     }
 
     let p = curve.degree();
-    let new_p = p + t;
+    let new_p = p
+        .checked_add(t)
+        .ok_or_else(|| MathError::InvalidKnotVector {
+            expected: usize::MAX,
+            got: curve.knots().len(),
+        })?;
 
     let segments = curve_to_bezier_segments(curve)?;
     let n_segs = segments.len();
@@ -860,6 +867,18 @@ mod tests {
                 p2.y()
             );
         }
+    }
+
+    /// An elevation from outside data can be any number. One whose degree
+    /// passes the largest `usize` is refused with an error, and the sum does
+    /// not overflow.
+    #[test]
+    fn a_degree_elevation_past_the_largest_usize_is_refused() {
+        let found = curve_degree_elevate(&cubic_bezier(), usize::MAX);
+        assert!(
+            matches!(found, Err(MathError::InvalidKnotVector { .. })),
+            "{found:?}"
+        );
     }
 
     #[test]
