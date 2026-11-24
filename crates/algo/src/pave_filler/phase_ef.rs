@@ -2635,7 +2635,9 @@ impl SideForm {
 /// range is halved until Taylor's bounds about its middle, with the
 /// rounding, show that the form keeps clear of zero along it, or that its
 /// slope does, so that it holds at most one root, bisected where its ends
-/// lie on two sides for sure. Below the parameter step that moves the curve
+/// lie on two sides for sure down to two neighbouring values, of which the
+/// one whose point lies nearer the surface is kept (a crossing of a line
+/// that lands on a vertex lands there exactly). Below the parameter step that moves the curve
 /// by the tolerance, or where an end's side is not known, a piece holds a
 /// place where the curve may meet the surface.
 ///
@@ -2687,7 +2689,8 @@ fn quadric_side_roots(
         let (f, unsure) = form.value(t);
         (f.abs() > unsure).then_some(f > 0.0)
     };
-    // Where `sign` of the form changes between `a` and `b`, by halving.
+    // The last bracket in which `sign` of the form changes between `a` and
+    // `b`, by halving to two neighbouring values.
     let halve = |mut a: f64, mut b: f64, sign: &dyn Fn(f64) -> bool| {
         let from = sign(a);
         if sign(b) == from {
@@ -2704,7 +2707,12 @@ fn quadric_side_roots(
                 b = m;
             }
         }
-        Some(f64::midpoint(a, b))
+        Some((a, b))
+    };
+    // Of a bracket's two ends, the one whose point lies nearer the surface.
+    let nearer = |(a, b): (f64, f64)| {
+        let off = |t: f64| distance_to_surface(point_at(t), surface);
+        if off(b) < off(a) { b } else { a }
     };
     let above = |t: f64| form.value(t).0 > 0.0;
     let rising = |t: f64| form.derivatives(t).0[0] > 0.0;
@@ -2753,7 +2761,7 @@ fn quadric_side_roots(
             marks.extend(side_a.map(Mark::Side));
             match (side_a, side_b) {
                 (Some(x), Some(y)) if x != y => {
-                    marks.push(Mark::Root(halve(a, b, &above).unwrap_or(m), true));
+                    marks.push(Mark::Root(halve(a, b, &above).map_or(m, nearer), true));
                 }
                 (Some(_), Some(_)) if one_way => {}
                 (Some(_), None) => marks.push(Mark::Root(b, false)),
@@ -2812,7 +2820,7 @@ fn quadric_side_roots(
             }
         } else {
             halve(first - shortest, last + shortest, &rising)
-                .unwrap_or_else(|| f64::midpoint(first, last))
+                .map_or_else(|| f64::midpoint(first, last), nearer)
                 .clamp(lo, hi)
         };
         let p = point_at(t);
