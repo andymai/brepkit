@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.47](https://github.com/andymai/brepkit/compare/v4.11.46...v4.11.47) (2026-11-24)
+
+
+### Bug Fixes
+
+* **math:** prove that the marcher's seeds reach every part of a section, or refuse ([#2790](https://github.com/andymai/brepkit/issues/2790)) ([1fedae6](https://github.com/andymai/brepkit/commit/1fedae6dc6724d26553742298ead18d590f93f90))
+
 ## [4.11.46](https://github.com/andymai/brepkit/compare/v4.11.45...v4.11.46) (2026-11-24)
 
 
