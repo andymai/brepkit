@@ -24,7 +24,67 @@ pub enum EdgeCurve {
     Ellipse(Ellipse3D),
 }
 
+/// How far from 1 the length of a frame's axis may be, and how far from 0
+/// the dot product of two of its axes. The frames of every primitive, in
+/// every pose, and of every fixture are within 5e-15.
+const FRAME_SLACK: f64 = 1e-6;
+
+/// Whether `v` is finite and of unit length.
+pub(crate) fn is_unit(v: Vec3) -> bool {
+    [v.x(), v.y(), v.z()].iter().all(|c| c.is_finite()) && (v.length() - 1.0).abs() <= FRAME_SLACK
+}
+
+/// Whether `a`, `b` and `c` are unit axes at right angles that turn right
+/// handed, `c` along `a` cross `b`. A conic runs counter-clockwise about
+/// its normal, and a surface of revolution's parameters turn its normal
+/// outward, only on such a frame; with two axes alike, a circle is a
+/// segment.
+pub(crate) fn is_frame(a: Vec3, b: Vec3, c: Vec3) -> bool {
+    [a, b, c].into_iter().all(is_unit)
+        && [a.dot(b), a.dot(c), b.dot(c)]
+            .iter()
+            .all(|d| d.abs() <= FRAME_SLACK)
+        && a.cross(b).dot(c) > 0.0
+}
+
+/// Whether each coordinate of `p` is finite.
+pub(crate) fn is_finite_point(p: Point3) -> bool {
+    p.x().is_finite() && p.y().is_finite() && p.z().is_finite()
+}
+
+/// Whether `r` is a finite positive length.
+pub(crate) fn is_length(r: f64) -> bool {
+    r.is_finite() && r > 0.0
+}
+
 impl EdgeCurve {
+    /// Whether the curve gives a finite point at each parameter of its
+    /// domain, on the shape its type names. A curve read from data, and not
+    /// built by a constructor, can hold any values.
+    ///
+    /// A NURBS curve passes [`NurbsCurve::is_well_formed`]. A circle's
+    /// radius and an ellipse's semi-axes are finite and positive, the centre
+    /// is finite, and the two axes and the normal make a right-handed frame
+    /// of unit axes at right angles.
+    #[must_use]
+    pub fn is_well_formed(&self) -> bool {
+        match self {
+            Self::Line => true,
+            Self::NurbsCurve(n) => n.is_well_formed(),
+            Self::Circle(c) => {
+                is_finite_point(c.center())
+                    && is_length(c.radius())
+                    && is_frame(c.u_axis(), c.v_axis(), c.normal())
+            }
+            Self::Ellipse(e) => {
+                is_finite_point(e.center())
+                    && is_length(e.semi_major())
+                    && is_length(e.semi_minor())
+                    && is_frame(e.u_axis(), e.v_axis(), e.normal())
+            }
+        }
+    }
+
     /// The same point set traversed the opposite way.
     ///
     /// A circle or ellipse runs counter-clockwise about its normal, so
@@ -400,6 +460,38 @@ mod tests {
             Circle3D::new(Point3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap(),
         );
         assert!(!arc.is_straight_between(a, b, 1e-9));
+    }
+
+    /// A circle or ellipse is well formed only on a right-handed frame of
+    /// unit axes at right angles: with its two axes alike it is a segment,
+    /// and with its normal turned round it runs the other way about it.
+    #[test]
+    fn a_conic_needs_a_right_handed_unit_frame() {
+        let o = Point3::new(1.0, 2.0, 3.0);
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let circle = |n, u, v| EdgeCurve::Circle(Circle3D::with_axes(o, n, 2.0, u, v).unwrap());
+        let ellipse =
+            |n, u, v| EdgeCurve::Ellipse(Ellipse3D::with_axes(o, n, 2.0, 1.0, u, v).unwrap());
+        let tilted = Vec3::new(1.0, 1e-3, 0.0).normalize().unwrap();
+        for (n, u, v, good) in [
+            (z, x, y, true),
+            (x, y, z, true),
+            (z, x, x, false),
+            (-z, x, y, false),
+            (z, tilted, y, false),
+            (z * 2.0, x, y, false),
+        ] {
+            assert_eq!(circle(n, u, v).is_well_formed(), good, "{n:?} {u:?} {v:?}");
+            assert_eq!(ellipse(n, u, v).is_well_formed(), good, "{n:?} {u:?} {v:?}");
+        }
+        assert!(
+            EdgeCurve::Circle(Circle3D::new(o, Vec3::new(1.0, -2.0, 0.5), 3.0).unwrap())
+                .is_well_formed()
+        );
     }
 
     fn make_test_vertices() -> (VertexId, VertexId) {

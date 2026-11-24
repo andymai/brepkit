@@ -827,6 +827,32 @@ fn two_chains_must_clear_each_other() {
     assert!(chamfer(&mut topo, solid, &edges, 8.5).is_err());
 }
 
+/// A distance past an arc's cap, and two chains whose strips overlap, leave
+/// the cap an arc whose end vertex lies off its circle, by the distance past
+/// the radius or the overlap and the strip's width (7 and 7.5 here). The
+/// chamfer is refused for that fault, in each pose.
+#[test]
+fn a_chamfer_that_leaves_an_arc_off_its_vertex_is_refused_for_it() {
+    for (name, pose) in poses() {
+        for (lines_only, distance, gap) in [(false, RADIUS + 1.0, "7.00e0"), (true, 8.5, "7.50e0")]
+        {
+            let mut topo = Topology::new();
+            let solid = obround(&mut topo, false, 0.0, HEIGHT);
+            let edges: Vec<_> = edges_at(&topo, solid, 0.0, |_, _| true)
+                .into_iter()
+                .filter(|&e| !lines_only || is_line(&topo, e))
+                .collect();
+            transform_solid(&mut topo, solid, &pose).unwrap();
+            let refused = chamfer(&mut topo, solid, &edges, distance).unwrap_err();
+            let reason = refused.to_string();
+            assert!(
+                reason.contains("its curve misses its") && reason.contains(gap),
+                "{name} {distance}: {reason}"
+            );
+        }
+    }
+}
+
 /// A chain keeps a cavity, and the cavity's faces keep their trims.
 #[test]
 fn a_chain_keeps_a_cavity_and_its_pcurves() {

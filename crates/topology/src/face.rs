@@ -46,6 +46,47 @@ pub enum FaceSurface {
 }
 
 impl FaceSurface {
+    /// Whether the surface gives a finite point at each parameter pair of
+    /// its domain, on the shape its type names. A surface read from data,
+    /// and not built by a constructor, can hold any values.
+    ///
+    /// A NURBS surface passes [`NurbsSurface::is_well_formed`]. A plane's
+    /// normal is a unit vector and its distance is finite. A cylinder's,
+    /// sphere's or torus's radii are finite and positive, a cone's half
+    /// angle lies strictly between 0 and a right angle, the origin, apex or
+    /// centre is finite, and the frame's two radial axes and its axis make
+    /// a right-handed frame of unit axes at right angles.
+    #[must_use]
+    pub fn is_well_formed(&self) -> bool {
+        use crate::edge::{is_finite_point, is_frame, is_length, is_unit};
+        match self {
+            Self::Plane { normal, d } => is_unit(*normal) && d.is_finite(),
+            Self::Nurbs(n) => n.is_well_formed(),
+            Self::Cylinder(c) => {
+                is_finite_point(c.origin())
+                    && is_length(c.radius())
+                    && is_frame(c.x_axis(), c.y_axis(), c.axis())
+            }
+            Self::Cone(c) => {
+                is_finite_point(c.apex())
+                    && c.half_angle() > 0.0
+                    && c.half_angle() < std::f64::consts::FRAC_PI_2
+                    && is_frame(c.x_axis(), c.y_axis(), c.axis())
+            }
+            Self::Sphere(s) => {
+                is_finite_point(s.center())
+                    && is_length(s.radius())
+                    && is_frame(s.x_axis(), s.y_axis(), s.z_axis())
+            }
+            Self::Torus(t) => {
+                is_finite_point(t.center())
+                    && is_length(t.major_radius())
+                    && is_length(t.minor_radius())
+                    && is_frame(t.x_axis(), t.y_axis(), t.z_axis())
+            }
+        }
+    }
+
     /// Evaluate the surface at parameters `(u, v)`.
     ///
     /// Returns `None` for `Plane` since it has no true UV parameterization.

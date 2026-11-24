@@ -221,6 +221,49 @@ impl NurbsSurface {
         })
     }
 
+    /// Whether the surface can be evaluated without reading past its arrays,
+    /// and gives a finite point at each parameter pair of its domain.
+    /// [`Self::new`] checks only the counts, and a surface read from data
+    /// with no constructor can hold any values.
+    ///
+    /// Every row of control points and of weights has as many entries as
+    /// the first row of control points, and there is a row of weights for
+    /// each row of points. Each knot vector passes
+    /// [`basis::knots_are_sound`] for its degree and its number of points,
+    /// each weight passes [`basis::weight_is_sound`], every coordinate is
+    /// finite, and the weights and points pass
+    /// [`basis::weighted_points_are_bounded`].
+    #[must_use]
+    pub fn is_well_formed(&self) -> bool {
+        let rows = self.control_points.len();
+        let cols = self.control_points.first().map_or(0, Vec::len);
+        basis::knots_are_sound(self.degree_u, rows, &self.knots_u)
+            && basis::knots_are_sound(self.degree_v, cols, &self.knots_v)
+            && self.weights.len() == rows
+            && self
+                .control_points
+                .iter()
+                .zip(&self.weights)
+                .all(|(points, weights)| points.len() == cols && weights.len() == cols)
+            && self
+                .weights
+                .iter()
+                .flatten()
+                .all(|&w| basis::weight_is_sound(w))
+            && self
+                .control_points
+                .iter()
+                .flatten()
+                .all(|q| q.x().is_finite() && q.y().is_finite() && q.z().is_finite())
+            && basis::weighted_points_are_bounded(
+                self.weights.iter().flatten().copied(),
+                self.control_points
+                    .iter()
+                    .flatten()
+                    .flat_map(|q| [q.x(), q.y(), q.z()]),
+            )
+    }
+
     /// Polynomial degree in the u direction.
     #[must_use]
     pub const fn degree_u(&self) -> usize {
@@ -1066,6 +1109,112 @@ use super::basis::binomial;
 mod tests {
     use super::*;
     use crate::madd::Madd;
+
+    /// [`NurbsSurface::new`] accepts surfaces whose counts agree but whose
+    /// values no evaluation can walk. Those are told from well formed ones,
+    /// in each direction.
+    #[test]
+    fn malformed_surfaces_are_told_from_well_formed_ones() {
+        let grid = |degree_u: usize, knots_u: Vec<f64>, rows: usize, weight: f64| {
+            let points = (0..rows)
+                .map(|i| {
+                    vec![
+                        Point3::new(i as f64, 0.0, 0.0),
+                        Point3::new(i as f64, 1.0, 0.0),
+                    ]
+                })
+                .collect();
+            let surface = NurbsSurface::new(
+                degree_u,
+                1,
+                knots_u,
+                vec![0.0, 0.0, 1.0, 1.0],
+                points,
+                vec![vec![weight; 2]; rows],
+            )
+            .expect("counts agree");
+            let swapped = NurbsSurface::new(
+                1,
+                surface.degree_u,
+                surface.knots_v.clone(),
+                surface.knots_u.clone(),
+                (0..2)
+                    .map(|j| surface.control_points.iter().map(|row| row[j]).collect())
+                    .collect(),
+                (0..2)
+                    .map(|j| surface.weights.iter().map(|row| row[j]).collect())
+                    .collect(),
+            )
+            .expect("counts agree");
+            [surface, swapped]
+        };
+        let unit = vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        for good in [
+            vec![bilinear_surface()],
+            grid(2, unit.clone(), 3, 1.0).to_vec(),
+            grid(1, vec![0.0, 0.0, 0.5, 1.0, 1.0], 3, 0.5).to_vec(),
+        ]
+        .concat()
+        {
+            assert!(good.is_well_formed(), "{good:?}");
+        }
+        let mut off = bilinear_surface();
+        off.control_points[1][0] = Point3::new(0.0, f64::INFINITY, 0.0);
+        let mut ragged = bilinear_surface();
+        ragged.control_points[1].pop();
+        let mut ragged_weights = bilinear_surface();
+        ragged_weights.weights[0].pop();
+        let mut short_weights = bilinear_surface();
+        short_weights.weights.pop();
+        for bad in [
+            grid(2, vec![0.0, 0.0, 0.0, 1.0, 1.0], 2, 1.0).to_vec(),
+            grid(2, vec![0.0, 0.0, 1.0, 0.0, 1.0, 1.0], 3, 1.0).to_vec(),
+            grid(2, vec![0.0, 0.0, 0.0, f64::NAN, 1.0, 1.0], 3, 1.0).to_vec(),
+            grid(2, vec![0.0; 6], 3, 1.0).to_vec(),
+            grid(2, vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0], 4, 1.0).to_vec(),
+            grid(2, unit.clone(), 3, 0.0).to_vec(),
+            grid(2, unit.clone(), 3, -2.0).to_vec(),
+            grid(2, unit, 3, 1e-310).to_vec(),
+            vec![off, ragged, ragged_weights, short_weights],
+        ]
+        .concat()
+        {
+            assert!(!bad.is_well_formed(), "{bad:?}");
+        }
+    }
+
+    /// A knot span whose reciprocal overflows, in either direction, and
+    /// weights whose product with the coordinates overflows, give a point
+    /// that is not finite. Such surfaces are not well formed.
+    #[test]
+    fn surfaces_whose_evaluation_overflows_are_not_well_formed() {
+        let patch = |knots_u: Vec<f64>, knots_v: Vec<f64>, weight: f64| {
+            NurbsSurface::new(
+                1,
+                1,
+                knots_u,
+                knots_v,
+                vec![
+                    vec![Point3::new(2.0, 0.0, 0.0), Point3::new(2.0, 1.0, 0.0)],
+                    vec![Point3::new(3.0, 0.0, 0.0), Point3::new(3.0, 1.0, 0.0)],
+                ],
+                vec![vec![weight; 2]; 2],
+            )
+            .expect("counts agree")
+        };
+        let unit = vec![0.0, 0.0, 1.0, 1.0];
+        let tiny = vec![0.0, 0.0, 1e-310, 1e-310];
+        for bad in [
+            patch(tiny.clone(), unit.clone(), 1.0),
+            patch(unit.clone(), tiny, 1.0),
+            patch(unit.clone(), unit.clone(), 1e308),
+        ] {
+            let p = bad.evaluate(0.0, 0.0);
+            assert!(!(p.x().is_finite() && p.y().is_finite()), "{bad:?}");
+            assert!(!bad.is_well_formed(), "{bad:?}");
+        }
+        assert!(patch(unit.clone(), unit, 1e290).is_well_formed());
+    }
 
     /// A bilinear surface (degree 1x1): a flat quadrilateral.
     fn bilinear_surface() -> NurbsSurface {
