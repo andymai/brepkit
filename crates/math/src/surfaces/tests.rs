@@ -790,3 +790,19 @@ fn rational_cone_lies_on_the_cone() {
         }
     }
 }
+
+/// An annulus written as a cone 1e-8 from flat, its apex 1e-7 off the
+/// annulus's plane (as a file's digits leave it): a point of the annulus
+/// lies within 1e-7 of the cone and projects to its distance from the apex
+/// along the generator, not its height over the apex over the angle's sine.
+#[test]
+fn a_nearly_flat_cone_projects_points_along_its_generator() {
+    let cone =
+        ConicalSurface::new(Point3::new(0.0, 0.0, -1e-7), Vec3::new(0.0, 0.0, 1.0), 1e-8).unwrap();
+    for r in [10.0, 15.0, 21.0] {
+        let (u, v) = cone.project_point(Point3::new(0.0, r, 0.0));
+        assert!((v - r).abs() < 1e-6, "r {r}: v {v}");
+        let back = cone.evaluate(u, v);
+        assert!((back - Point3::new(0.0, r, 0.0)).length() < 1e-6, "r {r}");
+    }
+}
