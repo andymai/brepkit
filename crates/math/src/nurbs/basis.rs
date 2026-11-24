@@ -42,6 +42,14 @@ pub fn find_span(n: usize, degree: usize, u: f64, knots: &[f64]) -> usize {
     mid
 }
 
+/// The shortest a span of positive length inside a spline's domain may be,
+/// as a share of the domain's length.
+///
+/// The basis functions divide by the span a parameter lies in, and their
+/// derivatives grow as its reciprocal. The shortest span in any fixture or
+/// test file is 1.5e-5 of its domain.
+pub const KNOT_SPAN_FLOOR: f64 = 1e-12;
+
 /// Whether [`find_span`] and the basis functions can walk `knots` for a
 /// spline of `degree` over `points` control points, and give finite values
 /// over the whole domain, `knots[degree]` to `knots[points]`.
@@ -52,8 +60,22 @@ pub fn find_span(n: usize, degree: usize, u: f64, knots: &[f64]) -> usize {
 /// turn the domain round or divide by zero. The first and the last span of
 /// the domain have positive length, because the span search takes them at
 /// the domain's ends with no test of their length.
+///
+/// Each span of positive length inside the domain has a finite reciprocal
+/// and is at least [`KNOT_SPAN_FLOOR`] of the domain's length: every divisor
+/// in the basis functions holds the span its parameter lies in. Spans of no
+/// length (repeated knots) are not divisors, and spans outside the domain
+/// are only read added to one inside it.
 #[must_use]
 pub fn knots_are_sound(degree: usize, points: usize, knots: &[f64]) -> bool {
+    let sound_spans = || {
+        let domain = &knots[degree..=points];
+        let length = domain[domain.len() - 1] - domain[0];
+        domain.windows(2).all(|pair| {
+            let span = pair[1] - pair[0];
+            span <= 0.0 || (span.recip().is_finite() && span >= KNOT_SPAN_FLOOR * length)
+        })
+    };
     points > degree
         && knots.len() == points + degree + 1
         && knots.iter().all(|k| k.is_finite())
@@ -62,6 +84,7 @@ pub fn knots_are_sound(degree: usize, points: usize, knots: &[f64]) -> bool {
             .all(|pair| pair[0] <= pair[1])
         && knots[degree] < knots[degree + 1]
         && knots[points - 1] < knots[points]
+        && sound_spans()
 }
 
 /// Whether `weight` can weigh a control point: a positive normal float, so
@@ -70,6 +93,28 @@ pub fn knots_are_sound(degree: usize, points: usize, knots: &[f64]) -> bool {
 #[must_use]
 pub fn weight_is_sound(weight: f64) -> bool {
     weight.is_normal() && weight > 0.0
+}
+
+/// The most a spline's largest weight times its largest coordinate (or 1,
+/// if that is larger) may be.
+///
+/// A point is a sum of weighted control points over the sum of their
+/// weights, and since the basis values sum to one,
+/// neither sum passes this product. The limit leaves room below `f64::MAX`
+/// for the factors of the basis derivatives. The largest product in any
+/// fixture or test file is 4.7e4.
+pub const WEIGHTED_LIMIT: f64 = 1e300;
+
+/// Whether the largest of `weights` times the largest magnitude among the
+/// control points' `coordinates`, or 1, stays within [`WEIGHTED_LIMIT`].
+#[must_use]
+pub fn weighted_points_are_bounded(
+    weights: impl IntoIterator<Item = f64>,
+    coordinates: impl IntoIterator<Item = f64>,
+) -> bool {
+    let weight = weights.into_iter().fold(0.0_f64, |m, w| m.max(w.abs()));
+    let reach = coordinates.into_iter().fold(1.0_f64, |m, c| m.max(c.abs()));
+    weight * reach <= WEIGHTED_LIMIT
 }
 
 /// O(1) span lookup for uniform knot vectors.

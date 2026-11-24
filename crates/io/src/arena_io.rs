@@ -772,6 +772,100 @@ mod tests {
         }
     }
 
+    /// A circle or a surface of revolution whose frame has two axes alike,
+    /// axes not at right angles, or a left-handed turn is not the shape its
+    /// type names: a dump that holds one is refused. A knot span or weights
+    /// whose arithmetic overflows are refused too. The dumps they were made
+    /// from load.
+    #[test]
+    fn a_dump_with_a_skewed_frame_or_an_overflowing_spline_is_refused() {
+        use brepkit_operations::primitives::{make_cone, make_sphere, make_torus};
+        use serde_json::{Value, json};
+
+        let mut topo = Topology::new();
+        let solids = [
+            make_cylinder(&mut topo, 3.0, 4.0).unwrap(),
+            make_cone(&mut topo, 3.0, 1.0, 4.0).unwrap(),
+            make_sphere(&mut topo, 2.5, 8).unwrap(),
+            make_torus(&mut topo, 4.0, 1.0, 8).unwrap(),
+        ];
+        let spline = make_cylinder(&mut topo, 3.0, 4.0).unwrap();
+        brepkit_operations::heal::convert_to_bspline(&mut topo, spline).unwrap();
+        let dumps: Vec<Value> = solids
+            .iter()
+            .chain([&spline])
+            .map(|&s| {
+                let bytes = serialize_solid(&topo, s).unwrap();
+                assert!(deserialize_solid(&bytes, &mut Topology::new()).is_ok());
+                serde_json::from_slice(&bytes).unwrap()
+            })
+            .collect();
+        // The dumps with `edit` made to the first entity in `list` whose
+        // `field` holds a `variant`, if any does.
+        let edited = |list: &str, field: &str, variant: &str, edit: &dyn Fn(&mut Value)| {
+            dumps
+                .iter()
+                .filter_map(|dump| {
+                    let at = dump[list]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .position(|entity| entity[field].get(variant).is_some())?;
+                    let mut dump = dump.clone();
+                    edit(&mut dump[list][at][field][variant]);
+                    Some(serde_json::to_vec(&dump).unwrap())
+                })
+                .collect::<Vec<_>>()
+        };
+        let same = |a: &'static str, b: &'static str| move |g: &mut Value| g[b] = g[a].clone();
+        let flipped = |a: &'static str| {
+            move |g: &mut Value| {
+                let v: Vec<f64> = serde_json::from_value(g[a].clone()).unwrap();
+                g[a] = json!(v.iter().map(|c| -c).collect::<Vec<_>>());
+            }
+        };
+        let shrunk = |key: &'static str| {
+            move |g: &mut Value| {
+                let v: Vec<f64> = serde_json::from_value(g[key].clone()).unwrap();
+                g[key] = json!(v.iter().map(|k| k * 1e-310).collect::<Vec<_>>());
+            }
+        };
+        let kinds = [
+            edited("edges", "curve", "Circle", &same("u_axis", "v_axis")),
+            edited("edges", "curve", "Circle", &flipped("normal")),
+            edited("faces", "surface", "Cylinder", &same("x_axis", "y_axis")),
+            edited("faces", "surface", "Cylinder", &flipped("axis")),
+            edited("faces", "surface", "Cone", &same("x_axis", "y_axis")),
+            edited("faces", "surface", "Cone", &flipped("axis")),
+            edited("faces", "surface", "Sphere", &same("x_axis", "y_axis")),
+            edited("faces", "surface", "Sphere", &flipped("z_axis")),
+            edited("faces", "surface", "Torus", &same("x_axis", "y_axis")),
+            edited("faces", "surface", "Torus", &flipped("z_axis")),
+            edited("edges", "curve", "NurbsCurve", &shrunk("knots")),
+            edited("faces", "surface", "Nurbs", &shrunk("knots_v")),
+            edited("edges", "curve", "NurbsCurve", &|c| {
+                c["weights"] = json!(vec![1e308; c["weights"].as_array().unwrap().len()]);
+            }),
+            edited("faces", "surface", "Nurbs", &|s| {
+                let rows: Vec<Vec<f64>> = serde_json::from_value(s["weights"].clone()).unwrap();
+                s["weights"] = json!(
+                    rows.iter()
+                        .map(|row| vec![1e308; row.len()])
+                        .collect::<Vec<_>>()
+                );
+            }),
+        ];
+        assert!(kinds.iter().all(|dumps| !dumps.is_empty()));
+        let malformed = kinds.concat();
+        for bad in &malformed {
+            let found = deserialize_solid(bad, &mut Topology::new());
+            assert!(
+                matches!(&found, Err(IoError::ParseError { reason }) if reason.contains("malformed")),
+                "{found:?}"
+            );
+        }
+    }
+
     /// A dump holds whatever data its bytes hold. A pcurve whose B-spline
     /// has more degrees than control points, or knots that fall, would read
     /// past its arrays when evaluated: such a dump is refused. The dump it

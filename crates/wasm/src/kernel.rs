@@ -1767,6 +1767,8 @@ mod from_brep_tests {
             edit(&|c, _| c["weights"] = json!([1.0, 0.0])),
             edit(&|c, _| c["weights"] = json!([1.0, -1.0])),
             edit(&|c, _| c["weights"] = json!([1.0, 1e-310])),
+            edit(&|c, _| c["weights"] = json!([1e308, 1e308])),
+            edit(&|c, _| c["knots"] = json!([0.0, 0.0, 1e-310, 1e-310])),
             edit(&|_, s| {
                 s["degreeU"] = json!(2);
                 s["knotsU"] = json!([0.0, 0.0, 0.0, 1.0, 1.0]);
@@ -1775,6 +1777,8 @@ mod from_brep_tests {
             edit(&|_, s| s["weights"] = json!([[1.0, 0.0], [1.0, 1.0]])),
             edit(&|_, s| s["weights"] = json!([[1.0, -2.0], [1.0, 1.0]])),
             edit(&|_, s| s["weights"] = json!([[1.0, 1e-310], [1.0, 1.0]])),
+            edit(&|_, s| s["weights"] = json!([[1e308, 1e308], [1e308, 1e308]])),
+            edit(&|_, s| s["knotsV"] = json!([0.0, 0.0, 1e-310, 1e-310])),
         ];
         for bad in &malformed {
             let found = BrepKernel::new().from_brep_impl(bad);

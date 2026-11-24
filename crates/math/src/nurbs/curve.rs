@@ -96,7 +96,8 @@ impl NurbsCurve {
     ///
     /// The knots pass [`basis::knots_are_sound`] for the degree and the
     /// number of control points, each control point has a weight that passes
-    /// [`basis::weight_is_sound`], and every coordinate is finite.
+    /// [`basis::weight_is_sound`], every coordinate is finite, and the
+    /// weights and points pass [`basis::weighted_points_are_bounded`].
     #[must_use]
     pub fn is_well_formed(&self) -> bool {
         basis::knots_are_sound(self.degree, self.control_points.len(), &self.knots)
@@ -106,6 +107,12 @@ impl NurbsCurve {
                 .control_points
                 .iter()
                 .all(|q| q.x().is_finite() && q.y().is_finite() && q.z().is_finite())
+            && basis::weighted_points_are_bounded(
+                self.weights.iter().copied(),
+                self.control_points
+                    .iter()
+                    .flat_map(|q| [q.x(), q.y(), q.z()]),
+            )
     }
 
     /// The points of knot span `k` (between `knots[k]` and `knots[k + 1]`)
@@ -405,6 +412,40 @@ mod tests {
         ] {
             assert!(!bad.is_well_formed(), "{bad:?}");
         }
+    }
+
+    /// A knot span whose reciprocal overflows, and weights whose product
+    /// with the coordinates overflows, give a point that is not finite,
+    /// though every number is finite and the counts agree. Such curves are
+    /// not well formed. A span a trillionth of the domain is too short.
+    #[test]
+    fn curves_whose_evaluation_overflows_are_not_well_formed() {
+        let two = |knots: Vec<f64>, x: f64, weight: f64| {
+            NurbsCurve::new(
+                1,
+                knots,
+                vec![Point3::new(x, 0.0, 0.0), Point3::new(x, 1.0, 0.0)],
+                vec![weight; 2],
+            )
+            .expect("counts agree")
+        };
+        let tiny = two(vec![0.0, 0.0, 1e-310, 1e-310], 2.0, 1.0);
+        let heavy = two(vec![0.0, 0.0, 1.0, 1.0], 2.0, 1e308);
+        for bad in [&tiny, &heavy] {
+            let p = bad.evaluate(0.0);
+            assert!(!(p.x().is_finite() && p.y().is_finite()), "{bad:?}");
+            assert!(!bad.is_well_formed(), "{bad:?}");
+        }
+        let short = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1e-13, 1.0, 1.0],
+            vec![Point3::new(0.0, 0.0, 0.0); 3],
+            vec![1.0; 3],
+        )
+        .expect("counts agree");
+        assert!(!short.is_well_formed());
+        assert!(two(vec![0.0, 0.0, 1e-300, 1e-300], 2.0, 1.0).is_well_formed());
+        assert!(two(vec![0.0, 0.0, 1.0, 1.0], 1e3, 1e290).is_well_formed());
     }
 
     /// A cubic Bezier curve (single span): control points form a simple shape.

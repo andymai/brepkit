@@ -461,8 +461,9 @@ impl Curve2D {
     /// Every number is finite. A line's direction is not zero, and a
     /// circle's radius and an ellipse's semi-axes are positive. A NURBS
     /// curve's knots pass [`crate::nurbs::basis::knots_are_sound`] for its
-    /// degree and number of control points, and each control point has a
-    /// weight that passes [`crate::nurbs::basis::weight_is_sound`].
+    /// degree and number of control points, each control point has a weight
+    /// that passes [`crate::nurbs::basis::weight_is_sound`], and the weights
+    /// and points pass [`crate::nurbs::basis::weighted_points_are_bounded`].
     #[must_use]
     pub fn is_well_formed(&self) -> bool {
         let point = |p: Point2| p.x().is_finite() && p.y().is_finite();
@@ -480,11 +481,17 @@ impl Curve2D {
                     && c.rotation.is_finite()
             }
             Self::Nurbs(c) => {
-                use crate::nurbs::basis::{knots_are_sound, weight_is_sound};
+                use crate::nurbs::basis::{
+                    knots_are_sound, weight_is_sound, weighted_points_are_bounded,
+                };
                 knots_are_sound(c.degree, c.control_points.len(), &c.knots)
                     && c.weights.len() == c.control_points.len()
                     && c.weights.iter().all(|&w| weight_is_sound(w))
                     && c.control_points.iter().all(|&q| point(q))
+                    && weighted_points_are_bounded(
+                        c.weights.iter().copied(),
+                        c.control_points.iter().flat_map(|q| [q.x(), q.y()]),
+                    )
             }
         }
     }
