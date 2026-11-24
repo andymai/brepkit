@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795550824337,
+  "lastUpdate": 1795555439369,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -77921,6 +77921,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27936364,
             "range": "± 171337",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bb9b1c092c13a545c0d268afef680d451d92bce1",
+          "message": "test(algo,operations): split off the segment between an arc and its chord inside a plate (#2840)\n\n## Summary\n\n#2822's own case is now exact on main. The arc and the line between its\nends sit clear of the plate's rim, and the split needed two fixes. #2837\nkeeps an arc apart from its chord in the plane arrangement. #2825 keeps\nthem apart in `plane_internal_line_loops`. This PR adds the issue's case\nas tests.\n\nFixes #2822.\n\n## Tests\n\n- `an_arc_and_its_chord_inside_the_plate_split_off_their_segment` runs\nthe issue's case through `split_face_2d`. It also runs these cases:\n  - the arc on the other side, and the arc and chord alone;\n- a lens with its chord, and the circle's rest in two arcs. Each case\nruns in 3 poses, in both section orders, with and without a hole. Each\npiece's area must hold within 1e-9 of its closed form.\n- `arc_and_chord_pocket.rs` gains the issue's case as an imprint row:\nthe segment, 3 less the segment, and 97.\n- brepkit-algo (668), the boolean lib tests (233) and\n`arc_and_chord_pocket` (3) pass. The pose sweep and the truth audit give\nthe same output as main.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nAdds the case from #2822 as tests, now that splitting between an arc and\nits chord works on main. A `face_splitter` test runs the case through\n`split_face_2d` with the arc on either side, the arc and chord alone, a\nlens with its chord, and the rest of the circle in two arcs; each in 3\nposes, both section orders, and with and without a hole, checking each\npiece's area within 1e-9. The `arc_and_chord_pocket` test gains the same\nedges as an imprint row on a box's top, keeping the three faces and the\nsolid's validity.\n\n<sup>Written for commit d578046806774c3eb927b88e72cf1d5dc87682e5.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2840?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2840?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2840&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-24T21:19:36Z",
+          "tree_id": "866c03270b602c5a5e2043bbc9a069180df21f2c",
+          "url": "https://github.com/andymai/brepkit/commit/bb9b1c092c13a545c0d268afef680d451d92bce1"
+        },
+        "date": 1795555422798,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1194997,
+            "range": "± 12753",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1263936,
+            "range": "± 40806",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13346,
+            "range": "± 87",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 739524,
+            "range": "± 4637",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27463257,
+            "range": "± 97916",
             "unit": "ns/iter"
           }
         ]
