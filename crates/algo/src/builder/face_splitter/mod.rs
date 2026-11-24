@@ -17495,7 +17495,12 @@ mod tests {
 
     /// The plate of [`two_arcs_between_one_pair_of_points`] split by
     /// `sections`, its regions' areas sorted, each read by the shoelace
-    /// formula over its wires with each edge read at 2000 points.
+    /// formula over its wires with each edge read at 2000 points. An edge
+    /// runs its curve from its stored start, its samples then turned to the
+    /// wire's way, as [`sampling::sample_wire_loop_uv_via_frame`] reads it.
+    /// Each outline must wind counter-clockwise about the plate's normal
+    /// `+z` and each hole clockwise; a region's area is the sum of its
+    /// wires' signed areas.
     fn plate_region_areas(sections: &[SectionEdge]) -> Vec<f64> {
         let (topo, face_id, _) = two_arcs_between_one_pair_of_points();
         let subs = split_face_2d(
@@ -17513,16 +17518,19 @@ mod tests {
         let wire_area = |wire: &[OrientedPCurveEdge]| {
             let mut pts = Vec::new();
             for e in wire {
-                let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
+                let (s3, e3) = if e.forward {
+                    (e.start_3d, e.end_3d)
+                } else {
+                    (e.end_3d, e.start_3d)
+                };
+                let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
                 for k in 0..2000 {
                     let f = f64::from(k) / 2000.0;
                     let f = if e.forward { f } else { 1.0 - f };
-                    let (a, b) = if e.forward { (t0, t1) } else { (t0, t1) };
-                    pts.push(e.curve_3d.evaluate_with_endpoints(
-                        (b - a).madd(f, a),
-                        e.start_3d,
-                        e.end_3d,
-                    ));
+                    pts.push(
+                        e.curve_3d
+                            .evaluate_with_endpoints((t1 - t0).madd(f, t0), s3, e3),
+                    );
                 }
             }
             let mut twice = 0.0;
@@ -17530,12 +17538,19 @@ mod tests {
                 let b = pts[(i + 1) % pts.len()];
                 twice += a.x() * b.y() - b.x() * a.y();
             }
-            (0.5 * twice).abs()
+            0.5 * twice
         };
         let mut areas: Vec<f64> = subs
             .iter()
             .map(|s| {
-                wire_area(&s.outer_wire) - s.inner_wires.iter().map(|w| wire_area(w)).sum::<f64>()
+                let outline = wire_area(&s.outer_wire);
+                assert!(outline > 0.0, "an outline winds clockwise: {outline}");
+                let holes: Vec<f64> = s.inner_wires.iter().map(|w| wire_area(w)).collect();
+                assert!(
+                    holes.iter().all(|&h| h < 0.0),
+                    "a hole winds counter-clockwise: {holes:?}"
+                );
+                outline + holes.iter().sum::<f64>()
             })
             .collect();
         areas.sort_by(f64::total_cmp);
