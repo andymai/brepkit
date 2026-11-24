@@ -1103,6 +1103,12 @@ pub(super) fn find_splits_on_nurbs_section(
     let mut splits: Vec<(f64, Point3)> = Vec::new();
     for &sp in split_pts_3d {
         crate::perf::bump_face_split_probe();
+        // The edge's own end splits nothing off it. Found by its samples on
+        // a spline whose parameter runs unevenly, it can read at a middle
+        // parameter, and mint a piece that ends where it starts.
+        if (sp - edge.start_3d).length() <= fine_band || (sp - edge.end_3d).length() <= fine_band {
+            continue;
+        }
         // Nearest sample, then ternary-refine the distance over the two
         // neighbouring segments.
         let (mut best_i, mut best_d) = (0usize, f64::MAX);

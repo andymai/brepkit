@@ -10894,6 +10894,18 @@ fn split_face_2d_impl(
             }
         }
     }
+    // Whether a section piece off a flat face bounds something: its ends lie
+    // apart; its chart image spans 0.01 (the scale of the boundary-proximity
+    // `uv_tol` above, ~0.6 deg in angular coordinates), as a closed circle
+    // round the chart's axis does; or, read about a pole, its curve is not
+    // proved to stay within a weld of its start (a closed circle round no
+    // pole spans neither).
+    let has_extent = |e: &OrientedPCurveEdge| {
+        const ZERO_EXTENT_UV: f64 = 0.01;
+        (e.start_3d - e.end_3d).length() >= tol.linear
+            || (e.start_uv - e.end_uv).length() >= ZERO_EXTENT_UV
+            || (pole_view.is_some() && super::wire_builder::runs_off(e, 100.0 * tol.linear))
+    };
     // What the face received, read about a pole: each half must run once in
     // its pieces, whatever the pruning below drops. A piece with no extent
     // (a self-split remnant) bounds nothing.
@@ -10901,11 +10913,7 @@ fn split_face_2d_impl(
         all_edges
             .iter()
             .enumerate()
-            .filter(|(i, e)| {
-                *i < n_boundary_edges
-                    || (e.start_3d - e.end_3d).length() >= tol.linear
-                    || super::wire_builder::closes_on_itself(e, tol.linear)
-            })
+            .filter(|(i, e)| *i < n_boundary_edges || has_extent(e))
             .map(|(_, e)| e.clone())
             .collect()
     });
@@ -10937,16 +10945,7 @@ fn split_face_2d_impl(
         all_edges
             .into_iter()
             .enumerate()
-            .filter(|(i, e)| {
-                // Same scale as the boundary-proximity `uv_tol` above
-                // (~0.6 deg in angular coordinates): a closed circle section
-                // has a zero 3D chord but a full-period UV extent.
-                const ZERO_EXTENT_UV: f64 = 0.01;
-                *i < n_b
-                    || (e.start_3d - e.end_3d).length() >= tol.linear
-                    || (e.start_uv - e.end_uv).length() >= ZERO_EXTENT_UV
-                    || (pole_view.is_some() && super::wire_builder::closes_on_itself(e, tol.linear))
-            })
+            .filter(|(i, e)| *i < n_b || has_extent(e))
             .map(|(_, e)| e)
             .collect()
     };
@@ -16507,13 +16506,14 @@ mod tests {
     /// 0.2 rad round, their middles 0.3 rad apart either side of the unit
     /// direction `m` along the unit direction `e` square to it, so that they
     /// cross twice, and a whole circle 0.1 rad round the unit direction
-    /// `lone` where one is given; split by `split_face_2d` along their arcs,
-    /// laid in the order of their circles.
+    /// `lone` where one is given, as a circle or as a squeezed spline
+    /// ([`squeezed_spline_circle`]); split by `split_face_2d` along their
+    /// arcs, laid in the order of their circles.
     fn split_with_crossing_circles(
         cap: Vec3,
         m: Vec3,
         e: Vec3,
-        lone: Option<Vec3>,
+        lone: Option<(Vec3, bool)>,
     ) -> Vec<SplitSubFace> {
         use brepkit_math::curves::Circle3D;
         use brepkit_math::surfaces::SphericalSurface;
@@ -16583,8 +16583,12 @@ mod tests {
                 });
             }
         }
-        if let Some(d) = lone {
-            let curve = EdgeCurve::Circle(circle(d, 0.1));
+        if let Some((d, squeezed)) = lone {
+            let curve = if squeezed {
+                EdgeCurve::NurbsCurve(squeezed_spline_circle(&circle(d, 0.1)))
+            } else {
+                EdgeCurve::Circle(circle(d, 0.1))
+            };
             let at = curve.evaluate_with_endpoints(0.0, origin, origin);
             let pcurve = super::super::pcurve_compute::compute_pcurve_on_surface(
                 &curve,
@@ -16629,6 +16633,46 @@ mod tests {
             &std::collections::BTreeSet::new(),
             None,
         )
+    }
+
+    /// `circle` as a closed rational quadratic spline in four arcs: three
+    /// over the first 1e-6 of its domain run all but 1e-6 rad of the turn,
+    /// and the fourth runs the rest over the remainder of the domain.
+    fn squeezed_spline_circle(
+        circle: &brepkit_math::curves::Circle3D,
+    ) -> brepkit_math::nurbs::curve::NurbsCurve {
+        use std::f64::consts::TAU;
+        let (c, r) = (circle.center(), circle.radius());
+        let (u, v) = (circle.u_axis(), circle.v_axis());
+        let on = |a: f64| c + u * (r * a.cos()) + v * (r * a.sin());
+        let last = 1e-6;
+        let big = (TAU - last) / 3.0;
+        let ends = [0.0, big, 2.0 * big, TAU - last, TAU];
+        let mut points = vec![on(0.0)];
+        let mut weights = vec![1.0];
+        for w in ends.windows(2) {
+            let half = 0.5 * (w[1] - w[0]);
+            points.push(c + (on(w[0] + half) - c) * (1.0 / half.cos()));
+            weights.push(half.cos());
+            points.push(on(w[1]));
+            weights.push(1.0);
+        }
+        let third = 1e-6 / 3.0;
+        let knots = vec![
+            0.0,
+            0.0,
+            0.0,
+            third,
+            third,
+            2.0 * third,
+            2.0 * third,
+            1e-6,
+            1e-6,
+            1.0,
+            1.0,
+            1.0,
+        ];
+        brepkit_math::nurbs::curve::NurbsCurve::new(2, knots, points, weights).unwrap()
     }
 
     /// The arcs a piece's wires run, as the middles of their circles.
@@ -16684,13 +16728,13 @@ mod tests {
         }
     }
 
-    /// Two small circles that cross and a whole circle apart from them
-    /// split a ball face in five: the whole circle's disc stands as a piece,
-    /// and the face keeps it as a hole.
+    /// Two small circles that cross and a whole circle apart from them,
+    /// a circle or a squeezed spline, split a ball face in five: the whole
+    /// circle's disc stands as a piece, and the face keeps it as a hole.
     #[test]
     fn crossing_circles_and_a_lone_circle_on_a_ball_face_split_it_in_five() {
         let unit = |x: f64, y: f64, z: f64| Vec3::new(x, y, z).normalize().unwrap();
-        for (cap, m, e, lone) in [
+        let cases = [
             (
                 Vec3::new(0.0, 0.0, 1.0),
                 unit(1.0, 0.0, -1.0),
@@ -16703,20 +16747,24 @@ mod tests {
                 unit(1.0, 1.0, 0.0),
                 unit(-0.5, -0.5, -0.7),
             ),
-        ] {
-            let split = split_with_crossing_circles(cap, m, e, Some(lone));
-            assert_eq!(split.len(), 5, "cap {cap:?}");
+        ];
+        for (case, squeezed) in cases.iter().flat_map(|c| [(c, false), (c, true)]) {
+            let &(cap, m, e, lone) = case;
+            let split = split_with_crossing_circles(cap, m, e, Some((lone, squeezed)));
+            assert_eq!(split.len(), 5, "cap {cap:?}, squeezed {squeezed}");
             assert_eq!(
                 split.iter().map(|p| p.inner_wires.len()).sum::<usize>(),
                 2,
                 "cap {cap:?}"
             );
+            // The lone loop's disc: one wire of one edge, the lone loop.
             let middle = Point3::new(0.0, 0.0, 0.0) + lone * 0.1_f64.cos();
             let disc = split.iter().filter(|p| {
-                let runs = circles_run(p);
-                runs.len() == 1 && runs[0].iter().all(|c| (*c - middle).length() < 1e-9)
+                p.inner_wires.is_empty()
+                    && p.outer_wire.len() == 1
+                    && (p.outer_wire[0].start_3d - middle).length() < 0.11
             });
-            assert_eq!(disc.count(), 1, "cap {cap:?}");
+            assert_eq!(disc.count(), 1, "cap {cap:?}, squeezed {squeezed}");
         }
     }
 

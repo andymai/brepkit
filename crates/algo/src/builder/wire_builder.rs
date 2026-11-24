@@ -10,7 +10,7 @@ use brepkit_math::madd::Madd;
 use std::collections::HashMap;
 use std::f64::consts::TAU;
 
-use brepkit_math::vec::{Point2, Vec2};
+use brepkit_math::vec::{Point2, Point3, Vec2};
 
 use super::split_types::OrientedPCurveEdge;
 
@@ -616,20 +616,52 @@ pub fn remove_pendant_sections_but_loops(
 }
 
 /// Whether `e` ends where it starts, a weld (`100 tol`) apart, and its
-/// curve runs off that point: of its points a third and two thirds along
-/// its domain, one lies farther than a weld from its start.
+/// curve is not proved to stay within a weld of its start ([`runs_off`]).
+/// An edge and its twin read alike.
 pub fn closes_on_itself(e: &OrientedPCurveEdge, tol: f64) -> bool {
     let weld = 100.0 * tol;
-    if (e.start_3d - e.end_3d).length() > weld {
-        return false;
+    (e.start_3d - e.end_3d).length() <= weld && runs_off(e, weld)
+}
+
+/// Whether `e`'s curve may run farther than `reach` from its start: true
+/// unless a bound proves it does not. Read in the curve's own way, so that
+/// an edge and its twin read alike. A line runs between its ends. A conic's
+/// arc of sweep `s` lies within its largest radius times `2 sin(s / 2)`
+/// (`s` at most half a turn) of its start. A spline's piece over each knot
+/// span lies in the hull of its Bezier points where their weights are
+/// positive; a weight that is not, or a piece not read, proves nothing.
+pub fn runs_off(e: &OrientedPCurveEdge, reach: f64) -> bool {
+    use brepkit_math::nurbs::decompose::curve_bezier_between;
+    use brepkit_topology::edge::EdgeCurve;
+    let (from, to) = if e.forward {
+        (e.start_3d, e.end_3d)
+    } else {
+        (e.end_3d, e.start_3d)
+    };
+    let (t0, t1) = e.curve_3d.domain_with_endpoints(from, to);
+    let conic = |radius: f64, at_t0: Point3| {
+        let sweep = (t1 - t0).abs().min(std::f64::consts::PI);
+        (at_t0 - from).length() + 2.0 * radius * (0.5 * sweep).sin() > reach
+    };
+    match &e.curve_3d {
+        EdgeCurve::Line => (to - from).length() > reach,
+        EdgeCurve::Circle(c) => conic(c.radius(), c.evaluate(t0)),
+        EdgeCurve::Ellipse(el) => conic(el.semi_major(), el.evaluate(t0)),
+        EdgeCurve::NurbsCurve(n) => {
+            let (lo, hi) = (t0.min(t1), t0.max(t1));
+            let mut ts = vec![lo];
+            ts.extend(n.knots().iter().copied().filter(|&k| lo < k && k < hi));
+            ts.push(hi);
+            ts.dedup();
+            ts.windows(2).any(|w| {
+                curve_bezier_between(n, w[0], w[1]).map_or(true, |points| {
+                    points.iter().any(|&[x, y, z, w]| {
+                        w <= 0.0 || (Point3::new(x / w, y / w, z / w) - from).length() > reach
+                    })
+                })
+            })
+        }
     }
-    let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
-    [1.0 / 3.0, 2.0 / 3.0].iter().any(|f| {
-        let at = e
-            .curve_3d
-            .evaluate_with_endpoints((t1 - t0).madd(*f, t0), e.start_3d, e.end_3d);
-        (at - e.start_3d).length() > weld
-    })
 }
 
 fn peel_pendant_sections(
@@ -2091,5 +2123,46 @@ mod tests {
             };
             assert_eq!(key(&again), key(&reference), "peel result must not vary");
         }
+    }
+
+    /// A unit circle's arc from angle 0 round to `TAU - 5e-8`, its ends 5e-8
+    /// apart, laid in the chart of its angle, and its twin.
+    fn near_turn() -> [OrientedPCurveEdge; 2] {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::vec::{Point3, Vec3};
+        use brepkit_topology::edge::EdgeCurve;
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        let end = TAU - 5e-8;
+        let forward = OrientedPCurveEdge {
+            curve_3d: EdgeCurve::Circle(circle.clone()),
+            pcurve: Curve2D::Line(Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)).unwrap()),
+            start_uv: Point2::new(0.0, 0.0),
+            end_uv: Point2::new(end, 0.0),
+            start_3d: circle.evaluate(0.0),
+            end_3d: circle.evaluate(end),
+            forward: true,
+            source_edge_idx: Some(0),
+            pave_block_id: None,
+        };
+        let back = OrientedPCurveEdge {
+            start_uv: forward.end_uv,
+            end_uv: forward.start_uv,
+            start_3d: forward.end_3d,
+            end_3d: forward.start_3d,
+            forward: false,
+            ..forward.clone()
+        };
+        [forward, back]
+    }
+
+    #[test]
+    fn an_arc_and_its_twin_close_on_themselves_alike() {
+        let [forward, back] = near_turn();
+        assert!(closes_on_itself(&forward, 1e-7));
+        assert!(closes_on_itself(&back, 1e-7));
+        // Pruned with its twin, the arc stands: its vertex is no free end.
+        let kept = remove_pendant_sections_but_loops(&[forward, back], 1e-7, true, false);
+        assert_eq!(kept.len(), 2);
     }
 }
