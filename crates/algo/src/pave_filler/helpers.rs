@@ -321,12 +321,21 @@ pub(super) fn pcurve_loops(
     reach: f64,
 ) -> Result<Option<PcurveLoops>, AlgoError> {
     use brepkit_math::vec::Point2;
+    let face = topo.face(face_id)?;
+    // A face whose edges carry no pcurves, as most do, needs no proof that
+    // its surface's sides keep apart.
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(wid)?.edges() {
+            if topo.pcurves().get(oe.edge(), face_id).is_none() {
+                return Ok(None);
+            }
+        }
+    }
     if !crate::nurbs_sides::sides_are_apart(surface, reach) {
         return Ok(None);
     }
     let ((u_min, u_max), (v_min, v_max)) = (surface.domain_u(), surface.domain_v());
     let span = (u_max - u_min) + (v_max - v_min);
-    let face = topo.face(face_id)?;
     let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
     let mut gap = 0.0_f64;
     let mut loops = Vec::new();
