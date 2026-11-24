@@ -36,6 +36,8 @@ static FACE_SPLIT_PROBES: AtomicU64 = AtomicU64::new(0);
 static LOCAL_VERTEX_INSERTS: AtomicU64 = AtomicU64::new(0);
 #[cfg(feature = "perf-counters")]
 static SECTION_FIT_POINTS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "perf-counters")]
+static UNPROVED_PCURVES: AtomicU64 = AtomicU64::new(0);
 
 /// Count one pave-vertex distance comparison (per candidate examined while
 /// snapping an intersection endpoint to a coincident vertex). Crate-internal:
@@ -104,6 +106,16 @@ pub(crate) fn bump_section_fit_points(_n: u64) {
     SECTION_FIT_POINTS.fetch_add(_n, Ordering::Relaxed);
 }
 
+/// Count one pcurve built with no proof that its image lies within the
+/// tolerance of its edge: a fit through samples, a straight pcurve on a
+/// B-spline surface, or an ellipse on a wall checked at samples.
+/// Crate-internal.
+#[inline]
+pub(crate) fn bump_unproved_pcurve() {
+    #[cfg(feature = "perf-counters")]
+    UNPROVED_PCURVES.fetch_add(1, Ordering::Relaxed);
+}
+
 /// A snapshot of every work counter since the last [`reset`]. Only available
 /// with `perf-counters`.
 #[cfg(feature = "perf-counters")]
@@ -122,6 +134,9 @@ pub struct PerfSnapshot {
     pub local_vertex_inserts: u64,
     /// Points fed to section-curve NURBS interpolation in the FF phase.
     pub section_fit_points: u64,
+    /// Pcurves built with no proof that their image lies within the
+    /// tolerance of their edge.
+    pub unproved_pcurves: u64,
 }
 
 /// Reset all counters to zero. Only available with `perf-counters`.
@@ -133,6 +148,7 @@ pub fn reset() {
     FACE_SPLIT_PROBES.store(0, Ordering::Relaxed);
     LOCAL_VERTEX_INSERTS.store(0, Ordering::Relaxed);
     SECTION_FIT_POINTS.store(0, Ordering::Relaxed);
+    UNPROVED_PCURVES.store(0, Ordering::Relaxed);
 }
 
 /// Every work counter since the last [`reset`]. Only available with
@@ -147,6 +163,7 @@ pub fn snapshot() -> PerfSnapshot {
         face_split_probes: FACE_SPLIT_PROBES.load(Ordering::Relaxed),
         local_vertex_inserts: LOCAL_VERTEX_INSERTS.load(Ordering::Relaxed),
         section_fit_points: SECTION_FIT_POINTS.load(Ordering::Relaxed),
+        unproved_pcurves: UNPROVED_PCURVES.load(Ordering::Relaxed),
     }
 }
 

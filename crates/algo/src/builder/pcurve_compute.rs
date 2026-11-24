@@ -97,7 +97,7 @@ pub fn compute_pcurve_on_surface(
             ellipse_sample_span(ellipse, start, end, surface),
         )
     {
-        return pcurve;
+        return unproved(pcurve, "wall ellipse");
     }
     pcurve_through_uv_samples(uv_pts, &pts_3d, start, end, surface, straight)
 }
@@ -193,7 +193,7 @@ pub fn compute_boundary_pcurve_on_surface(
         let (t0, t1) = curve_3d.domain_with_endpoints(stored_start, stored_end);
         let span = if forward { (t0, t1) } else { (t1, t0) };
         if let Some(pcurve) = wall_ellipse_pcurve(ellipse, surface, span) {
-            return pcurve;
+            return unproved(pcurve, "wall ellipse");
         }
     }
     pcurve_through_uv_samples(uv_pts, &pts_3d, start, end, surface, straight)
@@ -292,9 +292,9 @@ fn pcurve_through_uv_samples(
     }
 
     if matches!(surface, FaceSurface::Plane { .. }) {
-        return fit_nurbs2d_through_points(&uv_pts);
+        return unproved(fit_nurbs2d_through_points(&uv_pts), "fit on a plane");
     }
-    fit_nurbs2d_at_chords_3d(&uv_pts, pts_3d)
+    unproved(fit_nurbs2d_at_chords_3d(&uv_pts, pts_3d), "fit")
 }
 
 /// A NURBS through UV samples, each at the length along the edge's chords
@@ -922,6 +922,98 @@ fn multilinear_bound(surface: &FaceSurface, slots: &[(f64, f64)], v_most: f64) -
     Some(total)
 }
 
+/// The rounding of an edge's 3D samples where they lie: `2 ε` times their
+/// largest coordinate. Each coordinate of a sample rounds within `ε / 2` of
+/// its size, so a sample stands within `sqrt(3) ε / 2` times the largest
+/// coordinate of its exact place. A bound reads that shift at most twice:
+/// once at the end of a chord and once at the end of the arc.
+fn sample_rounding(pts_3d: &[Point3]) -> f64 {
+    let far = pts_3d.iter().fold(0.0_f64, |m, p| {
+        [p.x(), p.y(), p.z()]
+            .into_iter()
+            .fold(m, |m, c| max_or_nan(m, c.abs()))
+    });
+    2.0 * f64::EPSILON * far
+}
+
+/// `surface`, `curve` and `points` moved by one offset so the surface's own
+/// origin lies at nothing, with that offset. The surface keeps its frame
+/// and its (u, v), and the curve its axes and sizes. Each moved point
+/// rounds within `ε / 2` of its new size. `None` on a plane or a B-spline
+/// surface, and for a B-spline edge.
+fn moved_to_surface_origin(
+    surface: &FaceSurface,
+    curve: &EdgeCurve,
+    points: &[Point3],
+) -> Option<(FaceSurface, EdgeCurve, Vec<Point3>, Vec3)> {
+    let offset = Point3::new(0.0, 0.0, 0.0) - surface_origin(surface)?;
+    let surface = surface_moved(surface, offset)?;
+    let curve = conic_moved(curve, offset)?;
+    let points = points.iter().map(|&p| p + offset).collect();
+    Some((surface, curve, points, offset))
+}
+
+/// `pcurve`, with no proof that its image lies within the tolerance of its
+/// edge. The perf counters count it and the log records it at debug level,
+/// so a run can find each one.
+fn unproved(pcurve: Curve2D, how: &str) -> Curve2D {
+    crate::perf::bump_unproved_pcurve();
+    log::debug!("unproved pcurve: {how}");
+    pcurve
+}
+
+/// An analytic surface's own origin: a rod's axis point, a cone's apex, a
+/// ball's or a ring's centre. `None` on a plane or a B-spline surface.
+fn surface_origin(surface: &FaceSurface) -> Option<Point3> {
+    match surface {
+        FaceSurface::Cylinder(c) => Some(c.origin()),
+        FaceSurface::Cone(c) => Some(c.apex()),
+        FaceSurface::Sphere(s) => Some(s.center()),
+        FaceSurface::Torus(t) => Some(t.center()),
+        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => None,
+    }
+}
+
+/// An analytic surface moved by `offset`, its frame and its (u, v) kept.
+/// `None` on a plane or a B-spline surface.
+fn surface_moved(surface: &FaceSurface, offset: Vec3) -> Option<FaceSurface> {
+    match surface {
+        FaceSurface::Cylinder(c) => Some(FaceSurface::Cylinder(c.translated(offset))),
+        FaceSurface::Cone(c) => Some(FaceSurface::Cone(c.translated(offset))),
+        FaceSurface::Sphere(s) => Some(FaceSurface::Sphere(s.translated(offset))),
+        FaceSurface::Torus(t) => Some(FaceSurface::Torus(t.translated(offset))),
+        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => None,
+    }
+}
+
+/// A line, circle or ellipse edge moved by `offset`, its axes and sizes
+/// kept (a line holds no points of its own). `None` for a B-spline.
+fn conic_moved(curve: &EdgeCurve, offset: Vec3) -> Option<EdgeCurve> {
+    match curve {
+        EdgeCurve::Line => Some(EdgeCurve::Line),
+        EdgeCurve::Circle(c) => brepkit_math::curves::Circle3D::with_axes(
+            c.center() + offset,
+            c.normal(),
+            c.radius(),
+            c.u_axis(),
+            c.v_axis(),
+        )
+        .ok()
+        .map(EdgeCurve::Circle),
+        EdgeCurve::Ellipse(e) => brepkit_math::curves::Ellipse3D::with_axes(
+            e.center() + offset,
+            e.normal(),
+            e.semi_major(),
+            e.semi_minor(),
+            e.u_axis(),
+            e.v_axis(),
+        )
+        .ok()
+        .map(EdgeCurve::Ellipse),
+        EdgeCurve::NurbsCurve(_) => None,
+    }
+}
+
 /// A node of a [`proved_hermite_pcurve`]: the fraction `s` along the edge,
 /// the edge's (u, v) there and its rate in `s`, how far the surface at that
 /// (u, v) stands off the edge, and how far the surface's rate along the
@@ -959,6 +1051,14 @@ fn proved_hermite_pcurve(
     surface: &FaceSurface,
     off_form: f64,
 ) -> Option<Curve2D> {
+    // The proof runs with the surface's own origin at nothing, so its
+    // rounding goes with the surface's size and the edge's reach from it.
+    // The arc read from the first and last samples can end up to
+    // [`sample_rounding`] off the stored edge's ends: the one term that goes
+    // with where they lie, counted once.
+    let reserve = sample_rounding(pts_3d);
+    let (surface, curve, pts_3d, _) = moved_to_surface_origin(surface, curve, pts_3d)?;
+    let (surface, curve, pts_3d) = (&surface, &curve, &pts_3d[..]);
     let run = match curve {
         EdgeCurve::Line => EdgeRun::Line(*pts_3d.first()?, *pts_3d.last()?),
         EdgeCurve::Circle(c) => {
@@ -980,7 +1080,7 @@ fn proved_hermite_pcurve(
     });
     let allowed = 64.0f64.madd(
         -f64::EPSILON * size,
-        brepkit_math::tolerance::Tolerance::new().linear,
+        brepkit_math::tolerance::Tolerance::new().linear - reserve,
     ) - off_form;
     if allowed.is_nan() || allowed <= 0.0 {
         return None;
@@ -1257,8 +1357,22 @@ fn straight_pcurve(
     }
     let line = Curve2D::Line(make_line2d_safe(first, run));
     if matches!(surface, FaceSurface::Nurbs(_)) {
-        return Some(line);
+        return Some(unproved(line, "straight on a B-spline surface"));
     }
+    // On a rod, cone, ball or ring the bound runs with the surface's own
+    // origin at nothing, as in [`proved_hermite_pcurve`].
+    let reserve = sample_rounding(pts_3d);
+    let local = moved_to_surface_origin(surface, curve, pts_3d);
+    let (surface, curve, pts_3d, ends, reserve) = match &local {
+        Some((surface, curve, points, offset)) => (
+            surface,
+            curve,
+            &points[..],
+            (ends.0 + *offset, ends.1 + *offset),
+            reserve,
+        ),
+        None => (surface, curve, pts_3d, ends, 0.0),
+    };
     let lift = |q: Point2| match frame {
         Some(f) => Some(f.evaluate(q.x(), q.y())),
         None => surface.evaluate(q.x(), q.y()),
@@ -1272,7 +1386,7 @@ fn straight_pcurve(
             .fold(size, |m, c| max_or_nan(m, c.abs()));
     }
     let bound = straight_image_bound(uv_pts, pts_3d, curve, ends, surface, lift)?;
-    let rounding = 64.0 * f64::EPSILON * size;
+    let rounding = (64.0 * f64::EPSILON).madd(size, reserve);
     let tol = brepkit_math::tolerance::Tolerance::new().linear;
     let excess = bound + rounding - off_surface;
     (excess.is_finite() && excess <= max_or_nan(tol, off_surface)).then_some(line)
@@ -2861,11 +2975,68 @@ mod tests {
         }
     }
 
+    /// The quarter turns of [`a_quarter_turn_on_a_large_surface_gets_a_proved_pcurve`]
+    /// on the ball, the rod and the ring of size 1e4, each scene moved
+    /// `offset` along x, in three poses: moved 1e6 or 1e8, the pcurve is
+    /// proved and lies within the tolerance of the stored circle; moved
+    /// 1e10, where one rounding of a sample's coordinates passes the
+    /// tolerance, the proof refuses.
+    #[test]
+    fn a_quarter_turn_far_from_the_origin_is_proved_or_refused() {
+        use std::f64::consts::FRAC_PI_2;
+        for offset in [1e6, 1e8, 1e10] {
+            for k in 0..3 {
+                let mut pose = Pose::new(k, 1e4);
+                pose.shift += Vec3::new(offset, 0.0, 0.0);
+                for (what, surface, curve, at, span) in arcs_of_span(&pose, 1e4, FRAC_PI_2) {
+                    let EdgeCurve::Circle(circle) = &curve else {
+                        continue;
+                    };
+                    let (a, b) = (circle.evaluate(at), circle.evaluate(at + span));
+                    let (samples, _) = sample_edge_on_surface(&curve, a, b, &surface);
+                    let proved = proved_conic_pcurve(&curve, &samples, &surface, None);
+                    let name = format!("{what} pose {k} moved {offset:e}");
+                    if offset > 1e9 {
+                        assert!(proved.is_none(), "{name}: proved past one rounding");
+                        continue;
+                    }
+                    let pcurve = proved.unwrap_or_else(|| {
+                        unreachable!("{name}: no proved pcurve");
+                    });
+                    let off = stray_from_stored(&pcurve, &surface, circle, (at, at + span));
+                    assert!(off <= 1e-7, "{name}: the pcurve strays {off:e}");
+                }
+            }
+        }
+    }
+
+    /// A quarter turn on a ball, a rod and a ring of size 1e4 moved 1e10
+    /// from the origin, where the proof refuses, gets its pcurve from the
+    /// fit, and the perf counters count it as unproved.
+    #[cfg(feature = "perf-counters")]
+    #[test]
+    fn a_pcurve_with_no_proof_is_counted() {
+        let mut pose = Pose::new(1, 1e4);
+        pose.shift += Vec3::new(1e10, 0.0, 0.0);
+        for (what, surface, curve, at, span) in
+            arcs_of_span(&pose, 1e4, std::f64::consts::FRAC_PI_2)
+        {
+            let EdgeCurve::Circle(circle) = &curve else {
+                continue;
+            };
+            let (a, b) = (circle.evaluate(at), circle.evaluate(at + span));
+            let before = crate::perf::snapshot().unproved_pcurves;
+            let _ = compute_pcurve_on_surface(&curve, a, b, &surface, &[], None);
+            let after = crate::perf::snapshot().unproved_pcurves;
+            assert!(after > before, "{what}: the fit is not counted");
+        }
+    }
+
     /// Arcs that a straight run in (u, v) traces exactly, on surfaces of
-    /// size 1e4 and 1, in three poses: a parallel and a meridian of a ball
-    /// and of a ring, a parallel of a rod and of a cone, a ruling of a rod
-    /// and of a cone. Each keeps a straight pcurve, within the linear
-    /// tolerance of the arc in 3D.
+    /// size 1e4 and 1 and of size 1e4 moved 1e8 from the origin, in three
+    /// poses: a parallel and a meridian of a ball and of a ring, a parallel
+    /// of a rod and of a cone, a ruling of a rod and of a cone. Each keeps a
+    /// straight pcurve, within the linear tolerance of the arc in 3D.
     #[test]
     fn runs_along_parallels_meridians_and_rulings_keep_straight_pcurves() {
         use brepkit_math::curves::Circle3D;
@@ -2874,9 +3045,10 @@ mod tests {
         };
         let origin = Point3::new(0.0, 0.0, 0.0);
         let (x, z) = (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0));
-        for size in [1e4, 1.0] {
+        for (size, far) in [(1e4, 0.0), (1.0, 0.0), (1e4, 1e8)] {
             for k in 0..3 {
-                let pose = Pose::new(k, size);
+                let mut pose = Pose::new(k, size);
+                pose.shift += Vec3::new(far, 0.0, 0.0);
                 let (centre, axis) = (pose.point(origin), pose.vec(z));
                 let ball_surface =
                     SphericalSurface::with_axis_and_ref_dir(centre, size, axis, pose.vec(x))
@@ -2967,7 +3139,7 @@ mod tests {
                 ));
                 for (what, surface, curve, a, b) in cases {
                     for (way, off, kind) in arc_pcurves(surface, &curve, a, b) {
-                        let name = format!("{what} size {size:e} pose {k} {way}");
+                        let name = format!("{what} size {size:e} moved {far:e} pose {k} {way}");
                         assert_eq!(kind, "line", "{name}");
                         assert!(off <= 1e-7, "{name}: strays {off:e}");
                     }
