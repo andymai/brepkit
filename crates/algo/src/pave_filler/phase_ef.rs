@@ -7310,6 +7310,110 @@ mod tests {
         }
     }
 
+    /// A sheet of degree one along `u` over four rows: `x` from 0 to 1 at
+    /// `z = 0` for `u` up to 1/3, back from 1 to 0.2 rising to `z = rise` for
+    /// `u` up to 2/3, then up to `z = 1`; `y = v`. It folds back over
+    /// itself, `rise (1 - x) / 0.8` above its first part. Its face is the
+    /// part `u` from 0.05 to 0.3 and `v` from 0.2 to 0.8, `x` from 0.15 to
+    /// 0.9 at `z = 0`: four lines, each with its pcurve. All of it is placed
+    /// by `centre` and `turn`.
+    fn hairpin_sheet(
+        topo: &mut Topology,
+        rise: f64,
+        centre: Point3,
+        turn: brepkit_math::mat::Mat4,
+    ) -> FaceId {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::Point2;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::pcurve::PCurve;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let place =
+            |x: f64, y: f64, z: f64| centre + turned(turn, brepkit_math::vec::Vec3::new(x, y, z));
+        let rows = [(0.0, 0.0), (1.0, 0.0), (0.2, rise), (0.2, 1.0)]
+            .iter()
+            .map(|&(x, z)| [0.0, 1.0].iter().map(|&y| place(x, y, z)).collect())
+            .collect();
+        let sheet = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 2]; 4],
+        )
+        .unwrap();
+        let corners = [(0.05, 0.2), (0.3, 0.2), (0.3, 0.8), (0.05, 0.8)];
+        let v = corners.map(|(u, w)| topo.add_vertex(Vertex::new(sheet.evaluate(u, w), 1e-7)));
+        let mut sides = Vec::new();
+        let mut pcurves = Vec::new();
+        for k in 0..4 {
+            let (a, b) = (corners[k], corners[(k + 1) % 4]);
+            let e = topo.add_edge(Edge::new(v[k], v[(k + 1) % 4], EdgeCurve::Line));
+            sides.push(OrientedEdge::new(e, true));
+            let (from, to) = (Point2::new(a.0, a.1), Point2::new(b.0, b.1));
+            let line = Line2D::new(from, to - from).unwrap();
+            pcurves.push((
+                e,
+                PCurve::new(Curve2D::Line(line), 0.0, (to - from).length()),
+            ));
+        }
+        let wire = topo.add_wire(Wire::new(sides, true).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(sheet)));
+        for (e, pcurve) in pcurves {
+            topo.pcurves_mut().set(e, face, pcurve);
+        }
+        face
+    }
+
+    /// A sheet that folds back 8e-8 or less over its face, in two poses: a
+    /// line through the face crosses both, within the tolerance of each
+    /// other, and its crossing is read on the sheet that runs back, outside
+    /// the face's pcurves. The face runs within the tolerance of it too, so
+    /// phase EF keeps it, within 1e-7 of the face. Lines past the face's
+    /// pcurves, where no part of the face runs near, cross it nowhere.
+    #[test]
+    fn a_crossing_read_on_a_sheet_folded_back_over_the_face_is_kept() {
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::vec::Vec3;
+        let poses = [
+            (Point3::new(0.0, 0.0, 0.0), Mat4::identity()),
+            (
+                Point3::new(0.4, -1.3, 2.2),
+                Mat4::rotation_z(0.7) * Mat4::rotation_x(1.1) * Mat4::rotation_y(0.3),
+            ),
+        ];
+        let mut misread = Vec::new();
+        for (centre, turn) in poses {
+            let place = |x: f64, y: f64, z: f64| centre + turned(turn, Vec3::new(x, y, z));
+            for rise in [8e-8, 4e-8] {
+                for ((x, y), want) in [
+                    ((0.3, 0.5), 1),
+                    ((0.5, 0.5), 1),
+                    ((0.95, 0.5), 0),
+                    ((0.5, 0.1), 0),
+                ] {
+                    let mut topo = Topology::new();
+                    let face = hairpin_sheet(&mut topo, rise, centre, turn);
+                    let found = ef_vertices(
+                        &mut topo,
+                        face,
+                        EdgeCurve::Line,
+                        place(x, y, 0.31),
+                        Some(place(x, y, -0.27)),
+                    );
+                    let on = place(x, y, 0.0);
+                    if found.len() != want || found.iter().any(|p| (*p - on).length() > 1e-7) {
+                        misread.push((centre.x(), rise, x, y, want, found));
+                    }
+                }
+            }
+        }
+        assert!(misread.is_empty(), "{misread:?}");
+    }
+
     /// A flat sheet over `[0, 1]²` with `x = u` and `y = v`, and its face
     /// bounded by the square `[0.1, 0.9]²`: four lines whose pcurves stand
     /// `shift` along `u` from them, within the reach a pcurve's ends may

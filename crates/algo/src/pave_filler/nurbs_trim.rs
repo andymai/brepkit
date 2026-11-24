@@ -28,6 +28,10 @@ const ARC_STEP: f64 = std::f64::consts::FRAC_PI_4;
 /// bound how far their images stand from the face's edges.
 const IMAGE_HALVINGS: usize = 256;
 
+/// How many parts of the loops' box of parameters one proof that a point
+/// lies off a face may read ([`NurbsFaceTrim::clear_of`]).
+const MOST_PARTS: usize = 512;
+
 /// A pcurve run over its parameters from the first to the second, and the
 /// place in a trim's list of the edge whose pcurve it is.
 type Run<'a> = (&'a Curve2D, (f64, f64), usize);
@@ -231,6 +235,9 @@ pub(super) struct NurbsFaceTrim {
     /// the first time a point is read outside the loops; `None` where it
     /// cannot be bounded.
     image_reaches: std::cell::OnceCell<Option<Vec<f64>>>,
+    /// The box of the loops' parameters, which holds the parameters of every
+    /// point of the face.
+    bounds: Box2,
 }
 
 /// An edge of a face read by its trim.
@@ -337,26 +344,37 @@ impl NurbsFaceTrim {
         // line or a conic is a few products and sums.
         #[allow(clippy::cast_precision_loss)]
         let roundings = (8 * (MOST_HALVINGS as usize + 4) * (degree + 2)) as f64;
+        let slack = roundings * f64::EPSILON * size.max(f64::MIN_POSITIVE);
+        let bounds = pieces
+            .iter()
+            .map(|piece| piece.bounds(slack))
+            .reduce(|x, y| Box2 {
+                lo: [x.lo[0].min(y.lo[0]), x.lo[1].min(y.lo[1])],
+                hi: [x.hi[0].max(y.hi[0]), x.hi[1].max(y.hi[1])],
+            })?;
         Some(Self {
             surface: surface.clone(),
             pieces,
-            slack: roundings * f64::EPSILON * size.max(f64::MIN_POSITIVE),
+            slack,
             edges,
             image_reaches: std::cell::OnceCell::new(),
+            bounds,
         })
     }
 
     /// Whether `p`, a point within `near` of the face's surface, lies on the
     /// face: `Some(true)` where its parameters, where the surface's point
     /// there lies within `near` of it, lie inside the loops; `Some(false)`
-    /// where they lie outside them and `p` lies farther from every edge than
+    /// where they lie outside them, `p` lies farther from every edge than
     /// the edge's reach, how far its pcurve's image can stand from it, and
-    /// how far `p` lies from the surface. `None` where no such parameters
-    /// are found, they lie in the box of a piece of a loop halved as far as
-    /// it goes, an image's reach cannot be bounded, or `p` lies within those
-    /// of an edge. A surface that runs through one point twice away from its
-    /// sides gives that point two places in its parameters, and the reading
-    /// takes the one the projection finds.
+    /// how far `p` lies from the surface, and no point of the surface over
+    /// the loops lies within the tolerance and that distance of `p`
+    /// ([`Self::clear_of`]): a surface that runs back by `p` (a hairpin) can
+    /// give it parameters off the face though the face runs by it too.
+    /// `None` where no such parameters are found, they lie in the box of a
+    /// piece of a loop halved as far as it goes, an image's reach cannot be
+    /// bounded, `p` lies within those of an edge, or the surface over the
+    /// loops cannot be proved clear of it.
     pub(super) fn holds(&self, p: Point3, near: f64, tol: Tolerance) -> Option<bool> {
         let foot =
             brepkit_math::nurbs::projection::project_point_to_surface(&self.surface, p, tol.linear)
@@ -378,7 +396,101 @@ impl NurbsFaceTrim {
                 return None;
             }
         }
-        Some(false)
+        self.clear_of(p, tol.linear + off).then_some(false)
+    }
+
+    /// Whether every point of the surface over the loops lies farther than
+    /// `reach` from `p`. The box of the loops' parameters is halved, its
+    /// longer side first, and a part is dropped where the hull of the
+    /// surface's control points cut to it ([`super::helpers::cut_net_points`])
+    /// keeps farther than `reach` from `p` past a plane ([`parted`]), or where
+    /// the part lies outside the loops ([`Self::outside_loops`]); a part that
+    /// holds no area of the domain holds no point. Each plane is read with
+    /// the rounding of the cut and of the coordinates' size. `false` where a
+    /// part is left after [`MOST_PARTS`] are read.
+    fn clear_of(&self, p: Point3, reach: f64) -> bool {
+        let rounding = super::helpers::net_rounding(&self.surface)
+            + 64.0 * f64::EPSILON * (p.x().abs() + p.y().abs() + p.z().abs());
+        let mut parts = vec![self.bounds];
+        let mut read = 0_usize;
+        while let Some(part) = parts.pop() {
+            if read == MOST_PARTS {
+                return false;
+            }
+            read += 1;
+            let range = [part.lo[0], part.hi[0], part.lo[1], part.hi[1]];
+            let Some(points) = super::helpers::cut_net_points(&self.surface, range) else {
+                continue;
+            };
+            if parted(&points, p, reach + rounding) || self.outside_loops(part) {
+                continue;
+            }
+            let (du, dv) = (part.hi[0] - part.lo[0], part.hi[1] - part.lo[1]);
+            let (first, second) = if du >= dv {
+                let mid = f64::midpoint(part.lo[0], part.hi[0]);
+                (
+                    Box2 {
+                        lo: part.lo,
+                        hi: [mid, part.hi[1]],
+                    },
+                    Box2 {
+                        lo: [mid, part.lo[1]],
+                        hi: part.hi,
+                    },
+                )
+            } else {
+                let mid = f64::midpoint(part.lo[1], part.hi[1]);
+                (
+                    Box2 {
+                        lo: part.lo,
+                        hi: [part.hi[0], mid],
+                    },
+                    Box2 {
+                        lo: [part.lo[0], mid],
+                        hi: part.hi,
+                    },
+                )
+            };
+            parts.extend([first, second]);
+        }
+        true
+    }
+
+    /// Whether every point of the box of parameters `part` lies outside the
+    /// loops: no piece of a loop meets it, halved where its box does, so the
+    /// loops wind round each point of the part alike, and its middle reads
+    /// outside them.
+    fn outside_loops(&self, part: Box2) -> bool {
+        let mut budget = MOST_PIECES;
+        for piece in &self.pieces {
+            if !self.misses(piece, part, &mut budget, 0) {
+                return false;
+            }
+        }
+        let middle = Point2::new(
+            f64::midpoint(part.lo[0], part.hi[0]),
+            f64::midpoint(part.lo[1], part.hi[1]),
+        );
+        self.holds_parameters(middle) == Some(false)
+    }
+
+    /// Whether `piece` keeps out of the box `part`, halved where its box
+    /// meets it.
+    fn misses(&self, piece: &Piece, part: Box2, budget: &mut usize, depth: u32) -> bool {
+        let b = piece.bounds(self.slack);
+        if b.lo[0] > part.hi[0]
+            || b.hi[0] < part.lo[0]
+            || b.lo[1] > part.hi[1]
+            || b.hi[1] < part.lo[1]
+        {
+            return true;
+        }
+        if depth >= MOST_HALVINGS || *budget == 0 {
+            return false;
+        }
+        *budget -= 1;
+        let (left, right) = piece.halves();
+        self.misses(&left, part, budget, depth + 1) && self.misses(&right, part, budget, depth + 1)
     }
 
     /// How far the image on the surface of each edge's pcurve can stand
@@ -557,6 +669,37 @@ impl NurbsFaceTrim {
                 != self.crossed(&right, q, budget, depth + 1)?,
         )
     }
+}
+
+/// Whether a plane keeps every one of `points`, and so their convex hull,
+/// farther than `reach` from `p`: one square to an axis, to the points'
+/// middle from `p`, or to the point nearest `p`.
+fn parted(points: &[Point3], p: Point3, reach: f64) -> bool {
+    use brepkit_math::vec::Vec3;
+    let Some(nearest) = points
+        .iter()
+        .copied()
+        .min_by(|a, b| (*a - p).length().total_cmp(&(*b - p).length()))
+    else {
+        return true;
+    };
+    #[allow(clippy::cast_precision_loss)]
+    let share = 1.0 / points.len() as f64;
+    let middle = points
+        .iter()
+        .fold(Vec3::new(0.0, 0.0, 0.0), |sum, &q| sum + (q - p) * share);
+    let axes = [
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+    ];
+    let toward = [middle, nearest - p]
+        .into_iter()
+        .filter_map(|d| d.normalize().ok());
+    axes.into_iter()
+        .flat_map(|a| [a, -a])
+        .chain(toward)
+        .any(|d| points.iter().all(|&q| d.dot(q - p) > reach))
 }
 
 /// The pieces of `curve` from parameter `run.0` to `run.1`, in that order:
