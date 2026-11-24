@@ -607,8 +607,10 @@ fn build_manifold_shell(
 /// - Too few faces (< `MIN_SOLID_FACES`)
 /// - No edges or vertices (empty topology)
 /// - Unclosed wires and non-manifold edges (hard errors)
-/// - Euler characteristic, boundary edges, degenerate faces, and face area
-///   via [`crate::validate::validate_solid`] (logged as warnings)
+/// - The Euler-Poincaré relation on each piece, with its genus and inner
+///   loops, as [`crate::validate::validate_solid`] reads it (hard error)
+/// - Boundary edges, degenerate faces, and face area via
+///   [`crate::validate::validate_solid`] (logged as warnings)
 ///
 /// This is the strict acceptance gate for results that still have a fallback
 /// available (the GFA pipeline). The mesh fallback's terminal sanity check is
@@ -726,6 +728,15 @@ pub(super) fn validate_boolean_result(
                  {non_manifold_edges} non-manifold edge(s), and \
                  {free_edges} free boundary edge(s)"
             ),
+        });
+    }
+
+    // A closed shell whose counts break the Euler-Poincaré relation has a
+    // face that is not the patch its wires make it (a hole lost, a vertex
+    // that should be two), though every count above holds.
+    if let Some(misfit) = crate::validate::solid_euler_misfit(topo, solid)? {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: format!("boolean result: {misfit}"),
         });
     }
 

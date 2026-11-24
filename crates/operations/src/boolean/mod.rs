@@ -1489,13 +1489,22 @@ pub(crate) fn fuse_cluster(
     topo: &mut Topology,
     cluster: &[SolidId],
 ) -> Result<SolidId, crate::OperationsError> {
+    fuse_cluster_with(topo, cluster, brepkit_algo::gfa::fuse_n)
+}
+
+/// [`fuse_cluster`] with `fuse_n` as the one-pass fuse.
+pub(crate) fn fuse_cluster_with(
+    topo: &mut Topology,
+    cluster: &[SolidId],
+    fuse_n: impl FnOnce(&mut Topology, &[SolidId]) -> Result<SolidId, brepkit_algo::error::AlgoError>,
+) -> Result<SolidId, crate::OperationsError> {
     let Some((&first, rest)) = cluster.split_first() else {
         return Err(crate::OperationsError::InvalidInput {
             reason: "fuse_cluster requires a non-empty cluster".into(),
         });
     };
     if cluster.len() >= 3
-        && let Ok(fused) = brepkit_algo::gfa::fuse_n(topo, cluster)
+        && let Ok(fused) = fuse_n(topo, cluster)
         && validate_boolean_result(topo, fused).is_ok()
     {
         return Ok(fused);

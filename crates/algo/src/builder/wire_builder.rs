@@ -183,13 +183,11 @@ fn trace_loops(
             // still order by curvature.
             let score = |entry: &VertexEntry| {
                 let turn = turn_score(incoming_angle, entry.angle);
-                if continues_straight(incoming_exact, entry.exact)
-                    || continues_one_conic(
-                        current_edge,
-                        &edges[entry.edge_idx],
-                        incoming_angle,
-                        entry.angle,
-                    )
+                let leaving = &edges[entry.edge_idx];
+                let sections =
+                    current_edge.source_edge_idx.is_some() && leaving.source_edge_idx.is_some();
+                if !sections && continues_straight(incoming_exact, entry.exact)
+                    || continues_one_conic(current_edge, leaving, incoming_angle, entry.angle)
                 {
                     TAU + turn
                 } else {
@@ -1149,6 +1147,12 @@ fn exact_nurbs_angle(edge: &OrientedPCurveEdge, at_start: bool) -> Option<f64> {
 /// agree to 2.4e-7 (a scoop's side edge). A hole's arc pieces, fitted one by
 /// one, kink by 3e-6 to 1e-5, and the hole weave relies on the walk reading
 /// those as turns (the keyholed knuckle cuts), so the band stays below them.
+///
+/// The walk does not ask this of a section that runs on into a section. Two
+/// pieces of one section curve meet with one tangent where their pcurves are
+/// exact, and that section is a turn like any other where a second section
+/// crosses it (as in [`continues_one_conic`]): ranked last, the walk turned
+/// onto the crossing section where the first curves toward the face.
 fn continues_straight(incoming: Option<f64>, outgoing: Option<f64>) -> bool {
     const STRAIGHT: f64 = 1e-6;
     let (Some(back), Some(out)) = (incoming, outgoing) else {

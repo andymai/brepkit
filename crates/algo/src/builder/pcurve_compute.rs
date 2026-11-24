@@ -3,9 +3,11 @@
 //! For plane faces, uses [`PlaneFrame`] to project 3D lines to 2D lines.
 //! For analytic surfaces (cylinder, cone, sphere, torus), samples points along
 //! the 3D curve, projects via `surface.project_point()`, unwraps periodicity,
-//! and fits a [`NurbsCurve2D`] (or a `Line2D` if collinear in UV).
+//! and fits a [`NurbsCurve2D`], or gives a `Line2D` where a bound shows that
+//! the straight run in UV lies on the edge in 3D.
 
 use brepkit_math::madd::Madd;
+use std::borrow::Cow;
 use std::f64::consts::TAU;
 
 use brepkit_math::curves2d::{Curve2D, Line2D, NurbsCurve2D};
@@ -59,32 +61,46 @@ pub fn compute_pcurve_on_surface(
     }
 
     // For plane surfaces with curved edges, use PlaneFrame for projection.
-    let (pts_3d, uv_pts) = if let FaceSurface::Plane { normal, .. } = surface {
-        let owned;
-        let f = if let Some(fr) = frame {
+    let owned;
+    let plane_frame = if let FaceSurface::Plane { normal, .. } = surface {
+        Some(if let Some(fr) = frame {
             fr
         } else {
             owned = PlaneFrame::from_plane_face(*normal, wire_pts);
             &owned
-        };
-        (
-            Vec::new(),
-            sample_edge_to_uv_via_frame(curve_3d, start, end, f),
-        )
+        })
+    } else {
+        None
+    };
+    let (pts_3d, uv_pts) = if let Some(f) = plane_frame {
+        sample_edge_via_frame(curve_3d, start, end, f)
     } else {
         sample_edge_on_surface(curve_3d, start, end, surface)
     };
-    if let EdgeCurve::Ellipse(ellipse) = curve_3d
-        && !is_collinear_2d(&uv_pts, 1e-6)
+    let straight = straight_pcurve(
+        &uv_pts,
+        &pts_3d,
+        curve_3d,
+        (start, end),
+        surface,
+        plane_frame,
+    );
+    if straight.is_none()
+        && let Some(pcurve) = proved_conic_pcurve(curve_3d, &pts_3d, surface, plane_frame)
+    {
+        return pcurve;
+    }
+    if straight.is_none()
+        && let EdgeCurve::Ellipse(ellipse) = curve_3d
         && let Some(pcurve) = wall_ellipse_pcurve(
             ellipse,
             surface,
             ellipse_sample_span(ellipse, start, end, surface),
         )
     {
-        return pcurve;
+        return unproved(pcurve, "wall ellipse");
     }
-    pcurve_through_uv_samples(uv_pts, &pts_3d, start, end, surface)
+    pcurve_through_uv_samples(uv_pts, &pts_3d, start, end, surface, straight)
 }
 
 /// The pcurve of a face's own boundary edge. An open circle or ellipse
@@ -135,14 +151,18 @@ pub fn compute_boundary_pcurve_on_surface(
         &mut pts_3d,
     );
     pts_3d.push(end);
-    let uv_pts = if let FaceSurface::Plane { normal, .. } = surface {
-        let owned;
-        let f = if let Some(fr) = frame {
+    let owned;
+    let plane_frame = if let FaceSurface::Plane { normal, .. } = surface {
+        Some(if let Some(fr) = frame {
             fr
         } else {
             owned = PlaneFrame::from_plane_face(*normal, wire_pts);
             &owned
-        };
+        })
+    } else {
+        None
+    };
+    let uv_pts = if let Some(f) = plane_frame {
         pts_3d.iter().map(|&p| f.project(p)).collect()
     } else {
         let mut uv: Vec<Point2> = pts_3d
@@ -155,22 +175,37 @@ pub fn compute_boundary_pcurve_on_surface(
         lift_edge_samples(curve_3d, surface, &pts_3d, &mut uv);
         uv
     };
-    if let EdgeCurve::Ellipse(ellipse) = curve_3d
-        && !is_collinear_2d(&uv_pts, 1e-6)
+    let straight = straight_pcurve(
+        &uv_pts,
+        &pts_3d,
+        curve_3d,
+        (start, end),
+        surface,
+        plane_frame,
+    );
+    if straight.is_none()
+        && let Some(pcurve) = proved_conic_pcurve(curve_3d, &pts_3d, surface, plane_frame)
+    {
+        return pcurve;
+    }
+    if straight.is_none()
+        && let EdgeCurve::Ellipse(ellipse) = curve_3d
     {
         let (t0, t1) = curve_3d.domain_with_endpoints(stored_start, stored_end);
         let span = if forward { (t0, t1) } else { (t1, t0) };
         if let Some(pcurve) = wall_ellipse_pcurve(ellipse, surface, span) {
-            return pcurve;
+            return unproved(pcurve, "wall ellipse");
         }
     }
-    pcurve_through_uv_samples(uv_pts, &pts_3d, start, end, surface)
+    pcurve_through_uv_samples(uv_pts, &pts_3d, start, end, surface, straight)
 }
 
-/// A circle or ellipse arc in a plane's frame, exactly: the frame maps the
-/// conic `c + cos t a + sin t b` affinely, so its image is the conic through
-/// the projected centre and axes, built as rational quadratic pieces of at
-/// most a quarter turn, from the traversal's start to its end on [0, 1].
+/// A circle or ellipse arc in a plane's frame: the frame maps the conic
+/// `c + cos t a + sin t b` affinely, so its image is the conic through the
+/// projected centre and axes, built as rational quadratic pieces of at most
+/// a quarter turn, from the traversal's start to its end on [0, 1]. The
+/// span comes from the stored ends, read against the conic where they lie,
+/// so its bound in [`plane_conic_span`] takes no reserve.
 ///
 /// A fit through a fixed number of samples drifts at the ends of a long
 /// arc (7e-3 rad off the tangent of a hole's rim piece running most of the
@@ -183,19 +218,53 @@ fn plane_conic_arc(
     forward: bool,
     frame: &PlaneFrame,
 ) -> Option<Curve2D> {
-    let centre = match curve_3d {
-        EdgeCurve::Circle(c) => c.center(),
-        EdgeCurve::Ellipse(e) => e.center(),
+    let (t0, t1) = curve_3d.domain_with_endpoints(stored_start, stored_end);
+    plane_conic_span(
+        curve_3d,
+        if forward { (t0, t1) } else { (t1, t0) },
+        frame,
+        0.0,
+    )
+}
+
+/// [`plane_conic_arc`] over the span of the conic's own parameter from `ta`
+/// to `tb`, where its bound holds.
+///
+/// The axes go into the frame as vectors, so their rounding goes with their
+/// sizes, not with where the conic lies. The image then lies within
+/// `reserve + 64 ε size` of the conic's shadow on the frame's plane, `size`
+/// the centre's distance from the frame's origin plus the lengths of the two
+/// axes: the frame's axes are square to each other within a few ε, and the
+/// projections, the angles, the weights and the control points round within
+/// that. `reserve` is what the caller's reading of the span and of the
+/// conic adds. `None` where the bound passes the linear tolerance.
+fn plane_conic_span(
+    curve_3d: &EdgeCurve,
+    (ta, tb): (f64, f64),
+    frame: &PlaneFrame,
+    reserve: f64,
+) -> Option<Curve2D> {
+    let (centre, (big_a, big_b)) = match curve_3d {
+        EdgeCurve::Circle(c) => (
+            c.center(),
+            (c.u_axis() * c.radius(), c.v_axis() * c.radius()),
+        ),
+        EdgeCurve::Ellipse(e) => (
+            e.center(),
+            (e.u_axis() * e.semi_major(), e.v_axis() * e.semi_minor()),
+        ),
         EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return None,
     };
-    let at = |t: f64| curve_3d.evaluate_with_endpoints(t, stored_start, stored_end);
+    let flat = |w: Vec3| Vec2::new(w.dot(frame.u_axis()), w.dot(frame.v_axis()));
     let c = frame.project(centre);
-    let a = frame.project(at(0.0)) - c;
-    let b = frame.project(at(std::f64::consts::FRAC_PI_2)) - c;
-    let (t0, t1) = curve_3d.domain_with_endpoints(stored_start, stored_end);
-    let (ta, tb) = if forward { (t0, t1) } else { (t1, t0) };
+    let (a, b) = (flat(big_a), flat(big_b));
     let sweep = tb - ta;
     if !sweep.is_finite() || sweep.abs() < 1e-12 {
+        return None;
+    }
+    let size = (centre - frame.origin()).length() + big_a.length() + big_b.length();
+    let bound = (64.0 * f64::EPSILON).madd(size, reserve);
+    if bound.is_nan() || bound > brepkit_math::tolerance::Tolerance::new().linear {
         return None;
     }
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -227,15 +296,16 @@ fn plane_conic_arc(
         .map(Curve2D::Nurbs)
 }
 
-/// A pcurve through UV samples running from `start` to `end`: a `Line2D`
-/// when they are collinear and distinct, else a fitted NURBS. `pts_3d` are
-/// the samples on the edge, one for each UV sample, or none.
+/// A pcurve through UV samples running from `start` to `end`: `straight`
+/// when there is one (see [`straight_pcurve`]), else a fitted NURBS.
+/// `pts_3d` are the samples on the edge, one for each UV sample, or none.
 fn pcurve_through_uv_samples(
     uv_pts: Vec<Point2>,
     pts_3d: &[Point3],
     start: Point3,
     end: Point3,
     surface: &FaceSurface,
+    straight: Option<Curve2D>,
 ) -> Curve2D {
     if uv_pts.len() < 2 {
         // Degenerate: just project endpoints.
@@ -246,33 +316,14 @@ fn pcurve_through_uv_samples(
         let dir = Vec2::new(p1.x() - p0.x(), p1.y() - p0.y());
         return Curve2D::Line(make_line2d_safe(p0, dir));
     }
-
-    // Check collinearity -- if all points are (nearly) on a line in UV,
-    // use a Line2D instead of a NURBS fit.
-    // EXCEPTION: Line2D uses arc-length parameterization (evaluate(t) =
-    // origin + unit_dir * t), not [0,1] mapping. For curves that need
-    // evaluate(0)→start and evaluate(1)→end, use NURBS interpolation
-    // instead, which naturally maps [0,1] to the full extent.
-    if is_collinear_2d(&uv_pts, 1e-6) {
-        let p0 = uv_pts[0];
-        let pn = uv_pts[uv_pts.len() - 1];
-        let dx = pn.x() - p0.x();
-        let dy = pn.y() - p0.y();
-        let len_sq = dx * dx + dy * dy;
-        // For non-degenerate lines (p0 ≠ pn), use Line2D.
-        // For closed collinear curves (p0 ≈ pn), fall through to NURBS
-        // fit to preserve [0,1] parameterization.
-        if len_sq >= 1e-12 {
-            let dir = Vec2::new(dx, dy);
-            return Curve2D::Line(make_line2d_safe(p0, dir));
-        }
-        // p0 ≈ pn: fall through to NURBS interpolation.
+    if let Some(line) = straight {
+        return line;
     }
 
     if matches!(surface, FaceSurface::Plane { .. }) {
-        return fit_nurbs2d_through_points(&uv_pts);
+        return unproved(fit_nurbs2d_through_points(&uv_pts), "fit on a plane");
     }
-    fit_nurbs2d_at_chords_3d(&uv_pts, pts_3d)
+    unproved(fit_nurbs2d_at_chords_3d(&uv_pts, pts_3d), "fit")
 }
 
 /// A NURBS through UV samples, each at the length along the edge's chords
@@ -764,6 +815,433 @@ fn wall_ellipse_pcurve(
         .map(Curve2D::Nurbs)
 }
 
+/// The most pieces a proved pcurve takes before it gives up.
+const PROVED_PCURVE_MAX_PIECES: usize = 4096;
+
+/// A pcurve for a line, circle or ellipse edge through the samples
+/// `pts_3d`, whose image is proved within the linear tolerance of the edge
+/// at every point, or `None`. On a plane it is the conic's image in the
+/// frame ([`plane_conic_span`]), within the tolerance of the edge's shadow
+/// on the plane; on a cylinder, cone, ball or ring it is a
+/// [`proved_hermite_pcurve`].
+fn proved_conic_pcurve(
+    curve: &EdgeCurve,
+    pts_3d: &[Point3],
+    surface: &FaceSurface,
+    frame: Option<&PlaneFrame>,
+) -> Option<Curve2D> {
+    let (curve, gap) = unit_conic(curve)?;
+    let curve: &EdgeCurve = &curve;
+    // The pcurve follows the unit form's arc between the points nearest the
+    // first and last samples, within the arc gap of the stored arc, which
+    // may take at most a quarter of the tolerance.
+    let off_form = unit_conic_arc_gap(gap);
+    if off_form > 0.25 * brepkit_math::tolerance::Tolerance::new().linear {
+        return None;
+    }
+    if let Some(f) = frame {
+        // The span comes from the samples, each rounded where it lies.
+        let (theta0, sweep) = conic_sweep(curve, pts_3d)?;
+        let reserve = off_form + sample_rounding(pts_3d);
+        return plane_conic_span(curve, (theta0, theta0 + sweep), f, reserve);
+    }
+    proved_hermite_pcurve(curve, pts_3d, surface, off_form)
+}
+
+/// A line, circle or ellipse edge along its samples, by the fraction `s` of
+/// their run from first to last.
+enum EdgeRun<'a> {
+    Line(Point3, Point3),
+    Circle(&'a brepkit_math::curves::Circle3D, f64, f64),
+    Ellipse(&'a brepkit_math::curves::Ellipse3D, f64, f64),
+}
+
+impl EdgeRun<'_> {
+    /// The edge's point at `s` and its rate in `s`.
+    fn at(&self, s: f64) -> (Point3, Vec3) {
+        match self {
+            Self::Line(a, b) => (*a + (*b - *a) * s, *b - *a),
+            Self::Circle(c, t0, sweep) => {
+                let t = sweep.madd(s, *t0);
+                (c.evaluate(t), c.tangent(t) * (c.radius() * sweep))
+            }
+            Self::Ellipse(e, t0, sweep) => {
+                let t = sweep.madd(s, *t0);
+                (e.evaluate(t), e.tangent(t) * *sweep)
+            }
+        }
+    }
+
+    /// The parameter the edge's own curve runs over its samples.
+    const fn sweep(&self) -> f64 {
+        match self {
+            Self::Line(..) => 0.0,
+            Self::Circle(_, _, w) | Self::Ellipse(_, _, w) => *w,
+        }
+    }
+
+    /// A bound on the norm of the edge's fourth derivative in `s`: the
+    /// radius, or the longer semi-axis, times the sweep to the fourth.
+    fn fourth(&self) -> f64 {
+        match self {
+            Self::Line(..) => 0.0,
+            Self::Circle(c, _, sweep) => c.radius() * sweep.powi(4),
+            Self::Ellipse(e, _, sweep) => e.semi_major() * sweep.powi(4),
+        }
+    }
+}
+
+/// An analytic surface's point at `(u, v)` and its two partial
+/// derivatives there. `None` on a plane or a B-spline surface.
+fn surface_point_and_rates(surface: &FaceSurface, u: f64, v: f64) -> Option<(Point3, Vec3, Vec3)> {
+    use brepkit_math::traits::ParametricSurface;
+    fn jet(s: &impl ParametricSurface, u: f64, v: f64) -> (Point3, Vec3, Vec3) {
+        (s.evaluate(u, v), s.partial_u(u, v), s.partial_v(u, v))
+    }
+    match surface {
+        FaceSurface::Cylinder(c) => Some(jet(c, u, v)),
+        FaceSurface::Cone(c) => Some(jet(c, u, v)),
+        FaceSurface::Sphere(s) => Some(jet(s, u, v)),
+        FaceSurface::Torus(t) => Some(jet(t, u, v)),
+        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => None,
+    }
+}
+
+/// A bound on the norm of an analytic surface's partial derivative taken
+/// `i` times in `u` and `j` times in `v`, `i + j >= 2`, over the band of `v`
+/// whose largest `|v|` is `v_most`. A rod's are its radius when `j = 0` and
+/// nothing else; a cone's `|v| cos a` when `j = 0`, `cos a` when `j = 1` and
+/// nothing else; a ball's its radius; a ring's `R + r` when `j = 0` and `r`
+/// else. `None` on a plane or a B-spline surface.
+fn partial_bound(surface: &FaceSurface, i: usize, j: usize, v_most: f64) -> Option<f64> {
+    match surface {
+        FaceSurface::Cylinder(c) => Some(if j == 0 { c.radius() } else { 0.0 }),
+        FaceSurface::Cone(c) => Some(match j {
+            0 => c.half_angle().cos() * v_most,
+            1 if i > 0 => c.half_angle().cos(),
+            _ => 0.0,
+        }),
+        FaceSurface::Sphere(s) => Some(s.radius()),
+        FaceSurface::Torus(t) => Some(if j == 0 {
+            t.major_radius() + t.minor_radius()
+        } else {
+            t.minor_radius()
+        }),
+        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => None,
+    }
+}
+
+/// A bound on `|D^k S [w_1, ..., w_k]|`, `k = slots.len()` from two to four,
+/// each `w` with `|u|` and `|v|` parts at most the slot's pair: the sum over
+/// each choice of the slots read along `v` of the bound on that partial
+/// ([`partial_bound`]) times the parts chosen. `None` where
+/// [`partial_bound`] is.
+fn multilinear_bound(surface: &FaceSurface, slots: &[(f64, f64)], v_most: f64) -> Option<f64> {
+    let k = slots.len();
+    let mut total = 0.0;
+    for chosen in 0..(1_usize << k) {
+        let j = chosen.count_ones() as usize;
+        let mut term = partial_bound(surface, k - j, j, v_most)?;
+        for (slot, &(along_u, along_v)) in slots.iter().enumerate() {
+            term *= if chosen >> slot & 1 == 1 {
+                along_v
+            } else {
+                along_u
+            };
+        }
+        total += term;
+    }
+    Some(total)
+}
+
+/// The rounding of an edge's 3D samples where they lie: `2 ε` times their
+/// largest coordinate. Each coordinate of a sample rounds within `ε / 2` of
+/// its size, so a sample stands within `sqrt(3) ε / 2` times the largest
+/// coordinate of its exact place. A bound reads that shift at most twice:
+/// once at the end of a chord and once at the end of the arc.
+fn sample_rounding(pts_3d: &[Point3]) -> f64 {
+    let far = pts_3d.iter().fold(0.0_f64, |m, p| {
+        [p.x(), p.y(), p.z()]
+            .into_iter()
+            .fold(m, |m, c| max_or_nan(m, c.abs()))
+    });
+    2.0 * f64::EPSILON * far
+}
+
+/// `surface`, `curve` and `points` moved by one offset so the surface's own
+/// origin lies at nothing, with that offset. The surface keeps its frame
+/// and its (u, v), and the curve its axes and sizes. Each moved point
+/// rounds within `ε / 2` of its new size. `None` on a plane or a B-spline
+/// surface, and for a B-spline edge.
+fn moved_to_surface_origin(
+    surface: &FaceSurface,
+    curve: &EdgeCurve,
+    points: &[Point3],
+) -> Option<(FaceSurface, EdgeCurve, Vec<Point3>, Vec3)> {
+    let offset = Point3::new(0.0, 0.0, 0.0) - surface_origin(surface)?;
+    let surface = surface_moved(surface, offset)?;
+    let curve = conic_moved(curve, offset)?;
+    let points = points.iter().map(|&p| p + offset).collect();
+    Some((surface, curve, points, offset))
+}
+
+/// `pcurve`, with no proof that its image lies within the tolerance of its
+/// edge. The perf counters count it and the log records it at debug level,
+/// so a run can find each one.
+fn unproved(pcurve: Curve2D, how: &str) -> Curve2D {
+    crate::perf::bump_unproved_pcurve();
+    log::debug!("unproved pcurve: {how}");
+    pcurve
+}
+
+/// An analytic surface's own origin: a rod's axis point, a cone's apex, a
+/// ball's or a ring's centre. `None` on a plane or a B-spline surface.
+fn surface_origin(surface: &FaceSurface) -> Option<Point3> {
+    match surface {
+        FaceSurface::Cylinder(c) => Some(c.origin()),
+        FaceSurface::Cone(c) => Some(c.apex()),
+        FaceSurface::Sphere(s) => Some(s.center()),
+        FaceSurface::Torus(t) => Some(t.center()),
+        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => None,
+    }
+}
+
+/// An analytic surface moved by `offset`, its frame and its (u, v) kept.
+/// `None` on a plane or a B-spline surface.
+fn surface_moved(surface: &FaceSurface, offset: Vec3) -> Option<FaceSurface> {
+    match surface {
+        FaceSurface::Cylinder(c) => Some(FaceSurface::Cylinder(c.translated(offset))),
+        FaceSurface::Cone(c) => Some(FaceSurface::Cone(c.translated(offset))),
+        FaceSurface::Sphere(s) => Some(FaceSurface::Sphere(s.translated(offset))),
+        FaceSurface::Torus(t) => Some(FaceSurface::Torus(t.translated(offset))),
+        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => None,
+    }
+}
+
+/// A line, circle or ellipse edge moved by `offset`, its axes and sizes
+/// kept (a line holds no points of its own). `None` for a B-spline.
+fn conic_moved(curve: &EdgeCurve, offset: Vec3) -> Option<EdgeCurve> {
+    match curve {
+        EdgeCurve::Line => Some(EdgeCurve::Line),
+        EdgeCurve::Circle(c) => brepkit_math::curves::Circle3D::with_axes(
+            c.center() + offset,
+            c.normal(),
+            c.radius(),
+            c.u_axis(),
+            c.v_axis(),
+        )
+        .ok()
+        .map(EdgeCurve::Circle),
+        EdgeCurve::Ellipse(e) => brepkit_math::curves::Ellipse3D::with_axes(
+            e.center() + offset,
+            e.normal(),
+            e.semi_major(),
+            e.semi_minor(),
+            e.u_axis(),
+            e.v_axis(),
+        )
+        .ok()
+        .map(EdgeCurve::Ellipse),
+        EdgeCurve::NurbsCurve(_) => None,
+    }
+}
+
+/// A node of a [`proved_hermite_pcurve`]: the fraction `s` along the edge,
+/// the edge's (u, v) there and its rate in `s`, how far the surface at that
+/// (u, v) stands off the edge, and how far the surface's rate along the
+/// node's rate stands off the edge's rate.
+#[derive(Clone, Copy)]
+struct HermiteNode {
+    s: f64,
+    uv: Point2,
+    rate: Vec2,
+    gap: f64,
+    gap_rate: f64,
+}
+
+/// A pcurve of cubic pieces for a line, circle or ellipse edge on a
+/// cylinder, cone, ball or ring, each piece matching the edge's (u, v) and
+/// their rates at its ends, split until a bound proves its image within the
+/// linear tolerance of the edge. `None` past [`PROVED_PCURVE_MAX_PIECES`],
+/// for another curve or surface, or where a node does not evaluate.
+///
+/// On a piece of length `h` let `f` be its cubic and `g(s) = S(f(s)) - C(s)`,
+/// `S` the surface and `C` the edge at the same fraction. `g` stands within
+/// `h^4 / 384` times a bound on its fourth derivative of its cubic Hermite
+/// interpolant from its ends (the error's Peano kernel does not change
+/// sign), and that interpolant stays within the larger end gap plus
+/// `4 h / 27` times the two end rate gaps. A cubic's fourth derivative is
+/// nothing, so by Faa di Bruno the image's fourth derivative is
+/// `D^4 S [f', f', f', f'] + 6 D^3 S [f', f', f''] + 4 D^2 S [f', f''']
+/// + 3 D^2 S [f'', f'']`, each bounded by [`multilinear_bound`] from the
+/// most `|u|` and `|v|` parts of the cubic's derivatives over the piece,
+/// read from their Bezier points. The edge's fourth derivative is at most
+/// [`EdgeRun::fourth`].
+fn proved_hermite_pcurve(
+    curve: &EdgeCurve,
+    pts_3d: &[Point3],
+    surface: &FaceSurface,
+    off_form: f64,
+) -> Option<Curve2D> {
+    // The proof runs with the surface's own origin at nothing, so its
+    // rounding goes with the surface's size and the edge's reach from it.
+    // The arc read from the first and last samples can end up to
+    // [`sample_rounding`] off the stored edge's ends: the one term that goes
+    // with where they lie, counted once.
+    let reserve = sample_rounding(pts_3d);
+    let (surface, curve, pts_3d, _) = moved_to_surface_origin(surface, curve, pts_3d)?;
+    let (surface, curve, pts_3d) = (&surface, &curve, &pts_3d[..]);
+    let run = match curve {
+        EdgeCurve::Line => EdgeRun::Line(*pts_3d.first()?, *pts_3d.last()?),
+        EdgeCurve::Circle(c) => {
+            let (t0, sweep) = conic_sweep(curve, pts_3d)?;
+            EdgeRun::Circle(c, t0, sweep)
+        }
+        EdgeCurve::Ellipse(e) => {
+            let (t0, sweep) = conic_sweep(curve, pts_3d)?;
+            EdgeRun::Ellipse(e, t0, sweep)
+        }
+        EdgeCurve::NurbsCurve(_) => return None,
+    };
+    partial_bound(surface, 2, 0, 0.0)?;
+    let (u_period, v_period) = surface_periods(surface);
+    let size = pts_3d.iter().fold(1.0_f64, |m, p| {
+        [p.x(), p.y(), p.z()]
+            .into_iter()
+            .fold(m, |m, c| max_or_nan(m, c.abs()))
+    });
+    let allowed = 64.0f64.madd(
+        -f64::EPSILON * size,
+        brepkit_math::tolerance::Tolerance::new().linear - reserve,
+    ) - off_form;
+    if allowed.is_nan() || allowed <= 0.0 {
+        return None;
+    }
+    let nearest = |raw: f64, want: f64, period: Option<f64>| match period {
+        Some(p) => p.madd(((want - raw) / p).round(), raw),
+        None => raw,
+    };
+    // The node at `s`, its (u, v) lifted onto the copies of the periods it
+    // reaches running on from `from` at that node's rate.
+    let node = |s: f64, from: Option<&HermiteNode>| -> Option<HermiteNode> {
+        let (p, dp) = run.at(s);
+        let (u_raw, v_raw) = surface.project_point(p)?;
+        let (u, v) = match from {
+            None => (u_raw, v_raw),
+            Some(a) => {
+                let guess = a.uv + a.rate * (s - a.s);
+                let u = match curve {
+                    EdgeCurve::Ellipse(e) => {
+                        ellipse_u_after(e, surface, (a.uv.x(), u_raw), run.sweep() * (s - a.s))
+                    }
+                    EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::NurbsCurve(_) => None,
+                }
+                .unwrap_or_else(|| nearest(u_raw, guess.x(), u_period));
+                (u, nearest(v_raw, guess.y(), v_period))
+            }
+        };
+        let (q, su, sv) = surface_point_and_rates(surface, u, v)?;
+        let (nu, nv) = (su.length_squared(), sv.length_squared());
+        if nu.is_nan() || nv.is_nan() || nu <= 0.0 || nv <= 0.0 {
+            return None;
+        }
+        let rate = Vec2::new(su.dot(dp) / nu, sv.dot(dp) / nv);
+        let node = HermiteNode {
+            s,
+            uv: Point2::new(u, v),
+            rate,
+            gap: (q - p).length(),
+            gap_rate: (su * rate.x() + sv * rate.y() - dp).length(),
+        };
+        [u, v, rate.x(), rate.y(), node.gap, node.gap_rate]
+            .iter()
+            .all(|x| x.is_finite())
+            .then_some(node)
+    };
+    // The most `|u|` and `|v|` parts among vectors.
+    let parts = |ws: &[Vec2]| {
+        ws.iter().fold((0.0_f64, 0.0_f64), |(u, v), w| {
+            (max_or_nan(u, w.x().abs()), max_or_nan(v, w.y().abs()))
+        })
+    };
+    let bound = |a: &HermiteNode, b: &HermiteNode| -> f64 {
+        let h = b.s - a.s;
+        // The piece's Bezier points less its first: `e1`, `e2`, `e3`.
+        let e1 = a.rate * (h / 3.0);
+        let e3 = b.uv - a.uv;
+        let e2 = e3 - b.rate * (h / 3.0);
+        let first = parts(&[a.rate, b.rate, (e2 - e1) * (3.0 / h)]);
+        let second = parts(&[
+            (e2 - e1 * 2.0) * (6.0 / (h * h)),
+            (e3 - e2 * 2.0 + e1) * (6.0 / (h * h)),
+        ]);
+        let third = parts(&[(e3 - e2 * 3.0 + e1 * 3.0) * (6.0 / (h * h * h))]);
+        let v_most = [a.uv.y(), a.uv.y() + e1.y(), a.uv.y() + e2.y(), b.uv.y()]
+            .iter()
+            .fold(0.0_f64, |m, &v| max_or_nan(m, v.abs()));
+        let terms = [
+            (1.0, vec![first; 4]),
+            (6.0, vec![first, first, second]),
+            (4.0, vec![first, third]),
+            (3.0, vec![second, second]),
+        ];
+        let mut image = 0.0;
+        for (count, slots) in &terms {
+            let Some(term) = multilinear_bound(surface, slots, v_most) else {
+                return f64::NAN;
+            };
+            image = count.madd(term, image);
+        }
+        let ends = (4.0 / 27.0 * h).madd(a.gap_rate + b.gap_rate, max_or_nan(a.gap, b.gap));
+        (h.powi(4) / 384.0).madd(image + run.fourth(), ends)
+    };
+
+    // Even nodes to start from, each lifted from the one before.
+    let mut even = vec![node(0.0, None)?];
+    for k in 1..=PCURVE_SAMPLES {
+        #[allow(clippy::cast_precision_loss)]
+        let s = k as f64 / PCURVE_SAMPLES as f64;
+        let before = even[even.len() - 1];
+        even.push(node(s, Some(&before))?);
+    }
+    let mut pending: Vec<HermiteNode> = even.drain(1..).rev().collect();
+    let mut done = even;
+    while let Some(b) = pending.pop() {
+        let a = done[done.len() - 1];
+        let err = bound(&a, &b);
+        if err.is_finite() && err <= allowed {
+            done.push(b);
+            continue;
+        }
+        if b.s - a.s < 1e-9 || done.len() + pending.len() >= PROVED_PCURVE_MAX_PIECES {
+            return None;
+        }
+        pending.push(b);
+        pending.push(node(f64::midpoint(a.s, b.s), Some(&a))?);
+    }
+
+    // Each piece as a Bezier cubic, joined at triple knots.
+    let pieces = done.len() - 1;
+    let mut points = Vec::with_capacity(3 * pieces + 1);
+    let mut knots = vec![0.0; 4];
+    points.push(done[0].uv);
+    for (k, w) in done.windows(2).enumerate() {
+        let (a, b) = (w[0], w[1]);
+        let third = (b.s - a.s) / 3.0;
+        points.push(a.uv + a.rate * third);
+        points.push(b.uv - b.rate * third);
+        points.push(b.uv);
+        if k + 1 < pieces {
+            knots.extend([b.s; 3]);
+        }
+    }
+    knots.extend([1.0; 4]);
+    let weights = vec![1.0; points.len()];
+    NurbsCurve2D::new(3, knots, points, weights)
+        .ok()
+        .map(Curve2D::Nurbs)
+}
+
 /// Evaluate a 3D edge curve at parameter t in [0, 1].
 ///
 /// For `Line`, linearly interpolates between start and end.
@@ -864,21 +1342,467 @@ pub(super) fn shorter_arc_delta(d: f64) -> f64 {
 ///
 /// Used for curved edges (Circle, Ellipse) on plane surfaces where
 /// `surface.project_point()` returns `None`.
-fn sample_edge_to_uv_via_frame(
+fn sample_edge_via_frame(
     curve_3d: &EdgeCurve,
     start: Point3,
     end: Point3,
     frame: &PlaneFrame,
-) -> Vec<Point2> {
+) -> (Vec<Point3>, Vec<Point2>) {
     let n = PCURVE_SAMPLES;
-    let mut uv_pts = Vec::with_capacity(n + 1);
     let at = edge_point_at(curve_3d, start, end);
-    for i in 0..=n {
-        #[allow(clippy::cast_precision_loss)]
-        let t = i as f64 / n as f64;
-        uv_pts.push(frame.project(at(t)));
+    #[allow(clippy::cast_precision_loss)]
+    let pts_3d: Vec<Point3> = (0..=n).map(|i| at(i as f64 / n as f64)).collect();
+    let uv_pts = pts_3d.iter().map(|&p| frame.project(p)).collect();
+    (pts_3d, uv_pts)
+}
+
+/// The straight pcurve from the first UV sample to the last, where a bound
+/// ([`straight_image_bound`]) holds its image on the edge. `None` where the
+/// samples do not lie within 1e-6 of a line in (u, v), where the first and
+/// last coincide, or where no bound holds.
+///
+/// On a curved surface (u, v) are not lengths: an angle runs its radius in
+/// space for each unit, so a line in (u, v) through samples 1e-6 off it can
+/// stand 1e-6 times the radius off the edge between them. No pcurve comes
+/// nearer the edge than the edge's samples stand off the surface, `d`; the
+/// straight one stands where the bound passes `d` by at most the linear
+/// tolerance or, for an edge `d` off the surface (whose pcurve is its
+/// shadow), by at most `d`. On a B-spline surface there is no bound on the
+/// surface's bend here, so samples within 1e-6 of a line still give it.
+fn straight_pcurve(
+    uv_pts: &[Point2],
+    pts_3d: &[Point3],
+    curve: &EdgeCurve,
+    ends: (Point3, Point3),
+    surface: &FaceSurface,
+    frame: Option<&PlaneFrame>,
+) -> Option<Curve2D> {
+    if uv_pts.len() < 2 || !is_collinear_2d(uv_pts, 1e-6) {
+        return None;
     }
-    uv_pts
+    let (first, last) = (uv_pts[0], uv_pts[uv_pts.len() - 1]);
+    let run = last - first;
+    // Line2D runs by length from its origin, not over [0, 1], so a closed
+    // curve whose samples lie on a line keeps a fit that runs round it.
+    if run.length_squared() < 1e-12 {
+        return None;
+    }
+    let line = Curve2D::Line(make_line2d_safe(first, run));
+    if matches!(surface, FaceSurface::Nurbs(_)) {
+        return Some(unproved(line, "straight on a B-spline surface"));
+    }
+    // On a rod, cone, ball or ring the bound runs with the surface's own
+    // origin at nothing, as in [`proved_hermite_pcurve`].
+    let reserve = sample_rounding(pts_3d);
+    let local = moved_to_surface_origin(surface, curve, pts_3d);
+    let (surface, curve, pts_3d, ends, reserve) = match &local {
+        Some((surface, curve, points, offset)) => (
+            surface,
+            curve,
+            &points[..],
+            (ends.0 + *offset, ends.1 + *offset),
+            reserve,
+        ),
+        None => (surface, curve, pts_3d, ends, 0.0),
+    };
+    let lift = |q: Point2| match frame {
+        Some(f) => Some(f.evaluate(q.x(), q.y())),
+        None => surface.evaluate(q.x(), q.y()),
+    };
+    let mut off_surface = 0.0_f64;
+    let mut size = 1.0_f64;
+    for (&q, &p) in uv_pts.iter().zip(pts_3d) {
+        off_surface = max_or_nan(off_surface, (lift(q)? - p).length());
+        size = [p.x(), p.y(), p.z()]
+            .into_iter()
+            .fold(size, |m, c| max_or_nan(m, c.abs()));
+    }
+    let bound = straight_image_bound(uv_pts, pts_3d, curve, ends, surface, lift)?;
+    let rounding = (64.0 * f64::EPSILON).madd(size, reserve);
+    let tol = brepkit_math::tolerance::Tolerance::new().linear;
+    let excess = bound + rounding - off_surface;
+    (excess.is_finite() && excess <= max_or_nan(tol, off_surface)).then_some(line)
+}
+
+/// A bound on how far the image on `surface` of the straight run in (u, v)
+/// from the first UV sample to the last strays from the edge, both ways:
+/// each point of either lies within the bound of the other. `lift` maps
+/// (u, v) onto the surface. `pts_3d` are the edge's samples, evenly spaced
+/// in its own parameter, each projecting to its UV sample. `None` where no
+/// bound holds.
+///
+/// The least of three bounds. In each, `f(t)` is the image at the fraction
+/// `t` of the run and `c(t)` the edge at the same fraction of its parameter.
+///
+/// Between two samples, `f` stands off its chord by at most an eighth of
+/// the square of the step times a bound on `|f''|`, and the edge strays off
+/// its own chord by its sagitta or its Bezier hull ([`piece_stray`]). So
+/// within each step the two lie within the larger of their gaps at the step's
+/// ends plus those two.
+///
+/// That bound grows with the bend of each, and so cannot hold a circle that
+/// a run along a parallel or a meridian traces exactly. On a surface turned
+/// about an axis, the run with `v` held at its start traces a parallel at an
+/// even pace in `u`, and with `u` held, on a ball or a ring, a meridian at an
+/// even pace in `v`. Holding it moves the image by at most the run in the
+/// held parameter times the surface's speed along it. Then
+/// [`arcs_apart`] bounds the gap between that arc and a circular edge.
+fn straight_image_bound(
+    uv_pts: &[Point2],
+    pts_3d: &[Point3],
+    curve: &EdgeCurve,
+    (start, end): (Point3, Point3),
+    surface: &FaceSurface,
+    lift: impl Fn(Point2) -> Option<Point3>,
+) -> Option<f64> {
+    let raw = curve;
+    let (curve, gap) = unit_conic(curve)?;
+    let curve: &EdgeCurve = &curve;
+    let n = uv_pts.len() - 1;
+    if pts_3d.len() != n + 1 || n == 0 {
+        return None;
+    }
+    let (first, last) = (uv_pts[0], uv_pts[n]);
+    let run = last - first;
+    #[allow(clippy::cast_precision_loss)]
+    let step = 1.0 / n as f64;
+    let nurbs_span =
+        matches!(curve, EdgeCurve::NurbsCurve(_)).then(|| curve.domain_with_endpoints(start, end));
+    let bend = image_bend_bound(surface, first, last)?;
+    let mut gaps = Vec::with_capacity(n + 1);
+    for (k, &p) in pts_3d.iter().enumerate() {
+        #[allow(clippy::cast_precision_loss)]
+        let t = k as f64 * step;
+        gaps.push((lift(first + run * t)? - p).length());
+    }
+    let mut pieces = 0.0_f64;
+    for k in 0..n {
+        let span = nurbs_span.map(|(t0, t1)| {
+            #[allow(clippy::cast_precision_loss)]
+            let at = |j: usize| (t1 - t0).madd(j as f64 * step, t0);
+            (at(k), at(k + 1))
+        });
+        let stray = piece_stray(raw, pts_3d[k], pts_3d[k + 1], span)?;
+        let piece = max_or_nan(gaps[k], gaps[k + 1]) + (step * step / 8.0).madd(bend, stray);
+        pieces = max_or_nan(pieces, piece);
+    }
+
+    let EdgeCurve::Circle(circle) = curve else {
+        return Some(pieces);
+    };
+    let (theta0, sweep) = conic_sweep(curve, pts_3d)?;
+    let edge = |t: f64| circle.evaluate(sweep.madd(t, theta0));
+    let (du, dv) = (run.x(), run.y());
+    let (u0, v0) = (first.x(), first.y());
+    let parallel = match surface {
+        FaceSurface::Cylinder(c) => Some((c.origin() + c.axis() * v0, 1.0)),
+        FaceSurface::Cone(c) => Some((c.apex() + c.axis() * (v0 * c.half_angle().sin()), 1.0)),
+        FaceSurface::Sphere(s) => Some((
+            s.center() + s.z_axis() * (s.radius() * v0.sin()),
+            s.radius(),
+        )),
+        FaceSurface::Torus(t) => Some((
+            t.center() + t.z_axis() * (t.minor_radius() * v0.sin()),
+            t.minor_radius(),
+        )),
+        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => None,
+    }
+    .and_then(|(centre, speed_v)| {
+        let arc = |t: f64| surface.evaluate(du.madd(t, u0), v0);
+        let apart = arcs_apart(arc, centre, du, edge, circle, sweep)?;
+        Some(speed_v.madd(dv.abs(), apart))
+    });
+    let meridian = match surface {
+        FaceSurface::Sphere(s) => Some((s.center(), s.radius())),
+        FaceSurface::Torus(t) => {
+            let (sin_u, cos_u) = u0.sin_cos();
+            Some((
+                t.center() + (t.x_axis() * cos_u + t.y_axis() * sin_u) * t.major_radius(),
+                t.major_radius() + t.minor_radius(),
+            ))
+        }
+        FaceSurface::Plane { .. }
+        | FaceSurface::Nurbs(_)
+        | FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_) => None,
+    }
+    .and_then(|(centre, speed_u)| {
+        let arc = |t: f64| surface.evaluate(u0, dv.madd(t, v0));
+        let apart = arcs_apart(arc, centre, dv, edge, circle, sweep)?;
+        Some(speed_u.madd(du.abs(), apart))
+    });
+    // A NaN bound proves nothing, and `f64::min` passes over it to the
+    // least of the others. The two arc bounds compare the unit form's arc,
+    // which the stored one lies within the arc gap of.
+    Some(
+        [parallel, meridian]
+            .into_iter()
+            .flatten()
+            .map(|bound| bound + unit_conic_arc_gap(gap))
+            .fold(pieces, f64::min),
+    )
+}
+
+/// A bound on `|f''|` along the straight run in (u, v) from `a` to `b`,
+/// `f(t)` the surface at the fraction `t` of the run:
+/// `du^2 |S_uu| + 2 |du dv| |S_uv| + dv^2 |S_vv|`, with each second
+/// derivative bounded over the run. `None` on a B-spline surface.
+fn image_bend_bound(surface: &FaceSurface, a: Point2, b: Point2) -> Option<f64> {
+    let (du, dv) = ((b.x() - a.x()).abs(), (b.y() - a.y()).abs());
+    let (uu, uv, vv) = match surface {
+        FaceSurface::Plane { .. } => (0.0, 0.0, 0.0),
+        FaceSurface::Cylinder(c) => (c.radius(), 0.0, 0.0),
+        FaceSurface::Cone(c) => {
+            let cos_a = c.half_angle().cos();
+            (cos_a * max_or_nan(a.y().abs(), b.y().abs()), cos_a, 0.0)
+        }
+        FaceSurface::Sphere(s) => (s.radius(), s.radius(), s.radius()),
+        FaceSurface::Torus(t) => (
+            t.major_radius() + t.minor_radius(),
+            t.minor_radius(),
+            t.minor_radius(),
+        ),
+        FaceSurface::Nurbs(_) => return None,
+    };
+    Some((du * du).madd(uu, (2.0 * du * dv).madd(uv, dv * dv * vv)))
+}
+
+/// How far an edge strays from the chord between its points `a` and `b`, at
+/// most: nothing for a line; for a circle or an ellipse its longer semi-axis
+/// times `1 - cos(phi / 2)`, `phi` its sweep from `a` to `b` (the arc is an
+/// affine image of a unit arc, which lies within `1 - cos(phi / 2)` of its
+/// chord along the middle radius); for a B-spline over its parameters
+/// `span`, the farthest point of the hulls of its Bezier pieces. `None` for
+/// a sweep over a quarter turn or a weight not above nothing.
+fn piece_stray(curve: &EdgeCurve, a: Point3, b: Point3, span: Option<(f64, f64)>) -> Option<f64> {
+    let (curve, gap) = unit_conic(curve)?;
+    let curve: &EdgeCurve = &curve;
+    // The stored piece lies within the arc gap of the unit form's piece
+    // between the points nearest `a` and `b`, which lie within the gap of
+    // `a` and `b`, so its chord within the gap of theirs.
+    let extra = gap + unit_conic_arc_gap(gap);
+    let sagitta = |phi: f64, semi: f64| {
+        let phi = shorter_arc_delta(phi).abs();
+        (phi <= std::f64::consts::FRAC_PI_2).then(|| 2.0 * semi * (phi / 4.0).sin().powi(2))
+    };
+    let stray = match curve {
+        EdgeCurve::Line => Some(0.0),
+        EdgeCurve::Circle(c) => sagitta(c.project(b) - c.project(a), c.radius()),
+        EdgeCurve::Ellipse(e) => sagitta(e.project(b) - e.project(a), e.semi_major()),
+        EdgeCurve::NurbsCurve(nurbs) => {
+            let (t0, t1) = span?;
+            if !(t0.is_finite() && t1.is_finite()) {
+                return None;
+            }
+            let (lo, hi) = (t0.min(t1), t0.max(t1));
+            let mut breaks = vec![lo];
+            breaks.extend(nurbs.knots().iter().copied().filter(|&k| k > lo && k < hi));
+            breaks.push(hi);
+            let mut most = 0.0_f64;
+            for w in breaks.windows(2) {
+                if w[1] <= w[0] {
+                    continue;
+                }
+                let hull =
+                    brepkit_math::nurbs::decompose::curve_bezier_between(nurbs, w[0], w[1]).ok()?;
+                for [x, y, z, weight] in hull {
+                    if weight <= 0.0 || !weight.is_finite() {
+                        return None;
+                    }
+                    let p = Point3::new(x / weight, y / weight, z / weight);
+                    most = max_or_nan(most, segment_distance_3d(p, a, b));
+                }
+            }
+            Some(most)
+        }
+    };
+    stray.map(|stray| stray + extra)
+}
+
+/// The larger of `a` and `b`, or NaN where either is NaN. `f64::max` drops
+/// a NaN, so a bound built with it could pass a term it never read.
+pub(super) fn max_or_nan(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.max(b)
+    }
+}
+
+/// The distance from `p` to the segment from `a` to `b`.
+fn segment_distance_3d(p: Point3, a: Point3, b: Point3) -> f64 {
+    let ab = b - a;
+    let len_sq = ab.length_squared();
+    let t = if len_sq > 0.0 {
+        ((p - a).dot(ab) / len_sq).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (p - (a + ab * t)).length()
+}
+
+/// The circle or ellipse `curve` with the sizes its bounds read, on unit
+/// axes square to each other with its normal their cross product, and a
+/// bound on how far its point at each parameter lies from the stored
+/// conic's. The first axis keeps its direction and the second is squared to
+/// it; a circle's radius is the stored one times the first axis's length,
+/// an ellipse's semi-axes the stored ones times their axes' lengths. A
+/// circle's axes may have any length: its parameter, read from the angle of
+/// a point's shadow on its axes, does not change with their common length.
+/// An ellipse's axes must be unit within 64 units of rounding, as its
+/// projection reads its semi-axes against unit axes. `None` where a length
+/// or a size is not finite or not positive, or an ellipse's major semi-axis
+/// comes out shorter than its minor. A line or a B-spline comes back as it
+/// is, borrowed, with no gap.
+///
+/// At one parameter the stored point is `c + cos t A + sin t B` and the
+/// unit form's `c + cos t A' + sin t B'`, so the two lie within
+/// `|A - A'| + |B - B'|` of each other: that covers a difference in the
+/// axes' lengths and their skew. Each difference is read as it is computed,
+/// plus its rounding, and is nothing where the two are the same to the bit.
+pub(super) fn unit_conic(curve: &EdgeCurve) -> Option<(Cow<'_, EdgeCurve>, f64)> {
+    let slack = 64.0 * f64::EPSILON;
+    // The unit first axis, the second squared to it, and both lengths.
+    let frame = |u: Vec3, v: Vec3| {
+        let (lu, lv) = (u.length(), v.length());
+        if !(lu.is_finite() && lv.is_finite() && lu > 0.0 && lv > 0.0) {
+            return None;
+        }
+        let first = u * (1.0 / lu);
+        let rest = v - first * first.dot(v);
+        let second = rest.normalize().ok()?;
+        Some((first, second, lu, lv))
+    };
+    // `|a x - b y|` for sizes `a`, `b` and axes `x`, `y`, with its rounding.
+    let apart = |a: f64, x: Vec3, b: f64, y: Vec3| {
+        let bits = |v: Vec3| [v.x().to_bits(), v.y().to_bits(), v.z().to_bits()];
+        if a.to_bits() == b.to_bits() && bits(x) == bits(y) {
+            return 0.0;
+        }
+        let gap = (x * a - y * b).length();
+        (2.0 * f64::EPSILON).madd(a * x.length() + b * y.length(), gap) * (1.0 + f64::EPSILON)
+    };
+    let gap_ok = |gap: f64| (gap.is_finite() && gap >= 0.0).then_some(gap);
+    match curve {
+        EdgeCurve::Circle(c) => {
+            let (u, w, lu, _) = frame(c.u_axis(), c.v_axis())?;
+            let radius = c.radius() * lu;
+            if !(radius.is_finite() && radius > 0.0) {
+                return None;
+            }
+            let gap =
+                apart(c.radius(), c.u_axis(), radius, u) + apart(c.radius(), c.v_axis(), radius, w);
+            let unit =
+                brepkit_math::curves::Circle3D::with_axes(c.center(), u.cross(w), radius, u, w)
+                    .ok()?;
+            Some((Cow::Owned(EdgeCurve::Circle(unit)), gap_ok(gap)?))
+        }
+        EdgeCurve::Ellipse(e) => {
+            let (u, w, lu, lv) = frame(e.u_axis(), e.v_axis())?;
+            let near_one = |l: f64| (l - 1.0).abs() <= slack;
+            let (major, minor) = (e.semi_major() * lu, e.semi_minor() * lv);
+            if !near_one(lu) || !near_one(lv) || major < minor || minor.is_nan() || minor <= 0.0 {
+                return None;
+            }
+            let gap = apart(e.semi_major(), e.u_axis(), major, u)
+                + apart(e.semi_minor(), e.v_axis(), minor, w);
+            let unit = brepkit_math::curves::Ellipse3D::with_axes(
+                e.center(),
+                u.cross(w),
+                major,
+                minor,
+                u,
+                w,
+            )
+            .ok()?;
+            Some((Cow::Owned(EdgeCurve::Ellipse(unit)), gap_ok(gap)?))
+        }
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => Some((Cow::Borrowed(curve), 0.0)),
+    }
+}
+
+/// How far an arc of a stored conic and the arc of its [`unit_conic`]
+/// form between the nearest points to its ends can stand apart, `gap` the
+/// forms' gap at one parameter: the gap, plus the shift of each end, at most
+/// twice the gap as each end's nearest point lies no farther than its point
+/// at the same parameter.
+pub(super) const fn unit_conic_arc_gap(gap: f64) -> f64 {
+    3.0 * gap
+}
+
+/// The parameter of a circular or elliptic edge at its first sample and
+/// its signed sweep over the samples `pts_3d`, which lie evenly along it
+/// under a quarter turn apart. `None` for another curve, or when a step
+/// reads a quarter turn or more.
+fn conic_sweep(curve: &EdgeCurve, pts_3d: &[Point3]) -> Option<(f64, f64)> {
+    let unit = unit_conic(curve)?.0;
+    let curve: &EdgeCurve = &unit;
+    let project = |p: Point3| match curve {
+        EdgeCurve::Circle(c) => Some(c.project(p)),
+        EdgeCurve::Ellipse(e) => Some(e.project(p)),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+    };
+    let theta0 = project(*pts_3d.first()?)?;
+    if theta0.is_nan() {
+        return None;
+    }
+    let mut sweep = 0.0;
+    for w in pts_3d.windows(2) {
+        let step = shorter_arc_delta(project(w[1])? - project(w[0])?);
+        if step.is_nan() || step.abs() >= std::f64::consts::FRAC_PI_2 {
+            return None;
+        }
+        sweep += step;
+    }
+    Some((theta0, sweep))
+}
+
+/// A bound on `|p(t) - q(t)|` over `t` in [0, 1], `p` an arc round `centre`
+/// at an even angular speed `omega` (`p'' = -omega^2 (p - centre)`), `q`
+/// the arc of `circle` from its parameter `theta0` on by `sweep`, with
+/// `q(t) = circle(theta0 + sweep t)`. `None` where `p` does not evaluate.
+///
+/// With `d = p - q`, `d'' = -omega^2 d - omega^2 (c - centre)
+/// + (sweep^2 - omega^2) (q - c)`, `c` the circle's centre and `r` its
+/// radius, so `|d''| <= omega^2 |d| + k` with
+/// `k = omega^2 |c - centre| + |sweep^2 - omega^2| r`. Over a piece of
+/// length `h`, `|d|` stands within `h^2 / 8` of `|d''|` above the larger of
+/// its ends, so it is at most that larger end plus `h^2 k / 8`, over
+/// `1 - h^2 omega^2 / 8`. The pieces turn at most a quarter turn each.
+fn arcs_apart(
+    p: impl Fn(f64) -> Option<Point3>,
+    centre: Point3,
+    omega: f64,
+    q: impl Fn(f64) -> Point3,
+    circle: &brepkit_math::curves::Circle3D,
+    sweep: f64,
+) -> Option<f64> {
+    let turn = max_or_nan(omega.abs(), sweep.abs()) / std::f64::consts::FRAC_PI_2;
+    if !turn.is_finite() || turn > 64.0 {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let pieces = turn.ceil().max(1.0) as usize;
+    #[allow(clippy::cast_precision_loss)]
+    let h = 1.0 / pieces as f64;
+    let k = (omega * omega).madd(
+        (circle.center() - centre).length(),
+        (sweep * sweep - omega * omega).abs() * circle.radius(),
+    );
+    let shrink = 1.0 - h * h * omega * omega / 8.0;
+    let mut before = (p(0.0)? - q(0.0)).length();
+    let mut most = 0.0_f64;
+    for j in 1..=pieces {
+        #[allow(clippy::cast_precision_loss)]
+        let t = if j == pieces { 1.0 } else { j as f64 * h };
+        let gap = (p(t)? - q(t)).length();
+        most = max_or_nan(
+            most,
+            (h * h / 8.0).madd(k, max_or_nan(before, gap)) / shrink,
+        );
+        before = gap;
+    }
+    Some(most)
 }
 
 /// Unwrap periodic UV parameters to remove seam jumps.
@@ -1595,6 +2519,911 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A rigid motion of a scene: upright, turned about a slanted axis, or
+    /// mirrored through a slanted plane.
+    struct Pose {
+        rows: [Vec3; 3],
+        shift: Vec3,
+    }
+
+    impl Pose {
+        fn new(k: usize, scale: f64) -> Self {
+            let (x, y, z) = (
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            );
+            match k {
+                0 => Self {
+                    rows: [x, y, z],
+                    shift: Vec3::new(0.0, 0.0, 0.0),
+                },
+                1 => {
+                    let a = Vec3::new(1.0, 2.0, 3.0).normalize().unwrap();
+                    let (s, c) = 0.7f64.sin_cos();
+                    let turn = |e: Vec3| e * c + a.cross(e) * s + a * (a.dot(e) * (1.0 - c));
+                    let (cx, cy, cz) = (turn(x), turn(y), turn(z));
+                    Self {
+                        rows: [
+                            Vec3::new(cx.x(), cy.x(), cz.x()),
+                            Vec3::new(cx.y(), cy.y(), cz.y()),
+                            Vec3::new(cx.z(), cy.z(), cz.z()),
+                        ],
+                        shift: Vec3::new(0.3, -0.2, 0.1) * scale,
+                    }
+                }
+                _ => {
+                    let n = Vec3::new(1.0, -2.0, 0.5).normalize().unwrap();
+                    let flip = |e: Vec3| e - n * (2.0 * n.dot(e));
+                    let (cx, cy, cz) = (flip(x), flip(y), flip(z));
+                    Self {
+                        rows: [
+                            Vec3::new(cx.x(), cy.x(), cz.x()),
+                            Vec3::new(cx.y(), cy.y(), cz.y()),
+                            Vec3::new(cx.z(), cy.z(), cz.z()),
+                        ],
+                        shift: Vec3::new(-0.2, 0.4, 0.3) * scale,
+                    }
+                }
+            }
+        }
+
+        fn vec(&self, v: Vec3) -> Vec3 {
+            Vec3::new(
+                self.rows[0].dot(v),
+                self.rows[1].dot(v),
+                self.rows[2].dot(v),
+            )
+        }
+
+        fn point(&self, p: Point3) -> Point3 {
+            Point3::new(0.0, 0.0, 0.0) + self.vec(p - Point3::new(0.0, 0.0, 0.0)) + self.shift
+        }
+    }
+
+    /// A short arc of a curve on a ball, a rod or a ring of size `size`, in
+    /// pose `pose`: a circle tilted to the ball's axis, a steep plane section
+    /// of the rod, and a circle that runs round the ring and through its hole
+    /// (a section by a plane that touches the ring twice). Each arc is a
+    /// quarter of a thousandth of a turn of its curve.
+    fn short_arcs(pose: &Pose, size: f64) -> Vec<(&'static str, FaceSurface, EdgeCurve, f64, f64)> {
+        arcs_of_span(pose, size, 2.5e-3)
+    }
+
+    /// [`short_arcs`] with each arc `span` of its curve's parameter long.
+    fn arcs_of_span(
+        pose: &Pose,
+        size: f64,
+        span: f64,
+    ) -> Vec<(&'static str, FaceSurface, EdgeCurve, f64, f64)> {
+        use brepkit_math::curves::{Circle3D, Ellipse3D};
+        use brepkit_math::surfaces::{CylindricalSurface, SphericalSurface, ToroidalSurface};
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let ball = FaceSurface::Sphere(
+            SphericalSurface::with_axis_and_ref_dir(
+                pose.point(origin),
+                size,
+                pose.vec(z),
+                pose.vec(x),
+            )
+            .unwrap(),
+        );
+        let tilt = Vec3::new(0.3, -0.4, 0.866).normalize().unwrap();
+        let ball_circle = Circle3D::new(
+            pose.point(origin + tilt * (0.25 * size)),
+            pose.vec(tilt),
+            size * (1.0f64 - 0.0625).sqrt(),
+        )
+        .unwrap();
+        let rod = FaceSurface::Cylinder(
+            CylindricalSurface::new(pose.point(origin), pose.vec(z), size).unwrap(),
+        );
+        let steep = 1.4f64;
+        let rod_ellipse = Ellipse3D::new_with_ref(
+            pose.point(origin),
+            pose.vec(Vec3::new(-steep.sin(), 0.0, steep.cos())),
+            size / steep.cos(),
+            size,
+            pose.vec(Vec3::new(steep.cos(), 0.0, steep.sin())),
+        )
+        .unwrap();
+        let tube = 0.4 * size;
+        let ring = FaceSurface::Torus(
+            ToroidalSurface::with_axis_and_ref_dir(
+                pose.point(origin),
+                size,
+                tube,
+                pose.vec(z),
+                pose.vec(x),
+            )
+            .unwrap(),
+        );
+        let (sb, cb) = (tube / size, (1.0 - (tube / size).powi(2)).sqrt());
+        let ring_circle = Circle3D::new_with_ref(
+            pose.point(origin + y * tube),
+            pose.vec(Vec3::new(-sb, 0.0, cb)),
+            size,
+            pose.vec(Vec3::new(cb, 0.0, sb)),
+        )
+        .unwrap();
+        vec![
+            ("ball", ball, EdgeCurve::Circle(ball_circle), 1.0, span),
+            ("rod", rod, EdgeCurve::Ellipse(rod_ellipse), 1.0, span),
+            ("ring", ring, EdgeCurve::Circle(ring_circle), 0.7, span),
+        ]
+    }
+
+    /// How far a pcurve's image strays from its edge in 3D, read at 2001
+    /// points along it, and the pcurve's kind. `start` and `end` are the
+    /// edge's ends, the way the pcurve runs.
+    fn pcurve_stray(
+        pcurve: &Curve2D,
+        surface: &FaceSurface,
+        curve: &EdgeCurve,
+        (start, end): (Point3, Point3),
+    ) -> (f64, &'static str) {
+        let (lo, hi, kind) = match pcurve {
+            Curve2D::Line(line) => {
+                let (u, v) = surface.project_point(end).unwrap();
+                let o = line.evaluate(0.0);
+                let near = |a: f64, b: f64| b + ((a - b) / TAU).round() * TAU;
+                let (u, v) = match surface {
+                    FaceSurface::Torus(_) => (near(o.x(), u), near(o.y(), v)),
+                    _ => (near(o.x(), u), v),
+                };
+                (0.0, line.project(Point2::new(u, v)), "line")
+            }
+            Curve2D::Nurbs(n) => {
+                let (a, b) = n.domain();
+                (a, b, "nurbs")
+            }
+            Curve2D::Circle(_) | Curve2D::Ellipse(_) => (0.0, 1.0, "conic"),
+        };
+        let off = |p: Point3| match curve {
+            EdgeCurve::Circle(c) => {
+                let w = p - c.center();
+                let h = w.dot(c.normal());
+                let flat = (w - c.normal() * h).length() - c.radius();
+                h.hypot(flat)
+            }
+            EdgeCurve::Ellipse(e) => (p - e.evaluate(e.project(p))).length(),
+            EdgeCurve::Line => segment_distance_3d(p, start, end),
+            EdgeCurve::NurbsCurve(_) => f64::NAN,
+        };
+        let worst = (0..=2000)
+            .map(|k| {
+                let uv = pcurve.evaluate((hi - lo).madd(f64::from(k) / 2000.0, lo));
+                off(surface.evaluate(uv.x(), uv.y()).unwrap())
+            })
+            .fold(0.0, max_or_nan);
+        (worst, kind)
+    }
+
+    /// The pcurves of the arc of `curve` from `a` to `b` on `surface`, as a
+    /// section edge and as a face's boundary edge both ways, each with how
+    /// far its image strays from the arc in 3D ([`pcurve_stray`]) and its
+    /// kind.
+    fn arc_pcurves(
+        surface: &FaceSurface,
+        curve: &EdgeCurve,
+        a: Point3,
+        b: Point3,
+    ) -> Vec<(&'static str, f64, &'static str)> {
+        let section = compute_pcurve_on_surface(curve, a, b, surface, &[], None);
+        let (off, kind) = pcurve_stray(&section, surface, curve, (a, b));
+        let mut out = vec![("section", off, kind)];
+        if matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) {
+            for (forward, way) in [(true, "boundary forward"), (false, "boundary back")] {
+                let rim =
+                    compute_boundary_pcurve_on_surface(curve, a, b, forward, surface, &[], None);
+                let ends = if forward { (a, b) } else { (b, a) };
+                let (off, kind) = pcurve_stray(&rim, surface, curve, ends);
+                out.push((way, off, kind));
+            }
+        }
+        out
+    }
+
+    /// A short arc on a ball, a rod and a ring of size 1e4 and 1e-3, in three
+    /// poses, as a section edge and as a face's boundary edge both ways: its
+    /// pcurve's image lies within the linear tolerance of the arc in 3D. Its
+    /// samples lie within 1e-6 of a line in (u, v). On a size of 1e4 that
+    /// line strays 7e-4 to 5e-3 off the arc, so the pcurve is the proved
+    /// one; on a size of 1e-3 it strays under 1e-9, and the pcurve stays
+    /// that line.
+    #[test]
+    fn a_short_arc_on_a_large_ball_rod_or_ring_gets_a_pcurve_on_its_edge() {
+        for size in [1e4, 1e-3] {
+            for k in 0..3 {
+                let pose = Pose::new(k, size);
+                for (what, surface, curve, at, span) in short_arcs(&pose, size) {
+                    let point = |t: f64| match &curve {
+                        EdgeCurve::Circle(c) => c.evaluate(t),
+                        EdgeCurve::Ellipse(e) => e.evaluate(t),
+                        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => unreachable!(),
+                    };
+                    for t in [at, at + span * 0.5, at + span] {
+                        let (u, v) = surface.project_point(point(t)).unwrap();
+                        let back = surface.evaluate(u, v).unwrap();
+                        assert!(
+                            (back - point(t)).length() < 1e-9 * size,
+                            "{what} off its surface"
+                        );
+                    }
+                    let (samples, uv) =
+                        sample_edge_on_surface(&curve, point(at), point(at + span), &surface);
+                    assert!(
+                        is_collinear_2d(&uv, 1e-6),
+                        "{what} {size:e}: samples off a line"
+                    );
+                    if size > 1.0 {
+                        assert!(
+                            proved_conic_pcurve(&curve, &samples, &surface, None).is_some(),
+                            "{what} pose {k}: no proved pcurve"
+                        );
+                    }
+                    for (way, off, kind) in
+                        arc_pcurves(&surface, &curve, point(at), point(at + span))
+                    {
+                        let name = format!("{what} size {size:e} pose {k} {way}");
+                        assert!(off <= 1e-7, "{name}: the {kind} pcurve strays {off:e}");
+                        if size < 1.0 {
+                            assert_eq!(kind, "line", "{name}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A quarter turn of each curve of [`short_arcs`] on a ball, a rod and a
+    /// ring of size 1e4, in three poses, and a quarter of a circle of radius
+    /// 1e4 on a plane: each pcurve is the proved one, and its image lies
+    /// within the linear tolerance of the arc. A cubic through the sixteen
+    /// samples strays 1.3e-3 to 5.1e-2 off these arcs.
+    #[test]
+    fn a_quarter_turn_on_a_large_surface_gets_a_proved_pcurve() {
+        use std::f64::consts::FRAC_PI_2;
+        for k in 0..3 {
+            let pose = Pose::new(k, 1e4);
+            for (what, surface, curve, at, span) in arcs_of_span(&pose, 1e4, FRAC_PI_2) {
+                let point = |t: f64| match &curve {
+                    EdgeCurve::Circle(c) => c.evaluate(t),
+                    EdgeCurve::Ellipse(e) => e.evaluate(t),
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => unreachable!(),
+                };
+                let (a, b) = (point(at), point(at + span));
+                let (samples, _) = sample_edge_on_surface(&curve, a, b, &surface);
+                let proved = proved_conic_pcurve(&curve, &samples, &surface, None);
+                let pieces = match &proved {
+                    Some(Curve2D::Nurbs(n)) => n.control_points().len() / 3,
+                    _ => 0,
+                };
+                assert!(pieces > 0, "{what} pose {k}: no proved pcurve: {proved:?}");
+                for (way, off, kind) in arc_pcurves(&surface, &curve, a, b) {
+                    assert!(
+                        off <= 1e-7,
+                        "{what} pose {k} {way}: the {kind} pcurve strays {off:e} ({pieces} pieces)"
+                    );
+                }
+            }
+        }
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let centre = Point3::new(0.0, 0.0, 0.0);
+        let circle =
+            brepkit_math::curves::Circle3D::new(centre, Vec3::new(0.0, 0.0, 1.0), 1e4).unwrap();
+        let frame = PlaneFrame::from_normal_and_point(Vec3::new(0.0, 0.0, 1.0), centre);
+        let (a, b) = (circle.evaluate(0.3), circle.evaluate(0.3 + FRAC_PI_2));
+        let pcurve =
+            compute_pcurve_on_surface(&EdgeCurve::Circle(circle), a, b, &plane, &[], Some(&frame));
+        assert!(matches!(pcurve, Curve2D::Nurbs(_)), "{pcurve:?}");
+        let (lo, hi) = match &pcurve {
+            Curve2D::Nurbs(n) => n.domain(),
+            _ => (0.0, 0.0),
+        };
+        let off = (0..=4000)
+            .map(|k| {
+                let q = pcurve.evaluate((hi - lo).madd(f64::from(k) / 4000.0, lo));
+                ((frame.evaluate(q.x(), q.y()) - centre).length() - 1e4).abs()
+            })
+            .fold(0.0, max_or_nan);
+        assert!(off <= 1e-7, "the plane's pcurve strays {off:e}");
+    }
+
+    /// How far a B-spline pcurve's image, read at 401 points, stands off the
+    /// stored circle `c` over its parameters from `t0` to `t1`: each distance
+    /// from a search over 801 of the stored circle's own points and a golden
+    /// section about the nearest.
+    fn stray_from_stored(
+        pcurve: &Curve2D,
+        surface: &FaceSurface,
+        c: &brepkit_math::curves::Circle3D,
+        (t0, t1): (f64, f64),
+    ) -> f64 {
+        let (lo, hi) = match pcurve {
+            Curve2D::Nurbs(n) => n.domain(),
+            Curve2D::Line(_) | Curve2D::Circle(_) | Curve2D::Ellipse(_) => return f64::NAN,
+        };
+        let step = (t1 - t0) / 800.0;
+        (0..=400)
+            .map(|k| {
+                let q = pcurve.evaluate((hi - lo).madd(f64::from(k) / 400.0, lo));
+                let p = surface.evaluate(q.x(), q.y()).unwrap();
+                let gap = |t: f64| (c.evaluate(t) - p).length();
+                let nearest = (0..=800)
+                    .map(|j| step.madd(f64::from(j), t0))
+                    .min_by(|&x, &y| gap(x).total_cmp(&gap(y)))
+                    .unwrap();
+                let (mut a, mut b) = (nearest - step, nearest + step);
+                for _ in 0..200 {
+                    let (m1, m2) = ((b - a).madd(0.381_966, a), (a - b).madd(0.381_966, b));
+                    if gap(m1) < gap(m2) {
+                        b = m2;
+                    } else {
+                        a = m1;
+                    }
+                }
+                gap(f64::midpoint(a, b)).min(gap(nearest))
+            })
+            .fold(0.0, max_or_nan)
+    }
+
+    /// The quarter turns of [`a_quarter_turn_on_a_large_surface_gets_a_proved_pcurve`]
+    /// with each circle stored on axes 1e12 long and its radius divided by
+    /// as much: the pcurve is proved, as for the unit form, and lies within
+    /// the tolerance of the stored circle, read from its own points. An ellipse on axes 2 and 3 long, whose projection
+    /// misreads its points, or on axes slightly askew, gets no proved
+    /// pcurve.
+    #[test]
+    fn a_conic_on_long_axes_gets_the_proof_of_its_unit_form() {
+        use brepkit_math::curves::{Circle3D, Ellipse3D};
+        use std::f64::consts::FRAC_PI_2;
+        for k in 0..3 {
+            let pose = Pose::new(k, 1e4);
+            for (what, surface, curve, at, span) in arcs_of_span(&pose, 1e4, FRAC_PI_2) {
+                let long = match &curve {
+                    EdgeCurve::Circle(c) => EdgeCurve::Circle(
+                        Circle3D::with_axes(
+                            c.center(),
+                            c.normal(),
+                            c.radius() * 1e-12,
+                            c.u_axis() * 1e12,
+                            c.v_axis() * 1e12,
+                        )
+                        .unwrap(),
+                    ),
+                    EdgeCurve::Ellipse(e) => EdgeCurve::Ellipse(
+                        Ellipse3D::with_axes(
+                            e.center(),
+                            e.normal(),
+                            e.semi_major() / 2.0,
+                            e.semi_minor() / 3.0,
+                            e.u_axis() * 2.0,
+                            e.v_axis() * 3.0,
+                        )
+                        .unwrap(),
+                    ),
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => unreachable!(),
+                };
+                let point = |t: f64| match &curve {
+                    EdgeCurve::Circle(c) => c.evaluate(t),
+                    EdgeCurve::Ellipse(e) => e.evaluate(t),
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => unreachable!(),
+                };
+                let (a, b) = (point(at), point(at + span));
+                let (samples, _) = sample_edge_on_surface(&long, a, b, &surface);
+                let proved = proved_conic_pcurve(&long, &samples, &surface, None);
+                if let EdgeCurve::Ellipse(e) = &curve {
+                    assert!(proved.is_none(), "{what} pose {k}: proved on scaled axes");
+                    let askew = Ellipse3D::with_axes(
+                        e.center(),
+                        e.normal(),
+                        e.semi_major(),
+                        e.semi_minor(),
+                        e.u_axis(),
+                        (e.v_axis() + e.u_axis() * 1e-6).normalize().unwrap(),
+                    )
+                    .unwrap();
+                    let askew = EdgeCurve::Ellipse(askew);
+                    let (samples, _) = sample_edge_on_surface(&askew, a, b, &surface);
+                    assert!(proved_conic_pcurve(&askew, &samples, &surface, None).is_none());
+                    continue;
+                }
+                assert!(
+                    proved.is_some(),
+                    "{what} pose {k}: no proved pcurve on long axes"
+                );
+                let EdgeCurve::Circle(stored) = &long else {
+                    continue;
+                };
+                let mut pcurves = vec![(
+                    "section",
+                    compute_pcurve_on_surface(&long, a, b, &surface, &[], None),
+                    (a, b),
+                )];
+                for (forward, way) in [(true, "forward"), (false, "back")] {
+                    let ends = if forward { (a, b) } else { (b, a) };
+                    pcurves.push((
+                        way,
+                        compute_boundary_pcurve_on_surface(
+                            &long,
+                            a,
+                            b,
+                            forward,
+                            &surface,
+                            &[],
+                            None,
+                        ),
+                        ends,
+                    ));
+                }
+                for (way, pcurve, _) in pcurves {
+                    assert!(matches!(pcurve, Curve2D::Nurbs(_)), "{what} pose {k} {way}");
+                    let off = stray_from_stored(&pcurve, &surface, stored, (at, at + span));
+                    assert!(
+                        off <= 1e-7,
+                        "{what} pose {k} {way}: the pcurve on long axes strays {off:e}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A piece of a circle of radius 1e4 stored as radius 1e-8 on axes 1e12
+    /// long: the bound on how far it strays from its chord covers its true
+    /// sagitta, as for its unit form.
+    #[test]
+    fn a_circle_on_long_axes_strays_from_its_chord_by_its_true_sagitta() {
+        use brepkit_math::curves::Circle3D;
+        let unit =
+            Circle3D::new(Point3::new(1.0, 2.0, 3.0), Vec3::new(0.0, 0.0, 1.0), 1e4).unwrap();
+        let long = Circle3D::with_axes(
+            unit.center(),
+            unit.normal(),
+            1e-8,
+            unit.u_axis() * 1e12,
+            unit.v_axis() * 1e12,
+        )
+        .unwrap();
+        let (a, b) = (unit.evaluate(0.3), unit.evaluate(0.4));
+        assert!((long.evaluate(0.3) - a).length() < 1e-9);
+        let middle = unit.evaluate(0.35);
+        let sagitta = (middle - (a + (b - a) * 0.5)).length();
+        for curve in [EdgeCurve::Circle(unit), EdgeCurve::Circle(long)] {
+            let stray = piece_stray(&curve, a, b, None).unwrap();
+            assert!(
+                stray >= sagitta,
+                "stray {stray:e} under the sagitta {sagitta:e}"
+            );
+        }
+    }
+
+    /// The quarter turns of [`a_quarter_turn_on_a_large_surface_gets_a_proved_pcurve`]
+    /// on the ball, the rod and the ring of size 1e4, each scene moved
+    /// `offset` along x, in three poses: moved 1e6 or 1e8, the pcurve is
+    /// proved and lies within the tolerance of the stored circle; moved
+    /// 1e10, where one rounding of a sample's coordinates passes the
+    /// tolerance, the proof refuses.
+    #[test]
+    fn a_quarter_turn_far_from_the_origin_is_proved_or_refused() {
+        use std::f64::consts::FRAC_PI_2;
+        for offset in [1e6, 1e8, 1e10] {
+            for k in 0..3 {
+                let mut pose = Pose::new(k, 1e4);
+                pose.shift += Vec3::new(offset, 0.0, 0.0);
+                for (what, surface, curve, at, span) in arcs_of_span(&pose, 1e4, FRAC_PI_2) {
+                    let EdgeCurve::Circle(circle) = &curve else {
+                        continue;
+                    };
+                    let (a, b) = (circle.evaluate(at), circle.evaluate(at + span));
+                    let (samples, _) = sample_edge_on_surface(&curve, a, b, &surface);
+                    let proved = proved_conic_pcurve(&curve, &samples, &surface, None);
+                    let name = format!("{what} pose {k} moved {offset:e}");
+                    if offset > 1e9 {
+                        assert!(proved.is_none(), "{name}: proved past one rounding");
+                        continue;
+                    }
+                    let pcurve = proved.unwrap_or_else(|| {
+                        unreachable!("{name}: no proved pcurve");
+                    });
+                    let off = stray_from_stored(&pcurve, &surface, circle, (at, at + span));
+                    assert!(off <= 1e-7, "{name}: the pcurve strays {off:e}");
+                }
+            }
+        }
+    }
+
+    /// How far the image of a plane pcurve strays from `edge` over its
+    /// parameters from `t0` to `t1`, at its most, read from the frame's
+    /// origin: 201 points of the pcurve, each against an 801-point search
+    /// and a golden section.
+    fn plane_stray(
+        pcurve: &Curve2D,
+        frame: &PlaneFrame,
+        edge: impl Fn(f64) -> Vec3,
+        (t0, t1): (f64, f64),
+    ) -> f64 {
+        let Curve2D::Nurbs(n) = pcurve else {
+            return f64::NAN;
+        };
+        let (lo, hi) = n.domain();
+        let step = (t1 - t0) / 800.0;
+        (0..=200)
+            .map(|k| {
+                let q = pcurve.evaluate((hi - lo).madd(f64::from(k) / 200.0, lo));
+                let p = frame.u_axis() * q.x() + frame.v_axis() * q.y();
+                let gap = |t: f64| (edge(t) - p).length();
+                let nearest = (0..=800)
+                    .map(|j| step.madd(f64::from(j), t0))
+                    .min_by(|&x, &y| gap(x).total_cmp(&gap(y)))
+                    .unwrap();
+                let (mut a, mut b) = (nearest - step, nearest + step);
+                for _ in 0..200 {
+                    let (m1, m2) = ((b - a).madd(0.381_966, a), (a - b).madd(0.381_966, b));
+                    if gap(m1) < gap(m2) {
+                        b = m2;
+                    } else {
+                        a = m1;
+                    }
+                }
+                gap(f64::midpoint(a, b)).min(gap(nearest))
+            })
+            .fold(0.0, max_or_nan)
+    }
+
+    /// A plane through `centre` with normal `n`, and on it a circle of
+    /// radius `r` and an ellipse of semi-axes `1.7 r` and `r`, each with its
+    /// axis vectors.
+    fn plane_conics(
+        n: Vec3,
+        centre: Point3,
+        r: f64,
+    ) -> (FaceSurface, Vec<(&'static str, EdgeCurve, Vec3, Vec3)>) {
+        use brepkit_math::curves::{Circle3D, Ellipse3D};
+        let seed = Vec3::new(0.6, -0.2, 0.7);
+        let e1 = (seed - n * n.dot(seed)).normalize().unwrap();
+        let e2 = n.cross(e1);
+        let surface = FaceSurface::Plane {
+            normal: n,
+            d: n.dot(centre - Point3::new(0.0, 0.0, 0.0)),
+        };
+        let conics = vec![
+            (
+                "circle",
+                EdgeCurve::Circle(Circle3D::with_axes(centre, e1.cross(e2), r, e1, e2).unwrap()),
+                e1 * r,
+                e2 * r,
+            ),
+            (
+                "ellipse",
+                EdgeCurve::Ellipse(
+                    Ellipse3D::with_axes(centre, e1.cross(e2), 1.7 * r, r, e1, e2).unwrap(),
+                ),
+                e1 * (1.7 * r),
+                e2 * r,
+            ),
+        ];
+        (surface, conics)
+    }
+
+    /// The plane normals of [`a_conic_on_a_plane_far_from_the_origin_is_proved_or_refused`].
+    fn plane_normals() -> [Vec3; 3] {
+        [
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 2.0, 3.0).normalize().unwrap(),
+            Vec3::new(-0.3, 0.9, -0.1).normalize().unwrap(),
+        ]
+    }
+
+    /// A circle and an ellipse of size 1e4 and 1e-6 on a plane, on three
+    /// plane normals, an arc of each from stored ends with the frame from a
+    /// third point of the conic. Moved 1e8 from the origin, the pcurve from
+    /// the samples and the boundary pcurve from the stored ends are proved,
+    /// and each lies within the tolerance of the stored arc between its
+    /// ends, read from the frame's origin. Moved 1e10, where one rounding
+    /// of a sample's coordinates passes the tolerance, the pcurve from the
+    /// samples is refused; the boundary pcurve, read from the stored ends
+    /// alone, stays proved within the tolerance of the shadow on the frame's
+    /// plane of its own arc, from its start round to its end (the frame's
+    /// origin and the ends round 1e-6 off the conic).
+    #[test]
+    fn a_conic_on_a_plane_far_from_the_origin_is_proved_or_refused() {
+        for (k, n) in plane_normals().into_iter().enumerate() {
+            for far in [1e8, 1e10] {
+                for r in [1e4, 1e-6] {
+                    let centre = Point3::new(far, -0.7 * far, 0.4 * far);
+                    let (surface, conics) = plane_conics(n, centre, r);
+                    for (what, curve, big_a, big_b) in conics {
+                        let at = |t: f64| match &curve {
+                            EdgeCurve::Circle(c) => c.evaluate(t),
+                            EdgeCurve::Ellipse(e) => e.evaluate(t),
+                            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => unreachable!(),
+                        };
+                        let read = |p: Point3| match &curve {
+                            EdgeCurve::Circle(c) => c.project(p),
+                            EdgeCurve::Ellipse(e) => e.project(p),
+                            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => unreachable!(),
+                        };
+                        let (a, b) = (at(0.4), at(1.7));
+                        let wire = [at(3.4), a, b];
+                        let frame = PlaneFrame::from_plane_face(n, &wire);
+                        let ta = read(a);
+                        let span = (ta, ta + shorter_arc_delta(read(b) - ta));
+                        let native = curve.domain_with_endpoints(a, b);
+                        let o = frame.origin();
+                        let edge = |t: f64| (centre - o) + big_a * t.cos() + big_b * t.sin();
+                        let normal = frame.u_axis().cross(frame.v_axis());
+                        let shadow = |t: f64| {
+                            let w = edge(t);
+                            w - normal * normal.dot(w)
+                        };
+                        let name = format!("{what} r {r:e} normal {k} moved {far:e}");
+                        let (samples, _) = sample_edge_via_frame(&curve, a, b, &frame);
+                        let proved = proved_conic_pcurve(&curve, &samples, &surface, Some(&frame));
+                        let boundary = plane_conic_arc(&curve, a, b, true, &frame)
+                            .unwrap_or_else(|| unreachable!("{name}: no boundary pcurve"));
+                        if far > 1e9 {
+                            assert!(proved.is_none(), "{name}: proved past one rounding");
+                            let off = plane_stray(&boundary, &frame, shadow, native);
+                            assert!(off <= 1e-7, "{name}: the boundary pcurve strays {off:e}");
+                            continue;
+                        }
+                        let proved =
+                            proved.unwrap_or_else(|| unreachable!("{name}: no proved pcurve"));
+                        for (way, pcurve, span) in
+                            [("samples", proved, span), ("boundary", boundary, native)]
+                        {
+                            let off = plane_stray(&pcurve, &frame, edge, span);
+                            assert!(off <= 1e-7, "{name} {way}: the pcurve strays {off:e}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A quarter turn on a ball, a rod and a ring of size 1e4 moved 1e10
+    /// from the origin, and an arc of a circle and of an ellipse on a plane
+    /// moved as far, where the proof refuses, gets its pcurve from the fit,
+    /// and the perf counters count it as unproved.
+    #[cfg(feature = "perf-counters")]
+    #[test]
+    fn a_pcurve_with_no_proof_is_counted() {
+        let mut pose = Pose::new(1, 1e4);
+        pose.shift += Vec3::new(1e10, 0.0, 0.0);
+        for (what, surface, curve, at, span) in
+            arcs_of_span(&pose, 1e4, std::f64::consts::FRAC_PI_2)
+        {
+            let EdgeCurve::Circle(circle) = &curve else {
+                continue;
+            };
+            let (a, b) = (circle.evaluate(at), circle.evaluate(at + span));
+            let before = crate::perf::snapshot().unproved_pcurves;
+            let _ = compute_pcurve_on_surface(&curve, a, b, &surface, &[], None);
+            let after = crate::perf::snapshot().unproved_pcurves;
+            assert!(after > before, "{what}: the fit is not counted");
+        }
+        for n in plane_normals() {
+            let (surface, conics) = plane_conics(n, Point3::new(1e10, -7e9, 4e9), 1e4);
+            for (what, curve, _, _) in conics {
+                let at = |t: f64| match &curve {
+                    EdgeCurve::Circle(c) => c.evaluate(t),
+                    EdgeCurve::Ellipse(e) => e.evaluate(t),
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => unreachable!(),
+                };
+                let (a, b) = (at(0.4), at(1.7));
+                let wire = [at(3.4), a, b];
+                let before = crate::perf::snapshot().unproved_pcurves;
+                let _ = compute_pcurve_on_surface(&curve, a, b, &surface, &wire, None);
+                let after = crate::perf::snapshot().unproved_pcurves;
+                assert!(after > before, "plane {what}: the fit is not counted");
+            }
+        }
+    }
+
+    /// Arcs that a straight run in (u, v) traces exactly, on surfaces of
+    /// size 1e4 and 1 and of size 1e4 moved 1e8 from the origin, in three
+    /// poses: a parallel and a meridian of a ball and of a ring, a parallel
+    /// of a rod and of a cone, a ruling of a rod and of a cone. Each keeps a
+    /// straight pcurve, within the linear tolerance of the arc in 3D.
+    #[test]
+    fn runs_along_parallels_meridians_and_rulings_keep_straight_pcurves() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::{
+            ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface,
+        };
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let (x, z) = (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0));
+        for (size, far) in [(1e4, 0.0), (1.0, 0.0), (1e4, 1e8)] {
+            for k in 0..3 {
+                let mut pose = Pose::new(k, size);
+                pose.shift += Vec3::new(far, 0.0, 0.0);
+                let (centre, axis) = (pose.point(origin), pose.vec(z));
+                let ball_surface =
+                    SphericalSurface::with_axis_and_ref_dir(centre, size, axis, pose.vec(x))
+                        .unwrap();
+                let tube = 0.3 * size;
+                let ring_surface =
+                    ToroidalSurface::with_axis_and_ref_dir(centre, size, tube, axis, pose.vec(x))
+                        .unwrap();
+                // The way `v` grows at `u` turns about this axis.
+                let ball_meridian = |u: f64| {
+                    let (s, c) = u.sin_cos();
+                    (ball_surface.x_axis() * c + ball_surface.y_axis() * s).cross(axis)
+                };
+                let ring_out = |u: f64| {
+                    let (s, c) = u.sin_cos();
+                    ring_surface.x_axis() * c + ring_surface.y_axis() * s
+                };
+                let ball = FaceSurface::Sphere(ball_surface.clone());
+                let ring = FaceSurface::Torus(ring_surface.clone());
+                let rod =
+                    FaceSurface::Cylinder(CylindricalSurface::new(centre, axis, size).unwrap());
+                let cone = FaceSurface::Cone(ConicalSurface::new(centre, axis, 0.5).unwrap());
+                let along = |s: &FaceSurface, u: f64, v: f64| s.evaluate(u, v).unwrap();
+                let lat = 0.4f64;
+                let mut cases: Vec<(&str, &FaceSurface, EdgeCurve, Point3, Point3)> = Vec::new();
+                let parallel = |height: f64, radius: f64| {
+                    EdgeCurve::Circle(Circle3D::new(centre + axis * height, axis, radius).unwrap())
+                };
+                cases.push((
+                    "ball parallel",
+                    &ball,
+                    parallel(size * lat.sin(), size * lat.cos()),
+                    along(&ball, 0.3, lat),
+                    along(&ball, 2.1, lat),
+                ));
+                cases.push((
+                    "ball meridian",
+                    &ball,
+                    EdgeCurve::Circle(Circle3D::new(centre, ball_meridian(0.9), size).unwrap()),
+                    along(&ball, 0.9, -1.1),
+                    along(&ball, 0.9, 1.2),
+                ));
+                cases.push((
+                    "ring parallel",
+                    &ring,
+                    parallel(tube * 0.8f64.sin(), 0.8f64.cos().madd(tube, size)),
+                    along(&ring, 0.3, 0.8),
+                    along(&ring, 2.1, 0.8),
+                ));
+                let u0 = 0.6f64;
+                cases.push((
+                    "ring meridian",
+                    &ring,
+                    EdgeCurve::Circle(
+                        Circle3D::new(centre + ring_out(u0) * size, ring_out(u0).cross(axis), tube)
+                            .unwrap(),
+                    ),
+                    along(&ring, u0, 0.4),
+                    along(&ring, u0, 2.9),
+                ));
+                cases.push((
+                    "rod parallel",
+                    &rod,
+                    parallel(0.7 * size, size),
+                    along(&rod, 0.3, 0.7 * size),
+                    along(&rod, 2.1, 0.7 * size),
+                ));
+                cases.push((
+                    "cone parallel",
+                    &cone,
+                    parallel(2.0 * size * 0.5f64.sin(), 2.0 * size * 0.5f64.cos()),
+                    along(&cone, 0.3, 2.0 * size),
+                    along(&cone, 2.1, 2.0 * size),
+                ));
+                cases.push((
+                    "rod ruling",
+                    &rod,
+                    EdgeCurve::Line,
+                    along(&rod, 0.7, -0.3 * size),
+                    along(&rod, 0.7, 2.0 * size),
+                ));
+                cases.push((
+                    "cone ruling",
+                    &cone,
+                    EdgeCurve::Line,
+                    along(&cone, 0.7, 0.5 * size),
+                    along(&cone, 0.7, 3.0 * size),
+                ));
+                for (what, surface, curve, a, b) in cases {
+                    for (way, off, kind) in arc_pcurves(surface, &curve, a, b) {
+                        let name = format!("{what} size {size:e} moved {far:e} pose {k} {way}");
+                        assert_eq!(kind, "line", "{name}");
+                        assert!(off <= 1e-7, "{name}: strays {off:e}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// Curved edges on a plane: an arc of a circle of radius 1e4 whose
+    /// sagitta, 5e-7, is under the samples' 1e-6 but over the tolerance, and
+    /// a B-spline with one inner control point 6e-7 off its chord. Each gets
+    /// a fit that lies within the tolerance of it. A B-spline along a line,
+    /// and a shorter arc of sagitta 5e-9, each keep a straight pcurve. So
+    /// does an arc that stands up off the plane, its shadow a segment.
+    #[test]
+    fn curved_edges_on_a_plane_keep_a_straight_pcurve_only_within_the_tolerance() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let plane = FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        };
+        let frame =
+            PlaneFrame::from_normal_and_point(Vec3::new(0.0, 0.0, 1.0), Point3::new(0.0, 0.0, 0.0));
+        let stray = |pcurve: &Curve2D, on: &dyn Fn(Point3) -> f64, end: Point3| {
+            let hi = match pcurve {
+                Curve2D::Line(line) => line.project(frame.project(end)),
+                Curve2D::Nurbs(n) => n.domain().1,
+                Curve2D::Circle(_) | Curve2D::Ellipse(_) => 1.0,
+            };
+            (0..=2000)
+                .map(|k| {
+                    let q = pcurve.evaluate(hi * f64::from(k) / 2000.0);
+                    on(frame.evaluate(q.x(), q.y()))
+                })
+                .fold(0.0, max_or_nan)
+        };
+        let radius = 1e4;
+        let circle =
+            Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), radius).unwrap();
+        let to_circle = |p: Point3| (p - Point3::new(0.0, 0.0, 0.0)).length() - radius;
+        for (sweep, straight) in [(2.0e-5, false), (2.0e-6, true)] {
+            let (a, b) = (circle.evaluate(0.4), circle.evaluate(0.4 + sweep));
+            let curve = EdgeCurve::Circle(circle.clone());
+            let pcurve = compute_pcurve_on_surface(&curve, a, b, &plane, &[], Some(&frame));
+            assert_eq!(
+                matches!(pcurve, Curve2D::Line(_)),
+                straight,
+                "sweep {sweep}"
+            );
+            let off = stray(&pcurve, &|p| to_circle(p).abs(), b);
+            assert!(off <= 1e-7, "sweep {sweep}: strays {off:e}");
+        }
+        for (bump, straight) in [(6e-7, false), (0.0, true)] {
+            let points = vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, bump, 0.0),
+                Point3::new(2.0, 0.0, 0.0),
+                Point3::new(3.0, 0.0, 0.0),
+            ];
+            let nurbs = NurbsCurve::new(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                points.clone(),
+                vec![1.0; 4],
+            )
+            .unwrap();
+            let (a, b) = (points[0], points[3]);
+            let curve = EdgeCurve::NurbsCurve(nurbs.clone());
+            let pcurve = compute_pcurve_on_surface(&curve, a, b, &plane, &[], Some(&frame));
+            assert_eq!(matches!(pcurve, Curve2D::Line(_)), straight, "bump {bump}");
+            let to_curve = |p: Point3| {
+                brepkit_math::nurbs::projection::project_point_to_curve(&nurbs, p, 1e-14)
+                    .unwrap()
+                    .distance
+            };
+            let off = stray(&pcurve, &to_curve, b);
+            assert!(off <= 1e-7, "bump {bump}: strays {off:e}");
+        }
+        let upright =
+            Circle3D::new(Point3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 1.0, 0.0), 1.0).unwrap();
+        let (a, b) = (Point3::new(-0.6, 0.0, 0.2), Point3::new(0.6, 0.0, 0.2));
+        let pcurve =
+            compute_pcurve_on_surface(&EdgeCurve::Circle(upright), a, b, &plane, &[], Some(&frame));
+        assert!(matches!(pcurve, Curve2D::Line(_)), "{pcurve:?}");
     }
 
     /// The section of a cylinder of radius 1000 by a plane at one radian to
