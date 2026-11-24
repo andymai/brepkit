@@ -184,17 +184,61 @@ fn make_sphere_basic() {
 #[test]
 fn make_sphere_volume() {
     let mut topo = Topology::new();
-    // Use high segment count for better approximation
     let solid = make_sphere(&mut topo, 1.0, 32).unwrap();
 
     let vol = crate::measure::solid_volume(&topo, solid, 0.05).unwrap();
     let expected = 4.0 / 3.0 * PI;
-    // Polygonal approximation — allow 5% tolerance
     assert!(
-        (vol - expected).abs() / expected < 0.01,
-        "sphere volume should be ~{expected}, got {vol} (error: {:.1}%)",
-        (vol - expected).abs() / expected * 100.0
+        (vol - expected).abs() / expected < 1e-9,
+        "sphere volume should be {expected}, got {vol}"
     );
+}
+
+/// A ball's two hemispheres meet on one closed circle edge round the
+/// equator, whose angle is the sphere's `u` along `v = 0`, whatever the
+/// segment count. The ball is valid, meshes closed and holds 4/3 pi r^3.
+#[test]
+#[allow(clippy::panic)]
+fn make_sphere_equator_is_one_circle() {
+    use brepkit_topology::edge::EdgeCurve;
+    use brepkit_topology::face::FaceSurface;
+    for (r, segments) in [(1.0, 4), (2.5, 32), (0.3, 7)] {
+        let mut topo = Topology::new();
+        let solid = make_sphere(&mut topo, r, segments).unwrap();
+        let edges = brepkit_topology::explorer::solid_edges(&topo, solid).unwrap();
+        assert_eq!(edges.len(), 1, "r {r}");
+        let edge = topo.edge(edges[0]).unwrap();
+        assert_eq!(edge.start(), edge.end());
+        let EdgeCurve::Circle(circle) = edge.curve() else {
+            panic!("r {r}: the equator is no circle");
+        };
+        assert!(
+            (topo.vertex(edge.start()).unwrap().point() - Point3::new(r, 0.0, 0.0)).length()
+                < 1e-15
+        );
+        for face in brepkit_topology::explorer::solid_faces(&topo, solid).unwrap() {
+            let FaceSurface::Sphere(sphere) = topo.face(face).unwrap().surface() else {
+                panic!("r {r}: a face is no sphere");
+            };
+            for k in 0..16 {
+                let t = f64::from(k) * PI / 8.0;
+                assert!((circle.evaluate(t) - sphere.evaluate(t, 0.0)).length() < 1e-14 * r);
+            }
+        }
+        assert!(
+            crate::validate::validate_solid(&topo, solid)
+                .unwrap()
+                .is_valid()
+        );
+        let mesh = crate::tessellate::tessellate_solid(&topo, solid, 0.01 * r).unwrap();
+        assert!(crate::tessellate::is_watertight(&mesh), "r {r}");
+        let vol = crate::measure::solid_volume(&topo, solid, 0.05 * r).unwrap();
+        let expected = 4.0 / 3.0 * PI * r * r * r;
+        assert!(
+            (vol - expected).abs() / expected < 1e-9,
+            "r {r}: {vol} against {expected}"
+        );
+    }
 }
 
 #[test]

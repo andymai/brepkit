@@ -2559,33 +2559,58 @@ fn complementary_regions_of_closed_surface(
     if !matches!(fi.surface(), FaceSurface::Sphere(_) | FaceSurface::Torus(_)) {
         return false;
     }
-    let traversal = |face: &brepkit_topology::face::Face| -> Option<Vec<(QVert, QVert)>> {
+    // Each edge as the wire runs it: its ends, and the points a quarter and
+    // three quarters of the way along. An edge that closes on one vertex (a
+    // whole circle) has one end, so only those points tell its way round.
+    let traversal = |face: &brepkit_topology::face::Face| -> Option<Vec<[QVert; 4]>> {
         let wire = topo.wire(face.outer_wire()).ok()?;
         wire.edges()
             .iter()
             .map(|oe| {
                 let edge = topo.edge(oe.edge()).ok()?;
-                let at = |v| {
-                    topo.vertex(arena.resolve_vertex(v))
-                        .ok()
-                        .map(|vertex| quantize_point(vertex.point(), scale))
+                let start = topo
+                    .vertex(arena.resolve_vertex(edge.start()))
+                    .ok()?
+                    .point();
+                let end = topo.vertex(arena.resolve_vertex(edge.end())).ok()?.point();
+                let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+                let along = |f: f64| {
+                    let f = if oe.is_forward() { f } else { 1.0 - f };
+                    let p = edge
+                        .curve()
+                        .evaluate_with_endpoints((t1 - t0).madd(f, t0), start, end);
+                    quantize_point(p, scale / 100.0)
                 };
-                let (from, to) = (at(edge.start())?, at(edge.end())?);
-                Some(if oe.is_forward() {
-                    (from, to)
+                let (from, to) = if oe.is_forward() {
+                    (start, end)
                 } else {
-                    (to, from)
-                })
+                    (end, start)
+                };
+                Some([
+                    quantize_point(from, scale),
+                    along(0.25),
+                    along(0.75),
+                    quantize_point(to, scale),
+                ])
             })
             .collect()
     };
     let (Some(ti), Some(tj)) = (traversal(fi), traversal(fj)) else {
         return false;
     };
-    let Some(&(from, to)) = ti.iter().find(|(from, to)| from != to) else {
+    let Some(&[from, ahead, behind, to]) = ti
+        .iter()
+        .find(|[from, .., to]| from != to)
+        .or_else(|| ti.first())
+    else {
         return false;
     };
-    let (same_way, opposite_way) = (tj.contains(&(from, to)), tj.contains(&(to, from)));
+    let same_way = tj
+        .iter()
+        .any(|&[f, a, _, t]| (f, t) == (from, to) && (from != to || a == ahead));
+    let opposite_way = tj
+        .iter()
+        .any(|&[f, a, _, t]| (f, t) == (to, from) && (from != to || a == behind));
     if same_way == opposite_way {
         return false;
     }

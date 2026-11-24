@@ -6404,10 +6404,8 @@ fn assert_chain_meshes_closed(
 
 /// A ball less a ball through its top, less a blind rod along x whose
 /// footprint reaches past the ball's equator by 5e-4 in latitude: the
-/// boolean tests the footprint against the equator's chords, which the rod
-/// misses, so the whole footprint is a hole in the southern face. The chord
-/// takes the footprint's samples past it, and both hemispheres mesh round
-/// them, closed and turned outward.
+/// footprint splits where it crosses the equator, and both hemispheres mesh
+/// round their pieces of it, closed and turned outward.
 #[test]
 fn rod_footprint_past_a_balls_equator_meshes_closed() {
     use crate::boolean::BooleanOp::Cut;
@@ -6433,6 +6431,118 @@ fn rod_footprint_past_a_balls_equator_meshes_closed() {
         },
         &[Cut, Cut],
     );
+}
+
+/// The volume of the part of a unit ball at the origin inside a rod along x
+/// of radius `rho` round the line through `(0, y0, z0)`, from `x = x0`
+/// inside the ball out past it: over the rod's section, the length from
+/// `x0` to the sphere, summed by Gauss points across the radius and evenly
+/// round the section.
+fn ball_held_by_a_rod(rho: f64, y0: f64, z0: f64, x0: f64) -> f64 {
+    const ROUND: u32 = 512;
+    let step = std::f64::consts::TAU / f64::from(ROUND);
+    let mut sum = 0.0;
+    for gp in brepkit_math::quadrature::gauss_legendre_points(20) {
+        let r = 0.5 * rho * (gp.x + 1.0);
+        let weight = 0.5 * rho * gp.w * r * step;
+        for k in 0..ROUND {
+            let a = step * f64::from(k);
+            let (y, z) = (r.madd(a.cos(), y0), r.madd(a.sin(), z0));
+            sum += weight * ((1.0 - y * y - z * z).sqrt() - x0);
+        }
+    }
+    sum
+}
+
+/// Blind rods along x into an unturned unit ball, each footprint reaching
+/// past the equator at its top by `rise` in latitude, as little as 1e-4.
+/// The footprint splits where it crosses the equator, so in five poses each
+/// cut, intersect and fuse is valid, meshes closed, and holds the volume a
+/// quadrature over the rod's section gives. A ray cast reads points in the
+/// rod above the equator just inside and just outside the ball's wall, in
+/// the ball just above the rod there, and in the ball past the rod's blind
+/// end, each as the operation keeps it.
+#[test]
+fn blind_rods_just_past_a_balls_equator_are_exact() {
+    use crate::boolean::BooleanOp::{Cut, Fuse, Intersect};
+    use brepkit_math::mat::Mat4;
+    let opts = crate::boolean::BooleanOptions {
+        mesh_fallback: false,
+        unify_faces: false,
+        ..crate::boolean::BooleanOptions::default()
+    };
+    let ball_volume = 4.0 / 3.0 * std::f64::consts::PI;
+    for (rise, rho, y0, x0) in [
+        (5e-4_f64, 0.2, 0.1, -0.2),
+        (1e-2, 0.2, 0.1, -0.2),
+        (2e-3, 0.3, -0.2, 0.1),
+        (5e-4, 0.1, 0.4, 0.3),
+        (1e-4, 0.25, 0.0, -0.5),
+    ] {
+        let z0 = rise.sin() - rho;
+        let held = ball_held_by_a_rod(rho, y0, z0, x0);
+        let rod_volume = std::f64::consts::PI * rho * rho * (2.0 - x0);
+        // Where the ball's wall is at height `z` over the rod's axis.
+        let wall = |z: f64| (1.0 - y0 * y0 - z * z).sqrt();
+        let (low, high) = (0.5 * rise.sin(), rise.sin() + 1e-4);
+        // Each probe, and whether it lies in the ball and in the rod.
+        let probes = [
+            (Point3::new(wall(low) - 1e-3, y0, low), true, true),
+            (Point3::new(wall(low) + 1e-3, y0, low), false, true),
+            (Point3::new(wall(high) - 1e-3, y0, high), true, false),
+            (Point3::new(x0 - 0.05, y0, z0), true, false),
+        ];
+        for (op, want) in [
+            (Cut, ball_volume - held),
+            (Intersect, held),
+            (Fuse, ball_volume - held + rod_volume),
+        ] {
+            for (name, pose) in sweep_poses() {
+                let what = format!("rise {rise} radius {rho} {op:?} {name}");
+                let mut topo = Topology::new();
+                let ball = crate::primitives::make_sphere(&mut topo, 1.0, 32).unwrap();
+                let rod = crate::primitives::make_cylinder(&mut topo, rho, 2.0 - x0).unwrap();
+                let place = pose
+                    * Mat4::translation(x0, y0, z0)
+                    * Mat4::rotation_y(std::f64::consts::FRAC_PI_2);
+                crate::transform::transform_solid(&mut topo, rod, &place).unwrap();
+                crate::transform::transform_solid(&mut topo, ball, &pose).unwrap();
+                let result =
+                    crate::boolean::boolean_with_options(&mut topo, op, ball, rod, opts).unwrap();
+                let report = crate::validate::validate_solid(&topo, result).unwrap();
+                assert!(report.is_valid(), "{what}: {:?}", report.issues);
+                let mesh = tessellate_solid(&topo, result, 0.01).unwrap();
+                assert_eq!(boundary_edge_count(&mesh), 0, "{what}: open");
+                assert_eq!(non_manifold_edge_count(&mesh), 0, "{what}: non-manifold");
+                let volume = crate::measure::solid_volume(&topo, result, 0.0005).unwrap();
+                assert!(
+                    ((volume - want) / want).abs() < 1e-7,
+                    "{what}: volume {volume} against {want}"
+                );
+                for &(at, in_ball, in_rod) in &probes {
+                    let kept = match op {
+                        Cut => in_ball && !in_rod,
+                        Intersect => in_ball && in_rod,
+                        Fuse => in_ball || in_rod,
+                    };
+                    let class = crate::classify::classify_point(
+                        &topo,
+                        result,
+                        pose.mul_point(at),
+                        0.0,
+                        1e-7,
+                    )
+                    .unwrap();
+                    let want = if kept {
+                        crate::classify::PointClassification::Inside
+                    } else {
+                        crate::classify::PointClassification::Outside
+                    };
+                    assert_eq!(class, want, "{what}: {at:?}");
+                }
+            }
+        }
+    }
 }
 
 /// A drum fused with a box through its wall, less a rod across it along y
@@ -6464,19 +6574,75 @@ fn rod_footprint_beside_a_drums_seam_meshes_closed() {
     );
 }
 
-/// A ball with flat cuts on the first chord of its equator, each across a
-/// circle of angular radius 0.02 at azimuth `phi` whose edge reaches past the
-/// chord's great circle by `rise` in latitude: north of it for a positive
-/// `rise`, from a hole of the southern face, and south of it for a negative
-/// one, from a hole of the northern face. Each circle's vertex is the point
-/// that reaches past. The faces hold the circles as holes, as a boolean that
-/// tests them against the chord leaves them.
+/// A unit ball whose two hemispheres meet on a polygon of `segments` straight
+/// edges inscribed in the equator, as a STEP file can bound them.
+fn ball_on_equator_chords(topo: &mut Topology, segments: usize) -> SolidId {
+    use brepkit_math::surfaces::SphericalSurface;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+
+    let vertices: Vec<_> = (0..segments)
+        .map(|i| {
+            #[allow(clippy::cast_precision_loss)]
+            let theta = std::f64::consts::TAU * i as f64 / segments as f64;
+            topo.add_vertex(Vertex::new(
+                Point3::new(theta.cos(), theta.sin(), 0.0),
+                1e-7,
+            ))
+        })
+        .collect();
+    let edges: Vec<_> = (0..segments)
+        .map(|i| {
+            topo.add_edge(Edge::new(
+                vertices[i],
+                vertices[(i + 1) % segments],
+                EdgeCurve::Line,
+            ))
+        })
+        .collect();
+    let surface = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0).unwrap();
+    let north = Wire::new(
+        edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+        true,
+    )
+    .unwrap();
+    let south = Wire::new(
+        edges
+            .iter()
+            .rev()
+            .map(|&e| OrientedEdge::new(e, false))
+            .collect(),
+        true,
+    )
+    .unwrap();
+    let faces = [north, south]
+        .into_iter()
+        .map(|wire| {
+            let wire = topo.add_wire(wire);
+            topo.add_face(Face::new(
+                wire,
+                vec![],
+                FaceSurface::Sphere(surface.clone()),
+            ))
+        })
+        .collect();
+    let shell = topo.add_shell(Shell::new(faces).unwrap());
+    topo.add_solid(Solid::new(shell, vec![]))
+}
+
+/// A ball on 32 chords of its equator with flat cuts on the first chord,
+/// each across a circle of angular radius 0.02 at azimuth `phi` whose edge
+/// reaches past the chord's great circle by `rise` in latitude: north of it
+/// for a positive `rise`, from a hole of the southern face, and south of it
+/// for a negative one, from a hole of the northern face. Each circle's vertex
+/// is the point that reaches past. The faces hold the circles as holes, as a
+/// boolean that tests them against the chord leaves them.
 fn ball_with_cuts_on_one_chord(topo: &mut Topology, cuts: &[(f64, f64)]) -> SolidId {
     use brepkit_math::curves::Circle3D;
     use brepkit_topology::shell::Shell;
     use brepkit_topology::solid::Solid;
 
-    let ball = crate::primitives::make_sphere(topo, 1.0, 32).unwrap();
+    let ball = ball_on_equator_chords(topo, 32);
     let faces = brepkit_topology::explorer::solid_faces(topo, ball).unwrap();
     let southern = |f: &brepkit_topology::face::FaceId| {
         let wire = topo.wire(topo.face(*f).unwrap().outer_wire()).unwrap();

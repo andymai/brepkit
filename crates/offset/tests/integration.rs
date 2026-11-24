@@ -211,6 +211,50 @@ fn offset_sphere_outward_produces_solid() {
     assert!(!shell.faces().is_empty(), "offset sphere should have faces");
 }
 
+/// A ball of radius 3 offset by 0.5 out and in, and made a wall 0.5 thick
+/// round a cavity, in three poses: each result is valid and holds the volume
+/// of the balls it lies between.
+#[test]
+fn ball_offsets_and_wall_hold_their_closed_forms() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_operations::transform::transform_solid;
+    use brepkit_operations::validate::validate_solid;
+    let ball = |r: f64| 4.0 / 3.0 * std::f64::consts::PI * r * r * r;
+    let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1);
+    for (pose, place) in [
+        ("upright", Mat4::identity()),
+        ("turned", turn),
+        (
+            "turned and moved",
+            Mat4::translation(20.0, -7.0, 5.0) * turn,
+        ),
+    ] {
+        let mut cases: Vec<(String, f64)> = Vec::new();
+        let mut topo = Topology::new();
+        for distance in [0.5, -0.5] {
+            let solid = make_sphere(&mut topo, 3.0, 16).unwrap();
+            transform_solid(&mut topo, solid, &place).unwrap();
+            let result = offset_solid(&mut topo, solid, distance, offset_opts()).unwrap();
+            let what = format!("{pose} offset {distance}");
+            assert!(validate_solid(&topo, result).unwrap().is_valid(), "{what}");
+            let volume = solid_volume(&topo, result, 0.001).unwrap();
+            cases.push((what, volume - ball(3.0 + distance)));
+        }
+        let solid = make_sphere(&mut topo, 3.0, 16).unwrap();
+        transform_solid(&mut topo, solid, &place).unwrap();
+        let wall = brepkit_offset::thick_solid(&mut topo, solid, -0.5, &[], offset_opts()).unwrap();
+        assert!(
+            validate_solid(&topo, wall).unwrap().is_valid(),
+            "{pose} wall"
+        );
+        let volume = solid_volume(&topo, wall, 0.001).unwrap();
+        cases.push((format!("{pose} wall"), volume - (ball(3.0) - ball(2.5))));
+        for (what, error) in cases {
+            assert!(error.abs() < 1e-9, "{what}: volume off by {error}");
+        }
+    }
+}
+
 #[test]
 fn offset_torus_stays_analytic() {
     // Regression: a torus face is doubly-periodic (a fundamental-polygon wire

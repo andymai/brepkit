@@ -865,7 +865,7 @@ fn try_ball_revolution(
     axis: Vec3,
     is_full: bool,
 ) -> Result<Option<SolidId>, crate::OperationsError> {
-    /// The chords of the equator `make_sphere` builds, as its callers ask.
+    /// A segment count `make_sphere` accepts. It has no effect on the ball.
     const EQUATOR_SEGMENTS: usize = 32;
 
     if !is_full {

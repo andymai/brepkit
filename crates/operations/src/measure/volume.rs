@@ -792,7 +792,7 @@ fn ball_less_caps_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
 ///
 /// Detection rules (single pass over shell faces):
 /// - Any `Nurbs` face -> `None` (fall back)
-/// - All faces are `Sphere` -> sphere formula `(4/3)pi*r^3`
+/// - All faces on one `Sphere` (one centre, one radius) -> sphere formula `(4/3)pi*r^3`
 /// - Exactly 1 `Cylinder` + >=1 `Plane` caps, 0 other analytic -> `pi*r^2*h`
 /// - Exactly 1 `Cone` + <=2 `Plane` caps, 0 other analytic -> cone/frustum formula
 ///   (cap radii are read from the `Circle3D` edges of the cap faces)
@@ -810,6 +810,7 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
     let shell = topo.shell(solid_data.outer_shell()).ok()?;
 
     let mut sphere_r: Option<f64> = None;
+    let mut sphere_center: Option<Point3> = None;
     let mut cyl: Option<(Point3, Vec3, f64)> = None; // (origin, axis, radius)
     let mut cone_params: Option<(Point3, Vec3)> = None; // (apex, axis)
     let mut torus_params: Option<(f64, f64)> = None; // (major_r, minor_r)
@@ -838,6 +839,13 @@ fn try_analytic_solid_volume(topo: &Topology, solid: SolidId) -> Option<f64> {
                     None => sphere_r = Some(r),
                     // Multiple sphere faces must all share the same radius.
                     Some(existing) if (r - existing).abs() > existing * 1e-6 => return None,
+                    Some(_) => {}
+                }
+                // ...and the same centre: two balls of one radius (touching,
+                // or a lens of two) are no one ball.
+                match sphere_center {
+                    None => sphere_center = Some(s.center()),
+                    Some(c) if (s.center() - c).length() > r * 1e-9 => return None,
                     Some(_) => {}
                 }
             }

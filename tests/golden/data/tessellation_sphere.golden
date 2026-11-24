@@ -1,5 +1,5 @@
 # sphere r=2 tessellation (deflection=0.1)
-vertices: 418
-triangles: 832
+vertices: 420
+triangles: 836
 min_distance_from_origin: 2.000000
 max_distance_from_origin: 2.000000
