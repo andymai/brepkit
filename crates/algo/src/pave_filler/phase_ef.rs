@@ -2711,6 +2711,11 @@ trait SideFunction {
     /// is, read straight from the point: it carries only the rounding of
     /// the point itself, where the function's terms can cancel.
     fn side(&self, t: f64) -> f64;
+
+    /// A bound on the function's size per unit of distance from the
+    /// surface, over the points within `reach` of the curve's point at `t`:
+    /// its size divided by this is at most that distance there.
+    fn scale_over(&self, t: f64, reach: f64) -> f64;
 }
 
 impl SideFunction for SideForm {
@@ -2764,6 +2769,12 @@ impl SideFunction for SideForm {
 
     fn side(&self, t: f64) -> f64 {
         self.frame(t).0.length() - self.radius
+    }
+
+    /// The form is `(n - r)(n + r)`, for `n` the point's distance from the
+    /// axis or the centre, which moves by at most `reach`.
+    fn scale_over(&self, t: f64, reach: f64) -> f64 {
+        self.frame(t).0.length() + reach + self.radius
     }
 }
 
@@ -3037,6 +3048,16 @@ impl SideFunction for RingForm {
         let q = self.frame(t).0[0];
         (q[0].hypot(q[1]) - self.major).hypot(q[2]) - self.minor
     }
+
+    /// The form is `(d - r)(d + r)(e² - r²)`, and `d` and `e`, distances
+    /// from points of the core circle, move by at most `reach`.
+    fn scale_over(&self, t: f64, reach: f64) -> f64 {
+        let q = self.frame(t).0[0];
+        let rho = q[0].hypot(q[1]);
+        let d = (rho - self.major).hypot(q[2]) + reach;
+        let e = (rho + self.major).hypot(q[2]) + reach;
+        (d + self.minor) * e.madd(e, -self.minor * self.minor)
+    }
 }
 
 /// The side of a ring that a point of a line, a circle or an ellipse lies
@@ -3197,6 +3218,12 @@ impl SideFunction for TubeForm {
     fn side(&self, t: f64) -> f64 {
         self.0.side(t)
     }
+
+    /// The form is `(d - r)(d + r)`, and `d` moves by at most `reach`.
+    fn scale_over(&self, t: f64, reach: f64) -> f64 {
+        let q = self.0.frame(t).0[0];
+        (q[0].hypot(q[1]) - self.0.major).hypot(q[2]) + reach + self.0.minor
+    }
 }
 
 /// Where a line, a circle or an ellipse meets a cylinder, a ball or a ring
@@ -3276,11 +3303,13 @@ fn side_roots(
     // length would leave unread.
     const MOST_PIECES: usize = 1 << 14;
     /// What a piece shows, in order along the curve: a stretch on one side
-    /// for sure, or a place where the forms may be zero, whether the curve
-    /// passes through zero there for sure, and whether a side there is
-    /// unknown for the rounding alone.
+    /// for sure; such a stretch that may come within the tolerance of the
+    /// surface, from parameter to parameter; or a place where the forms may
+    /// be zero, whether the curve passes through zero there for sure, and
+    /// whether a side there is unknown for the rounding alone.
     enum Mark {
         Side(bool),
+        Near(f64, f64, bool),
         Root(f64, bool, bool),
     }
     let Some(&form) = forms.first() else {
@@ -3402,7 +3431,7 @@ fn side_roots(
             return Ok(None);
         }
         let (h, m) = (b - a, f64::midpoint(a, b));
-        let (mut side, mut one_way) = (None, false);
+        let (mut side, mut one_way, mut near) = (None, false, false);
         for f in forms {
             let (Some((v, unsure, _)), Some((d, err)), Some(rest)) =
                 (f.value(m), f.derivatives(m), f.fifth_bound((a, b)))
@@ -3422,6 +3451,9 @@ fn side_roots(
                 + size(1) * r;
             if v.abs() > unsure + reach {
                 side = Some(v > 0.0);
+                // The least distance the piece may come to the surface.
+                let least_off = (v.abs() - unsure - reach) / f.scale_over(m, speed * r);
+                near = least_off < tol.linear;
                 break;
             }
             let slope_reach =
@@ -3432,7 +3464,11 @@ fn side_roots(
             }
         }
         if let Some(side) = side {
-            marks.push(Mark::Side(side));
+            marks.push(if near {
+                Mark::Near(a, b, side)
+            } else {
+                Mark::Side(side)
+            });
             continue;
         }
         if one_way || h <= shortest {
@@ -3458,7 +3494,7 @@ fn side_roots(
     let mut k = 0;
     while k < marks.len() {
         let first = match marks[k] {
-            Mark::Side(side) => {
+            Mark::Side(side) | Mark::Near(_, _, side) => {
                 before = Some(side);
                 k += 1;
                 continue;
@@ -3482,7 +3518,7 @@ fn side_roots(
                     }
                 }
                 Mark::Root(..) => break,
-                Mark::Side(side) => {
+                Mark::Side(side) | Mark::Near(_, _, side) => {
                     after = after.or(Some(side));
                     before = Some(side);
                 }
@@ -3545,6 +3581,31 @@ fn side_roots(
             }
         }
     }
+    // A run of pieces on one side for sure that may come within the
+    // tolerance of the surface holds a touch where the curve comes nearest
+    // the surface inside it, if that is within the tolerance. Where the
+    // distance comes least at an end of the run, it falls on into what lies
+    // beside: a place where the forms may be zero, whose contact is read
+    // above; an end of the curve, whose contact is its vertex's; or a piece
+    // proved farther than the tolerance.
+    let within_tolerance = |t: f64| distance_to_surface(point_at(t), surface) < tol.linear;
+    let mut k = 0;
+    while k < marks.len() {
+        let Mark::Near(from, _, _) = marks[k] else {
+            k += 1;
+            continue;
+        };
+        let mut to = from;
+        while let Some(&Mark::Near(_, b, _)) = marks.get(k) {
+            to = b;
+            k += 1;
+        }
+        let t = least(from, to);
+        if t - from > shortest && to - t > shortest && within_tolerance(t) {
+            roots.push(SideRoot::Touch(t, point_at(t)));
+        }
+    }
+    roots.sort_by(|x, y| x.at().0.total_cmp(&y.at().0));
     Ok(Some(roots))
 }
 
@@ -7508,6 +7569,92 @@ mod tests {
                 && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9));
             if !same {
                 misread.push(format!("{what}: unit {a:?}, scaled {b:?}"));
+            }
+        }
+        assert!(misread.is_empty(), "{misread:#?}");
+    }
+
+    /// The patch of a wall of radius 2 about `z` from angle 0 to 270 degrees
+    /// and height 0 to 4.
+    fn wall_patch(topo: &mut Topology) -> FaceId {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let at = |deg: f64, h: f64| {
+            let a = deg.to_radians();
+            Point3::new(2.0 * a.cos(), 2.0 * a.sin(), h)
+        };
+        let circle =
+            |h: f64| EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, h), z, 2.0).unwrap());
+        let corner = [at(0.0, 0.0), at(270.0, 0.0), at(270.0, 4.0), at(0.0, 4.0)];
+        let v = corner.map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+        let low = topo.add_edge(Edge::new(v[0], v[1], circle(0.0)));
+        let right = topo.add_edge(Edge::new(v[1], v[2], EdgeCurve::Line));
+        let high = topo.add_edge(Edge::new(v[3], v[2], circle(4.0)));
+        let left = topo.add_edge(Edge::new(v[0], v[3], EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(low, true),
+                    OrientedEdge::new(right, true),
+                    OrientedEdge::new(high, false),
+                    OrientedEdge::new(left, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let wall = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z, 2.0).unwrap();
+        topo.add_face(Face::new(wire, vec![], FaceSurface::Cylinder(wall)))
+    }
+
+    /// Segments that pass a surface at a gap of 5e-8, inside the tolerance,
+    /// without reaching it, each touch it once: along `y` past a ball of
+    /// radius 2 at `(2, 0, 0)`, along `y` past a wall of radius 2 at
+    /// `(-2, 0, 2)`, and along `z` past a ring of radii 2 and 0.5 at
+    /// `(-2.5, 0, 0)`. At a gap of 2e-7 none touches.
+    #[test]
+    fn a_segment_passing_within_the_tolerance_touches_once() {
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::vec::Vec3;
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let mut misread = Vec::new();
+        for gap in [5e-8, 2e-7] {
+            let want = usize::from(gap < 1e-7);
+            for what in ["ball", "wall", "ring"] {
+                let mut topo = Topology::new();
+                let (face, touch, along) = match what {
+                    "ball" => (
+                        ball_less_a_cap(&mut topo, origin, Mat4::identity()),
+                        Point3::new(2.0 + gap, 0.0, 0.0),
+                        Vec3::new(0.0, 1.0, 0.0),
+                    ),
+                    "wall" => (
+                        wall_patch(&mut topo),
+                        Point3::new(-2.0 - gap, 0.0, 2.0),
+                        Vec3::new(0.0, 1.0, 0.0),
+                    ),
+                    _ => (
+                        whole_ring(&mut topo, origin, Mat4::identity()).0,
+                        Point3::new(-2.5 - gap, 0.0, 0.0),
+                        Vec3::new(0.0, 0.0, 1.0),
+                    ),
+                };
+                let found = ef_vertices(
+                    &mut topo,
+                    face,
+                    EdgeCurve::Line,
+                    touch - along * 1.01,
+                    Some(touch + along * 0.99),
+                );
+                let near = found.iter().all(|&p| (p - touch).length() < 1e-6);
+                if found.len() != want || !near {
+                    misread.push(format!("{what} at {gap}: {found:?}"));
+                }
             }
         }
         assert!(misread.is_empty(), "{misread:#?}");
