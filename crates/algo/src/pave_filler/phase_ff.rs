@@ -9513,6 +9513,39 @@ fn circle_face_hits(
                         edge_hits.push((t, p, Some(oe.edge())));
                     }
                 }
+                // An edge passing through the circle's plane between its
+                // ends, at a point on the circle: the face leaves the circle
+                // there, as a round's face does where its mitre with the next
+                // round crosses a plane cutting both rounds.
+                if !in_plane {
+                    let clear = tol.linear * 10.0;
+                    let side = |f: f64| circle.normal().dot(at(f) - circle.center());
+                    for k in 0..PIECES {
+                        let (mut lo, mut hi) = (
+                            f64::from(k) / f64::from(PIECES),
+                            f64::from(k + 1) / f64::from(PIECES),
+                        );
+                        let (mut s_lo, s_hi) = (side(lo), side(hi));
+                        if s_lo * s_hi >= 0.0 || s_lo.abs() <= clear || s_hi.abs() <= clear {
+                            continue;
+                        }
+                        for _ in 0..60 {
+                            let m = f64::midpoint(lo, hi);
+                            let s = side(m);
+                            if (s > 0.0) == (s_lo > 0.0) {
+                                (lo, s_lo) = (m, s);
+                            } else {
+                                hi = m;
+                            }
+                        }
+                        let q = at(f64::midpoint(lo, hi));
+                        if off_circle(q) <= tol.linear * 100.0 {
+                            let p = circle.evaluate(circle.project(q));
+                            let t = circle.project(p).rem_euclid(std::f64::consts::TAU);
+                            edge_hits.push((t, p, Some(oe.edge())));
+                        }
+                    }
+                }
             }
         }
         for (t, p, src) in edge_hits {
@@ -10167,6 +10200,31 @@ fn emit_split_circle_arcs(
     // axes, grows as the torus turns, and can hold an arc off the face: a
     // groove's meridian arc round the outside of the tube.
     let (torus_a, torus_b) = (TorusRegion::of(topo, face_a), TorusRegion::of(topo, face_b));
+    // A torus face those angles do not give (a round's piece ending on its
+    // mitres with the next rounds) is read against its own wires in its
+    // `(u, v)`: its box holds the arc of the circle that runs on along the
+    // next pieces of the same torus.
+    let torus_loops = |fid: FaceId, read: bool| -> Option<crate::classifier::FaceLoops2d> {
+        let face = topo.face(fid).ok()?;
+        (!read && matches!(face.surface(), FaceSurface::Torus(_)))
+            .then(|| crate::classifier::FaceLoops2d::new(topo, fid).ok())
+            .flatten()
+    };
+    let (tloops_a, tloops_b) = (
+        torus_loops(face_a, torus_a.is_some()),
+        torus_loops(face_b, torus_b.is_some()),
+    );
+    let on_torus_face = |loops: &Option<crate::classifier::FaceLoops2d>, p: Point3| -> bool {
+        use crate::builder::classify_2d::{boundary_eps, distance_to_polygon_boundary};
+        loops.as_ref().is_none_or(|l| {
+            l.to_uv(p).is_none_or(|q| {
+                l.contains(q)
+                    || std::iter::once(&l.outer).chain(l.holes.iter()).any(|lp| {
+                        lp.len() >= 3 && distance_to_polygon_boundary(q, lp) <= boundary_eps(lp)
+                    })
+            })
+        })
+    };
     // A wall's trim stands in for its box, which samples an oblique rim
     // too coarsely to hold the arcs just under its peak.
     let in_both = |p: Point3| -> bool {
@@ -10194,6 +10252,8 @@ fn emit_split_circle_arcs(
             && ball_b.as_ref().is_none_or(|t| t.holds(p, side_eps))
             && torus_a.as_ref().is_none_or(|t| t.holds(p, side_eps))
             && torus_b.as_ref().is_none_or(|t| t.holds(p, side_eps))
+            && on_torus_face(&tloops_a, p)
+            && on_torus_face(&tloops_b, p)
     };
 
     // Pass 1: determine which arcs survive the AABB filter, *before*
