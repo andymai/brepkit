@@ -302,20 +302,22 @@ fn ends_meet(a: &[[f64; 4]], b: &[[f64; 4]], margin: f64) -> bool {
 /// The axis and half-angle of a circular cone from a Bezier piece's first
 /// control point that holds the piece: each point of the piece is the first
 /// control point plus a blend of the others' offsets from it with weights
-/// that are not negative. An offset no longer than a few `slack` leaves its
-/// direction unread and moves the piece by no more than that; each other
-/// offset's direction is read to an angle of its rounding over its length.
-/// `None` where no offset is longer, or the half-angle reaches a right angle.
+/// that are not negative. Each offset's direction is read to an angle of
+/// its rounding over its length. `None` where an offset is no longer than a
+/// few `slack`, whose direction is then unread: a weight can carry the piece
+/// that way as far as the offset reaches, past the rounding (a side run
+/// back 1e-3 along its neighbour under a weight of 1000), or where the
+/// half-angle reaches a right angle.
 fn cone(net: &[[f64; 4]], slack: f64) -> Option<(Vec3, f64)> {
     let apex = point(*net.first()?);
     let reaches: Vec<(Vec3, f64)> = net[1..]
         .iter()
-        .filter_map(|&q| {
+        .map(|&q| {
             let g = point(q) - apex;
             let length = g.length();
             (length > 4.0 * slack).then(|| (g * (1.0 / length), 4.0 * slack / length))
         })
-        .collect();
+        .collect::<Option<_>>()?;
     let sum = reaches
         .iter()
         .fold(Vec3::new(0.0, 0.0, 0.0), |s, (u, _)| s + *u);
@@ -565,5 +567,38 @@ pub mod tests {
         let through = (past.evaluate(lo, 0.0) - foot).length();
         assert!(least > 1e-3 && through < 1e-6, "{least:e}, {through:e}");
         assert!(!sides_are_apart(&past, reach));
+    }
+
+    /// A patch of degrees 2 and 1 a million from the origin whose side at
+    /// `v = 0` starts back along its side at `u = 0`: its second control
+    /// point stands 1e-3 behind the corner with a weight of 1000. Its
+    /// control points' sizes times their weights' ratio give the rounding a
+    /// reach of 3.2e-4, past which that side runs on along the other: the
+    /// two sides meet 8.3e-4 from the corner, and do not keep apart.
+    #[test]
+    fn a_side_run_back_along_its_neighbour_from_their_corner_is_not_apart() {
+        let o = Point3::new(1e6, 1e6, 1e6);
+        let at = |x: f64, y: f64, z: f64| o + Vec3::new(x, y, z);
+        let patch = NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![at(0.0, 0.0, 0.0), at(-1.0, 0.0, 0.0)],
+                vec![at(-1e-3, 0.0, 0.0), at(-1.0, 1.0, 1.0)],
+                vec![at(1.0, 0.0, 0.0), at(1.0, 1.0, 0.0)],
+            ],
+            vec![vec![1.0, 1.0], vec![1000.0, 1.0], vec![1.0, 1.0]],
+        )
+        .unwrap();
+        // The side at `v = 0` runs back to its least `x`, on the side at
+        // `u = 0`, the segment from the corner back to `x = -1`.
+        let back = (0..=20_000_u32)
+            .map(|k| patch.evaluate(f64::from(k) / 20_000.0, 0.0))
+            .map(|p| (p - o).x())
+            .fold(0.0_f64, f64::min);
+        assert!(back < -8e-4, "{back:e}");
+        assert!(!sides_are_apart(&patch, 1e-6));
     }
 }
