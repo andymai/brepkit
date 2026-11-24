@@ -10,12 +10,10 @@
 
 use brepkit_math::madd::Madd;
 use brepkit_math::surfaces::SphericalSurface;
-use brepkit_math::vec::{Point2, Point3, Vec2, Vec3};
+use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::edge::EdgeCurve;
 
-use super::super::classify_2d::{
-    boundary_eps, distance_to_polygon_boundary, point_in_polygon_2d, sample_interior_point_where,
-};
+use super::super::classify_2d::{distance_to_polygon_boundary, point_in_polygon_2d};
 use super::super::split_types::OrientedPCurveEdge;
 use super::super::wire_builder::build_wire_loops_dcel_flat;
 use super::special_cases::reverse_loop;
@@ -127,6 +125,36 @@ impl PoleView {
         (area.abs() > 1e-9).then_some((area > 0.0) == self.north)
     }
 
+    /// A loop's polygon ([`Self::loop_polygon`]), and how far its curves
+    /// stray from its sides: the most that a curve's point half way between
+    /// two samples lies off the side between them.
+    fn reading(&self, lp: &[OrientedPCurveEdge]) -> Option<(Vec<Point2>, f64)> {
+        let mut poly = Vec::new();
+        let mut gap = 0.0_f64;
+        for e in lp {
+            let mut fine = Vec::new();
+            walk_edge_in(e, 2 * SAMPLES, &mut fine);
+            fine.push(e.end_3d);
+            let fine = self.polygon(&fine)?;
+            for k in (1..fine.len() - 1).step_by(2) {
+                let side = [fine[k - 1], fine[k + 1]];
+                gap = gap.max(distance_to_polygon_boundary(fine[k], &side));
+            }
+            poly.extend(fine[..fine.len() - 1].iter().step_by(2));
+        }
+        Some((poly, gap))
+    }
+
+    /// Whether the point `at` on the ball lies inside the loop read as
+    /// `(poly, gap)`: read on the polygon where the point lies farther from
+    /// it than twice the curves stray, so that the curves read the same.
+    /// `None` where it lies nearer, or does not map.
+    fn inside(&self, at: Point3, (poly, gap): &(Vec<Point2>, f64)) -> Option<bool> {
+        let p = self.map(at)?;
+        let d = distance_to_polygon_boundary(p, poly);
+        (d > 2.0 * gap && d > 1e-12).then(|| point_in_polygon_2d(p, poly))
+    }
+
     /// A loop of edges, each sampled along its own curve in the way the
     /// loop walks it, mapped.
     fn loop_polygon(&self, lp: &[OrientedPCurveEdge]) -> Option<Vec<Point2>> {
@@ -141,21 +169,26 @@ impl PoleView {
 /// `e`'s start, then samples along its curve toward its end, in the way the
 /// loop walks it.
 fn walk_edge(e: &OrientedPCurveEdge, out: &mut Vec<Point3>) {
+    walk_edge_in(e, SAMPLES, out);
+}
+
+/// [`walk_edge`] in `steps` steps.
+fn walk_edge_in(e: &OrientedPCurveEdge, steps: u32, out: &mut Vec<Point3>) {
     use std::f64::consts::TAU;
     out.push(e.start_3d);
     if matches!(e.curve_3d, EdgeCurve::Line) {
         return;
     }
-    let fraction = |k: u32| f64::from(k) / f64::from(SAMPLES);
+    let fraction = |k: u32| f64::from(k) / f64::from(steps);
     let closed = (e.start_3d - e.end_3d).length() < CLOSED;
     match &e.curve_3d {
         EdgeCurve::Circle(c) if closed => {
             let (a0, turn) = (c.project(e.start_3d), if e.forward { TAU } else { -TAU });
-            out.extend((1..SAMPLES).map(|k| c.evaluate(turn.madd(fraction(k), a0))));
+            out.extend((1..steps).map(|k| c.evaluate(turn.madd(fraction(k), a0))));
         }
         EdgeCurve::Ellipse(el) if closed => {
             let (a0, turn) = (el.project(e.start_3d), if e.forward { TAU } else { -TAU });
-            out.extend((1..SAMPLES).map(|k| el.evaluate(turn.madd(fraction(k), a0))));
+            out.extend((1..steps).map(|k| el.evaluate(turn.madd(fraction(k), a0))));
         }
         curve => {
             let (s3, e3) = if e.forward {
@@ -164,7 +197,7 @@ fn walk_edge(e: &OrientedPCurveEdge, out: &mut Vec<Point3>) {
                 (e.end_3d, e.start_3d)
             };
             let (t0, t1) = curve.domain_with_endpoints(s3, e3);
-            let mut samples: Vec<Point3> = (1..SAMPLES)
+            let mut samples: Vec<Point3> = (1..steps)
                 .map(|k| curve.evaluate_with_endpoints((t1 - t0).madd(fraction(k), t0), s3, e3))
                 .collect();
             // A closed curve (a spline loop) runs its whole domain, from its
@@ -182,44 +215,6 @@ fn walk_edge(e: &OrientedPCurveEdge, out: &mut Vec<Point3>) {
             out.extend(samples);
         }
     }
-}
-
-/// A point of the region inside `outline` and outside each of `holes`,
-/// clear of all of them: the polygon's own interior point where it serves,
-/// else one stepped off the middle of a side of the outline or a hole, a
-/// quarter of the side's length or a twentieth, a hundredth or a thousandth
-/// (a region thinner than its sides are long).
-fn region_point(outline: &[Point2], holes: &[Vec<Point2>]) -> Option<Point2> {
-    let walls = || std::iter::once(outline).chain(holes.iter().map(Vec::as_slice));
-    let holds = |p: Point2| {
-        point_in_polygon_2d(p, outline)
-            && !holes.iter().any(|h| point_in_polygon_2d(p, h))
-            && walls().all(|w| distance_to_polygon_boundary(p, w) > boundary_eps(w))
-    };
-    if let Some(p) = sample_interior_point_where(outline, holds) {
-        return Some(p);
-    }
-    for wall in walls() {
-        for (k, &a) in wall.iter().enumerate() {
-            let b = wall[(k + 1) % wall.len()];
-            let side = b - a;
-            let length = side.length();
-            if length <= 0.0 {
-                continue;
-            }
-            let middle = Point2::new(0.5 * (a.x() + b.x()), 0.5 * (a.y() + b.y()));
-            let normal = Vec2::new(-side.y(), side.x()) * (1.0 / length);
-            for share in [0.25, 0.05, 0.01, 1e-3] {
-                for way in [1.0, -1.0] {
-                    let p = middle + normal * (way * share * length);
-                    if holds(p) {
-                        return Some(p);
-                    }
-                }
-            }
-        }
-    }
-    None
 }
 
 /// The 3D point half way along `e`'s curve.
@@ -240,6 +235,15 @@ fn same_edge(a: &OrientedPCurveEdge, b: &OrientedPCurveEdge, near: f64) -> bool 
         && (a.end_3d - b.end_3d).length() <= near)
         || ((a.start_3d - b.end_3d).length() <= near && (a.end_3d - b.start_3d).length() <= near);
     ends && (edge_middle(a) - edge_middle(b)).length() <= near
+}
+
+/// Whether two loop edges are one half of an edge of the face: one edge,
+/// walked the same way.
+fn same_half(a: &OrientedPCurveEdge, b: &OrientedPCurveEdge, near: f64) -> bool {
+    (a.start_3d - b.start_3d).length() <= near
+        && (a.end_3d - b.end_3d).length() <= near
+        && a.forward == b.forward
+        && (edge_middle(a) - edge_middle(b)).length() <= near
 }
 
 /// A piece: its outline and its holes.
@@ -280,24 +284,28 @@ pub(super) fn read(
 /// edges `boundary`, cut by the section halves `sections` (each section run
 /// both ways), seen in `view`.
 ///
-/// The loops must run every piece of the outline and every section half
-/// once: a section the walk left out would leave the face standing whole
-/// across it.
+/// The loops must be closed, pass no vertex twice, and between them run
+/// each piece of the outline and each section half once: a section left
+/// out would leave the face standing whole across it. The edges of the
+/// face's arrangement cross nowhere but at its vertices, so each loop is a
+/// simple closed curve in the plane. A loop that winds as the outline does
+/// is a piece's outline, and one that winds against it a hole. Each hole
+/// goes to the smallest outline that holds the middle of its first edge,
+/// of those that do not run along that edge (a hole's twin, the outline of
+/// the piece inside it).
 ///
-/// A loop that winds as the outline does is a piece's outline, one that
-/// winds against it a hole. Each hole goes to the smallest outline that
-/// holds the middle of its first edge, of those that do not run along that
-/// edge (a hole's twin, the outline of the piece inside it), and that
-/// outline must run none of the hole's edges. The areas
-/// must balance: the pieces' outlines less their holes cover the face's
-/// own area. Read on the same samples, each section the pieces run both
-/// ways cancels and each piece of the outline counts once, so a piece left
-/// out or taken twice shows.
+/// That the pieces tile the face is then proved, not sampled. Each piece's
+/// mark (one inside its outline, less one inside each of its holes) sums
+/// over the pieces to the windings of all the loops: each section runs once
+/// each way and cancels, so the sum is the outline's winding, one inside
+/// the face and none outside. The pieces tile the face where each piece's
+/// mark is one or none everywhere: where each hole lies inside its outline
+/// and no two holes of a piece overlap ([`tiled`]).
 ///
-/// `None` when a loop does not map, bounds no area, runs an edge both ways
-/// or passes a vertex twice (two regions toured as one, touching there), a
-/// hole finds no outline or one that shares an edge with it, the areas do
-/// not balance, or two pieces overlap.
+/// `None` when a loop does not map, is not closed, bounds no area, runs an
+/// edge both ways or passes a vertex twice (two regions toured as one,
+/// touching there), the loops do not run each half once, a hole finds no
+/// outline, or the tiling is not proved.
 pub(super) fn pieces(
     view: &PoleView,
     boundary: &[OrientedPCurveEdge],
@@ -306,23 +314,26 @@ pub(super) fn pieces(
     tol: f64,
 ) -> Option<Vec<Piece>> {
     let face_area = 0.5 * view.twice_area(boundary)?;
-    if face_area.abs() <= 1e-9 {
-        return None;
-    }
-    let runs = |on_section: bool| {
-        loops
-            .iter()
-            .flatten()
-            .filter(|e| e.source_edge_idx.is_some() == on_section)
-            .count()
-    };
-    if sections.is_empty() || runs(true) != sections.len() || runs(false) != boundary.len() {
+    if face_area.abs() <= 1e-9 || sections.is_empty() {
         return None;
     }
     let near = 100.0 * tol;
+    let halves: Vec<&OrientedPCurveEdge> = boundary.iter().chain(sections).collect();
+    let mut free = vec![true; halves.len()];
+    for e in loops.iter().flatten() {
+        let k = (0..halves.len()).find(|&k| free[k] && same_half(halves[k], e, near))?;
+        free[k] = false;
+    }
+    if free.contains(&true) {
+        return None;
+    }
     let mut outers: Vec<(Vec<OrientedPCurveEdge>, Vec<Point2>, f64)> = Vec::new();
-    let mut holes: Vec<(Vec<OrientedPCurveEdge>, f64)> = Vec::new();
+    let mut holes: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
     for lp in loops {
+        let closed = lp
+            .iter()
+            .zip(lp.iter().cycle().skip(1))
+            .all(|(a, b)| (a.end_3d - b.start_3d).length() <= near);
         let both_ways = lp
             .iter()
             .enumerate()
@@ -332,7 +343,7 @@ pub(super) fn pieces(
                 .iter()
                 .any(|b| (a.start_3d - b.start_3d).length() <= near)
         });
-        if both_ways || pinched {
+        if !closed || both_ways || pinched {
             return None;
         }
         let poly = view.loop_polygon(&lp)?;
@@ -343,18 +354,14 @@ pub(super) fn pieces(
         if area > 0.0 {
             outers.push((lp, poly, area));
         } else {
-            holes.push((lp, -area));
+            holes.push(lp);
         }
-    }
-    let covered = outers.iter().map(|o| o.2).sum::<f64>() - holes.iter().map(|h| h.1).sum::<f64>();
-    if (covered - face_area.abs()).abs() > 1e-6 * face_area.abs() {
-        return None;
     }
     let mut pieces: Vec<Piece> = outers
         .iter()
         .map(|(lp, _, _)| (lp.clone(), Vec::new()))
         .collect();
-    for (hole, _) in holes {
+    for hole in holes {
         let first = hole.first()?;
         let probe = view.map(edge_middle(first))?;
         let owner = outers
@@ -365,46 +372,50 @@ pub(super) fn pieces(
             })
             .min_by(|a, b| a.1.2.total_cmp(&b.1.2))
             .map(|(i, _)| i)?;
-        // A hole lies inside its piece's outline: an edge on both bounds
-        // the piece on both sides.
-        if outers[owner]
-            .0
-            .iter()
-            .any(|e| hole.iter().any(|h| same_edge(e, h, near)))
-        {
-            return None;
-        }
         pieces[owner].1.push(hole);
     }
-    // Loops that use each half once and balance the area can still overlap:
-    // two section loops that cross, read as their union and their lens with
-    // both whole loops as holes. A piece's region (its outline less its
-    // holes) holds a point of its own that no other piece's region holds.
-    let regions: Vec<(&[Point2], Vec<Vec<Point2>>)> = outers
-        .iter()
-        .zip(&pieces)
-        .map(|((_, poly, _), (_, piece_holes))| {
-            let holes = piece_holes
-                .iter()
-                .map(|h| view.loop_polygon(h))
-                .collect::<Option<Vec<_>>>()?;
-            Some((poly.as_slice(), holes))
-        })
-        .collect::<Option<_>>()?;
-    let holds = |(outline, holes): &(&[Point2], Vec<Vec<Point2>>), p: Point2| {
-        point_in_polygon_2d(p, outline) && !holes.iter().any(|h| point_in_polygon_2d(p, h))
+    tiled(view, &pieces, near)?;
+    Some(pieces)
+}
+
+/// Whether each piece's mark is one or none everywhere: each hole lies
+/// inside its outline, and no two holes of a piece overlap. Edges of the
+/// arrangement cross nowhere but at vertices, so each edge of one loop lies
+/// all inside or all outside another loop that does not run it, and its
+/// middle tells which ([`PoleView::inside`]). A hole lies inside its
+/// outline where it shares no edge with it and each of its edges does; two
+/// holes are apart where they share no edge and each edge of either lies
+/// outside the other. `None` where one of these fails or a middle lies too
+/// near a loop to read.
+fn tiled(view: &PoleView, pieces: &[Piece], near: f64) -> Option<()> {
+    let off = |e: &OrientedPCurveEdge, lp: &[OrientedPCurveEdge]| {
+        !lp.iter().any(|f| same_edge(e, f, near))
     };
-    for (i, (outline, holes)) in regions.iter().enumerate() {
-        let own = region_point(outline, holes)?;
-        if regions
+    for (outline, holes) in pieces {
+        let read = view.reading(outline)?;
+        let hole_reads: Vec<(Vec<Point2>, f64)> = holes
             .iter()
-            .enumerate()
-            .any(|(j, other)| j != i && holds(other, own))
-        {
-            return None;
+            .map(|h| view.reading(h))
+            .collect::<Option<_>>()?;
+        for (i, hole) in holes.iter().enumerate() {
+            for e in hole {
+                if !(off(e, outline) && view.inside(edge_middle(e), &read)?) {
+                    return None;
+                }
+            }
+            for (j, other) in holes.iter().enumerate().skip(i + 1) {
+                for (a, b, b_read) in [(hole, other, &hole_reads[j]), (other, hole, &hole_reads[i])]
+                {
+                    for e in a {
+                        if !off(e, b) || view.inside(edge_middle(e), b_read)? {
+                            return None;
+                        }
+                    }
+                }
+            }
         }
     }
-    Some(pieces)
+    Some(())
 }
 
 #[cfg(test)]
@@ -414,6 +425,7 @@ mod tests {
     use brepkit_math::curves::Circle3D;
     use brepkit_math::curves2d::{Curve2D, Line2D};
     use brepkit_math::nurbs::curve::NurbsCurve;
+    use brepkit_math::vec::Vec2;
 
     use super::*;
 
@@ -758,5 +770,66 @@ mod tests {
         let split = read(&view, &edges, 1, Vec::new(), 1e-7).unwrap();
         assert_eq!(split.len(), 2);
         assert_eq!(split.iter().map(|p| p.1.len()).sum::<usize>(), 1);
+    }
+
+    /// A closed circle edge of the unit ball round the unit direction `d`,
+    /// `rho` radians round, walked its own way, with the section `k`.
+    fn ring(d: Vec3, rho: f64, k: usize) -> OrientedPCurveEdge {
+        let circle = small_circle(1.0, d, rho);
+        let at = circle.evaluate(0.0);
+        let mut e = edge(&EdgeCurve::Circle(circle), at, at, true);
+        e.source_edge_idx = Some(k);
+        e
+    }
+
+    fn unit(x: f64, y: f64, z: f64) -> Vec3 {
+        Vec3::new(x, y, z).normalize().unwrap()
+    }
+
+    #[test]
+    fn a_hole_outside_its_outline_or_inside_another_hole_is_refused() {
+        let (view, rim) = capped_ball(1.0);
+        let at = |lp, outline| oriented(&view, &rim, lp, outline);
+        // Two discs apart on the face, round the south pole.
+        let a = ring(unit(0.3, 0.0, -1.0), 0.1, 0);
+        let b = ring(unit(-0.3, 0.0, -1.0), 0.1, 1);
+        let [a_in, a_out] = [at(vec![a.clone()], true), at(vec![a.clone()], false)];
+        let [b_in, b_out] = [at(vec![b.clone()], true), at(vec![b.clone()], false)];
+        let sections = halves(&[a, b]);
+        // Read by `pieces`, each disc's hole goes to the face, whatever
+        // order the loops come in.
+        let loops = vec![
+            a_in.clone(),
+            b_out.clone(),
+            vec![rim.clone()],
+            b_in.clone(),
+            a_out.clone(),
+        ];
+        let split = pieces(&view, std::slice::from_ref(&rim), &sections, loops, 1e-7).unwrap();
+        assert_eq!(split.len(), 3);
+        let face = split
+            .iter()
+            .find(|p| p.0.len() == 1 && p.0[0].source_edge_idx.is_none());
+        assert_eq!(face.unwrap().1.len(), 2);
+        assert!(tiled(&view, &split, 1e-5).is_some());
+        // Given by hand: the first disc less the second, which lies
+        // outside it (marked less one there), the face less the first disc,
+        // and the second disc. Each half runs once and the marks sum to one
+        // over the face, but the face's piece and the second disc both
+        // cover the second disc.
+        let outside: Vec<Piece> = vec![
+            (a_in.clone(), vec![b_out]),
+            (vec![rim.clone()], vec![a_out.clone()]),
+            (b_in, Vec::new()),
+        ];
+        assert!(tiled(&view, &outside, 1e-5).is_none());
+        // A disc inside another: the face with both as holes nests them.
+        let c = ring(unit(0.3, 0.0, -1.0), 0.03, 2);
+        let nested: Vec<Piece> = vec![
+            (vec![rim.clone()], vec![a_out, at(vec![c.clone()], false)]),
+            (a_in, Vec::new()),
+            (at(vec![c], true), Vec::new()),
+        ];
+        assert!(tiled(&view, &nested, 1e-5).is_none());
     }
 }
