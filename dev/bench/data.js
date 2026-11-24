@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795489106050,
+  "lastUpdate": 1795492629347,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -77219,6 +77219,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27284567,
             "range": "± 180552",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "43458176d5fe3c2de6122549f6ba0fb244d80bcf",
+          "message": "chore(main): release 4.11.46 (#2785)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.46](https://github.com/andymai/brepkit/compare/v4.11.45...v4.11.46)\n(2026-11-24)\n\n\n### Bug Fixes\n\n* **math:** march each section branch by its curvature and close loops\nonly from the seed's side, and place the fit's first points by its miss\n([#2777](https://github.com/andymai/brepkit/issues/2777))\n([53dc48d](https://github.com/andymai/brepkit/commit/53dc48d05256943b79eaf5b047f0becc07e86462))\n* **operations,algo:** bound make_sphere's hemispheres by one circle at\nthe equator ([#2786](https://github.com/andymai/brepkit/issues/2786))\n([39a174d](https://github.com/andymai/brepkit/commit/39a174ddb6e61d1469fd83c9ab5dd012c1be3e5f))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-24T03:53:32Z",
+          "tree_id": "b82338999b216dd4507212c77a48bd420f048bb6",
+          "url": "https://github.com/andymai/brepkit/commit/43458176d5fe3c2de6122549f6ba0fb244d80bcf"
+        },
+        "date": 1795492620600,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 881830,
+            "range": "± 22507",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 937849,
+            "range": "± 26583",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9922,
+            "range": "± 27",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 576044,
+            "range": "± 6542",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19505311,
+            "range": "± 106552",
             "unit": "ns/iter"
           }
         ]
