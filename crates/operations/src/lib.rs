@@ -151,6 +151,7 @@ pub mod blend_ops;
 pub mod chamfer;
 pub mod chamfer_chain;
 pub mod fillet;
+mod fillet_short_wall;
 
 pub mod offset_face;
 pub mod offset_trim;
