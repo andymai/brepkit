@@ -6717,6 +6717,17 @@ fn loops_run_a_section_both_ways(loops: &[Vec<OrientedPCurveEdge>], tol: f64) ->
     })
 }
 
+/// Puts the section breaks of the try whose pieces a face keeps,
+/// `breaks`, in place of the registry `registry` they were copied from.
+fn keep_breaks(
+    registry: &mut Option<&mut std::collections::HashMap<usize, Vec<Point3>>>,
+    breaks: Option<std::collections::HashMap<usize, Vec<Point3>>>,
+) {
+    if let (Some(registry), Some(breaks)) = (registry.as_deref_mut(), breaks) {
+        *registry = breaks;
+    }
+}
+
 /// Split a face by its section edges, producing sub-faces.
 ///
 /// If there are no section edges, returns a single sub-face covering
@@ -6777,8 +6788,12 @@ pub fn split_face_2d(
             pole_clear_chart(topo, face_id, face, sections, true),
             Some(BallChart::PoleOff)
         );
-        if up_front {
-            let mut read_about_a_pole = false;
+        // Each try splits against its own copy of the registry of section
+        // breaks, and only the try whose pieces the face keeps adds its
+        // breaks to it: a try refused or set aside leaves no break that the
+        // kept pieces do not have for a later face to split at.
+        let attempt = |pole_off: Option<&mut bool>| {
+            let mut breaks = split_registry.as_deref().cloned();
             let pieces = split_face_2d_impl(
                 topo,
                 face_id,
@@ -6789,26 +6804,20 @@ pub fn split_face_2d(
                 info,
                 edge_images,
                 kept_splits,
-                split_registry.as_deref_mut(),
-                Some(&mut read_about_a_pole),
+                breaks.as_mut(),
+                pole_off,
             );
+            (pieces, breaks)
+        };
+        if up_front {
+            let mut read_about_a_pole = false;
+            let (pieces, breaks) = attempt(Some(&mut read_about_a_pole));
             if read_about_a_pole {
+                keep_breaks(&mut split_registry, breaks);
                 return pieces;
             }
         }
-        let first = split_face_2d_impl(
-            topo,
-            face_id,
-            sections,
-            rank,
-            tol,
-            frame,
-            info,
-            edge_images,
-            kept_splits,
-            split_registry.as_deref_mut(),
-            None,
-        );
+        let (first, first_breaks) = attempt(None);
         let whole = match first.as_slice() {
             [] => true,
             [only] => only
@@ -6819,25 +6828,16 @@ pub fn split_face_2d(
             _ => false,
         };
         if !whole || up_front {
+            keep_breaks(&mut split_registry, first_breaks);
             return first;
         }
         let mut read_about_a_pole = false;
-        let retry = split_face_2d_impl(
-            topo,
-            face_id,
-            sections,
-            rank,
-            tol,
-            frame,
-            info,
-            edge_images,
-            kept_splits,
-            split_registry,
-            Some(&mut read_about_a_pole),
-        );
+        let (retry, retry_breaks) = attempt(Some(&mut read_about_a_pole));
         return if read_about_a_pole && retry.len() >= 2 {
+            keep_breaks(&mut split_registry, retry_breaks);
             retry
         } else {
+            keep_breaks(&mut split_registry, first_breaks);
             first
         };
     }
