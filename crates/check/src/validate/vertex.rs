@@ -8,37 +8,62 @@ use brepkit_topology::vertex::VertexId;
 use super::checks::{CheckId, EntityRef, Severity, ValidationIssue};
 use crate::CheckError;
 
-/// Check that a vertex lies on its edge's 3D curve within tolerance.
+/// Check that a vertex lies where its edge's 3D curve passes, within
+/// tolerance.
 ///
-/// Evaluates the edge curve at the domain start/end and measures
-/// the distance to the vertex position.
+/// The curve is read at the end of the edge's span (see
+/// [`EdgeCurve::domain_with_endpoints`]) that the vertex bounds, as every
+/// reader of the edge reads it, so a vertex at the wrong end of a B-spline
+/// or past the end of its span is found. A closed edge's one vertex, or a
+/// vertex that bounds neither end, need only lie on the curve: a closed
+/// circle is read from its frame's origin, wherever its vertex lies. A
+/// curve that is not well formed (see [`EdgeCurve::is_well_formed`]) is
+/// reported, not read.
+///
+/// # Errors
+///
+/// Returns an error if the edge or a vertex is not in `topo`.
 pub fn check_vertex_on_curve(
     topo: &Topology,
     vertex_id: VertexId,
     edge_id: EdgeId,
     tolerance: f64,
 ) -> Result<Vec<ValidationIssue>, CheckError> {
-    let vertex = topo.vertex(vertex_id)?;
     let edge = topo.edge(edge_id)?;
-    let pos = vertex.point();
-
+    let curve = edge.curve();
     // For Line edges, the vertices ARE the geometry — always consistent.
-    let deviation = match edge.curve() {
-        EdgeCurve::Line => return Ok(vec![]),
-        EdgeCurve::Circle(c) => {
-            let t_closest = c.project(pos);
-            (pos - c.evaluate(t_closest)).length()
-        }
-        EdgeCurve::Ellipse(e) => {
-            let t_closest = e.project(pos);
-            (pos - e.evaluate(t_closest)).length()
-        }
-        EdgeCurve::NurbsCurve(nc) => {
-            let (t0, t1) = nc.domain();
-            let d_start = (pos - nc.evaluate(t0)).length();
-            let d_end = (pos - nc.evaluate(t1)).length();
-            d_start.min(d_end)
-        }
+    if matches!(curve, EdgeCurve::Line) {
+        return Ok(vec![]);
+    }
+    if !curve.is_well_formed() {
+        return Ok(vec![ValidationIssue {
+            check: CheckId::VertexOnCurve,
+            severity: Severity::Warning,
+            entity: EntityRef::Edge(edge_id),
+            description: "the edge's curve is malformed, so it is not read".into(),
+            deviation: None,
+        }]);
+    }
+    let pos = topo.vertex(vertex_id)?.point();
+    let (start, end) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let at_end = if edge.start() == edge.end() {
+        None
+    } else if vertex_id == edge.start() {
+        Some(true)
+    } else if vertex_id == edge.end() {
+        Some(false)
+    } else {
+        None
+    };
+    let deviation = if let Some(first) = at_end {
+        let (t0, t1) = curve.domain_with_endpoints(start, end);
+        let t = if first { t0 } else { t1 };
+        (pos - curve.evaluate_with_endpoints(t, start, end)).length()
+    } else {
+        distance_to_curve(curve, pos)
     };
 
     if deviation > tolerance {
@@ -53,6 +78,24 @@ pub fn check_vertex_on_curve(
         }]);
     }
     Ok(vec![])
+}
+
+/// How far `pos` lies from the nearest point of `curve`, a circle, an
+/// ellipse or a B-spline over its whole domain.
+fn distance_to_curve(curve: &EdgeCurve, pos: brepkit_math::vec::Point3) -> f64 {
+    match curve {
+        EdgeCurve::Line => 0.0,
+        EdgeCurve::Circle(c) => (pos - c.evaluate(c.project(pos))).length(),
+        EdgeCurve::Ellipse(e) => (pos - e.evaluate(e.project(pos))).length(),
+        EdgeCurve::NurbsCurve(nc) => {
+            let (t0, t1) = nc.domain();
+            let ends = (pos - nc.evaluate(t0))
+                .length()
+                .min((pos - nc.evaluate(t1)).length());
+            brepkit_math::nurbs::projection::project_point_to_curve(nc, pos, 1e-10)
+                .map_or(ends, |p| p.distance.min(ends))
+        }
+    }
 }
 
 /// Check that a vertex lies on a face's surface within tolerance.

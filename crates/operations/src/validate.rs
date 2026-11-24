@@ -403,6 +403,10 @@ fn piece_issues(
 /// 14. **Pcurves**: each pcurve of an edge on a curved face, read through
 ///     the face's surface, gives the edge's points at eleven fractions of
 ///     its span, within a tolerance that grows with the solid's size
+/// 15. **Edge ends**: each edge's curve, read at the ends of its span,
+///     passes through its vertices within their tolerance, or within the
+///     band in which the edge's readers take a vertex to lie on its curve,
+///     and a closed edge's curve passes through its one vertex
 ///
 /// # Errors
 ///
@@ -974,6 +978,7 @@ pub fn validate_solid_with_options(
         }
     }
 
+    issues.extend(edge_ends_issues(topo, &all_edges, scale)?);
     issues.extend(wires_apart_issues(topo, &faces, scale)?);
     issues.extend(faces_overlap_issues(topo, solid, scale)?);
     issues.extend(pcurve_issues(topo, solid, &faces, scale)?);
@@ -1053,6 +1058,68 @@ pub fn validate_solid_with_options(
     }
 
     Ok(ValidationReport { issues })
+}
+
+/// How far a vertex may lie from its edge's curve and still be read on it:
+/// `EdgeCurve::domain_with_endpoints` reads a B-spline edge's span from
+/// vertices this near its curve. Booleans fit their section curves and
+/// leave the vertices they share up to the fit off them, with no tolerance
+/// raised to cover it.
+const WELD_BAND: f64 = 1e-5;
+
+/// An error for each end of an edge whose curve misses its vertex. Read at
+/// the end of the edge's span that the vertex bounds, the curve lies farther
+/// from the vertex than the vertex's tolerance, the linear tolerance and the
+/// edge's own tolerance together, and [`WELD_BAND`], whichever is largest,
+/// times `scale`. A closed edge's one vertex must lie on its curve. A curve
+/// that is not well formed is an error and is not read.
+fn edge_ends_issues(
+    topo: &Topology,
+    edges: &[brepkit_topology::edge::EdgeId],
+    scale: f64,
+) -> Result<Vec<ValidationIssue>, crate::OperationsError> {
+    let linear = Tolerance::new().linear;
+    let mut issues = Vec::new();
+    for &eid in edges {
+        let edge = topo.edge(eid)?;
+        if !edge.curve().is_well_formed() {
+            issues.push(ValidationIssue {
+                severity: Severity::Error,
+                description: format!(
+                    "edge {}: its curve is malformed, so it is not read",
+                    eid.index()
+                ),
+            });
+            continue;
+        }
+        let ends = if edge.start() == edge.end() {
+            vec![(edge.start(), "one")]
+        } else {
+            vec![(edge.start(), "start"), (edge.end(), "end")]
+        };
+        for (vid, which) in ends {
+            let tolerance = topo
+                .vertex(vid)?
+                .tolerance()
+                .max(linear + edge.tolerance().unwrap_or(0.0))
+                .max(WELD_BAND)
+                * scale;
+            let found = brepkit_check::validate::check_vertex_on_curve(topo, vid, eid, tolerance)
+                .map_err(|e| crate::OperationsError::InvalidInput {
+                reason: e.to_string(),
+            })?;
+            issues.extend(found.into_iter().map(|issue| ValidationIssue {
+                severity: Severity::Error,
+                description: format!(
+                    "edge {}: its curve misses its {which} vertex {}: {}",
+                    eid.index(),
+                    vid.index(),
+                    issue.description
+                ),
+            }));
+        }
+    }
+    Ok(issues)
 }
 
 /// An error for each face with a wire that crosses itself or runs round its

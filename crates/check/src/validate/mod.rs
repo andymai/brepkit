@@ -13,6 +13,7 @@ pub(crate) mod wire;
 
 pub use checks::{CheckId, EntityRef, Severity, ValidationIssue, ValidationReport};
 pub use edge::check_edge_same_parameter;
+pub use vertex::check_vertex_on_curve;
 
 use std::collections::HashSet;
 
