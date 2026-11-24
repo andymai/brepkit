@@ -7252,6 +7252,17 @@ fn pole_off_ball_axis(
     (best >= 1.0).then_some(axis)
 }
 
+/// Whether each end of each section meets exactly one other end (a closed
+/// section's two ends meet each other). Sections cross nowhere but at their
+/// ends, so loops chained from such sections share no point: any two lie
+/// apart or one inside the other. Where three ends or more meet, two loops
+/// can cross there.
+fn sections_meet_in_pairs(sections: &[SectionEdge], weld: f64) -> bool {
+    let ends: Vec<Point3> = sections.iter().flat_map(|s| [s.start, s.end]).collect();
+    ends.iter()
+        .all(|&p| ends.iter().filter(|&&q| (q - p).length() < weld).count() == 2)
+}
+
 /// The centroid of a closed curved section's samples when every sample
 /// clears the face outline by a twentieth of the loop's extent (a loop that
 /// touches the outline is no cap).
@@ -8945,7 +8956,16 @@ fn split_face_2d_impl(
         endpoints_internal && !sections_form_winding_chain(sections, &surface, tol.linear)
     };
 
-    if all_sections_internal {
+    // The shortcut takes each chained loop as a disc, and as a hole of the
+    // rest of the face: that tiles the face only where no two loops cross.
+    // On a ball face, loops that meet (two small circles that cross) go to
+    // the general split. The weld is the one the shortcut chains by.
+    let loops_apart = !matches!(surface, FaceSurface::Sphere(_))
+        || sections_meet_in_pairs(
+            deduped_line_loops.as_deref().unwrap_or(sections),
+            tol.linear * 100.0,
+        );
+    if all_sections_internal && loops_apart {
         let secs = deduped_line_loops.as_deref().unwrap_or(sections);
         log::debug!(
             "split_face_2d: face {face_id:?} routed to internal-loops path ({} sections)",
@@ -16459,5 +16479,156 @@ mod tests {
         let zone = topo.add_wire(Wire::new(zone, true).unwrap());
         let zone = topo.add_face(Face::new(zone, vec![], ball()));
         assert!(pole_held_round(&topo, zone, &sphere).is_none());
+    }
+
+    /// The unit ball less the cap round the unit direction `cap` beyond
+    /// `0.95`, one face bounded by the cap's rim; two small circles on it,
+    /// 0.2 rad round, their middles 0.3 rad apart either side of the unit
+    /// direction `m` along the unit direction `e` square to it, so that they
+    /// cross twice; split by `split_face_2d` along their arcs, laid in the
+    /// order of their circles.
+    fn split_with_crossing_circles(cap: Vec3, m: Vec3, e: Vec3) -> Vec<SplitSubFace> {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let circle =
+            |d: Vec3, rho: f64| Circle3D::new(origin + d * rho.cos(), d, rho.sin()).unwrap();
+        let sphere = SphericalSurface::new(origin, 1.0).unwrap();
+        let surface = FaceSurface::Sphere(sphere);
+        let mut topo = Topology::new();
+        // The rim runs round `-cap`, so that the face lies on its left.
+        let rim = circle(-cap, std::f64::consts::PI - 0.95_f64.acos());
+        let at = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
+        let rim = topo.add_edge(Edge::new(at, at, EdgeCurve::Circle(rim)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+        let face_id = topo.add_face(Face::new(wire, vec![], surface.clone()));
+
+        let (rho, apart) = (0.2_f64, 0.3_f64);
+        let (s, c) = (0.5 * apart).sin_cos();
+        let n = m.cross(e);
+        let along = rho.cos() / c;
+        let across = (1.0 - along * along).sqrt();
+        let p = origin + m * along + n * across;
+        let q = origin + m * along - n * across;
+        let mut sections = Vec::new();
+        for d in [m * c + e * s, m * c - e * s] {
+            let round = circle(d, rho);
+            // Each arc in pieces under half a turn, as the face-face phase
+            // emits them.
+            let mut arcs = Vec::new();
+            for (from, to) in [(p, q), (q, p)] {
+                let (a, b) = (round.project(from), round.project(to));
+                let span = (b - a).rem_euclid(std::f64::consts::TAU);
+                if span < 0.999 * std::f64::consts::PI {
+                    arcs.push((from, to));
+                } else {
+                    let middle = round.evaluate(a + 0.5 * span);
+                    arcs.extend([(from, middle), (middle, to)]);
+                }
+            }
+            let curve = EdgeCurve::Circle(round);
+            for (from, to) in arcs {
+                let pcurve = super::super::pcurve_compute::compute_pcurve_on_surface(
+                    &curve,
+                    from,
+                    to,
+                    &surface,
+                    &[],
+                    None,
+                );
+                sections.push(SectionEdge {
+                    curve_3d: curve.clone(),
+                    pcurve_a: pcurve,
+                    pcurve_b: dummy_pcurve(),
+                    start: from,
+                    end: to,
+                    start_uv_a: None,
+                    end_uv_a: None,
+                    start_uv_b: None,
+                    end_uv_b: None,
+                    target_face: None,
+                    pave_block_id: None,
+                });
+            }
+        }
+        let tol = brepkit_math::tolerance::Tolerance::new();
+        let edge_images: std::collections::HashMap<
+            brepkit_topology::edge::EdgeId,
+            Vec<brepkit_topology::edge::EdgeId>,
+        > = std::collections::HashMap::new();
+        let info = SurfaceInfo::Parametric {
+            u_periodic: true,
+            v_periodic: false,
+        };
+        split_face_2d(
+            &topo,
+            face_id,
+            &sections,
+            Rank::A,
+            &tol,
+            None,
+            Some(&info),
+            &edge_images,
+            &std::collections::BTreeSet::new(),
+            None,
+        )
+    }
+
+    /// The arcs a piece's wires run, as the middles of their circles.
+    fn circles_run(piece: &SplitSubFace) -> Vec<Vec<Point3>> {
+        std::iter::once(&piece.outer_wire)
+            .chain(&piece.inner_wires)
+            .map(|w| {
+                w.iter()
+                    .filter_map(|e| match &e.curve_3d {
+                        EdgeCurve::Circle(c) => Some(c.center()),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Two small circles that cross on a ball face split it in four: the
+    /// face less both discs, each disc less the other, and their lens. Read
+    /// as two whole discs, the discs overlap on the lens and the face's
+    /// two holes overlap there too.
+    #[test]
+    fn two_small_circles_that_cross_on_a_ball_face_split_it_in_four() {
+        let unit = |x: f64, y: f64, z: f64| Vec3::new(x, y, z).normalize().unwrap();
+        // The face holds the south pole of its own chart; and, with the cap
+        // round +x, both poles, so that it takes a chart with one pole off it.
+        for (cap, m, e) in [
+            (
+                Vec3::new(0.0, 0.0, 1.0),
+                unit(1.0, 0.0, -1.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ),
+            (
+                Vec3::new(1.0, 0.0, 0.0),
+                unit(-0.5, 0.5, -0.7),
+                unit(1.0, 1.0, 0.0),
+            ),
+        ] {
+            let split = split_with_crossing_circles(cap, m, e);
+            assert_eq!(split.len(), 4, "cap {cap:?}");
+            // No wire runs one small circle alone: a whole disc.
+            let rim = Point3::new(0.0, 0.0, 0.0) + cap * 0.95;
+            for piece in &split {
+                for wire in circles_run(piece) {
+                    let one_circle = wire.iter().all(|c| (*c - wire[0]).length() < 1e-9);
+                    assert!(
+                        !one_circle || (wire[0] - rim).length() < 1e-9,
+                        "cap {cap:?}: a wire runs a whole small circle"
+                    );
+                }
+            }
+            assert_eq!(split.iter().map(|p| p.inner_wires.len()).sum::<usize>(), 1);
+        }
     }
 }
