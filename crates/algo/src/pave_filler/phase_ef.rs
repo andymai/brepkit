@@ -7310,6 +7310,296 @@ mod tests {
         }
     }
 
+    /// A patch of degrees 2 and 1 whose side at `v = 0` is the point
+    /// `(0, 0, 0)` and whose side at `v = 1` is the arch from `(-1, 1, 0)`
+    /// over `(0, 1, 0.5)` to `(1, 1, 0)`, a fan like a cone's. Its face is
+    /// the whole patch: a point edge at the pole whose pcurve runs along
+    /// `v = 0`, the lines from the pole up its sides at `u = 0` and `u = 1`,
+    /// and the arch, each with its pcurve.
+    fn pole_fan(topo: &mut Topology) -> FaceId {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::Point2;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::pcurve::PCurve;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let pole = Point3::new(0.0, 0.0, 0.0);
+        let arch = [
+            Point3::new(-1.0, 1.0, 0.0),
+            Point3::new(0.0, 1.0, 0.5),
+            Point3::new(1.0, 1.0, 0.0),
+        ];
+        let rows = arch.iter().map(|&a| vec![pole, a]).collect();
+        let fan = NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 2]; 3],
+        )
+        .unwrap();
+        let (p, left, right) = (
+            topo.add_vertex(Vertex::new(pole, 1e-7)),
+            topo.add_vertex(Vertex::new(arch[0], 1e-7)),
+            topo.add_vertex(Vertex::new(arch[2], 1e-7)),
+        );
+        let curve = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            arch.to_vec(),
+            vec![1.0; 3],
+        )
+        .unwrap();
+        let edges = [
+            (
+                topo.add_edge(Edge::new(p, p, EdgeCurve::Line)),
+                (0.0, 0.0),
+                (1.0, 0.0),
+            ),
+            (
+                topo.add_edge(Edge::new(p, right, EdgeCurve::Line)),
+                (1.0, 0.0),
+                (1.0, 1.0),
+            ),
+            (
+                topo.add_edge(Edge::new(right, left, EdgeCurve::NurbsCurve(curve))),
+                (1.0, 1.0),
+                (0.0, 1.0),
+            ),
+            (
+                topo.add_edge(Edge::new(left, p, EdgeCurve::Line)),
+                (0.0, 1.0),
+                (0.0, 0.0),
+            ),
+        ];
+        let wire = topo.add_wire(
+            Wire::new(
+                edges
+                    .iter()
+                    .map(|&(e, _, _)| OrientedEdge::new(e, true))
+                    .collect(),
+                true,
+            )
+            .unwrap(),
+        );
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(fan)));
+        for (e, a, b) in edges {
+            let (from, to) = (Point2::new(a.0, a.1), Point2::new(b.0, b.1));
+            let line = Line2D::new(from, to - from).unwrap();
+            topo.pcurves_mut().set(
+                e,
+                face,
+                PCurve::new(Curve2D::Line(line), 0.0, (to - from).length()),
+            );
+        }
+        face
+    }
+
+    /// A face on a patch with a pole side, whose wire runs a point edge
+    /// along that side: lines along `z` through the face near the pole and
+    /// away from it each cross it once, at its point. The pole's side holds
+    /// its control points at one point, so the face takes no trim.
+    #[test]
+    fn a_face_with_a_point_edge_at_a_pole_keeps_its_crossings() {
+        let mut topo = Topology::new();
+        let face = pole_fan(&mut topo);
+        let FaceSurface::Nurbs(fan) = topo.face(face).unwrap().surface().clone() else {
+            unreachable!()
+        };
+        let tol = Tolerance::new();
+        let reach = face_tolerance(&topo, face, tol).unwrap();
+        assert!(
+            super::super::nurbs_trim::NurbsFaceTrim::new(&topo, face, &fan, tol, reach)
+                .unwrap()
+                .is_none()
+        );
+        let mut misread = Vec::new();
+        for (u, v) in [(0.5, 0.01), (0.3, 0.02), (0.5, 0.5), (0.2, 0.8), (0.9, 0.3)] {
+            let hit = fan.evaluate(u, v);
+            let up = brepkit_math::vec::Vec3::new(0.0, 0.0, 1.0);
+            let found = ef_vertices(
+                &mut topo,
+                face,
+                EdgeCurve::Line,
+                hit + up * 0.31,
+                Some(hit - up * 0.27),
+            );
+            if found.len() != 1 || (found[0] - hit).length() > 1e-7 {
+                misread.push((u, v, found));
+            }
+        }
+        assert!(misread.is_empty(), "{misread:?}");
+    }
+
+    /// The flat sheet's square face with a point edge added at its corner
+    /// `(0.9, 0.1)`, whose pcurve is a line read over an interval of no
+    /// length, or a B-spline read so: lines through the face cross it once.
+    /// The line's point pcurve is a point piece, past which the next
+    /// pcurve's joint closes the loop, and lines 1e-5 off the face cross it
+    /// nowhere. The B-spline's has no pieces, so its face takes no trim and
+    /// keeps the crossings in its box, which its control points reach down
+    /// to `y = 0.05`.
+    #[test]
+    fn a_point_pcurve_in_a_wire_keeps_the_loop_closed() {
+        use brepkit_math::curves2d::{Curve2D, Line2D, NurbsCurve2D};
+        use brepkit_math::vec::{Point2, Vec2};
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::pcurve::PCurve;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        for spline in [false, true] {
+            let mut topo = Topology::new();
+            let face = sheet_with_shifted_pcurves(&mut topo, 0.0);
+            let outer = topo.face(face).unwrap().outer_wire();
+            let mut edges: Vec<OrientedEdge> = topo.wire(outer).unwrap().edges().to_vec();
+            let corner = topo.edge(edges[0].edge()).unwrap().end();
+            let point = topo.add_edge(Edge::new(corner, corner, EdgeCurve::Line));
+            edges.insert(1, OrientedEdge::new(point, true));
+            let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+            topo.face_mut(face).unwrap().set_outer_wire(wire);
+            let at = Point2::new(0.9, 0.1);
+            let pcurve = if spline {
+                let line = NurbsCurve2D::new(
+                    1,
+                    vec![0.0, 0.0, 1.0, 1.0],
+                    vec![at - Vec2::new(0.0, 0.05), at + Vec2::new(0.0, 0.05)],
+                    vec![1.0; 2],
+                )
+                .unwrap();
+                PCurve::new(Curve2D::Nurbs(line), 0.5, 0.5)
+            } else {
+                let line = Line2D::new(at, Vec2::new(0.0, 1.0)).unwrap();
+                PCurve::new(Curve2D::Line(line), 0.0, 0.0)
+            };
+            topo.pcurves_mut().set(point, face, pcurve);
+            let FaceSurface::Nurbs(sheet) = topo.face(face).unwrap().surface().clone() else {
+                unreachable!()
+            };
+            let tol = Tolerance::new();
+            let reach = face_tolerance(&topo, face, tol).unwrap();
+            let trim =
+                super::super::nurbs_trim::NurbsFaceTrim::new(&topo, face, &sheet, tol, reach)
+                    .unwrap();
+            assert_eq!(trim.is_some(), !spline, "spline {spline}");
+            for ((x, y), want) in [
+                ((0.5, 0.5), 1),
+                ((0.85, 0.15), 1),
+                ((0.9 - 1e-5, 0.1 + 1e-5), 1),
+                ((0.9 + 1e-5, 0.5), 0),
+                ((0.5, 0.1 - 1e-5), usize::from(spline)),
+            ] {
+                let found = ef_vertices(
+                    &mut topo,
+                    face,
+                    EdgeCurve::Line,
+                    Point3::new(x, y, 0.31),
+                    Some(Point3::new(x, y, -0.27)),
+                );
+                assert_eq!(
+                    found.len(),
+                    want,
+                    "spline {spline} at ({x}, {y}): {found:?}"
+                );
+            }
+        }
+    }
+
+    /// A flat sheet over `[0, 1]²` with `x = u` and `y = v`, its face the
+    /// square `[0.1, 0.9]²` whose wire runs a slit from `(0.5, 0.1)` up to
+    /// `(0.5, 0.5)` and back down it, one edge used twice: lines through the
+    /// face beside the slit, on either side, cross it once, and the trim
+    /// reads both inside; a line past the square crosses it nowhere.
+    #[test]
+    fn a_slit_edge_run_out_and_back_keeps_both_sides_of_it() {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::Point2;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::pcurve::PCurve;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut topo = Topology::new();
+        let rows = [0.0, 1.0]
+            .iter()
+            .map(|&x| [0.0, 1.0].iter().map(|&y| Point3::new(x, y, 0.0)).collect())
+            .collect();
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let sheet =
+            NurbsSurface::new(1, 1, knots.clone(), knots, rows, vec![vec![1.0; 2]; 2]).unwrap();
+        let at = [
+            (0.1, 0.1),
+            (0.5, 0.1),
+            (0.9, 0.1),
+            (0.9, 0.9),
+            (0.1, 0.9),
+            (0.5, 0.5),
+        ];
+        let v = at.map(|(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)));
+        let mut lines = Vec::new();
+        let mut edge = |topo: &mut Topology, a: usize, b: usize| {
+            let e = topo.add_edge(Edge::new(v[a], v[b], EdgeCurve::Line));
+            lines.push((e, a, b));
+            e
+        };
+        let bottom_left = edge(&mut topo, 0, 1);
+        let slit = edge(&mut topo, 1, 5);
+        let bottom_right = edge(&mut topo, 1, 2);
+        let right = edge(&mut topo, 2, 3);
+        let top = edge(&mut topo, 3, 4);
+        let left = edge(&mut topo, 4, 0);
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(bottom_left, true),
+                    OrientedEdge::new(slit, true),
+                    OrientedEdge::new(slit, false),
+                    OrientedEdge::new(bottom_right, true),
+                    OrientedEdge::new(right, true),
+                    OrientedEdge::new(top, true),
+                    OrientedEdge::new(left, true),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(sheet.clone())));
+        for (e, a, b) in lines {
+            let (from, to) = (Point2::new(at[a].0, at[a].1), Point2::new(at[b].0, at[b].1));
+            let line = Line2D::new(from, to - from).unwrap();
+            topo.pcurves_mut().set(
+                e,
+                face,
+                PCurve::new(Curve2D::Line(line), 0.0, (to - from).length()),
+            );
+        }
+        let tol = Tolerance::new();
+        let reach = face_tolerance(&topo, face, tol).unwrap();
+        let trim = super::super::nurbs_trim::NurbsFaceTrim::new(&topo, face, &sheet, tol, reach)
+            .unwrap()
+            .unwrap();
+        for ((x, y), want) in [
+            ((0.5 - 1e-3, 0.3), 1),
+            ((0.5 + 1e-3, 0.3), 1),
+            ((0.5, 0.7), 1),
+            ((0.5, 0.05), 0),
+        ] {
+            let p = Point3::new(x, y, 0.0);
+            if want == 1 {
+                assert_eq!(trim.holds(p, 1e-6, tol), Some(true), "({x}, {y})");
+            }
+            let found = ef_vertices(
+                &mut topo,
+                face,
+                EdgeCurve::Line,
+                Point3::new(x, y, 0.31),
+                Some(Point3::new(x, y, -0.27)),
+            );
+            assert_eq!(found.len(), want, "({x}, {y}): {found:?}");
+        }
+    }
+
     /// A sheet of degree one along `u` over four rows: `x` from 0 to 1 at
     /// `z = 0` for `u` up to 1/3, back from 1 to 0.2 rising to `z = rise` for
     /// `u` up to 2/3, then up to `z = 1`; `y = v`. It folds back over
