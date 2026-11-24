@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795546320998,
+  "lastUpdate": 1795549978106,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -77813,6 +77813,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19449015,
             "range": "± 114362",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "78c85b2aa0ca1d47351d518ab34d0aab0f6e9850",
+          "message": "fix(math,io,wasm,operations): refuse NaN and huge sizes, check analytic geometry on load and in wasm, and refuse a face too far out to mesh (#2834)\n\n## Summary\n\nOn main, these load and build paths accept geometry that cannot be\nevaluated:\n\n- **NaN sizes (#2816).** The constructors test `x <= 0.0`, which is\nfalse for NaN, so a NaN or infinite radius builds a curve or surface.\nThe STEP reader checks only B-splines, and the IGES plane reader accepts\na normal whose length overflows.\n- **Wasm bindings (#2805).** Seven bindings build NURBS from JS arrays\nwith only their counts checked. Two malformed cases panic in the\nevaluator, which traps a wasm instance.\n- **Huge sizes (#2806).** A circle of radius 1e300 passes the load\nchecks, and meshing it panics with an add overflow in a debug build. A\nrelease build wraps instead.\n- **Ellipse axis order (#2829, load side).** A loaded ellipse may put\nits smaller axis first.\n\nWith this change, each of these is refused with an error. The pose sweep\nand the truth audit give the same output as main.\n\nFixes #2816. Fixes #2805. Fixes #2806. For #2829, this fixes the load\nside; the algo call sites stay open.\n\n## The change\n\n- **Constructors.** Each radius, semi-axis, focal length, direction\nlength and cone angle must be finite and in range, and a 2D ellipse's\nrotation must be finite.\n- **Readers.** STEP checks `is_well_formed` on every curve and surface,\nand again on each face's final surface. IGES checks each plane.\n- **A size limit.** `is_well_formed` refuses analytic radii, semi-axes,\nplane distances and centre coordinates past `SIZE_LIMIT` (1e300), the\nbound splines already have. The largest real values are a radius of\n718.6 in the arena fixtures and a coordinate of 1.24e5 in the STEP test\ndata.\n- **The mesher.** `check_reach` refuses a face that could reach past\n1e11 in any coordinate, before it converts points to integer grid cells.\n- **Wasm.** The seven bindings check `is_well_formed` and return an\nerror. So do `makeTangentArc3d`, `makeCircleArc3d`, the lifted conics in\n`liftCurve2dToPlane`, the analytic curves and surfaces in `fromBREP`,\nand the fitting and knot operations. `makeNurbsEdge` is now in the\nbatch.\n- **Counts.** The NURBS constructors and degree elevation size their\nknot vectors and tables with checked arithmetic, and return an error on\noverflow. Bindings and the STEP reader refuse a degree not less than the\npoint count before they build a curve. Degree elevation stops at degree\n25, where every binomial product fits in 32 bits, and at 2^20 new\ncontrol points.\n- **Cones and cylinders in the mesher.** The reach check bounds a cone's\nor cylinder's heights by the wires' exact extent along the axis. A\ncone's bound divides by the sine of its half angle, as the projection\ndoes.\n- **Ellipse order.** `is_well_formed` refuses a 2D or 3D ellipse with\nits smaller axis first. No arena fixture or STEP test file holds one, so\na refusal costs no real file.\n\n## Tests\n\n- Constructor tests in math, a STEP circle or cylinder the reader cannot\nevaluate, and an IGES plane or circle, each refused. Each fails with the\ncheck off.\n- `a_dump_too_large_to_mesh_gives_an_error_from_the_mesher` meshes a\ndump past the reach, through the solid and face meshers, in debug and\nrelease-like builds.\n- Batch contract tests refuse each malformed curve through\n`makeNurbsEdge` and `liftCurve2dToPlane`. Native tests cover the sweep\nbindings and NaN input, which JSON cannot carry.\n- `a_dump_with_an_ellipse_whose_smaller_axis_comes_first_is_refused`,\nwith math and topology tests for the rule.\n- Tests refuse a degree of `u32::MAX` and `usize::MAX`, a degree\nelevation past its bounds, and a cone whose wires read far out along it.\n- brepkit-math (786), brepkit-topology (96), the io lib (176) and\nbrepkit-wasm native (305) pass, and so do all brepkit-operations and\nbrepkit-io tests (3314, 28 skipped).\n\n## Still open\n\n- The mesher has no sample count limit (#2831), and some wasm bindings\nuse JS counts as allocation sizes with no limit (#2838).\n- Wasm bindings that take a radius through `validate_positive` accept\nsizes past the limit (#2832).\n- The STEP reader accepts a NaN vertex, and two surface constructors do\nnot check their ranges (#2833).\n- The algo call sites that read `semi_major()` alone (#2829).",
+          "timestamp": "2026-11-24T19:48:31Z",
+          "tree_id": "f55ace5f6b27d3682a524148474aa7c6bcabd168",
+          "url": "https://github.com/andymai/brepkit/commit/78c85b2aa0ca1d47351d518ab34d0aab0f6e9850"
+        },
+        "date": 1795549963589,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1217301,
+            "range": "± 4363",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1301564,
+            "range": "± 7732",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14278,
+            "range": "± 326",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 727727,
+            "range": "± 3125",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28029853,
+            "range": "± 146128",
             "unit": "ns/iter"
           }
         ]
