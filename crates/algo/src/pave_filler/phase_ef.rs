@@ -3582,16 +3582,16 @@ fn side_roots(
         }
     }
     // A run of pieces on one side for sure that may come within the
-    // tolerance of the surface holds a touch where the curve comes nearest
-    // the surface inside it, if that is within the tolerance. Where the
-    // distance comes least at an end of the run, it falls on into what lies
-    // beside: a place where the forms may be zero, whose contact is read
-    // above; an end of the curve, whose contact is its vertex's; or a piece
-    // proved farther than the tolerance.
+    // tolerance of the surface holds a touch at each place inside it where
+    // the curve comes nearest the surface, if that is within the tolerance.
+    // A least at an end of the run falls on into what lies beside: a place
+    // where the forms may be zero, whose contact is read above; an end of
+    // the curve, whose contact is its vertex's; or a piece proved farther
+    // than the tolerance.
     let within_tolerance = |t: f64| distance_to_surface(point_at(t), surface) < tol.linear;
     let mut k = 0;
     while k < marks.len() {
-        let Mark::Near(from, _, _) = marks[k] else {
+        let Mark::Near(from, _, positive) = marks[k] else {
             k += 1;
             continue;
         };
@@ -3600,13 +3600,133 @@ fn side_roots(
             to = b;
             k += 1;
         }
-        let t = least(from, to);
-        if t - from > shortest && to - t > shortest && within_tolerance(t) {
-            roots.push(SideRoot::Touch(t, point_at(t)));
+        // The last form reads the side nearest to a distance, whose leasts
+        // lie where the distance's do: the ring's quartic carries a factor
+        // that changes by half along a curve round the tube.
+        let Some(lows) = forms
+            .iter()
+            .rev()
+            .find_map(|f| lows_of(*f, (from, to), positive, shortest))
+        else {
+            return Err(AlgoError::IntersectionFailed(format!(
+                "where a {} runs within the tolerance of a {} from t = {from} to {to}, its \
+                 nearest places cannot be told apart",
+                curve.type_tag(),
+                surface.type_tag()
+            )));
+        };
+        for (a, b) in lows {
+            let t = least(a, b);
+            if t - from > shortest && to - t > shortest && within_tolerance(t) {
+                roots.push(SideRoot::Touch(t, point_at(t)));
+            }
         }
     }
     roots.sort_by(|x, y| x.at().0.total_cmp(&y.at().0));
     Ok(Some(roots))
+}
+
+/// The brackets in the parameters `run`, along which `form` keeps one sign
+/// (`positive`), each holding one place where its size comes least, or a
+/// cluster of its turns shorter than `shortest`, the step that moves the
+/// curve by the tolerance. The form's slope is read on the pieces of the
+/// run as [`side_roots`] reads the form: a piece where Taylor's bounds,
+/// with the rounding, keep the slope off zero has the size rising or
+/// falling along it; one where they keep the slope's own slope off zero
+/// has at most one turn, a least where the size falls into it and rises
+/// out of it. Other pieces are halved down to `shortest`. A least is where
+/// the size falls before a stretch of turns and rises after it, read on
+/// the stretches beside it or at its own ends where those are sure. `None`
+/// where the form cannot be read on the run, or its pieces outrun the
+/// budget.
+fn lows_of(
+    form: &dyn SideFunction,
+    (from, to): (f64, f64),
+    positive: bool,
+    shortest: f64,
+) -> Option<Vec<(f64, f64)>> {
+    const MOST_PIECES: usize = 1 << 14;
+    /// Along the run: a stretch where the size rises (`true`) or falls for
+    /// sure, or a piece that may hold a turn, with the way the size runs at
+    /// its ends where that is sure.
+    enum Slope {
+        Way(bool),
+        Turn(f64, f64, Option<bool>, Option<bool>),
+    }
+    let sign = if positive { 1.0 } else { -1.0 };
+    let rising = |t: f64| {
+        let (d, err) = form.derivatives(t)?;
+        Some((d[0].abs() > err[0]).then_some(sign * d[0] > 0.0))
+    };
+    let mut slopes = Vec::new();
+    let mut pieces = vec![(from, to)];
+    let mut read = 0;
+    while let Some((a, b)) = pieces.pop() {
+        read += 1;
+        if read > MOST_PIECES {
+            return None;
+        }
+        let (h, m) = (b - a, f64::midpoint(a, b));
+        let (d, err) = form.derivatives(m)?;
+        // A form bounded only on short pieces (the tube's, which reads the
+        // curve only away from the ring's axis) is read on halves.
+        let Some(rest) = form.fifth_bound((a, b)) else {
+            if h <= shortest {
+                return None;
+            }
+            pieces.push((m, b));
+            pieces.push((a, m));
+            continue;
+        };
+        let r = 0.5 * h;
+        let (r2, r3, r4) = (r * r, r * r * r, r * r * r * r);
+        let size = |j: usize| d[j - 1].abs() + err[j - 1];
+        let slope_reach =
+            (rest * r4).madd(1.0 / 24.0, size(4) * r3 / 6.0) + size(3) * r2 / 2.0 + size(2) * r;
+        if d[0].abs() > err[0] + slope_reach {
+            slopes.push(Slope::Way(sign * d[0] > 0.0));
+            continue;
+        }
+        let bend_reach = (rest * r3).madd(1.0 / 6.0, size(4) * r2 / 2.0) + size(3) * r;
+        let one_turn = d[1].abs() > err[1] + bend_reach;
+        if one_turn || h <= shortest {
+            let (into, out) = (rising(a)?, rising(b)?);
+            match (into, out) {
+                (Some(x), Some(y)) if x == y && one_turn => slopes.push(Slope::Way(x)),
+                _ => slopes.push(Slope::Turn(a, b, into, out)),
+            }
+            continue;
+        }
+        pieces.push((m, b));
+        pieces.push((a, m));
+    }
+    let mut lows = Vec::new();
+    let mut before: Option<bool> = None;
+    let mut k = 0;
+    while k < slopes.len() {
+        let Slope::Turn(start, _, into, _) = slopes[k] else {
+            if let Slope::Way(way) = slopes[k] {
+                before = Some(way);
+            }
+            k += 1;
+            continue;
+        };
+        let falls = before.or(into);
+        let (mut end, mut out) = (start, None);
+        while let Some(&Slope::Turn(_, b, _, way)) = slopes.get(k) {
+            (end, out) = (b, way);
+            k += 1;
+        }
+        let rises = match slopes.get(k) {
+            Some(Slope::Way(way)) => Some(*way),
+            Some(Slope::Turn(..)) | None => out,
+        };
+        if falls == Some(false) && rises == Some(true) {
+            lows.push((start, end));
+        }
+        before = rises;
+    }
+    Some(lows)
 }
 
 /// Where a curve meets a surface: each crossing, and each touch where it
@@ -7655,6 +7775,77 @@ mod tests {
                 if found.len() != want || !near {
                     misread.push(format!("{what} at {gap}: {found:?}"));
                 }
+            }
+        }
+        assert!(misread.is_empty(), "{misread:#?}");
+    }
+
+    /// An ellipse of semi-axes `1 + 1.1e-7` and `1 + 5e-8` about the centre
+    /// of a unit ball in its plane stays within 1.1e-7 of the ball, and
+    /// comes within 5e-8 of it twice, at angles π/2 and 3π/2: the exact pass
+    /// reads both touches. So do the same ellipse about the axis of a unit
+    /// wall, across it, and about the centre of a ring's tube of radius 0.5
+    /// in the plane through the ring's axis, its semi-axes 0.5 more.
+    #[test]
+    fn a_curve_twice_within_the_tolerance_touches_twice() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::surfaces::{CylindricalSurface, SphericalSurface, ToroidalSurface};
+        use brepkit_math::vec::Vec3;
+        let tol = Tolerance::new();
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let mut misread = Vec::new();
+        for (what, surface, centre, normal, across, size) in [
+            (
+                "ball",
+                FaceSurface::Sphere(SphericalSurface::new(origin, 1.0).unwrap()),
+                origin,
+                z,
+                x,
+                1.0,
+            ),
+            (
+                "wall",
+                FaceSurface::Cylinder(CylindricalSurface::new(origin, z, 1.0).unwrap()),
+                origin,
+                z,
+                x,
+                1.0,
+            ),
+            (
+                "ring",
+                FaceSurface::Torus(ToroidalSurface::new(origin, 2.0, 0.5).unwrap()),
+                Point3::new(2.0, 0.0, 0.0),
+                y,
+                x,
+                0.5,
+            ),
+        ] {
+            let ellipse =
+                Ellipse3D::new_with_ref(centre, normal, size + 1.1e-7, size + 5e-8, across)
+                    .unwrap();
+            let curve = EdgeCurve::Ellipse(ellipse.clone());
+            let (t0, t1) = (0.0, std::f64::consts::TAU);
+            let start = ellipse.evaluate(t0);
+            let roots = analytic_side_roots(&curve, start, start, t0, t1, &surface, tol);
+            let found: Vec<f64> = roots
+                .as_ref()
+                .ok()
+                .and_then(Option::as_ref)
+                .map(|r| r.iter().map(|root| root.at().0).collect())
+                .unwrap_or_default();
+            let want = [
+                std::f64::consts::FRAC_PI_2,
+                3.0 * std::f64::consts::FRAC_PI_2,
+            ];
+            let held =
+                found.len() == 2 && found.iter().zip(want).all(|(t, w)| (t - w).abs() < 1e-3);
+            if !held {
+                misread.push(format!("{what}: {roots:?}"));
             }
         }
         assert!(misread.is_empty(), "{misread:#?}");
