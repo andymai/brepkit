@@ -12934,8 +12934,9 @@ fn winds_the_axis(pts: &[Point2]) -> Option<bool> {
 /// closed loops strictly inside a plane face's boundary (nested coplanar
 /// footprints, or a box wall's socket-profile silhouette), and dedup
 /// repeated segments. Both the coplanar-contact pass and adjacent-face plane-plane
-/// intersections can emit the same footprint segment, so identical
-/// segments (by unordered quantized endpoints) collapse to one.
+/// intersections can emit the same footprint segment, so sections with the
+/// same quantized ends (either way round) that are one curve
+/// ([`same_section_curve`]) collapse to one.
 ///
 /// Returns the deduped sections when every quantized endpoint has degree
 /// exactly 2 (disjoint closed loops) and every endpoint lies strictly
@@ -12949,7 +12950,7 @@ fn plane_internal_line_loops(
     hole_points: &[Point3],
     tol_linear: f64,
 ) -> Option<Vec<SectionEdge>> {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
 
     type QPt = (i64, i64, i64);
 
@@ -12992,7 +12993,10 @@ fn plane_internal_line_loops(
         (frame.evaluate(uv.x(), uv.y()) - p).length() <= margin
     };
 
-    let mut seen: HashSet<(QPt, QPt)> = HashSet::new();
+    // Sections kept so far, by their quantized ends. Two sections with the
+    // same ends are one only when they are one curve: two arcs between one
+    // pair of points (a lens), or an arc and its chord, bound a region.
+    let mut seen: HashMap<(QPt, QPt), Vec<usize>> = HashMap::new();
     let mut deduped: Vec<SectionEdge> = Vec::new();
     for s in sections {
         // A section can only bound a sub-face of this plane if it lies on
@@ -13007,9 +13011,15 @@ fn plane_internal_line_loops(
             return None;
         }
         let key = if a <= b { (a, b) } else { (b, a) };
-        if seen.insert(key) {
-            deduped.push(s.clone());
+        let twins = seen.entry(key).or_default();
+        if twins
+            .iter()
+            .any(|&i| same_section_curve(&deduped[i], s, margin))
+        {
+            continue;
         }
+        twins.push(deduped.len());
+        deduped.push(s.clone());
     }
     if deduped.len() < 3 {
         return None;
@@ -13172,6 +13182,80 @@ fn plane_internal_line_loops(
         return None;
     }
     Some(deduped)
+}
+
+/// Whether sections `a` and `b`, whose ends lie within `tol` of each other
+/// (either way round), are one curve within `tol`, by a proof. Two lines
+/// are. Two circular arcs are when their middles meet: three points fix a
+/// circle, and the middle fixes the arc. Two elliptic arcs are when three
+/// inner points meet: five points of a plane fix a conic. A B-spline is a
+/// line's segment when its control points all lie within `tol` of the
+/// segment, as the curve lies in their hull and runs from end to end, and is
+/// another B-spline when its data match, either way along, and so do the
+/// middles. Any other pair is taken for two curves.
+fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
+    let flipped = (a.start - b.start).length() > (a.start - b.end).length();
+    let meet = |fractions: &[f64]| {
+        fractions.iter().all(|&t| {
+            let on_b = if flipped { 1.0 - t } else { t };
+            (evaluate_edge_at_t(&a.curve_3d, a.start, a.end, t)
+                - evaluate_edge_at_t(&b.curve_3d, b.start, b.end, on_b))
+            .length()
+                <= tol
+        })
+    };
+    let straight = |nurbs: &brepkit_math::nurbs::curve::NurbsCurve, line: &SectionEdge| {
+        let d = line.end - line.start;
+        let len2 = d.dot(d);
+        len2 > 0.0
+            && nurbs.weights().iter().all(|&w| w > 0.0)
+            && nurbs.control_points().iter().all(|&p| {
+                let t = ((p - line.start).dot(d) / len2).clamp(0.0, 1.0);
+                (line.start + d * t - p).length() <= tol
+            })
+    };
+    match (&a.curve_3d, &b.curve_3d) {
+        (EdgeCurve::Line, EdgeCurve::Line) => true,
+        (EdgeCurve::Circle(_), EdgeCurve::Circle(_)) => meet(&[0.5]),
+        (EdgeCurve::Ellipse(_), EdgeCurve::Ellipse(_)) => meet(&[0.25, 0.5, 0.75]),
+        (EdgeCurve::Line, EdgeCurve::NurbsCurve(n)) => straight(n, a),
+        (EdgeCurve::NurbsCurve(n), EdgeCurve::Line) => straight(n, b),
+        (EdgeCurve::NurbsCurve(m), EdgeCurve::NurbsCurve(n)) => {
+            same_nurbs_data(m, n, tol) && meet(&[0.5])
+        }
+        _ => false,
+    }
+}
+
+/// Whether two B-splines have one degree, one knot vector, one set of
+/// weights and control points within `tol` of each other, read either way
+/// along the second.
+fn same_nurbs_data(
+    m: &brepkit_math::nurbs::curve::NurbsCurve,
+    n: &brepkit_math::nurbs::curve::NurbsCurve,
+    tol: f64,
+) -> bool {
+    let (mk, nk) = (m.knots(), n.knots());
+    let (mp, np) = (m.control_points(), n.control_points());
+    let (mw, nw) = (m.weights(), n.weights());
+    if m.degree() != n.degree() || mk.len() != nk.len() || mp.len() != np.len() {
+        return false;
+    }
+    let near = |x: f64, y: f64| (x - y).abs() <= 1e-12 * (1.0 + x.abs().max(y.abs()));
+    let forward = mk.iter().zip(nk).all(|(&x, &y)| near(x, y))
+        && mw.iter().zip(nw).all(|(&x, &y)| near(x, y))
+        && mp.iter().zip(np).all(|(&p, &q)| (p - q).length() <= tol);
+    let (lo, hi) = (nk[0], nk[nk.len() - 1]);
+    let backward = mk
+        .iter()
+        .zip(nk.iter().rev())
+        .all(|(&x, &y)| near(x, lo + hi - y))
+        && mw.iter().zip(nw.iter().rev()).all(|(&x, &y)| near(x, y))
+        && mp
+            .iter()
+            .zip(np.iter().rev())
+            .all(|(&p, &q)| (p - q).length() <= tol);
+    forward || backward
 }
 
 /// Rescue for [`plane_internal_line_loops`]: every degree-1 endpoint lies
@@ -16178,5 +16262,167 @@ mod tests {
         let zone = topo.add_wire(Wire::new(zone, true).unwrap());
         let zone = topo.add_face(Face::new(zone, vec![], ball()));
         assert!(!ball_face_round_a_pole(&topo, zone));
+    }
+
+    /// A square plate 10 wide, and on it two arcs from `(4, 5)` to `(6, 5)`,
+    /// each a quarter of a circle of radius `sqrt(2)`, one bulging up about
+    /// `(5, 4)` and one down about `(5, 6)`, with two lines from those
+    /// points up to `(5, 8)`. The sections and the plate's face.
+    fn two_arcs_between_one_pair_of_points() -> (Topology, FaceId, Vec<SectionEdge>) {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let corners = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+            .map(|(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)));
+        let edges: Vec<_> = (0..4)
+            .map(|i| {
+                let edge = Edge::new(corners[i], corners[(i + 1) % 4], EdgeCurve::Line);
+                OrientedEdge::new(topo.add_edge(edge), true)
+            })
+            .collect();
+        let outer = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = topo.add_face(Face::new(
+            outer,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let (p, q, r) = (
+            Point3::new(4.0, 5.0, 0.0),
+            Point3::new(6.0, 5.0, 0.0),
+            Point3::new(5.0, 8.0, 0.0),
+        );
+        // Each arc runs counter-clockwise about +z from its start, under a
+        // half turn.
+        let arc = |centre_y: f64, from: Point3, to: Point3| {
+            let circle = Circle3D::new(
+                Point3::new(5.0, centre_y, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                std::f64::consts::SQRT_2,
+            )
+            .unwrap();
+            SectionEdge {
+                curve_3d: EdgeCurve::Circle(circle),
+                ..line_section(from, to)
+            }
+        };
+        let sections = vec![
+            arc(4.0, q, p),
+            arc(6.0, p, q),
+            line_section(q, r),
+            line_section(r, p),
+        ];
+        (topo, face, sections)
+    }
+
+    /// The middle of a section along its shorter arc.
+    fn section_middle(s: &SectionEdge) -> Point3 {
+        evaluate_edge_at_t(&s.curve_3d, s.start, s.end, 0.5)
+    }
+
+    /// Two different curves between one pair of points (an arc bulging up
+    /// and one bulging down, or the arc up and the straight line) are two
+    /// sections: the loop finder keeps both. The arc up repeated is one
+    /// section, and goes once.
+    #[test]
+    fn plane_internal_line_loops_keeps_two_curves_that_share_their_ends() {
+        let (topo, face_id, sections) = two_arcs_between_one_pair_of_points();
+        let face = topo.face(face_id).unwrap();
+        let surface = face.surface().clone();
+        let wire_pts = collect_wire_points(&topo, face.outer_wire());
+        let frame = PlaneFrame::from_plane_face(extract_plane_normal(&surface), &wire_pts);
+        let boundary =
+            boundary_edges_to_pcurve(&topo, face.outer_wire(), &surface, &wire_pts, Some(&frame));
+        let chord = line_section(sections[0].start, sections[0].end);
+        for (what, pair) in [
+            ("two arcs", [sections[0].clone(), sections[1].clone()]),
+            ("an arc and a line", [sections[0].clone(), chord]),
+        ] {
+            let mut given = pair.to_vec();
+            given.extend_from_slice(&sections[2..]);
+            if let Some(kept) = plane_internal_line_loops(&given, &frame, &boundary, &[], &[], 1e-7)
+            {
+                for curve in &pair {
+                    let middle = section_middle(curve);
+                    assert!(
+                        kept.iter()
+                            .any(|s| (section_middle(s) - middle).length() < 1e-9),
+                        "{what}: the curve through {middle:?} was dropped, {} of {} kept",
+                        kept.len(),
+                        given.len()
+                    );
+                }
+            }
+        }
+        let repeated = vec![
+            sections[0].clone(),
+            sections[2].clone(),
+            sections[0].clone(),
+            sections[3].clone(),
+        ];
+        let kept = plane_internal_line_loops(&repeated, &frame, &boundary, &[], &[], 1e-7)
+            .expect("the arc up and the two lines close one loop");
+        assert_eq!(kept.len(), 3);
+    }
+
+    /// The same plate split by those sections: the lens between the two
+    /// arcs, the triangle above the arc up, and the rest of the plate, each
+    /// the region its sections bound.
+    #[test]
+    fn two_arcs_between_one_pair_of_points_split_a_plate_into_their_regions() {
+        let (topo, face_id, sections) = two_arcs_between_one_pair_of_points();
+        let subs = split_face_2d(
+            &topo,
+            face_id,
+            &sections,
+            Rank::A,
+            &brepkit_math::tolerance::Tolerance::new(),
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &std::collections::BTreeSet::new(),
+            None,
+        );
+        // Each region's area, by the shoelace formula over its wires, each
+        // edge read at 2000 points.
+        let wire_area = |wire: &[OrientedPCurveEdge]| {
+            let mut pts = Vec::new();
+            for e in wire {
+                for k in 0..2000 {
+                    let t = f64::from(k) / 2000.0;
+                    pts.push(evaluate_edge_at_t(&e.curve_3d, e.start_3d, e.end_3d, t));
+                }
+            }
+            let mut twice = 0.0;
+            for (i, a) in pts.iter().enumerate() {
+                let b = pts[(i + 1) % pts.len()];
+                twice += a.x() * b.y() - b.x() * a.y();
+            }
+            (0.5 * twice).abs()
+        };
+        let mut areas: Vec<f64> = subs
+            .iter()
+            .map(|s| {
+                wire_area(&s.outer_wire) - s.inner_wires.iter().map(|w| wire_area(w)).sum::<f64>()
+            })
+            .collect();
+        areas.sort_by(f64::total_cmp);
+        // Each arc cuts a segment of area pi/2 - 1 off its quarter disc; the
+        // triangle's area is 3.
+        let pi = std::f64::consts::PI;
+        let want = [pi - 2.0, 4.0 - 0.5 * pi, 98.0 - 0.5 * pi];
+        assert_eq!(areas.len(), 3, "regions of areas {areas:?}");
+        for (got, want) in areas.iter().zip(want) {
+            assert!(
+                (got - want).abs() < 1e-5,
+                "regions of areas {areas:?}, want {want}"
+            );
+        }
     }
 }
