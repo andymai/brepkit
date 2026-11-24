@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.11.46](https://github.com/andymai/brepkit/compare/v4.11.45...v4.11.46) (2026-11-24)
+
+
+### Bug Fixes
+
+* **math:** march each section branch by its curvature and close loops only from the seed's side, and place the fit's first points by its miss ([#2777](https://github.com/andymai/brepkit/issues/2777)) ([53dc48d](https://github.com/andymai/brepkit/commit/53dc48d05256943b79eaf5b047f0becc07e86462))
+* **operations,algo:** bound make_sphere's hemispheres by one circle at the equator ([#2786](https://github.com/andymai/brepkit/issues/2786)) ([39a174d](https://github.com/andymai/brepkit/commit/39a174ddb6e61d1469fd83c9ab5dd012c1be3e5f))
+
 ## [4.11.45](https://github.com/andymai/brepkit/compare/v4.11.44...v4.11.45) (2026-11-23)
 
 
