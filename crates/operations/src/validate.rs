@@ -380,6 +380,9 @@ fn piece_issues(
 
 /// Validate a solid, returning a report of all issues found.
 ///
+/// A solid with a curve, surface or pcurve that is not well formed is
+/// reported on those alone: every check below reads them.
+///
 /// Checks performed:
 /// 1. **Euler-Poincaré**: V - E + F = 2(S - g) + L for a genus-g closed
 ///    solid of S pieces (connected groups of faces: the outer shell, each
@@ -710,6 +713,9 @@ pub fn validate_solid_with_options(
     solid: SolidId,
     options: &ValidationOptions,
 ) -> Result<ValidationReport, crate::OperationsError> {
+    if let Some(report) = malformed_geometry_report(topo, solid)? {
+        return Ok(report);
+    }
     let mut issues = Vec::new();
     let tol = Tolerance::new();
     // Clamp to [0.1, 1000]: below 0.1 risks false positives on exact
@@ -1060,6 +1066,37 @@ pub fn validate_solid_with_options(
     Ok(ValidationReport { issues })
 }
 
+/// A report of the solid's malformed curves, surfaces and pcurves as errors,
+/// if it holds any (see `brepkit_check::validate::check_geometry_well_formed`).
+/// Every other check reads them, so the solid is reported on these alone.
+fn malformed_geometry_report(
+    topo: &Topology,
+    solid: SolidId,
+) -> Result<Option<ValidationReport>, crate::OperationsError> {
+    use brepkit_check::validate::EntityRef;
+    let faces = explorer::solid_faces(topo, solid)?;
+    let found = brepkit_check::validate::check_geometry_well_formed(topo, &faces).map_err(|e| {
+        crate::OperationsError::InvalidInput {
+            reason: e.to_string(),
+        }
+    })?;
+    if found.is_empty() {
+        return Ok(None);
+    }
+    let issues = found
+        .into_iter()
+        .map(|issue| ValidationIssue {
+            severity: Severity::Error,
+            description: match issue.entity {
+                EntityRef::Edge(e) => format!("edge {}: {}", e.index(), issue.description),
+                EntityRef::Face(f) => format!("face {}: {}", f.index(), issue.description),
+                _ => issue.description,
+            },
+        })
+        .collect();
+    Ok(Some(ValidationReport { issues }))
+}
+
 /// How far a vertex may lie from its edge's curve and still be read on it:
 /// `EdgeCurve::domain_with_endpoints` reads a B-spline edge's span from
 /// vertices this near its curve. Booleans fit their section curves and
@@ -1314,6 +1351,9 @@ pub fn validate_solid_relaxed_with_options(
     solid: SolidId,
     options: &ValidationOptions,
 ) -> Result<ValidationReport, crate::OperationsError> {
+    if let Some(report) = malformed_geometry_report(topo, solid)? {
+        return Ok(report);
+    }
     let mut issues = Vec::new();
     let tol = Tolerance::new();
     // Clamp to [0.1, 1000]: below 0.1 risks false positives on exact

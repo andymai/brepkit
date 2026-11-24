@@ -17,12 +17,14 @@ use crate::CheckError;
 /// or past the end of its span is found. A closed edge's one vertex, or a
 /// vertex that bounds neither end, need only lie on the curve: a closed
 /// circle is read from its frame's origin, wherever its vertex lies. A
-/// curve that is not well formed (see [`EdgeCurve::is_well_formed`]) is
-/// reported, not read.
+/// line's ends are its vertices, and another vertex is measured against
+/// the segment between them. A curve that is not well formed (see
+/// [`EdgeCurve::is_well_formed`]) is reported, not read.
 ///
 /// # Errors
 ///
-/// Returns an error if the edge or a vertex is not in `topo`.
+/// Returns an error if the edge, the vertex or either of the edge's
+/// vertices is not in `topo`.
 pub fn check_vertex_on_curve(
     topo: &Topology,
     vertex_id: VertexId,
@@ -31,10 +33,11 @@ pub fn check_vertex_on_curve(
 ) -> Result<Vec<ValidationIssue>, CheckError> {
     let edge = topo.edge(edge_id)?;
     let curve = edge.curve();
-    // For Line edges, the vertices ARE the geometry — always consistent.
-    if matches!(curve, EdgeCurve::Line) {
-        return Ok(vec![]);
-    }
+    let pos = topo.vertex(vertex_id)?.point();
+    let (start, end) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
     if !curve.is_well_formed() {
         return Ok(vec![ValidationIssue {
             check: CheckId::VertexOnCurve,
@@ -44,11 +47,6 @@ pub fn check_vertex_on_curve(
             deviation: None,
         }]);
     }
-    let pos = topo.vertex(vertex_id)?.point();
-    let (start, end) = (
-        topo.vertex(edge.start())?.point(),
-        topo.vertex(edge.end())?.point(),
-    );
     let at_end = if edge.start() == edge.end() {
         None
     } else if vertex_id == edge.start() {
@@ -58,7 +56,21 @@ pub fn check_vertex_on_curve(
     } else {
         None
     };
-    let deviation = if let Some(first) = at_end {
+    let deviation = if matches!(curve, EdgeCurve::Line) {
+        // A line's vertices are its ends: another vertex lies off it by its
+        // distance from the segment between them.
+        if at_end.is_some() || vertex_id == edge.start() {
+            0.0
+        } else {
+            let chord = end - start;
+            let t = if chord.length() > 0.0 {
+                ((pos - start).dot(chord) / chord.dot(chord)).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (pos - (start + chord * t)).length()
+        }
+    } else if let Some(first) = at_end {
         let (t0, t1) = curve.domain_with_endpoints(start, end);
         let t = if first { t0 } else { t1 };
         (pos - curve.evaluate_with_endpoints(t, start, end)).length()
