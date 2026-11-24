@@ -13191,8 +13191,9 @@ fn plane_internal_line_loops(
 /// inner points meet: five points of a plane fix a conic. A B-spline is a
 /// line's segment when its control points all lie within `tol` of the
 /// segment, as the curve lies in their hull and runs from end to end, and is
-/// another B-spline when its data match, either way along, and so do the
-/// middles. Any other pair is taken for two curves.
+/// another B-spline when a bound on their data holds them within `tol` of
+/// each other ([`same_nurbs_data`]) and their middles meet. Any other pair
+/// is taken for two curves.
 fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
     let flipped = (a.start - b.start).length() > (a.start - b.end).length();
     let meet = |fractions: &[f64]| {
@@ -13227,9 +13228,16 @@ fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
     }
 }
 
-/// Whether two B-splines have one degree, one knot vector, one set of
-/// weights and control points within `tol` of each other, read either way
-/// along the second.
+/// Whether two B-splines are one curve within `tol`, by a proof: one degree
+/// and one knot vector to the bit, read either way along the second, and a
+/// bound on how far apart the curves stand that is within `tol`.
+///
+/// On one knot vector the curves share their basis functions `N_i`, and each
+/// point is the mean of the control points under the shares `N_i w_i`. With
+/// the second's weights a common scale times `w_i (1 + e_i)`, `|e_i| <= d`,
+/// each share moves by at most `2d / (1 - d)` of itself. So at each
+/// parameter the second curve lies within
+/// `max |Q_i - P_i| + 2d / (1 - d) max |P_i - P_0|` of the first.
 fn same_nurbs_data(
     m: &brepkit_math::nurbs::curve::NurbsCurve,
     n: &brepkit_math::nurbs::curve::NurbsCurve,
@@ -13238,23 +13246,36 @@ fn same_nurbs_data(
     let (mk, nk) = (m.knots(), n.knots());
     let (mp, np) = (m.control_points(), n.control_points());
     let (mw, nw) = (m.weights(), n.weights());
-    if m.degree() != n.degree() || mk.len() != nk.len() || mp.len() != np.len() {
+    if m.degree() != n.degree() || mk.len() != nk.len() || mp.len() != np.len() || mp.is_empty() {
         return false;
     }
-    let near = |x: f64, y: f64| (x - y).abs() <= 1e-12 * (1.0 + x.abs().max(y.abs()));
-    let forward = mk.iter().zip(nk).all(|(&x, &y)| near(x, y))
-        && mw.iter().zip(nw).all(|(&x, &y)| near(x, y))
-        && mp.iter().zip(np).all(|(&p, &q)| (p - q).length() <= tol);
+    let positive = |w: &[f64]| w.iter().all(|&x| x.is_finite() && x > 0.0);
+    if !positive(mw) || !positive(nw) {
+        return false;
+    }
+    let most = |w: &[f64]| w.iter().copied().fold(0.0_f64, f64::max);
+    let (top_m, top_n) = (most(mw), most(nw));
+    let reach = mp
+        .iter()
+        .map(|&p| (p - mp[0]).length())
+        .fold(0.0_f64, f64::max);
+    let within = |pairs: &mut dyn Iterator<Item = ((Point3, f64), (Point3, f64))>| {
+        let (mut moved, mut ratio) = (0.0_f64, 0.0_f64);
+        for ((p, wp), (q, wq)) in pairs {
+            moved = moved.max((q - p).length());
+            ratio = ratio.max(((wq * top_m) / (wp * top_n) - 1.0).abs());
+        }
+        ratio < 0.5 && (2.0 * ratio / (1.0 - ratio)).madd(reach, moved) <= tol
+    };
+    let ours = || mp.iter().copied().zip(mw.iter().copied());
+    let forward = mk.iter().zip(nk).all(|(x, y)| x.to_bits() == y.to_bits())
+        && within(&mut ours().zip(np.iter().copied().zip(nw.iter().copied())));
     let (lo, hi) = (nk[0], nk[nk.len() - 1]);
     let backward = mk
         .iter()
         .zip(nk.iter().rev())
-        .all(|(&x, &y)| near(x, lo + hi - y))
-        && mw.iter().zip(nw.iter().rev()).all(|(&x, &y)| near(x, y))
-        && mp
-            .iter()
-            .zip(np.iter().rev())
-            .all(|(&p, &q)| (p - q).length() <= tol);
+        .all(|(x, &y)| x.to_bits() == (lo + hi - y).to_bits())
+        && within(&mut ours().zip(np.iter().copied().zip(nw.iter().copied()).rev()));
     forward || backward
 }
 
@@ -16424,5 +16445,98 @@ mod tests {
                 "regions of areas {areas:?}, want {want}"
             );
         }
+    }
+
+    /// A section along the B-spline of degree `degree` on `knots` through
+    /// `points` (in z = 0) with `weights`, from its first point to its last.
+    fn spline_section(
+        degree: usize,
+        knots: &[f64],
+        points: &[(f64, f64)],
+        weights: &[f64],
+    ) -> SectionEdge {
+        let points: Vec<Point3> = points
+            .iter()
+            .map(|&(x, y)| Point3::new(x, y, 0.0))
+            .collect();
+        let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+            degree,
+            knots.to_vec(),
+            points.clone(),
+            weights.to_vec(),
+        )
+        .unwrap();
+        SectionEdge {
+            curve_3d: EdgeCurve::NurbsCurve(curve),
+            ..line_section(points[0], points[points.len() - 1])
+        }
+    }
+
+    /// The most `y` a section reaches, read at 2001 points along it.
+    fn highest_y(s: &SectionEdge) -> f64 {
+        (0..=2000)
+            .map(|k| evaluate_edge_at_t(&s.curve_3d, s.start, s.end, f64::from(k) / 2000.0).y())
+            .fold(f64::NEG_INFINITY, f64::max)
+    }
+
+    /// Two cubics on one knot vector through one set of control points, with
+    /// weights 1e-15 at all four, and 1e-15, 1e-13, 1e-13, 1e-15: their ends
+    /// and middles meet, but the first reaches y = 0.289 and the second
+    /// 0.855. Weights that differ only by a common scale are one curve.
+    #[test]
+    fn b_splines_whose_tiny_weights_differ_in_ratio_are_two_curves() {
+        let knots = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        let points = [(0.0, 0.0), (1.0, 1.0), (2.0, -1.0), (3.0, 0.0)];
+        let even = spline_section(3, &knots, &points, &[1e-15; 4]);
+        let uneven = spline_section(3, &knots, &points, &[1e-15, 1e-13, 1e-13, 1e-15]);
+        assert!((section_middle(&even) - section_middle(&uneven)).length() < 1e-9);
+        let (low, high) = (highest_y(&even), highest_y(&uneven));
+        assert!(
+            (low - 0.289).abs() < 1e-3 && (high - 0.855).abs() < 1e-3,
+            "{low} {high}"
+        );
+        assert!(!same_section_curve(&even, &uneven, 1e-5));
+        assert!(!same_section_curve(&uneven, &even, 1e-5));
+        let scaled = spline_section(3, &knots, &points, &[2.5e-15; 4]);
+        assert!(same_section_curve(&even, &scaled, 1e-5));
+        assert!(same_section_curve(&uneven, &uneven.clone(), 1e-5));
+    }
+
+    /// Two cubics on the parameter span [0, 1e-12] through six control
+    /// points symmetric about (1.5, 0), with inner knots at a quarter and
+    /// three quarters of the span, and at 0.4 and 0.6 of it. Their ends and
+    /// middles meet, but they part by more than the tolerance between.
+    #[test]
+    fn b_splines_with_other_knots_on_a_short_span_are_two_curves() {
+        let span = 1e-12;
+        let knots = |a: f64, b: f64| {
+            [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                a * span,
+                b * span,
+                span,
+                span,
+                span,
+                span,
+            ]
+        };
+        let points = [
+            (0.0, 0.0),
+            (0.6, 1.0),
+            (1.2, 1.0),
+            (1.8, -1.0),
+            (2.4, -1.0),
+            (3.0, 0.0),
+        ];
+        let quarters = spline_section(3, &knots(0.25, 0.75), &points, &[1.0; 6]);
+        let tenths = spline_section(3, &knots(0.4, 0.6), &points, &[1.0; 6]);
+        assert!((section_middle(&quarters) - section_middle(&tenths)).length() < 1e-9);
+        let apart = (highest_y(&quarters) - highest_y(&tenths)).abs();
+        assert!(apart > 1e-3, "the two cubics part by {apart}");
+        assert!(!same_section_curve(&quarters, &tenths, 1e-5));
+        assert!(same_section_curve(&quarters, &quarters.clone(), 1e-5));
     }
 }
