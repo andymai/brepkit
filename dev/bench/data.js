@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795511745036,
+  "lastUpdate": 1795519375303,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -77489,6 +77489,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 16368260,
             "range": "± 60225",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9f8aed488e33b8d2d48ba7208cf7ea9609daf600",
+          "message": "fix(io,operations): refuse malformed NURBS on load, and report an edge whose curve misses its vertex (#2807)\n\n## Summary\n\nOn main, an arena dump reads 3D NURBS curves and surfaces with no checks\n(#2770). A malformed dump loads, and then:\n\n- it panics on a degree past the control points, falling knots, empty\narrays, short weights or ragged surface rows;\n- it hangs on a negative curve weight;\n- it gives a wrong solid with no validation error. With zero weights, a\ncylinder of volume 113.1 reads as 37.7.\n\nAlso on main, the operations `validate_solid` does not check that an\nedge's curve ends on its vertices (#2772). Two refused chamfers lose\ntheir real cause.\n\nWith this change, a dump, a STEP or IGES file, or a wasm `fromBREP` read\nrefuses a curve or surface it cannot evaluate. `validate_solid` reports\nan edge whose curve misses its vertex, and the two chamfers name that\ncause. The check finds five real faults that are open, filed as #2801 to\n#2804.\n\nFixes #2770. Fixes #2772.\n\n## The change\n\n- **Load checks.** New `is_well_formed` on `NurbsCurve` and\n`NurbsSurface` shares its knot and weight rules with\n`Curve2D::is_well_formed`. Weights must be positive normal floats.\n- `EdgeCurve::is_well_formed` and `FaceSurface::is_well_formed` add\nanalytic checks: positive radii, unit frame axes, and a cone half angle\nbetween 0 and π/2.\n- The knot rule ignores the first and last knot, which evaluation never\nreads. One fixture has a last knot 1 ulp below its neighbour, and all\n374 arena fixtures still load.\n- `deserialize_solid`, the STEP B-spline builders and the wasm\n`fromBREP` reader return an error. The IGES reader also refuses\nsubnormal weights. The checkpoint restore copies snapshots in memory, so\nit reads no bytes.\n- **Edge-end check.** `check_vertex_on_curve` in brepkit-check is now\npublic and reads the curve at the ends of the edge's span. A closed\nedge's vertex is measured against the whole curve, and a malformed curve\nis reported, not read.\n- `validate_solid` reports each miss as an error, before the\nwire-crossing check.\n- The bound is the vertex's tolerance or the edge's, with a floor of\n1e-5 (`WELD_BAND`). Correct booleans end section curves up to 2.3e-6 off\ntheir vertices with no tolerance raised (#2801). Without the floor, 26\ncorrect booleans would fail.\n- The check adds about 0.4 ms to a 45 ms `validate_solid` on a solid of\n1331 edges.\n\n## Tests\n\n- `a_dump_with_a_malformed_curve_or_surface_is_refused` covers each\nmalformed kind. STEP, IGES, wasm and math tests cover their readers and\nrules.\n- `validate_edge_ends.rs` runs in 4 poses. Primitives pass, and so do\nB-splines read either way or past their ends. Misses, and arcs and\nclosed rims off their circle, are reported with the measured distance.\n- `a_chamfer_that_leaves_an_arc_off_its_vertex_is_refused_for_it` reads\nthe two chamfers' misses of 7.00 and 7.50.\n- Five test files hold real faults past the floor: #2773, #2802, #2803\n(two files) and #2804. Each excludes only the edge-end error from its\nvalidity assert, and keeps all its other asserts.\n- brepkit-check (195), the io lib tests (171) and brepkit-wasm native\n(297) pass, and so do all brepkit-operations and brepkit-io tests (3296,\n26 skipped). The pose sweep and the truth audit give the same output as\nmain.\n\n## Still open\n\n- Seven wasm bindings build NURBS from JS arrays with only their counts\nchecked (#2805).\n- A dump circle of radius 1e300 passes the checks, and meshing it panics\nwith an add overflow in a debug build (#2806).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nLoading a malformed NURBS curve or surface could panic, hang, or\nsilently build wrong geometry on main (#2770), and `validate_solid` did\nnot check that an edge's curve ends on its vertices (#2772). Loads now\nrefuse curves or surfaces they cannot evaluate, `validate_solid` reports\nedges whose curve misses a vertex, and the validators report malformed\ngeometry before reading it.\n\n**Load checks**\n- `is_well_formed` on `NurbsCurve`, `NurbsSurface`, and `Curve2D`\nvalidates degree, knots, weights, and point counts; `EdgeCurve` and\n`FaceSurface` add analytic checks for radii, frame axes, and cone half\nangle.\n- Knot magnitudes are bounded, span reciprocals must be finite,\nweight-times-coordinate products cannot overflow, and subnormal weights\nare refused.\n- `deserialize_solid`, STEP B-splines, IGES curves and surfaces, and\nwasm `fromBREP` reads return an error instead of building malformed\ngeometry.\n\n**Edge-end check**\n- `validate_solid` reads each edge's curve at its span ends and reports\na miss past the vertex or edge tolerance, floored at 1e-5.\n- Both `validate_solid` variants and the check-crate validators now\nreport well-formedness faults before reading curves or surfaces, and\n`check_vertex_on_curve` reports a vertex id that is not in the topology\ninstead of passing.\n- The two previously refused chamfers now report their arcs' missing\nvertices; five real faults are filed as #2801–#2804.\n\n<sup>Written for commit cb88824f1ac6e9dcd39d3009e4f3d564e752882e.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2807?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2807?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2807&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-24T11:19:04Z",
+          "tree_id": "6578ef4c26bdbf70502ef3d841591bd1fb5f7e5e",
+          "url": "https://github.com/andymai/brepkit/commit/9f8aed488e33b8d2d48ba7208cf7ea9609daf600"
+        },
+        "date": 1795519360864,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 867905,
+            "range": "± 14732",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 911185,
+            "range": "± 11391",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9655,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 505804,
+            "range": "± 10705",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19364046,
+            "range": "± 30691",
             "unit": "ns/iter"
           }
         ]
