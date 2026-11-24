@@ -9,6 +9,7 @@
 //! winds as an outline or as a hole, and holes nest in their pieces.
 
 use brepkit_math::madd::Madd;
+use brepkit_math::nurbs::decompose::curve_bezier_between;
 use brepkit_math::surfaces::SphericalSurface;
 use brepkit_math::vec::{Point2, Point3, Vec3};
 use brepkit_topology::edge::EdgeCurve;
@@ -125,34 +126,87 @@ impl PoleView {
         (area.abs() > 1e-9).then_some((area > 0.0) == self.north)
     }
 
-    /// A loop's polygon ([`Self::loop_polygon`]), and how far its curves
-    /// stray from its sides: the most that a curve's point half way between
-    /// two samples lies off the side between them.
-    fn reading(&self, lp: &[OrientedPCurveEdge]) -> Option<(Vec<Point2>, f64)> {
-        let mut poly = Vec::new();
-        let mut gap = 0.0_f64;
-        for e in lp {
-            let mut fine = Vec::new();
-            walk_edge_in(e, 2 * SAMPLES, &mut fine);
-            fine.push(e.end_3d);
-            let fine = self.polygon(&fine)?;
-            for k in (1..fine.len() - 1).step_by(2) {
-                let side = [fine[k - 1], fine[k + 1]];
-                gap = gap.max(distance_to_polygon_boundary(fine[k], &side));
-            }
-            poly.extend(fine[..fine.len() - 1].iter().step_by(2));
+    /// A bound on how far the image of each point of a side's hull
+    /// ([`Side::hull`]) lies from the segment between the images of the
+    /// side's ends; infinite where the hull reaches the far pole's tangent
+    /// plane. `None` where the side's piece has no hull.
+    ///
+    /// The map is `f`, `m` the side's middle, and `A` the affine map that
+    /// agrees with `f` and its derivative at `m`. Each hull point `h` lies
+    /// within half the most of `|D2 f [u, u]|` (`u = h - m`) of `A(h)`;
+    /// `A(h)` within `|Df(m)|` times the most that a hull point lies off the
+    /// side of the image under `A` of the side; and that within half the
+    /// same most of the segment between the ends' images.
+    fn side_bound(&self, side: &Side) -> Option<f64> {
+        let hull = side.hull()?;
+        let (a, b) = (side.from, side.to);
+        let m = a + (b - a) * 0.5;
+        let r = self.radius;
+        // In the ball's own units, about the held pole `n`: `f(d) = k(w) (d
+        // x, d y)` with `w = 1 + d n` and `k(w) = sqrt(2 / w)`, so that
+        // `|Df [v]| <= |k'| |(d x, d y)| |v| + k |v|` and `|D2 f [u, u]| <=
+        // k'' (n u)^2 |(d x, d y)| + 2 |k'| |n u| |u|`. Along a segment from
+        // `m`, `w` falls by at most `|n u|`, and `k`, `|k'|` and `k''` rise
+        // as `w` falls.
+        let off = hull
+            .iter()
+            .map(|&h| segment_distance(h, a, b))
+            .fold(0.0, f64::max)
+            / r;
+        let reach = hull.iter().map(|&h| (h - m).length()).fold(0.0, f64::max) / r;
+        let rise = hull
+            .iter()
+            .map(|&h| (h - m).dot(self.pole).abs())
+            .fold(0.0, f64::max)
+            / r;
+        let d = (m - self.center) * (1.0 / r);
+        let w = 1.0 + d.dot(self.pole);
+        let low = w - rise;
+        if low <= 0.0 {
+            return Some(f64::INFINITY);
         }
-        Some((poly, gap))
+        let k = |w: f64| (2.0 / w).sqrt();
+        let k1 = |w: f64| k(w) / (2.0 * w);
+        let k2 = |w: f64| 3.0 * k(w) / (4.0 * w * w);
+        let level = d.dot(self.x).hypot(d.dot(self.y));
+        let slope = k1(w).madd(level, k(w));
+        let bend = (k2(low) * (level + reach) * rise).madd(rise, 2.0 * k1(low) * rise * reach);
+        Some(slope.madd(off, bend))
     }
 
-    /// Whether the point `at` on the ball lies inside the loop read as
-    /// `(poly, gap)`: read on the polygon where the point lies farther from
-    /// it than twice the curves stray, so that the curves read the same.
-    /// `None` where it lies nearer, or does not map.
-    fn inside(&self, at: Point3, (poly, gap): &(Vec<Point2>, f64)) -> Option<bool> {
-        let p = self.map(at)?;
-        let d = distance_to_polygon_boundary(p, poly);
-        (d > 2.0 * gap && d > 1e-12).then(|| point_in_polygon_2d(p, poly))
+    /// Whether the point `at` on the ball lies inside the loop of `sides`:
+    /// read on a polygon of their ends, each side cut in two (up to
+    /// [`CUTS`] times) until the point lies farther from it than twice its
+    /// bound ([`Self::side_bound`]). The loop and the polygon differ by a
+    /// closed curve along each side within its bound, which winds no point
+    /// farther than that from the side, so both wind the point alike.
+    /// `None` where a side stays too near, or the point does not map.
+    fn inside(&self, at: Point3, sides: &[Side]) -> Option<bool> {
+        let q = self.map(at)?;
+        let mut poly = Vec::new();
+        for side in sides {
+            self.clear_side(q, *side, CUTS, &mut poly)?;
+        }
+        Some(point_in_polygon_2d(q, &poly))
+    }
+
+    /// Pushes onto `poly` the image of the start of `side`, or of each part
+    /// it is cut into, so that `q` lies farther than twice its bound from
+    /// each. `None` where that takes more than `cuts` cuts, or a part has no
+    /// bound or does not map.
+    fn clear_side(&self, q: Point2, side: Side, cuts: u32, poly: &mut Vec<Point2>) -> Option<()> {
+        let (from, to) = (self.map(side.from)?, self.map(side.to)?);
+        let d = distance_to_polygon_boundary(q, &[from, to]);
+        if d > 2.0 * self.side_bound(&side)? && d > 1e-12 {
+            poly.push(from);
+            return Some(());
+        }
+        if cuts == 0 {
+            return None;
+        }
+        let (first, second) = side.halves();
+        self.clear_side(q, first, cuts - 1, poly)?;
+        self.clear_side(q, second, cuts - 1, poly)
     }
 
     /// A loop of edges, each sampled along its own curve in the way the
@@ -215,6 +269,183 @@ fn walk_edge_in(e: &OrientedPCurveEdge, steps: u32, out: &mut Vec<Point3>) {
             out.extend(samples);
         }
     }
+}
+
+/// A side of a loop's polygon: the piece of an edge's curve from parameter
+/// `a` to `b`, from the vertex `from` to `to`.
+#[derive(Clone, Copy)]
+struct Side<'a> {
+    edge: &'a OrientedPCurveEdge,
+    a: f64,
+    b: f64,
+    from: Point3,
+    to: Point3,
+}
+
+impl Side<'_> {
+    /// Points whose convex hull holds the side's piece of curve, its ends,
+    /// and the segments from them to the curve's ends ([`piece_hull`]).
+    fn hull(&self) -> Option<Vec<Point3>> {
+        let mut hull = piece_hull(&self.edge.curve_3d, self.a, self.b)?;
+        hull.extend([self.from, self.to]);
+        Some(hull)
+    }
+
+    /// The side cut in two at its middle parameter.
+    fn halves(&self) -> (Self, Self) {
+        let t = f64::midpoint(self.a, self.b);
+        let (s3, e3) = curve_ends(self.edge);
+        let at = self.edge.curve_3d.evaluate_with_endpoints(t, s3, e3);
+        (
+            Self {
+                b: t,
+                to: at,
+                ..*self
+            },
+            Self {
+                a: t,
+                from: at,
+                ..*self
+            },
+        )
+    }
+}
+
+/// A loop's sides: a vertex at each step of each edge's curve, and on a
+/// spline at each knot as well ([`edge_sides`]). An edge's last side
+/// runs on to the next edge's start, which can lie a weld off the edge's
+/// end.
+fn loop_sides(lp: &[OrientedPCurveEdge]) -> Vec<Side<'_>> {
+    let mut sides: Vec<Side> = lp.iter().flat_map(|e| edge_sides(e, 2 * SAMPLES)).collect();
+    let n = sides.len();
+    for k in 0..n {
+        sides[k].to = sides[(k + 1) % n].from;
+    }
+    sides
+}
+
+/// The most times a side is cut in two to read a point's side of a loop.
+const CUTS: u32 = 24;
+
+/// `e`'s ends in the way its curve runs.
+fn curve_ends(e: &OrientedPCurveEdge) -> (Point3, Point3) {
+    if e.forward {
+        (e.start_3d, e.end_3d)
+    } else {
+        (e.end_3d, e.start_3d)
+    }
+}
+
+/// The sides of `e`'s polygon in the way the loop walks it, from its start
+/// to its end: a vertex at each of `steps` even steps of its curve's
+/// parameter (one step on a line), and on a spline at each knot as well,
+/// so that each side spans part of one Bezier piece.
+fn edge_sides(e: &OrientedPCurveEdge, steps: u32) -> Vec<Side<'_>> {
+    use std::f64::consts::TAU;
+    let curve = &e.curve_3d;
+    let steps = if matches!(curve, EdgeCurve::Line) {
+        1
+    } else {
+        steps
+    };
+    let fraction = |k: u32| f64::from(k) / f64::from(steps);
+    let closed = (e.start_3d - e.end_3d).length() < CLOSED;
+    let (s3, e3) = curve_ends(e);
+    let turn = if e.forward { TAU } else { -TAU };
+    // The curve's parameters in the way the loop walks it, as
+    // `walk_edge_in` takes them.
+    let ts: Vec<f64> = match curve {
+        EdgeCurve::Circle(c) if closed => {
+            let a0 = c.project(e.start_3d);
+            (0..=steps).map(|k| turn.madd(fraction(k), a0)).collect()
+        }
+        EdgeCurve::Ellipse(el) if closed => {
+            let a0 = el.project(e.start_3d);
+            (0..=steps).map(|k| turn.madd(fraction(k), a0)).collect()
+        }
+        _ => {
+            let (t0, t1) = curve.domain_with_endpoints(s3, e3);
+            let mut ts: Vec<f64> = (0..=steps)
+                .map(|k| (t1 - t0).madd(fraction(k), t0))
+                .collect();
+            if let EdgeCurve::NurbsCurve(n) = curve {
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                ts.extend(n.knots().iter().filter(|&&k| lo < k && k < hi));
+                ts.sort_by(f64::total_cmp);
+                ts.dedup();
+                if t1 < t0 {
+                    ts.reverse();
+                }
+            }
+            let backward = if closed {
+                !e.forward
+            } else {
+                let at_t0 = curve.evaluate_with_endpoints(t0, s3, e3);
+                (at_t0 - e.start_3d).length() > (at_t0 - e.end_3d).length()
+            };
+            if backward {
+                ts.reverse();
+            }
+            ts
+        }
+    };
+    let last = ts.len() - 1;
+    let point = |k: usize| match k {
+        0 => e.start_3d,
+        k if k == last => e.end_3d,
+        k => curve.evaluate_with_endpoints(ts[k], s3, e3),
+    };
+    (0..last)
+        .map(|k| Side {
+            edge: e,
+            a: ts[k],
+            b: ts[k + 1],
+            from: point(k),
+            to: point(k + 1),
+        })
+        .collect()
+}
+
+/// Points whose convex hull holds `curve`'s piece from parameter `a` to
+/// `b`. A spline's piece, within one knot span, lies in the hull of its
+/// Bezier points where their weights are positive. A conic's piece is the
+/// image of an arc of the unit circle, which lies within `1 - cos(h)` of
+/// its chord toward its middle, `h` half its span: the hull is the chord,
+/// and the chord moved that far toward the middle. `None` for a spline's
+/// piece with a weight that is not positive, or a conic's piece over half
+/// a turn.
+fn piece_hull(curve: &EdgeCurve, a: f64, b: f64) -> Option<Vec<Point3>> {
+    let conic = |at: &dyn Fn(f64) -> Point3, center: Point3| {
+        let half = 0.5 * (b - a).abs();
+        if half > std::f64::consts::FRAC_PI_2 {
+            return None;
+        }
+        let rise = (at(f64::midpoint(a, b)) - center) * (1.0 - half.cos());
+        let (p, q) = (at(a), at(b));
+        Some(vec![p, q, p + rise, q + rise])
+    };
+    match curve {
+        EdgeCurve::Line => Some(Vec::new()),
+        EdgeCurve::Circle(c) => conic(&|t| c.evaluate(t), c.center()),
+        EdgeCurve::Ellipse(el) => conic(&|t| el.evaluate(t), el.center()),
+        EdgeCurve::NurbsCurve(n) => curve_bezier_between(n, a, b)
+            .ok()?
+            .iter()
+            .map(|&[x, y, z, w]| (w > 0.0).then(|| Point3::new(x / w, y / w, z / w)))
+            .collect(),
+    }
+}
+
+/// How far `p` lies from the segment from `a` to `b`.
+fn segment_distance(p: Point3, a: Point3, b: Point3) -> f64 {
+    let ab = b - a;
+    let len2 = ab.dot(ab);
+    let t = if len2 > 0.0 {
+        ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    (p - (a + ab * t)).length()
 }
 
 /// The 3D point half way along `e`'s curve.
@@ -392,11 +623,8 @@ fn tiled(view: &PoleView, pieces: &[Piece], near: f64) -> Option<()> {
         !lp.iter().any(|f| same_edge(e, f, near))
     };
     for (outline, holes) in pieces {
-        let read = view.reading(outline)?;
-        let hole_reads: Vec<(Vec<Point2>, f64)> = holes
-            .iter()
-            .map(|h| view.reading(h))
-            .collect::<Option<_>>()?;
+        let read = loop_sides(outline);
+        let hole_reads: Vec<Vec<Side>> = holes.iter().map(|h| loop_sides(h)).collect();
         for (i, hole) in holes.iter().enumerate() {
             for e in hole {
                 if !(off(e, outline) && view.inside(edge_middle(e), &read)?) {
@@ -831,5 +1059,136 @@ mod tests {
             (at(vec![c], true), Vec::new()),
         ];
         assert!(tiled(&view, &nested, 1e-5).is_none());
+    }
+
+    /// A closed quadratic spline in the plane `z = -1`, which the view about
+    /// the unit ball's south pole maps onto itself: twelve points round a
+    /// circle 0.1 round, with a lobe out to `x = -0.3` between the sixth and
+    /// the seventh. The lobe's two points act on four knot spans only, each
+    /// a ten-thousandth as long as each of the nine others, so that steps of
+    /// a 128th of the domain step over the lobe.
+    fn lobed_spline() -> OrientedPCurveEdge {
+        use std::f64::consts::TAU;
+        let mut points: Vec<Point3> = (0..12)
+            .map(|k| {
+                let (s, c) = (TAU * f64::from(k) / 12.0).sin_cos();
+                Point3::new(0.1 * c, 0.1 * s, -1.0)
+            })
+            .collect();
+        points.splice(
+            7..7,
+            [
+                Point3::new(-0.3, 0.04, -1.0),
+                Point3::new(-0.3, -0.09, -1.0),
+            ],
+        );
+        points.push(points[0]);
+        let spans: Vec<f64> = (0..points.len() - 2)
+            .map(|k| if (5..=8).contains(&k) { 1e-4 } else { 1.0 })
+            .collect();
+        let total: f64 = spans.iter().sum();
+        let mut knots = vec![0.0; 3];
+        let mut run = 0.0;
+        for span in &spans[..spans.len() - 1] {
+            run += span;
+            knots.push(run / total);
+        }
+        knots.extend([1.0; 3]);
+        let weights = vec![1.0; points.len()];
+        let at = points[0];
+        let curve = NurbsCurve::new(2, knots, points, weights).unwrap();
+        let mut e = edge(&EdgeCurve::NurbsCurve(curve), at, at, true);
+        e.source_edge_idx = Some(0);
+        e
+    }
+
+    #[test]
+    fn a_hole_in_a_spline_lobe_that_the_samples_step_over_is_not_read_apart() {
+        let (view, rim) = capped_ball(1.0);
+        let spline = lobed_spline();
+        let middle = Point3::new(-0.22, -0.03, -1.0);
+        let disc = Circle3D::new(middle, Vec3::new(0.0, 0.0, 1.0), 0.01).unwrap();
+        let at = disc.evaluate(0.0);
+        let mut ring = edge(&EdgeCurve::Circle(disc), at, at, true);
+        ring.source_edge_idx = Some(1);
+
+        // The lobe holds the disc: on the spline sampled finely over its
+        // domain and over the lobe's spans, the disc's middle lies inside,
+        // farther from the spline than the disc's radius.
+        let EdgeCurve::NurbsCurve(curve) = &spline.curve_3d else {
+            unreachable!()
+        };
+        let (lobe_from, lobe_to) = (curve.knots()[7], curve.knots()[11]);
+        let mut ts: Vec<f64> = (0..=100_000).map(|k| f64::from(k) / 1e5).collect();
+        ts.extend((0..=10_000).map(|k| lobe_from + (lobe_to - lobe_from) * f64::from(k) / 1e4));
+        ts.sort_by(f64::total_cmp);
+        let fine: Vec<Point2> = ts
+            .iter()
+            .map(|&t| {
+                let p = curve.evaluate(t);
+                Point2::new(p.x(), p.y())
+            })
+            .collect();
+        let probe = Point2::new(middle.x(), middle.y());
+        assert!(point_in_polygon_2d(probe, &fine));
+        assert!(distance_to_polygon_boundary(probe, &fine) > 0.03);
+
+        // Read against the spline's loop, the disc's middle lies inside it:
+        // the loop's sides meet at each knot, and those near the middle are
+        // cut until it lies clear of their bounds.
+        let spline_hole = oriented(&view, &rim, vec![spline.clone()], false);
+        let read = loop_sides(&spline_hole);
+        assert_eq!(view.inside(edge_middle(&ring), &read), Some(true));
+
+        // The spline's 64 samples step over the lobe, so the disc's hole
+        // goes to the face beside the spline's hole, which holds it. That
+        // must be refused, or the disc's hole go to the spline's disc.
+        let at = |lp, outline| oriented(&view, &rim, lp, outline);
+        let loops = vec![
+            vec![rim.clone()],
+            at(vec![spline.clone()], false),
+            at(vec![spline.clone()], true),
+            at(vec![ring.clone()], false),
+            at(vec![ring.clone()], true),
+        ];
+        let sections = halves(&[spline, ring]);
+        let split = pieces(&view, std::slice::from_ref(&rim), &sections, loops, 1e-7);
+        assert!(split.is_none_or(|s| s.iter().all(|p| p.1.len() <= 1)));
+    }
+
+    #[test]
+    fn each_side_bound_holds_the_image_of_its_curve() {
+        let (view, rim) = capped_ball(1.0);
+        // Steps over the lobe, crossing arcs, and circles near the far pole:
+        // the rim round it, and one that passes 0.05 rad from it.
+        let mut edges = vec![lobed_spline(), rim, ring(unit(0.25, 0.0, 1.0), 0.3, 1)];
+        edges.extend(crossing_arcs(1.0, 0.2, 0.3));
+        for e in &edges {
+            let (s3, e3) = curve_ends(e);
+            let mut sides = loop_sides(std::slice::from_ref(e));
+            // Cut each side a few times, to reach the far pole's bounds.
+            for _ in 0..4 {
+                sides = sides
+                    .iter()
+                    .flat_map(|side| {
+                        let (first, second) = side.halves();
+                        [first, second]
+                    })
+                    .collect();
+            }
+            for side in &sides {
+                let bound = view.side_bound(side).unwrap();
+                if !bound.is_finite() {
+                    continue;
+                }
+                let chord = [view.map(side.from).unwrap(), view.map(side.to).unwrap()];
+                for k in 0..=200 {
+                    let t = side.a + (side.b - side.a) * f64::from(k) / 200.0;
+                    let at = e.curve_3d.evaluate_with_endpoints(t, s3, e3);
+                    let off = distance_to_polygon_boundary(view.map(at).unwrap(), &chord);
+                    assert!(off <= bound, "{off} over {bound}");
+                }
+            }
+        }
     }
 }
