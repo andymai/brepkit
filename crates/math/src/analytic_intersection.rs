@@ -5,6 +5,7 @@
 //! for analytic-analytic surface intersections.
 
 use crate::madd::Madd;
+use std::cell::RefCell;
 use std::f64::consts::{FRAC_PI_2, TAU};
 
 use crate::MathError;
@@ -2593,8 +2594,8 @@ fn marched_sections_near(
         grid_res,
         &kept_a,
         meet.zip(region),
-        region.map_or(march_step, |_| margin.min(march_step)),
         Tolerance::new().linear,
+        cover::MOST_LEAVES,
     );
     // Where the cuts did not all settle, two loops in one cell of one patch
     // can lie in two cells of the other, which lie within their reach of
@@ -2670,11 +2671,12 @@ fn marched_sections_near(
     // patch's edge marches along a curve that one inside may already have
     // marched, which its middle then lies on.
     // March from a seed on the section and fit what the march traces,
-    // unless its middle lies on a curve already marched.
+    // unless its middle lies on a curve already marched. The march's points
+    // where its branch is then marched, `None` where it traces no curve.
     let trace = |seed: Point3,
                  marched: &mut Vec<Vec<Point3>>,
                  curves: &mut Vec<IntersectionCurve>|
-     -> Result<(), MathError> {
+     -> Result<Option<Vec<Point3>>, MathError> {
         let march_result = march_analytic_intersection(
             &a,
             &b,
@@ -2696,11 +2698,11 @@ fn marched_sections_near(
             iterations: MARCH_STEPS,
         })?;
         if march_result.len() < 2 {
-            return Ok(());
+            return Ok(None);
         }
         let middle = march_result[march_result.len() / 2];
         if marched.iter().any(|m| on_march(&a, &b, middle, m)) {
-            return Ok(());
+            return Ok(Some(march_result));
         }
         marched.push(march_result.clone());
 
@@ -2720,7 +2722,7 @@ fn marched_sections_near(
             }
         }
         if spaced.len() < 2 {
-            return Ok(());
+            return Ok(None);
         }
         if fit_tol < 0.5 * Tolerance::new().linear {
             return Err(MathError::ConvergenceFailure { iterations: 0 });
@@ -2738,7 +2740,7 @@ fn marched_sections_near(
             curve,
             points: ipts,
         });
-        Ok(())
+        Ok(Some(march_result))
     };
 
     let mut curves = Vec::new();
@@ -2770,52 +2772,40 @@ fn marched_sections_near(
     for m in &marched {
         cover.mark_marched(m);
     }
-    loop {
+    let (marched, curves) = (RefCell::new(marched), RefCell::new(curves));
+    // A probe whose nearest point on a fitted curve lies, as near as that
+    // fit's bound, on the class's arc. Near a node a march from the probe
+    // itself can stall.
+    let fitted = |cover: &cover::Cover<'_, '_>, class: &[usize], z: Point3| {
+        curves.borrow().iter().any(|c| {
+            crate::nurbs::projection::project_point_to_curve(&c.curve, z, 1e-12)
+                .is_ok_and(|f| cover.holds(class, f.point, fit_tol))
+        })
+    };
+    // A probe settled on the section, on a marched branch or marched from.
+    let mut seed = |z: Point3| -> Result<Option<Vec<Point3>>, MathError> {
+        let Some(seed) = settle(z)? else {
+            return Ok(None);
+        };
+        if marched.borrow().iter().any(|m| on_march(&a, &b, seed.p, m)) {
+            return Ok(Some(vec![seed.p]));
+        }
+        let traced = trace(seed.p, &mut marched.borrow_mut(), &mut curves.borrow_mut())?;
+        Ok(Some(traced.unwrap_or_default()))
+    };
+    // Where the cuts did not all settle, the cover proves nothing, and the
+    // two patches' seeds above stand as they are.
+    while cover.complete() {
         let classes = cover.classes();
         if classes.is_empty() {
             break;
         }
         for class in classes {
-            // A seed whose nearest point on a fitted curve lies, as near as
-            // that fit's bound, on the class's arc: the class is that
-            // curve's. Near a node a march from the seed itself can stall.
-            let mut seeds = cover.interiors(&class);
-            seeds.extend(cover.seeds(&class));
-            let on_fit = seeds.iter().any(|&z| {
-                curves.iter().any(|c| {
-                    crate::nurbs::projection::project_point_to_curve(&c.curve, z, 1e-12)
-                        .is_ok_and(|f| cover.holds(&class, f.point, fit_tol))
-                })
-            });
-            if on_fit {
-                cover.mark(&class);
-                continue;
-            }
-            let mut placed = false;
-            for p in seeds {
-                let Some(seed) = settle(p)? else {
-                    continue;
-                };
-                placed = true;
-                if !marched.iter().any(|m| on_march(&a, &b, seed.p, m)) {
-                    let before = marched.len();
-                    trace(seed.p, &mut marched, &mut curves)?;
-                    for m in &marched[before..] {
-                        cover.mark_marched(m);
-                    }
-                }
-                break;
-            }
-            // A lone cell across the region's or B's patch's edge whose
-            // seeds all lie off them is cut until its seeds lie close
-            // enough that its arc is proved off them too.
-            if placed || !cover.cut_across(&class) {
-                cover.mark(&class);
-            }
+            cover.resolve(&class, &fitted, &mut seed)?;
         }
     }
 
-    Ok(curves)
+    Ok(curves.into_inner())
 }
 
 /// How far a point of the patch of `surface` within `du` and `dv` of

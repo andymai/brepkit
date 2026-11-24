@@ -28,6 +28,7 @@ use std::collections::HashMap;
 
 use super::AnalyticSurface;
 use super::section_fit::Carrier;
+use crate::MathError;
 use crate::aabb::Aabb3;
 use crate::madd::Madd;
 use crate::vec::{Point3, Vec3};
@@ -43,13 +44,17 @@ const DEPTH: u32 = 40;
 const SHIFT: (f64, f64) = (0.3719, 0.2913);
 
 /// The most leaves a patch is cut into before the proof is given up.
-const MOST_LEAVES: usize = 1 << 16;
+pub(super) const MOST_LEAVES: usize = 1 << 16;
 
 /// How many times the linear tolerance over the sine of the crossing a
 /// leaf must reach for a fit within the tolerance to tell its arc from
 /// another's: [`Cover::holds`] places a point of a fit to within two and a
 /// half times, on each side of a leaf's middle.
 const RESOLVED: f64 = 16.0;
+
+/// How many seeds of a class that settle are marched from before it is cut
+/// or refused.
+const SEED_TRIES: usize = 4;
 
 /// A bound read up by this share, to cover the rounding of its terms.
 const UP: f64 = 1.0 + 1e-9;
@@ -147,10 +152,9 @@ pub(super) struct Cover<'s, 'a> {
     /// The region the faces can meet in, and the larger one the march
     /// follows.
     region: Option<(Aabb3, Aabb3)>,
-    /// How far past the region, and past the second patch, a seed is still
-    /// kept: a leaf twice as large as this is cut before it is set aside.
-    margin: f64,
     floor: f64,
+    /// The most leaves the patch is cut into.
+    most: usize,
     leaves: Vec<Leaf>,
     roots: HashMap<(u64, u64), usize>,
     corners: HashMap<(u64, u64), Option<(f64, f64)>>,
@@ -159,9 +163,8 @@ pub(super) struct Cover<'s, 'a> {
 impl<'s, 'a> Cover<'s, 'a> {
     /// The leaves of the cells `kept` (row along `u`, column along `v`) of
     /// a `grid` by `grid` cut of `a`'s patch, cut until each is empty,
-    /// simple, set aside or too fine, or [`MOST_LEAVES`] are cut. `margin`
-    /// is how far past the region and the second patch a seed is still
-    /// kept, and `floor` the linear tolerance.
+    /// simple, set aside or too fine, or `most` are cut. `floor` is the
+    /// linear tolerance.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         a: &'s AnalyticSurface<'a>,
@@ -171,8 +174,8 @@ impl<'s, 'a> Cover<'s, 'a> {
         grid: usize,
         kept: &[(usize, usize)],
         region: Option<(Aabb3, Aabb3)>,
-        margin: f64,
         floor: f64,
+        most: usize,
     ) -> Self {
         let side = 1_u64 << DEPTH;
         let n = grid as u64;
@@ -194,8 +197,8 @@ impl<'s, 'a> Cover<'s, 'a> {
             u_periodic: full(u_range),
             v_periodic: matches!(a, AnalyticSurface::Torus(_)) && full(v_range),
             region,
-            margin,
             floor,
+            most,
             leaves: Vec::with_capacity(4 * kept.len()),
             roots: HashMap::with_capacity(kept.len()),
             corners: HashMap::new(),
@@ -259,16 +262,16 @@ impl<'s, 'a> Cover<'s, 'a> {
         });
     }
 
-    /// Whether every leaf was read: the cuts settled within [`MOST_LEAVES`].
+    /// Whether every leaf was read: the cuts settled within the budget.
     pub(super) fn complete(&self) -> bool {
         self.leaves.iter().all(|l| l.kind != Kind::Open)
     }
 
     /// Reads and cuts every open leaf from `start` on, broadest first, up
-    /// to [`MOST_LEAVES`]: past that the leaves left open prove nothing.
+    /// to the budget: past that the leaves left open prove nothing.
     fn settle_from(&mut self, start: usize) {
         let mut k = start;
-        while k < self.leaves.len() && self.leaves.len() <= MOST_LEAVES {
+        while k < self.leaves.len() && self.leaves.len() <= self.most {
             if self.leaves[k].kind == Kind::Open {
                 self.read_leaf(k);
             }
@@ -367,8 +370,12 @@ impl<'s, 'a> Cover<'s, 'a> {
             leaf.u.0 + (leaf.u.1 - leaf.u.0) / 2,
             leaf.v.0 + (leaf.v.1 - leaf.v.0) / 2,
         );
-        let reach = super::cell_reach(self.a, (hu, hv), vm) * UP;
+        // Each point of the leaf lies within the half widths times the
+        // greatest rates at which the surface moves with each parameter over
+        // it: near a ball's pole, where it moves slowly along `u`, a leaf is
+        // far smaller than its parameters' spans read at the equator.
         let rates = rates(self.a, hv, vm);
+        let reach = hu.madd(rates.u, hv * rates.v) * UP;
         let Some(r) = self.read(um, vm).filter(|_| reach.is_finite()) else {
             self.leaves[k].reach = reach;
             self.cut_or_stop(k, (hu * rates.u, hv * rates.v), reach);
@@ -672,13 +679,30 @@ impl<'s, 'a> Cover<'s, 'a> {
     }
 
     /// A point inside each leaf of a class on its arc: halfway along the
-    /// parameter the arc is a graph over, between where it leaves the leaf.
+    /// parameter the arc is a graph over, between where it leaves the leaf,
+    /// or else the leaf's middle moved onto the section where that lands
+    /// inside the leaf, as where the arc ends on a pole.
     pub(super) fn interiors(&mut self, class: &[usize]) -> Vec<Point3> {
         let mut out = Vec::new();
         for &k in class {
+            let before = out.len();
+            self.interior(k, &mut out);
+            if out.len() == before
+                && let Some(q) =
+                    super::section_fit::settle_on_section(self.a, self.b, self.leaves[k].middle)
+                && self.locate(q, 0.0) == Some(k)
+            {
+                out.push(q);
+            }
+        }
+        out
+    }
+
+    fn interior(&mut self, k: usize, out: &mut Vec<Point3>) {
+        {
             let leaf = self.leaves[k];
             let Kind::Simple { along_u } = leaf.kind else {
-                continue;
+                return;
             };
             let (u, v) = (leaf.u, leaf.v);
             let corners = [(u.0, v.0), (u.1, v.0), (u.1, v.1), (u.0, v.1)];
@@ -694,7 +718,7 @@ impl<'s, 'a> Cover<'s, 'a> {
                 }
             }
             let [first, second, ..] = ends[..] else {
-                continue;
+                return;
             };
             let (lo, hi) = (self.param(u.0, v.0), self.param(u.1, v.1));
             let (from, to) = if along_u {
@@ -705,7 +729,7 @@ impl<'s, 'a> Cover<'s, 'a> {
                 ((u, lo.1), (u, hi.1))
             };
             let (Some(a), Some(b)) = (self.read(from.0, from.1), self.read(to.0, to.1)) else {
-                continue;
+                return;
             };
             if a.g.abs() > a.slack
                 && b.g.abs() > b.slack
@@ -715,7 +739,6 @@ impl<'s, 'a> Cover<'s, 'a> {
                 out.push(frame(self.a, pu, pv).0);
             }
         }
-        out
     }
 
     /// Marks every leaf of a class reached.
@@ -726,26 +749,85 @@ impl<'s, 'a> Cover<'s, 'a> {
     }
 
     /// Cuts a lone leaf that straddles the region's or the second patch's
-    /// edge and is too large for its seeds to prove its arc off both, and
-    /// reads its parts; `false` where there is none to cut.
-    pub(super) fn cut_across(&mut self, class: &[usize]) -> bool {
+    /// edge, so its parts either lie off both, or inside both where a seed
+    /// reaches them, and reads them; `false` where there is none to cut, or
+    /// where the parts cannot all be read within the budget: the cut is then
+    /// undone, so every leaf stays read.
+    pub(super) fn refine(&mut self, class: &[usize]) -> bool {
         let &[k] = class else {
             return false;
         };
         let leaf = self.leaves[k];
-        if leaf.inside || 2.0 * leaf.reach <= self.margin || self.leaves.len() > MOST_LEAVES {
+        let start = self.leaves.len();
+        if leaf.inside || start + 4 > self.most {
             return false;
         }
         let (hu, hv) = self.half_widths(&leaf);
         let (_, vm) = self.param(leaf.u.0, leaf.v.0 + (leaf.v.1 - leaf.v.0) / 2);
         let rates = rates(self.a, hv, vm);
-        let start = self.leaves.len();
         self.cut_or_stop(k, (hu * rates.u, hv * rates.v), leaf.reach);
         if self.leaves[k].kind == Kind::Fine {
+            self.leaves[k] = leaf;
             return false;
         }
         self.settle_from(start);
+        if self.leaves[start..].iter().any(|l| l.kind == Kind::Open) {
+            self.leaves.truncate(start);
+            self.leaves[k] = leaf;
+            return false;
+        }
         true
+    }
+
+    /// Settles a class. It is reached only where a marched point lies in
+    /// one of its leaves, or a fitted curve passes through one: `fitted`
+    /// reads whether the curve nearest a probe does, and `seed` settles a
+    /// probe and marches from it, returning the points of the march where
+    /// it lies on a marched branch (none where it traced nothing), or
+    /// `None` where it does not settle. `Ok(true)` where the class is
+    /// reached, `Ok(false)` where a lone leaf across an edge was cut and
+    /// its parts are to be read again.
+    ///
+    /// # Errors
+    ///
+    /// Any error of `seed`, and [`MathError::ConvergenceFailure`] where no
+    /// seed reaches the class and it cannot be cut: its arc may lie on both
+    /// patches, and it is refused rather than dropped.
+    pub(super) fn resolve(
+        &mut self,
+        class: &[usize],
+        fitted: &dyn Fn(&Self, &[usize], Point3) -> bool,
+        seed: &mut dyn FnMut(Point3) -> Result<Option<Vec<Point3>>, MathError>,
+    ) -> Result<bool, MathError> {
+        let mut probes = self.interiors(class);
+        probes.extend(self.seeds(class));
+        let reached = |cover: &Self| {
+            class.iter().any(|&k| cover.leaves[k].done)
+                || probes.iter().any(|&z| fitted(cover, class, z))
+        };
+        if reached(self) {
+            self.mark(class);
+            return Ok(true);
+        }
+        let mut tries = 0;
+        for &z in &probes {
+            let Some(points) = seed(z)? else {
+                continue;
+            };
+            self.mark_marched(&points);
+            if reached(self) {
+                self.mark(class);
+                return Ok(true);
+            }
+            tries += 1;
+            if tries == SEED_TRIES {
+                break;
+            }
+        }
+        if self.refine(class) {
+            return Ok(false);
+        }
+        Err(MathError::ConvergenceFailure { iterations: 0 })
     }
 
     /// Marks the leaf each point of a marched section lies in, where it
@@ -786,7 +868,7 @@ impl<'s, 'a> Cover<'s, 'a> {
             return None;
         };
         let sin = na.cross(nb).length();
-        let (u, v) = super::project_analytic(self.a, q, self.u_range, self.v_range);
+        let (u, v) = sheet_params(self.a, q, self.u_range, self.v_range);
         let (_, au, av) = frame(self.a, u, v);
         let size = q.x().abs().max(q.y().abs()).max(q.z().abs());
         let rounding = 1024.0 * f64::EPSILON * (self.a.scale(q) + self.b.scale(q) + size);
@@ -849,6 +931,24 @@ fn find(parent: &mut [usize], mut k: usize) -> usize {
     k
 }
 
+/// The parameters of the point of `surface` nearest `q`, within the
+/// patch's ranges: on a spindle torus, on whichever sheet `q` lies nearer,
+/// where the plain projection reads the near tube's.
+fn sheet_params(
+    surface: &AnalyticSurface<'_>,
+    q: Point3,
+    u_range: (f64, f64),
+    v_range: (f64, f64),
+) -> (f64, f64) {
+    match surface {
+        AnalyticSurface::Torus(t) => {
+            let (u, v) = t.project_point_nearest(q);
+            (u.clamp(u_range.0, u_range.1), v.clamp(v_range.0, v_range.1))
+        }
+        _ => super::project_analytic(surface, q, u_range, v_range),
+    }
+}
+
 /// Whether `inner` lies inside `outer`, off its faces.
 fn inside_box(inner: Aabb3, outer: Aabb3) -> bool {
     inner.min.x() > outer.min.x()
@@ -881,6 +981,11 @@ fn on_patch(surface: &AnalyticSurface<'_>, (v0, v1): (f64, f64), p: Point3, reac
         AnalyticSurface::Torus(t) => {
             if v1 - v0 >= std::f64::consts::TAU {
                 return Place::Inside;
+            }
+            // A spindle torus's far sheet reads its `v` about the centre
+            // circle's far point, which the bound below does not follow.
+            if t.minor_radius() >= t.major_radius() {
+                return Place::Across;
             }
             let w = p - t.center();
             let h = t.z_axis().dot(w);
@@ -1010,5 +1115,156 @@ fn rates(surface: &AnalyticSurface<'_>, hv: f64, v: f64) -> Rates {
                 vv: small,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use std::f64::consts::{PI, TAU};
+
+    use super::*;
+    use crate::surfaces::{CylindricalSurface, ToroidalSurface};
+
+    /// The spindle torus of radii 1 and 2 about the origin's z axis.
+    fn spindle() -> ToroidalSurface {
+        ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0, 2.0).unwrap()
+    }
+
+    /// A point of a spindle torus's far sheet, where `1 + 2 cos v` is
+    /// negative, lies half a turn round from the near tube's point that the
+    /// plain projection reads: read there, it lay 0.469 off, and its leaf
+    /// could be another class's. It is read on its own sheet.
+    #[test]
+    fn a_spindle_torus_point_on_its_far_sheet_is_read_there() {
+        let torus = spindle();
+        let surface = AnalyticSurface::Torus(&torus);
+        let q = torus.evaluate(0.0, 0.75 * PI);
+        let (u, v) = sheet_params(&surface, q, (0.0, TAU), (0.0, TAU));
+        let off = (frame(&surface, u, v).0 - q).length();
+        assert!(off < 1e-12, "read {off:.3e} off");
+    }
+
+    /// The point at `v` 2.5 of a spindle torus of radii 1 and 2 lies on the
+    /// patch from `v` 2.4 to 2.6, but its near tube's parameter is 1.89:
+    /// the patch was read as off the ball about it, and a cell holding it
+    /// was set aside.
+    #[test]
+    fn a_spindle_torus_patch_holds_its_far_sheet_points() {
+        let torus = spindle();
+        let surface = AnalyticSurface::Torus(&torus);
+        let p = torus.evaluate(0.0, 2.5);
+        assert!(on_patch(&surface, (2.4, 2.6), p, 1e-3) != Place::Outside);
+    }
+
+    /// The rod and ring of the two dips in one cell (see
+    /// `two_loops_in_one_cell_of_each_patch_are_both_traced`).
+    fn rod_and_ring() -> (CylindricalSurface, ToroidalSurface) {
+        let ring = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 4.0, 1.5).unwrap();
+        let rod = CylindricalSurface::new(
+            Point3::new(0.0, 4.0 - 0.007, 2.1 - 8e-6),
+            Vec3::new(1.0, 0.0, 0.0),
+            0.6,
+        )
+        .unwrap();
+        (rod, ring)
+    }
+
+    fn every_cell(n: usize) -> Vec<(usize, usize)> {
+        (0..n).flat_map(|i| (0..n).map(move |j| (i, j))).collect()
+    }
+
+    /// A class whose seeds do not settle, or whose march traces nothing, is
+    /// not reached: it was marked reached all the same, and its arc was
+    /// lost with no error. Only a marched point in one of its leaves
+    /// reaches it.
+    #[test]
+    fn a_class_no_march_reaches_is_not_taken_as_reached() {
+        let (rod, ring) = rod_and_ring();
+        let (a, b) = (
+            AnalyticSurface::Cylinder(&rod),
+            AnalyticSurface::Torus(&ring),
+        );
+        let mut cover = Cover::new(
+            &a,
+            &b,
+            ((0.0, TAU), (-10.0, 10.0)),
+            (0.0, TAU),
+            32,
+            &every_cell(32),
+            None,
+            1e-7,
+            MOST_LEAVES,
+        );
+        assert!(cover.complete());
+        let classes = cover.classes();
+        let class = classes
+            .iter()
+            .find(|c| c.iter().all(|&k| cover.leaves[k].inside))
+            .expect("a class inside both patches")
+            .clone();
+        let never = |_: &Cover<'_, '_>, _: &[usize], _: Point3| false;
+        let traced_nothing = cover.resolve(&class, &never, &mut |_: Point3| Ok(Some(Vec::new())));
+        assert!(traced_nothing.is_err(), "{traced_nothing:?}");
+        let unsettled = cover.resolve(&class, &never, &mut |_: Point3| Ok(None));
+        assert!(unsettled.is_err(), "{unsettled:?}");
+        assert!(cover.classes().contains(&class));
+        let reached = cover.resolve(&class, &never, &mut |z: Point3| Ok(Some(vec![z])));
+        assert!(
+            reached.is_ok_and(|r| r),
+            "a marched point on its arc reaches it"
+        );
+    }
+
+    /// A lone cell across the region's edge cut past the budget left its
+    /// parts unread after the cover was proved complete: the arcs in them
+    /// were dropped, and the second patch's seeds no longer ran. The cut is
+    /// undone, and every leaf stays read.
+    #[test]
+    fn a_cut_past_the_budget_is_undone() {
+        let (rod, ring) = rod_and_ring();
+        let (a, b) = (
+            AnalyticSurface::Cylinder(&rod),
+            AnalyticSurface::Torus(&ring),
+        );
+        // The region's edge across one loop, at a few places along it.
+        let mut tried = 0;
+        for edge in [0.17, 0.2, 0.23, 0.25, 0.27, 0.29] {
+            let meet = Aabb3 {
+                min: Point3::new(edge, 3.9, 1.4),
+                max: Point3::new(1.0, 4.1, 1.6),
+            };
+            let mut cover = Cover::new(
+                &a,
+                &b,
+                ((0.0, TAU), (-10.0, 10.0)),
+                (0.0, TAU),
+                32,
+                &every_cell(32),
+                Some((meet, meet.expanded(1e-4))),
+                1e-7,
+                MOST_LEAVES,
+            );
+            assert!(cover.complete());
+            let classes = cover.classes();
+            let Some(lone) = classes
+                .iter()
+                .find(|c| c.len() == 1 && !cover.leaves[c[0]].inside)
+                .cloned()
+            else {
+                continue;
+            };
+            tried += 1;
+            let before = cover.leaves.len();
+            cover.most = before + 2;
+            let cut = cover.refine(&lone);
+            assert!(
+                cover.complete(),
+                "edge {edge}: cut {cut}, a leaf is left unread"
+            );
+            assert!(!cut && cover.leaves.len() == before, "edge {edge}");
+        }
+        assert!(tried > 0, "no cell across the region's edge");
     }
 }
