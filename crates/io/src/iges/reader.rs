@@ -580,10 +580,16 @@ fn read_plane(params: &mut Params) -> Result<FaceSurface, IoError> {
             reason: "IGES plane has zero normal".to_string(),
         });
     }
-    Ok(FaceSurface::Plane {
+    let plane = FaceSurface::Plane {
         normal: normal * (1.0 / length),
         d: d / length,
-    })
+    };
+    if !plane.is_well_formed() {
+        return Err(IoError::ParseError {
+            reason: "IGES plane has a normal or distance it cannot be evaluated with".to_string(),
+        });
+    }
+    Ok(plane)
 }
 
 /// Refuses knots evaluation could not walk, in one parameter direction, since
@@ -940,6 +946,38 @@ mod tests {
 
     fn surface_is_read(params: &str) -> bool {
         read_surface(&mut Params::of(&entity(1, 128, params))).is_ok()
+    }
+
+    fn plane_is_read(params: &str) -> bool {
+        read_plane(&mut Params::of(&entity(1, 108, params))).is_ok()
+    }
+
+    /// A plane's normal comes from the file. A normal whose length
+    /// overflows scales to no normal at all, and the reader refuses it, as it
+    /// refuses a parameter that is not finite. A circle, which the file holds
+    /// as a rational spline, is refused when a coordinate that sets its
+    /// radius is NaN or infinite.
+    #[test]
+    fn a_plane_or_circle_must_be_one_evaluation_can_walk() {
+        assert!(plane_is_read("108,0.,0.,2.,3.,0,0.,0.,0.,0.;"));
+        for bad in [
+            "108,1E300,1E300,1E300,0.,0,0.,0.,0.,0.;",
+            "108,0.,0.,0.,3.,0,0.,0.,0.,0.;",
+            "108,NaN,0.,1.,3.,0,0.,0.,0.,0.;",
+            "108,0.,0.,1.,1E400,0,0.,0.,0.,0.;",
+        ] {
+            assert!(!plane_is_read(bad), "{bad}");
+        }
+        let arc = |corner: &str| {
+            format!(
+                "126,2,2,0,0,0,0,0.,0.,0.,1.,1.,1.,1.,0.7071067811865476,1.,\
+                 1.,0.,0.,{corner},0.,0.,1.,0.,0.,1.;"
+            )
+        };
+        assert!(curve_is_read(&arc("1.,1.,0.")));
+        for corner in ["NaN,1.,0.", "1E400,1.,0.", "1.,-inf,0."] {
+            assert!(!curve_is_read(&arc(corner)), "{corner}");
+        }
     }
 
     /// Each rule alone: past `NurbsCurve::new`, which checks only the counts.

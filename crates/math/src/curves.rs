@@ -69,10 +69,10 @@ impl Line3D {
     ///
     /// # Errors
     ///
-    /// Returns an error if `direction` is zero-length.
+    /// Returns an error if `direction` is zero-length or not finite.
     pub fn new(origin: Point3, direction: Vec3) -> Result<Self, MathError> {
         let len = direction.length();
-        if len < 1e-15 {
+        if !(len >= 1e-15 && len.is_finite()) {
             return Err(MathError::ZeroVector);
         }
         Ok(Self {
@@ -147,9 +147,9 @@ impl Circle3D {
     ///
     /// # Errors
     ///
-    /// Returns an error if `radius` is non-positive or `normal` is zero.
+    /// Returns an error if `radius` is not finite and positive or `normal` is zero.
     pub fn new(center: Point3, normal: Vec3, radius: f64) -> Result<Self, MathError> {
-        if radius <= 0.0 {
+        if !(radius > 0.0 && radius.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: radius,
                 min: 0.0,
@@ -176,14 +176,14 @@ impl Circle3D {
     ///
     /// # Errors
     ///
-    /// Returns an error if `radius` is non-positive or `normal` is zero.
+    /// Returns an error if `radius` is not finite and positive or `normal` is zero.
     pub fn new_with_ref(
         center: Point3,
         normal: Vec3,
         radius: f64,
         ref_dir: Vec3,
     ) -> Result<Self, MathError> {
-        if radius <= 0.0 {
+        if !(radius > 0.0 && radius.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: radius,
                 min: 0.0,
@@ -287,7 +287,7 @@ impl Circle3D {
     ///
     /// # Errors
     ///
-    /// Returns an error if `radius` is non-positive.
+    /// Returns an error if `radius` is not finite and positive.
     pub fn with_axes(
         center: Point3,
         normal: Vec3,
@@ -295,7 +295,7 @@ impl Circle3D {
         u_axis: Vec3,
         v_axis: Vec3,
     ) -> Result<Self, MathError> {
-        if radius <= 0.0 {
+        if !(radius > 0.0 && radius.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: radius,
                 min: 0.0,
@@ -670,16 +670,24 @@ impl Ellipse3D {
     ///
     /// # Errors
     ///
-    /// Returns an error if either semi-axis is non-positive.
+    /// Returns an error if either semi-axis is not finite and positive.
     pub fn new(
         center: Point3,
         normal: Vec3,
         semi_major: f64,
         semi_minor: f64,
     ) -> Result<Self, MathError> {
-        if semi_major <= 0.0 || semi_minor <= 0.0 {
+        if !(semi_major > 0.0
+            && semi_major.is_finite()
+            && semi_minor > 0.0
+            && semi_minor.is_finite())
+        {
             return Err(MathError::ParameterOutOfRange {
-                value: semi_major.min(semi_minor),
+                value: if semi_major > 0.0 && semi_major.is_finite() {
+                    semi_minor
+                } else {
+                    semi_major
+                },
                 min: 0.0,
                 max: f64::INFINITY,
             });
@@ -711,7 +719,7 @@ impl Ellipse3D {
     ///
     /// # Errors
     ///
-    /// Returns an error if either semi-axis is non-positive, `semi_minor`
+    /// Returns an error if either semi-axis is not finite and positive, `semi_minor`
     /// exceeds `semi_major`, or `normal` is zero.
     pub fn new_with_ref(
         center: Point3,
@@ -720,9 +728,17 @@ impl Ellipse3D {
         semi_minor: f64,
         ref_dir: Vec3,
     ) -> Result<Self, MathError> {
-        if semi_major <= 0.0 || semi_minor <= 0.0 {
+        if !(semi_major > 0.0
+            && semi_major.is_finite()
+            && semi_minor > 0.0
+            && semi_minor.is_finite())
+        {
             return Err(MathError::ParameterOutOfRange {
-                value: semi_major.min(semi_minor),
+                value: if semi_major > 0.0 && semi_major.is_finite() {
+                    semi_minor
+                } else {
+                    semi_major
+                },
                 min: 0.0,
                 max: f64::INFINITY,
             });
@@ -906,7 +922,7 @@ impl Ellipse3D {
     ///
     /// # Errors
     ///
-    /// Returns an error if either semi-axis is non-positive.
+    /// Returns an error if either semi-axis is not finite and positive.
     pub fn with_axes(
         center: Point3,
         normal: Vec3,
@@ -915,9 +931,17 @@ impl Ellipse3D {
         u_axis: Vec3,
         v_axis: Vec3,
     ) -> Result<Self, MathError> {
-        if semi_major <= 0.0 || semi_minor <= 0.0 {
+        if !(semi_major > 0.0
+            && semi_major.is_finite()
+            && semi_minor > 0.0
+            && semi_minor.is_finite())
+        {
             return Err(MathError::ParameterOutOfRange {
-                value: semi_major.min(semi_minor),
+                value: if semi_major > 0.0 && semi_major.is_finite() {
+                    semi_minor
+                } else {
+                    semi_major
+                },
                 min: 0.0,
                 max: f64::INFINITY,
             });
@@ -1043,9 +1067,9 @@ impl Parabola3D {
     /// from vertex to focus.
     ///
     /// # Errors
-    /// Returns an error if `focal_length` is not positive or `axis_dir` is zero.
+    /// Returns an error if `focal_length` is not finite and positive or `axis_dir` is zero.
     pub fn new(vertex: Point3, axis_dir: Vec3, focal_length: f64) -> Result<Self, MathError> {
-        if focal_length <= 0.0 {
+        if !(focal_length > 0.0 && focal_length.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: focal_length,
                 min: f64::EPSILON,
@@ -1066,7 +1090,7 @@ impl Parabola3D {
     /// perpendicular to `axis_dir`.
     ///
     /// # Errors
-    /// Returns an error if `focal_length` is not positive, or if either
+    /// Returns an error if `focal_length` is not finite and positive, or if either
     /// direction is zero or they are parallel.
     pub fn with_axes(
         vertex: Point3,
@@ -1074,7 +1098,7 @@ impl Parabola3D {
         u_axis: Vec3,
         focal_length: f64,
     ) -> Result<Self, MathError> {
-        if focal_length <= 0.0 {
+        if !(focal_length > 0.0 && focal_length.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: focal_length,
                 min: f64::EPSILON,
@@ -1172,16 +1196,24 @@ impl Hyperbola3D {
     /// `semi_minor` is the imaginary semi-axis.
     ///
     /// # Errors
-    /// Returns an error if either semi-axis is non-positive.
+    /// Returns an error if either semi-axis is not finite and positive.
     pub fn new(
         center: Point3,
         normal: Vec3,
         semi_major: f64,
         semi_minor: f64,
     ) -> Result<Self, MathError> {
-        if semi_major <= 0.0 || semi_minor <= 0.0 {
+        if !(semi_major > 0.0
+            && semi_major.is_finite()
+            && semi_minor > 0.0
+            && semi_minor.is_finite())
+        {
             return Err(MathError::ParameterOutOfRange {
-                value: semi_major.min(semi_minor),
+                value: if semi_major > 0.0 && semi_major.is_finite() {
+                    semi_minor
+                } else {
+                    semi_major
+                },
                 min: f64::EPSILON,
                 max: f64::MAX,
             });
@@ -1203,7 +1235,7 @@ impl Hyperbola3D {
     /// to `u_axis`, and the normal is `u_axis × v_axis`.
     ///
     /// # Errors
-    /// Returns an error if either semi-axis is non-positive, or if either
+    /// Returns an error if either semi-axis is not finite and positive, or if either
     /// direction is zero or they are parallel.
     pub fn with_axes(
         center: Point3,
@@ -1212,9 +1244,17 @@ impl Hyperbola3D {
         u_axis: Vec3,
         v_axis: Vec3,
     ) -> Result<Self, MathError> {
-        if semi_major <= 0.0 || semi_minor <= 0.0 {
+        if !(semi_major > 0.0
+            && semi_major.is_finite()
+            && semi_minor > 0.0
+            && semi_minor.is_finite())
+        {
             return Err(MathError::ParameterOutOfRange {
-                value: semi_major.min(semi_minor),
+                value: if semi_major > 0.0 && semi_major.is_finite() {
+                    semi_minor
+                } else {
+                    semi_major
+                },
                 min: f64::EPSILON,
                 max: f64::MAX,
             });

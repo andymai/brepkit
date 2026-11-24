@@ -1176,3 +1176,38 @@ fn conics_with_axes_normalize_their_frames() {
         .is_err()
     );
 }
+
+/// Each constructor refuses a size or a direction that is not finite and in
+/// range. A test of `value <= 0.0` alone lets NaN through, since every
+/// comparison with NaN is false.
+#[test]
+fn constructors_refuse_sizes_that_are_not_finite_and_in_range() {
+    let (o, z, x, y) = (
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+    );
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
+        assert!(Circle3D::new(o, z, bad).is_err(), "{bad}");
+        assert!(Circle3D::new_with_ref(o, z, bad, x).is_err(), "{bad}");
+        assert!(Circle3D::with_axes(o, z, bad, x, y).is_err(), "{bad}");
+        for (a, b) in [(bad, 1.0), (2.0, bad)] {
+            assert!(Ellipse3D::new(o, z, a, b).is_err(), "{a} {b}");
+            assert!(Ellipse3D::new_with_ref(o, z, a, b, x).is_err(), "{a} {b}");
+            assert!(Ellipse3D::with_axes(o, z, a, b, x, y).is_err(), "{a} {b}");
+            assert!(Hyperbola3D::new(o, z, a, b).is_err(), "{a} {b}");
+            assert!(Hyperbola3D::with_axes(o, a, b, x, y).is_err(), "{a} {b}");
+        }
+        assert!(Parabola3D::new(o, z, bad).is_err(), "{bad}");
+        assert!(Parabola3D::with_axes(o, z, x, bad).is_err(), "{bad}");
+    }
+    for bad in [f64::NAN, f64::INFINITY] {
+        assert!(Line3D::new(o, Vec3::new(bad, 0.0, 0.0)).is_err(), "{bad}");
+    }
+    assert!(Circle3D::new(o, z, 2.0).is_ok());
+    assert!(Ellipse3D::with_axes(o, z, 2.0, 1.0, x, y).is_ok());
+    assert!(Parabola3D::new(o, z, 1.0).is_ok());
+    assert!(Hyperbola3D::new(o, z, 2.0, 1.0).is_ok());
+    assert!(Line3D::new(o, x).is_ok());
+}

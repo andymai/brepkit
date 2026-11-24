@@ -21,10 +21,10 @@ impl Line2D {
     /// Creates a new 2D line.
     ///
     /// # Errors
-    /// Returns `MathError::ZeroVector` if direction has zero length.
+    /// Returns `MathError::ZeroVector` if direction has zero length or is not finite.
     pub fn new(origin: Point2, direction: Vec2) -> Result<Self, MathError> {
         let len = direction.length();
-        if len < 1e-15 {
+        if !(len >= 1e-15 && len.is_finite()) {
             return Err(MathError::ZeroVector);
         }
         Ok(Self {
@@ -89,9 +89,9 @@ impl Circle2D {
     /// Creates a new 2D circle.
     ///
     /// # Errors
-    /// Returns `MathError::ParameterOutOfRange` if radius is not positive.
+    /// Returns `MathError::ParameterOutOfRange` if radius is not finite and positive.
     pub fn new(center: Point2, radius: f64) -> Result<Self, MathError> {
-        if radius <= 0.0 {
+        if !(radius > 0.0 && radius.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: radius,
                 min: f64::EPSILON,
@@ -156,24 +156,33 @@ impl Ellipse2D {
     /// Creates a new 2D ellipse.
     ///
     /// # Errors
-    /// Returns `MathError::ParameterOutOfRange` if either semi-axis is not positive.
+    /// Returns `MathError::ParameterOutOfRange` if either semi-axis is not
+    /// finite and positive, `semi_minor` exceeds `semi_major`, or `rotation`
+    /// is not finite.
     pub fn new(
         center: Point2,
         semi_major: f64,
         semi_minor: f64,
         rotation: f64,
     ) -> Result<Self, MathError> {
-        if semi_major <= 0.0 {
+        if !(semi_major > 0.0 && semi_major.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: semi_major,
                 min: f64::EPSILON,
                 max: f64::MAX,
             });
         }
-        if semi_minor <= 0.0 {
+        if !(semi_minor > 0.0 && semi_minor.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: semi_minor,
                 min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        if !rotation.is_finite() {
+            return Err(MathError::ParameterOutOfRange {
+                value: rotation,
+                min: f64::MIN,
                 max: f64::MAX,
             });
         }
@@ -556,6 +565,26 @@ mod tests {
         ] {
             assert!(!bad.is_well_formed(), "{bad:?}");
         }
+    }
+
+    /// Each constructor refuses a size, an angle or a direction that is not
+    /// finite and in range. A test of `value <= 0.0` alone lets NaN through,
+    /// since every comparison with NaN is false.
+    #[test]
+    fn constructors_refuse_sizes_that_are_not_finite_and_in_range() {
+        let o = Point2::new(0.0, 0.0);
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
+            assert!(Circle2D::new(o, bad).is_err(), "{bad}");
+            assert!(Ellipse2D::new(o, bad, 1.0, 0.0).is_err(), "{bad}");
+            assert!(Ellipse2D::new(o, 2.0, bad, 0.0).is_err(), "{bad}");
+        }
+        for bad in [f64::NAN, f64::INFINITY] {
+            assert!(Ellipse2D::new(o, 2.0, 1.0, bad).is_err(), "{bad}");
+            assert!(Line2D::new(o, Vec2::new(bad, 0.0)).is_err(), "{bad}");
+        }
+        assert!(Circle2D::new(o, 2.0).is_ok());
+        assert!(Ellipse2D::new(o, 2.0, 1.0, 0.3).is_ok());
+        assert!(Line2D::new(o, Vec2::new(1.0, 0.0)).is_ok());
     }
 
     const TOL: f64 = 1e-10;

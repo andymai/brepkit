@@ -897,6 +897,9 @@ impl<'a> StepBuilder<'a> {
             }
             (surface, _) => surface,
         };
+        // A swept or revolved surface, and a sphere put on a new frame, are
+        // built here and not by `build_surface`.
+        let surface = evaluable_surface(surface, surface_ref)?;
 
         // Turning a face over flips its normal, not the side of its surface
         // its loops wind about.
@@ -1124,7 +1127,14 @@ impl<'a> StepBuilder<'a> {
         .unwrap_or(sphere))
     }
 
+    /// The surface `#surface_ref` names. The file can hold any numbers, so a
+    /// surface that cannot give a finite point at each parameter pair of its
+    /// domain is refused.
     fn build_surface(&self, surface_ref: u64) -> Result<FaceSurface, IoError> {
+        evaluable_surface(self.surface_geometry(surface_ref)?, surface_ref)
+    }
+
+    fn surface_geometry(&self, surface_ref: u64) -> Result<FaceSurface, IoError> {
         let entity = self.get_entity(surface_ref)?;
         let entity_type = entity.entity_type.clone();
         let attrs = entity.attrs.clone();
@@ -1328,12 +1338,19 @@ impl<'a> StepBuilder<'a> {
         Ok(edge_id)
     }
 
+    /// The curve `#curve_ref` names. The file can hold any numbers, so a
+    /// curve that cannot give a finite point at each parameter of its domain
+    /// is refused.
+    fn build_curve_geometry(&self, curve_ref: u64) -> Result<EdgeCurve, IoError> {
+        evaluable_curve(self.curve_geometry(curve_ref)?, curve_ref)
+    }
+
     /// Build the curve geometry for an edge from a curve entity reference.
     ///
     /// Dispatches on the entity type: LINE, CIRCLE, ELLIPSE,
     /// `B_SPLINE_CURVE_WITH_KNOTS`, and a curve on surfaces (simple or complex
     /// record) through its 3D curve.
-    fn build_curve_geometry(&self, curve_ref: u64) -> Result<EdgeCurve, IoError> {
+    fn curve_geometry(&self, curve_ref: u64) -> Result<EdgeCurve, IoError> {
         let entity = self.get_entity(curve_ref)?;
         let entity_type = entity.entity_type.clone();
         let attrs = entity.attrs.clone();
@@ -2307,6 +2324,36 @@ fn parse_list_refs(attrs: &str) -> Vec<u64> {
     Vec::new()
 }
 
+/// `curve`, read from `#entity`, if it gives a finite point at each
+/// parameter of its domain on the shape its type names.
+fn evaluable_curve(curve: EdgeCurve, entity: u64) -> Result<EdgeCurve, IoError> {
+    if curve.is_well_formed() {
+        Ok(curve)
+    } else {
+        Err(IoError::ParseError {
+            reason: format!(
+                "curve #{entity} has a size, frame, knots, weights or points \
+                 it cannot be evaluated with"
+            ),
+        })
+    }
+}
+
+/// `surface`, read from `#entity`, if it gives a finite point at each
+/// parameter pair of its domain on the shape its type names.
+fn evaluable_surface(surface: FaceSurface, entity: u64) -> Result<FaceSurface, IoError> {
+    if surface.is_well_formed() {
+        Ok(surface)
+    } else {
+        Err(IoError::ParseError {
+            reason: format!(
+                "surface #{entity} has a size, frame, knots, weights or points \
+                 it cannot be evaluated with"
+            ),
+        })
+    }
+}
+
 /// Extract floating-point numbers from an attribute string.
 ///
 /// Handles both nested `(1.0, 2.0)` and flat `'', #ref, 1.5E+00` formats.
@@ -3102,6 +3149,100 @@ mod tests {
             assert!(
                 matches!(surface, Err(IoError::ParseError { .. })),
                 "{surface:?}"
+            );
+        }
+    }
+
+    /// A circle's or a cylinder's radius comes from the file. A radius that
+    /// is not finite and positive gives a curve or surface with no points,
+    /// and a centre that is not finite gives points that are not finite: the
+    /// reader refuses each. The file it was made from reads.
+    #[test]
+    fn a_circle_or_cylinder_the_reader_cannot_evaluate_is_refused() {
+        let mut topo = Topology::new();
+        let rod = brepkit_operations::primitives::make_cylinder(&mut topo, 2.0, 3.0).unwrap();
+        let step = writer::write_step(&topo, &[rod]).unwrap();
+        assert_eq!(read_step(&step, &mut Topology::new()).unwrap().len(), 1);
+
+        // `text` with the last number of each `entity` record set to `value`.
+        let sized = |entity: &str, value: &str| {
+            step.lines()
+                .map(|line| match line.find(&format!("= {entity}(")) {
+                    Some(_) => {
+                        let (head, _) = line.rsplit_once(',').unwrap();
+                        format!("{head},{value});")
+                    }
+                    None => line.to_owned(),
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        // `text` with each circle placed on a new point at `x`.
+        let centred = |x: &str| {
+            let mut next = step
+                .lines()
+                .filter_map(|l| l.strip_prefix('#')?.split_once(' ')?.0.parse::<u64>().ok())
+                .max()
+                .unwrap();
+            let placements: Vec<String> = step
+                .lines()
+                .filter(|l| l.contains("= CIRCLE("))
+                .map(|l| {
+                    l.split('#')
+                        .nth(2)
+                        .unwrap()
+                        .split(',')
+                        .next()
+                        .unwrap()
+                        .to_owned()
+                })
+                .collect();
+            let mut extra = Vec::new();
+            let lines: Vec<String> = step
+                .lines()
+                .map(|line| {
+                    let id = line.strip_prefix('#').and_then(|l| l.split_once(' '));
+                    match id {
+                        Some((id, _))
+                            if placements.iter().any(|p| p == id)
+                                && line.contains("AXIS2_PLACEMENT_3D(") =>
+                        {
+                            next += 1;
+                            extra.push(format!("#{next} = CARTESIAN_POINT('',({x},0.,0.));"));
+                            let open = line.find('(').unwrap();
+                            let at = open + line[open..].find('#').unwrap();
+                            let end = at + line[at..].find(',').unwrap();
+                            format!("{}#{next}{}", &line[..at], &line[end..])
+                        }
+                        _ => line.to_owned(),
+                    }
+                })
+                .collect();
+            lines.join("\n").replacen(
+                "ENDSEC;\nEND-ISO",
+                &format!("{}\nENDSEC;\nEND-ISO", extra.join("\n")),
+                1,
+            )
+        };
+        assert_eq!(
+            read_step(&centred("0."), &mut Topology::new())
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let mut malformed = Vec::new();
+        for entity in ["CIRCLE", "CYLINDRICAL_SURFACE"] {
+            for value in ["NaN", "inf", "-inf", "1.E400", "0.", "-2."] {
+                malformed.push((format!("{entity} {value}"), sized(entity, value)));
+            }
+        }
+        malformed.push(("centre NaN".to_owned(), centred("NaN")));
+        for (what, bad) in &malformed {
+            let found = read_step(bad, &mut Topology::new());
+            assert!(
+                matches!(found, Err(IoError::ParseError { .. })),
+                "{what}: {found:?}"
             );
         }
     }
