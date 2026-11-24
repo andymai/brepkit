@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795549978106,
+  "lastUpdate": 1795550824337,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -77867,6 +77867,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28029853,
             "range": "± 146128",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9e65ab5ee856aa85e48ea12f1e921d5cf8817c6a",
+          "message": "fix(algo,operations): give a straight pcurve only under a 3D bound, and refuse a fuse result that breaks Euler (#2825)\n\n## Summary\n\nOn main, two paths can give a wrong result with no error:\n\n- **Chord pcurves (#2799).** An edge gets a straight pcurve where its\n(u, v) samples lie within 1e-6 of a line. On a ball, a rod, a cone or a\nring, (u, v) are angles, so 1e-6 is 1e-6 times the radius in 3D. On a\nball of radius 1e4, short arcs get chords that stray 7.0e-4 to 5.3e-3\nfrom their edges.\n- **The cluster fuse gate (#2776).** `fuse_cluster` keeps a `fuse_n`\nresult that `validate_boolean_result` accepts, and that check never\nreads the Euler count. Also, `plane_internal_line_loops` merges two\ndifferent sections that share their two ends.\n\nWith this change, those arcs get fitted pcurves within 3.5e-11 of their\nedges. A result that breaks the Euler-Poincaré relation is refused, and\n`fuse_cluster` falls back to one fuse at a time. Two curves that share\ntheir ends stay apart. The pose sweep and the truth audit give the same\noutput as main.\n\nFixes #2799. Fixes #2776.\n\n## The change\n\n- **A straight pcurve by a bound in 3D.** A straight pcurve stands only\nwhere a bound holds its image on the edge in 3D. The bound is the least\nof two forms:\n- per sample step, the gap at the ends plus the image's bend plus the\nedge's stray from its chord;\n- for a circle along a parallel or a meridian, a closed form per quarter\nturn, so exact parallels and meridians keep their chords.\n- The two ellipse gates near the top of `pcurve_compute.rs` use the same\nbound.\n- **The Euler gate.** `validate_boolean_result` now refuses a result\nthat breaks the Euler-Poincaré relation on any piece, with genus, inner\nloops and vertex sheets. `validate_solid` reads it per piece too,\nthrough the shared `euler_misfit`. So one piece's surplus can no longer\nhide another's lack. `fuse_cluster_with` takes the one-pass fuse as a\nparameter, so a test can feed it a bad result.\n- **The dedup.** Sections with the same ends merge only where a proof\nshows one curve. Two lines, two circular arcs whose middles meet, or two\nelliptic arcs that meet at three inner points count as one. So does a\nB-spline whose control points lie on a line's segment, or two B-splines\nwith the same data either way.\n\n- **Proved fits.** Where a straight pcurve is refused, line, circle and\nellipse edges get pieces proved within the tolerance of the edge. On a\nplane they are exact rational quadratic pieces. On a curved surface they\nare cubic pieces, split until a bound holds.\n- Each proof runs in a frame centred on the surface, so its rounding\nscales with the surface's size, not its position.\n- A conic is read on unit square axes, and the gap from its stored form\nis added to each bound.\n- A pcurve with no proof bumps a perf counter and writes a debug line\n(#2828).\n- **Whole-curve merge bounds.** Two sections merge only where a bound\nover the whole curve holds them together. Arcs use their centres, radii,\ntilt and ends, and trims of one B-spline use their parameter spans. A\nNaN anywhere refuses the merge.\n\n## Tests\n\n- `a_short_arc_on_a_large_ball_rod_or_ring_gets_a_pcurve_on_its_edge`\nand\n`curved_edges_on_a_plane_keep_a_straight_pcurve_only_within_the_tolerance`\nfail under main's rule.\n`runs_along_parallels_meridians_and_rulings_keep_straight_pcurves` runs\nradii 1e4 and 1 in 3 poses.\n- `large_ball_short_sections.rs` cuts a slanted bar through a ball of\nradius 1e4 in 3 poses. 18 section arcs get fits where they got chords,\nand the result does not change.\n- `fuse_cluster_refuses_a_one_pass_fuse_with_a_wrong_euler_count` feeds\nthe cluster a cube with a hole of no size in its top face. Main returns\nit. This branch refuses it and fuses one cube at a time, to the exact\nvolume 2.125.\n- `two_arcs_between_one_pair_of_points_split_a_plate_into_their_regions`\nsplits a plate by two arcs between one pair of points. Main gives 2\nregions and drops one arc. This branch gives the 3 true regions within\n1e-5.\n- Regressions cover each review round:\n- tiny and huge B-spline weights, short knot spans, and trims of one\ncircle or spline;\n- arcs that meet at their ends and middles but part between them, and\narcs turned by 1e-9;\n- quarter turns on surfaces of size 1e4, and conics on long or unequal\naxes;\n  - pcurves moved 1e8 (proved) and 1e10 (refused and counted).\n- The Euler check adds under 1% to `fuse_all` and `compound_cut`\nbenchmarks.\n- brepkit-algo (619) and the operations lib tests (1235) pass, and so do\nall brepkit-operations and brepkit-io tests (3294, 26 skipped). Random\nsweep seeds 1 to 3 give the same result for each case as main.\n\n## Still open\n\n- Rational circle arcs along a cylinder's parallel now get fits, not\nchords, because the B-spline edge bound is loose. The result is right in\neach test.\n- On a plane face, an arc and its chord lose their segment (#2822).\n- Two pcurve tests still read (u, v) units (#2823).\n- The splitter asks for pcurves of edges off the face (#2824).",
+          "timestamp": "2026-11-24T20:02:49Z",
+          "tree_id": "7aed798d1fafe1038f803c810aa20fa9df4ee2fe",
+          "url": "https://github.com/andymai/brepkit/commit/9e65ab5ee856aa85e48ea12f1e921d5cf8817c6a"
+        },
+        "date": 1795550812565,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1228105,
+            "range": "± 3405",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1313103,
+            "range": "± 4961",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14389,
+            "range": "± 18",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 763288,
+            "range": "± 2986",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27936364,
+            "range": "± 171337",
             "unit": "ns/iter"
           }
         ]
