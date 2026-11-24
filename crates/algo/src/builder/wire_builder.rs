@@ -329,6 +329,44 @@ pub fn build_wire_loops_dcel_measured(
     area_of: Option<LoopArea<'_>>,
     rim_ccw: Option<bool>,
 ) -> Vec<Vec<OrientedPCurveEdge>> {
+    dcel_trace(edges, tol, u_periodic, v_periodic, area_of, rim_ccw, None)
+}
+
+/// Whether a loop bounds no area, read in some plane of the caller's.
+pub type LoopFlat<'a> = &'a dyn Fn(&[OrientedPCurveEdge]) -> bool;
+
+/// [`build_wire_loops_dcel_measured`] with no area function, an orbit
+/// dropped as bounding no area where `flat` reads it so. `tol` welds the
+/// graph's nodes in `(u, v)` and nothing else: an area read in another
+/// plane is measured against lengths in that plane, not in `(u, v)`.
+pub fn build_wire_loops_dcel_flat(
+    edges: &[OrientedPCurveEdge],
+    tol: f64,
+    u_periodic: bool,
+    v_periodic: bool,
+    rim_ccw: Option<bool>,
+    flat: LoopFlat<'_>,
+) -> Vec<Vec<OrientedPCurveEdge>> {
+    dcel_trace(
+        edges,
+        tol,
+        u_periodic,
+        v_periodic,
+        None,
+        rim_ccw,
+        Some(flat),
+    )
+}
+
+fn dcel_trace(
+    edges: &[OrientedPCurveEdge],
+    tol: f64,
+    u_periodic: bool,
+    v_periodic: bool,
+    area_of: Option<LoopArea<'_>>,
+    rim_ccw: Option<bool>,
+    flat: Option<LoopFlat<'_>>,
+) -> Vec<Vec<OrientedPCurveEdge>> {
     if edges.is_empty() {
         return Vec::new();
     }
@@ -509,7 +547,11 @@ pub fn build_wire_loops_dcel_measured(
         }
         // A zero-area orbit walks out-and-back around a dangling chain (the
         // graph can carry genuinely unpaired sections); it is not a region.
-        if area.abs() <= perimeter * tol {
+        let no_area = match flat {
+            Some(f) => f(&orbit.iter().map(|&i| halves[i].clone()).collect::<Vec<_>>()),
+            None => area.abs() <= perimeter * tol,
+        };
+        if no_area {
             continue;
         }
         orbits.push((area, orbit));

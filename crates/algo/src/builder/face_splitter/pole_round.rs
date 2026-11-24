@@ -17,6 +17,8 @@ use super::super::classify_2d::{
     boundary_eps, distance_to_polygon_boundary, point_in_polygon_2d, sample_interior_point_where,
 };
 use super::super::split_types::OrientedPCurveEdge;
+use super::super::wire_builder::build_wire_loops_dcel_flat;
+use super::special_cases::reverse_loop;
 
 /// Samples per curved edge.
 const SAMPLES: u32 = 64;
@@ -87,8 +89,30 @@ impl PoleView {
         Some(sum)
     }
 
+    /// Whether a loop of signed area `area`, sampled as `poly`, bounds no
+    /// area: its area is within its perimeter times `tol`, a length on the
+    /// ball, which the plane reads over the ball's radius.
+    fn flat_reading(&self, area: f64, poly: &[Point2], tol: f64) -> bool {
+        let perimeter: f64 = poly
+            .iter()
+            .zip(poly.iter().cycle().skip(1))
+            .map(|(a, b)| (*b - *a).length())
+            .sum();
+        area.abs() <= perimeter * tol / self.radius
+    }
+
+    /// Whether a loop bounds no area ([`Self::flat_reading`]), or does not
+    /// map.
+    fn flat(&self, lp: &[OrientedPCurveEdge], tol: f64) -> bool {
+        match (self.loop_polygon(lp), self.twice_area(lp)) {
+            (Some(poly), Some(twice)) => self.flat_reading(0.5 * twice, &poly, tol),
+            _ => true,
+        }
+    }
+
     /// The signed area of a loop; 0 where it does not map.
-    pub(super) fn loop_area(&self, lp: &[OrientedPCurveEdge]) -> f64 {
+    #[cfg(test)]
+    fn loop_area(&self, lp: &[OrientedPCurveEdge]) -> f64 {
         self.twice_area(lp).map_or(0.0, |a| 0.5 * a)
     }
 
@@ -221,6 +245,37 @@ fn same_edge(a: &OrientedPCurveEdge, b: &OrientedPCurveEdge, near: f64) -> bool 
 /// A piece: its outline and its holes.
 pub(super) type Piece = (Vec<OrientedPCurveEdge>, Vec<Vec<OrientedPCurveEdge>>);
 
+/// The pieces of a ball face round the pole `view` holds, whose outline is
+/// `edges`' first `n_boundary` and whose section halves follow: read from
+/// the walk's loops `walked` ([`pieces`]), or where they do not read, from
+/// the face trace of `edges`. The walk can tour the regions about a
+/// crossing of sections as one loop; the trace's successor is a function of
+/// the graph, and reads them apart. The trace welds its nodes in `(u, v)`
+/// by `tol`, and drops a loop as bounding no area by the same reading in
+/// the plane as [`pieces`]. It keeps each region on its left in `(u, v)`:
+/// where the face lies on its outline's right there, each of its loops is
+/// turned round.
+pub(super) fn read(
+    view: &PoleView,
+    edges: &[OrientedPCurveEdge],
+    n_boundary: usize,
+    walked: Vec<Vec<OrientedPCurveEdge>>,
+    tol: f64,
+) -> Option<Vec<Piece>> {
+    let (boundary, sections) = edges.split_at(n_boundary);
+    pieces(view, boundary, sections, walked, tol).or_else(|| {
+        let left = view.face_left_in_uv(boundary)?;
+        let flat = |lp: &[OrientedPCurveEdge]| view.flat(lp, tol);
+        let traced = build_wire_loops_dcel_flat(edges, tol, true, false, Some(left), &flat);
+        let traced = if left {
+            traced
+        } else {
+            traced.iter().map(|lp| reverse_loop(lp)).collect()
+        };
+        pieces(view, boundary, sections, traced, tol)
+    })
+}
+
 /// The pieces that `loops` bound on a ball face whose outline is the run of
 /// edges `boundary`, cut by the section halves `sections` (each section run
 /// both ways), seen in `view`.
@@ -282,13 +337,7 @@ pub(super) fn pieces(
         }
         let poly = view.loop_polygon(&lp)?;
         let area = 0.5 * view.twice_area(&lp)? * face_area.signum();
-        let perimeter: f64 = poly
-            .iter()
-            .zip(poly.iter().cycle().skip(1))
-            .map(|(a, b)| (*b - *a).length())
-            .sum();
-        // The plane's lengths are the ball's over its radius.
-        if area.abs() <= perimeter * tol / view.radius {
+        if view.flat_reading(area, &poly, tol) {
             return None;
         }
         if area > 0.0 {
@@ -624,5 +673,90 @@ mod tests {
         )
         .unwrap();
         assert_eq!(split.len(), 4);
+    }
+
+    #[test]
+    fn a_thin_crescent_on_a_large_ball_is_read_by_the_face_trace() {
+        use super::super::super::pcurve_compute::compute_pcurve_on_surface;
+        use super::super::conversion::uv_endpoints_from_pcurve;
+        use brepkit_topology::face::FaceSurface;
+        use std::f64::consts::{PI, TAU};
+
+        // A ball of radius 1e4 less its cap above z = 0.95 r, charted about
+        // z. Two arcs from p to q, 20 apart on its southern half clear of
+        // the chart's seam and poles, bulge 2 and 2 less 2e-3 the same way:
+        // the crescent between them is 2e-3 wide at most. That is far over
+        // the tolerance of 1e-7, but under it times the crescent's
+        // perimeter in `(u, v)`, the band the face trace once read it by.
+        let r = 1e4;
+        let (view, _) = capped_ball(r);
+        let chart =
+            FaceSurface::Sphere(SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), r).unwrap());
+        // The rim runs its circle's own way, toward -u.
+        let rim = small_circle(r, Vec3::new(0.0, 0.0, -1.0), PI - 0.95_f64.acos());
+        let at = rim.evaluate(0.0);
+        let (u0, v0) = chart.project_point(at).unwrap();
+        let mut outline = edge(&EdgeCurve::Circle(rim), at, at, true);
+        outline.start_uv = Point2::new(u0, v0);
+        outline.end_uv = Point2::new(u0 - TAU, v0);
+        outline.pcurve =
+            Curve2D::Line(Line2D::new(outline.start_uv, Vec2::new(-TAU, 0.0)).unwrap());
+        // `p` and `q` half a chord `h` either side of `m` along `t`; each
+        // arc's circle has its middle on the bisector through `m` along `b`.
+        let (lat_s, lat_c) = (-0.8_f64).sin_cos();
+        let (lon_s, lon_c) = 1.5_f64.sin_cos();
+        let m = Vec3::new(lat_c * lon_c, lat_c * lon_s, lat_s);
+        let t = Vec3::new(-lon_s, lon_c, 0.0);
+        let b = m.cross(t);
+        let h = 1e-3_f64;
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let (p, q) = (
+            origin + (m * h.cos() + t * h.sin()) * r,
+            origin + (m * h.cos() - t * h.sin()) * r,
+        );
+        // The arc from `p` to `q` that bulges `s` toward -b: its circle's
+        // middle lies `rho - s` along +b, `rho` from `p`.
+        let arc = |s: f64, k: usize| -> OrientedPCurveEdge {
+            let rho = ((1.0 - h.cos() * s.cos()) / (h.cos() * s.sin())).atan();
+            let (bs, bc) = (rho - s).sin_cos();
+            let curve = EdgeCurve::Circle(small_circle(r, m * bc + b * bs, rho));
+            let one = edge(&curve, p, q, true);
+            let mut out = if (edge_middle(&one) - origin).dot(b) < 0.0 {
+                one
+            } else {
+                twin(&edge(&curve, q, p, true))
+            };
+            out.source_edge_idx = Some(k);
+            out
+        };
+        let arcs = [arc(2e-4, 0), arc(2e-4 - 2e-7, 1)];
+        // Each half laid out in the chart as the splitter lays a section:
+        // its pcurve from its curve's own way, its ends read on it.
+        let lay = |e: &OrientedPCurveEdge| {
+            let (s3, e3) = if e.forward {
+                (e.start_3d, e.end_3d)
+            } else {
+                (e.end_3d, e.start_3d)
+            };
+            let pcurve = compute_pcurve_on_surface(&e.curve_3d, s3, e3, &chart, &[], None);
+            assert!(matches!(pcurve, Curve2D::Nurbs(_)));
+            let (a, c) = uv_endpoints_from_pcurve(&pcurve, s3, e3, &chart, &[]);
+            let (start_uv, end_uv) = if e.forward { (a, c) } else { (c, a) };
+            OrientedPCurveEdge {
+                pcurve,
+                start_uv,
+                end_uv,
+                ..e.clone()
+            }
+        };
+        let mut edges = vec![outline];
+        edges.extend(halves(&arcs).iter().map(lay));
+        assert_eq!(view.face_left_in_uv(&edges[..1]), Some(true));
+        // With no loops from the walk, `pieces` refuses, so the face trace
+        // gives the pieces: the face round the crescent, and the crescent.
+        assert!(pieces(&view, &edges[..1], &edges[1..], Vec::new(), 1e-7).is_none());
+        let split = read(&view, &edges, 1, Vec::new(), 1e-7).unwrap();
+        assert_eq!(split.len(), 2);
+        assert_eq!(split.iter().map(|p| p.1.len()).sum::<usize>(), 1);
     }
 }

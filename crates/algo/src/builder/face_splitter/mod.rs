@@ -11814,36 +11814,15 @@ fn split_face_2d_impl(
 
     // A ball face round a pole of its chart, its other pole off the face, is
     // read in a plane about the pole it holds, where every loop bounds an
-    // area ([`pole_round`]). Where the walk toured the regions about a
-    // crossing of sections as one loop, the face trace, whose successor is a
-    // function of the graph, reads them apart. It keeps each region on its
-    // left in `(u, v)`: where the face lies on its outline's right there,
-    // each of its loops is turned round.
+    // area ([`pole_round`]).
     let mut pole_holes: Option<Vec<Vec<Vec<OrientedPCurveEdge>>>> = None;
-    let (boundary, section_halves) = all_edges.split_at(n_boundary_edges);
     let read_about_pole = pole_view.as_ref().and_then(|view| {
-        pole_round::pieces(view, boundary, section_halves, loops.clone(), tol.linear).or_else(
-            || {
-                let left = view.face_left_in_uv(boundary)?;
-                let area = |lp: &[OrientedPCurveEdge]| view.loop_area(lp);
-                let traced = build_wire_loops_dcel_measured(
-                    &all_edges,
-                    tol.linear,
-                    true,
-                    false,
-                    Some(&area),
-                    Some(left),
-                );
-                let traced: Vec<Vec<OrientedPCurveEdge>> = if left {
-                    traced
-                } else {
-                    traced
-                        .iter()
-                        .map(|lp| special_cases::reverse_loop(lp))
-                        .collect()
-                };
-                pole_round::pieces(view, boundary, section_halves, traced, tol.linear)
-            },
+        pole_round::read(
+            view,
+            &all_edges,
+            n_boundary_edges,
+            loops.clone(),
+            tol.linear,
         )
     });
     let loops = match read_about_pole {
