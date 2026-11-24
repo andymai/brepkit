@@ -182,6 +182,7 @@ Quick reference — find the right file for any task:
 | Chamfer builder (orchestration) | `chamfer_builder.rs` |
 | Vertex blend / corner solver | `corner.rs` |
 | Corner set back along its rounds (patches and surgery) | `setback_corner.rs` |
+| Walked rounds set back to their common ball at a convex corner | `walked_setback.rs` |
 | Face trimming along contact curves | `trimmer.rs` |
 | Shared builder utilities | `builder_utils.rs` |
 

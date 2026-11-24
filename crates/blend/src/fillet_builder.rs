@@ -765,6 +765,7 @@ impl<'a> FilletBuilder<'a> {
         // Whole, it would take each face's wire on along it to the corner and
         // back.
         let mut spokes: Vec<(brepkit_math::vec::Point3, brepkit_math::vec::Point3)> = Vec::new();
+        let mut curved_spokes: Vec<corner::CurvedSpoke> = Vec::new();
         if let Some(fillet_plan) = plan.as_ref() {
             for junction in &fillet_plan.junctions {
                 if junction.incident_contours.len() != 2 {
@@ -787,11 +788,13 @@ impl<'a> FilletBuilder<'a> {
                 .iter()
                 .map(|result| &result.stripe)
                 .collect();
-            for spoke in corner::tangent_junction_spokes(topo, fillet_plan, &stripes)? {
+            let (straight, curved) = corner::tangent_junction_spokes(topo, fillet_plan, &stripes)?;
+            for spoke in straight {
                 if !spokes.contains(&spoke) {
                     spokes.push(spoke);
                 }
             }
+            curved_spokes.extend(curved);
         }
         // A one-edge fillet splits every edge so its end caps take the notch,
         // unless an end's cap cannot: that end keeps its runout closure,
@@ -803,6 +806,7 @@ impl<'a> FilletBuilder<'a> {
                 unsplit: &unsplit_vertices,
                 notchable: &notchable_vertices,
                 spokes: &spokes,
+                curved_spokes: &curved_spokes,
             }
         };
         let mut restriction_faces: Vec<FaceId> = restrictions_by_face.keys().copied().collect();
@@ -10105,7 +10109,7 @@ fn cut_contact_crossing<F: crate::blend_func::BlendFunction>(
 /// Join bands built piece by piece along a round end to end, each piece's
 /// last section the next one's first: a band only C0 at the joins, each
 /// piece taking a share of the parameter range as long as its `lengths`.
-fn join_bands(
+pub(crate) fn join_bands(
     pieces: &[brepkit_math::nurbs::surface::NurbsSurface],
     lengths: &[f64],
 ) -> Result<brepkit_math::nurbs::surface::NurbsSurface, BlendError> {

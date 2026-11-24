@@ -2504,20 +2504,27 @@ pub enum BoundarySplitPolicy<'a> {
         unsplit: &'a std::collections::HashSet<VertexId>,
         notchable: &'a std::collections::HashSet<VertexId>,
         spokes: &'a [(Point3, Point3)],
+        /// Curved edges split as `spokes` are: any piece of one.
+        curved_spokes: &'a [crate::corner::CurvedSpoke],
     },
 }
 
 impl BoundarySplitPolicy<'_> {
-    /// Whether the straight edge from `start` to `end` lies along one of the
-    /// policy's spokes and touches no `unsplit` terminal vertex, whose runout
-    /// closure expects the whole edge.
+    /// Whether the edge from `start` to `end` lies along one of the policy's
+    /// spokes and touches no `unsplit` terminal vertex, whose runout closure
+    /// expects the whole edge: a `straight` edge along a straight spoke, any
+    /// edge with both ends on a curved one.
     fn on_spoke(
         self,
         (start_id, start): (VertexId, Point3),
         (end_id, end): (VertexId, Point3),
+        straight: bool,
     ) -> bool {
         let Self::Selective {
-            spokes, unsplit, ..
+            spokes,
+            curved_spokes,
+            unsplit,
+            ..
         } = self
         else {
             return false;
@@ -2534,9 +2541,17 @@ impl BoundarySplitPolicy<'_> {
             let t = (p - a).dot(ab) / (length * length);
             (-1e-9..=1.0 + 1e-9).contains(&t) && (a + ab * t - p).length() <= 1e-6
         };
-        spokes
-            .iter()
-            .any(|&spoke| on(start, spoke) && on(end, spoke))
+        let on_curve = |p: Point3, spoke: &crate::corner::CurvedSpoke| {
+            brepkit_math::nurbs::projection::project_point_to_curve(&spoke.curve, p, 1e-9)
+                .is_ok_and(|found| found.distance <= 1e-6)
+        };
+        (straight
+            && spokes
+                .iter()
+                .any(|&spoke| on(start, spoke) && on(end, spoke)))
+            || curved_spokes
+                .iter()
+                .any(|spoke| on_curve(start, spoke) && on_curve(end, spoke))
     }
 
     fn allows(self, single_contact: bool, start: VertexId, end: VertexId) -> bool {
@@ -2843,8 +2858,7 @@ fn rebuild_mapped_parametric_face(
                     let tp = topo.vertex(t)?.point();
                     let curve = edge.curve();
                     let spoke = !single_contact
-                        && is_straight(curve, sp, tp)
-                        && split_policy.on_spoke((s, sp), (t, tp));
+                        && split_policy.on_spoke((s, sp), (t, tp), is_straight(curve, sp, tp));
                     if !(own_seam || spoke || split_policy.allows(single_contact, s, t)) {
                         continue;
                     }
