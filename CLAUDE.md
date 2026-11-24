@@ -158,6 +158,7 @@ Quick reference — find the right file for any task:
 | FaceInfo population | `pave_filler/fill_face_info.rs` |
 | Builder (face splitting + assembly) | `builder/mod.rs`, `builder/assemble.rs` |
 | Face splitting (UV-space) | `builder/face_splitter/` (mod, containment, conversion, edge_splitting, sampling, special_cases), `builder/classify_2d.rs` |
+| A ball face with a pole of every chart on it, split about the pole it holds | `builder/face_splitter/pole_round.rs` |
 | PCurve computation | `builder/pcurve_compute.rs` |
 | Plane frame (3D↔UV projection) | `builder/plane_frame.rs` |
 | Wire loop reconstruction | `builder/wire_builder.rs` |
