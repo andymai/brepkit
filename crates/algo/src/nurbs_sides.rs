@@ -15,8 +15,9 @@ use crate::error::AlgoError;
 /// How many times a piece of a side is halved at most.
 const MOST_DEPTH: u32 = 24;
 
-/// How many pairs of pieces one pair of sides may halve.
-const MOST_HALVINGS: usize = 1 << 13;
+/// How many pairs of pieces one pair of sides may take up, as found and as
+/// halved.
+const MOST_PAIRS: usize = 1 << 14;
 
 /// The angle, in radians, by which the rounding of a direction's
 /// coordinates can move the angle between two directions read by `acos`.
@@ -67,9 +68,10 @@ pub fn face_reach(topo: &Topology, face: &Face, tol: Tolerance) -> Result<f64, A
 /// The control points are rounded blends of the surface's, whose sizes the
 /// weights scale by their ratio, and each halving blends them again: each
 /// lies within [`MOST_DEPTH`] such roundings of its exact place. Pieces
-/// whose boxes need more halvings to part, two pieces away from a shared
-/// corner whose ends come within `reach` and the rounding, or a weight that
-/// is not a positive normal float, read as not apart.
+/// whose boxes need more halvings to part, two sides that take up more than
+/// [`MOST_PAIRS`] pairs of pieces, two pieces away from a shared corner
+/// whose ends come within `reach` and the rounding, or a weight that is not
+/// a positive normal float, read as not apart.
 pub fn sides_are_apart(surface: &NurbsSurface, reach: f64) -> bool {
     let weights = surface.weights();
     if !weights.iter().flatten().all(|&w| w > 0.0 && w.is_normal()) {
@@ -232,22 +234,41 @@ fn halves(net: &[[f64; 4]]) -> (Net, Net) {
 /// than `margin` apart, but near the corner they share at their starts where
 /// `shared` (see [`sides_are_apart`]).
 fn apart(a: &[Net], b: &[Net], shared: bool, margin: f64, slack: f64) -> bool {
+    apart_counted(a, b, shared, margin, slack).0
+}
+
+/// [`apart`], and how many pairs of pieces it took up. Each pair of pieces
+/// whose boxes come within `margin`, as found and as halved, takes one of
+/// [`MOST_PAIRS`]; past them the sides read as not apart. A pair borrows
+/// the sides' own pieces until it halves them.
+fn apart_counted(a: &[Net], b: &[Net], shared: bool, margin: f64, slack: f64) -> (bool, usize) {
+    use std::borrow::Cow;
+    type Pair<'a> = (Cow<'a, [[f64; 4]]>, Cow<'a, [[f64; 4]]>, bool, u32);
     if let (Some(x), Some(y)) = (whole_box(a), whole_box(b))
         && gap(x, y) > margin
     {
-        return true;
+        return (true, 0);
     }
     let boxes_b: Vec<Aabb3> = b.iter().map(|n| net_box(n)).collect();
-    let mut work: Vec<(Net, Net, bool, u32)> = Vec::new();
+    let mut work: Vec<Pair<'_>> = Vec::new();
+    let mut taken = 0_usize;
     for (i, x) in a.iter().enumerate() {
         let bx = net_box(x);
         for (j, y) in b.iter().enumerate() {
             if gap(bx, boxes_b[j]) <= margin {
-                work.push((x.clone(), y.clone(), shared && i == 0 && j == 0, 0));
+                if taken == MOST_PAIRS {
+                    return (false, taken);
+                }
+                taken += 1;
+                work.push((
+                    Cow::Borrowed(x.as_slice()),
+                    Cow::Borrowed(y.as_slice()),
+                    shared && i == 0 && j == 0,
+                    0,
+                ));
             }
         }
     }
-    let mut budget = MOST_HALVINGS;
     while let Some((x, y, corner, depth)) = work.pop() {
         let (bx, by) = (net_box(&x), net_box(&y));
         if gap(bx, by) > margin || (corner && cones_apart(&x, &y, slack)) {
@@ -256,25 +277,20 @@ fn apart(a: &[Net], b: &[Net], shared: bool, margin: f64, slack: f64) -> bool {
         // The ends of a piece lie on its side: two ends within the margin
         // show the sides meet there, as along a closed surface's seam.
         if !corner && ends_meet(&x, &y, margin) {
-            return false;
+            return (false, taken);
         }
-        if depth >= MOST_DEPTH || budget == 0 {
-            return false;
+        if depth >= MOST_DEPTH {
+            return (false, taken);
         }
-        budget -= 1;
         let (dx, dy) = ((bx.max - bx.min).length(), (by.max - by.min).length());
-        let split = |n: Net, cut: bool| {
-            if cut {
-                let (l, r) = halves(&n);
-                vec![l, r]
-            } else {
-                vec![n]
-            }
-        };
         let xs = split(x, corner || dx >= dy);
         let ys = split(y, corner || dy > dx);
         for (i, xx) in xs.iter().enumerate() {
             for (j, yy) in ys.iter().enumerate() {
+                if taken == MOST_PAIRS {
+                    return (false, taken);
+                }
+                taken += 1;
                 work.push((
                     xx.clone(),
                     yy.clone(),
@@ -284,7 +300,21 @@ fn apart(a: &[Net], b: &[Net], shared: bool, margin: f64, slack: f64) -> bool {
             }
         }
     }
-    true
+    (true, taken)
+}
+
+/// `piece` halved where `cut`, else whole.
+fn split(
+    piece: std::borrow::Cow<'_, [[f64; 4]]>,
+    cut: bool,
+) -> Vec<std::borrow::Cow<'_, [[f64; 4]]>> {
+    use std::borrow::Cow;
+    if cut {
+        let (l, r) = halves(&piece);
+        vec![Cow::Owned(l), Cow::Owned(r)]
+    } else {
+        vec![piece]
+    }
 }
 
 /// Whether an end of one Bezier piece lies within `margin` of an end of
@@ -567,6 +597,50 @@ pub mod tests {
         let through = (past.evaluate(lo, 0.0) - foot).length();
         assert!(least > 1e-3 && through < 1e-6, "{least:e}, {through:e}");
         assert!(!sides_are_apart(&past, reach));
+    }
+
+    /// A strip of `spans` knot spans along `v`, quadratic along `u`, whose
+    /// sides at `u = 0` and `u = 1` stand 1e-7 apart, each running back and
+    /// forth along one segment of length 1e-3, so every piece of one side
+    /// comes within the reach of every piece of the other. Its middle row
+    /// stands 1 off them.
+    pub fn zigzag_strip(spans: usize) -> NurbsSurface {
+        let side = |x: f64| -> Vec<Point3> {
+            (0..=spans)
+                .map(|k| Point3::new(x, if k % 2 == 0 { 0.0 } else { 1e-3 }, 0.0))
+                .collect()
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let knots: Vec<f64> = std::iter::once(0.0)
+            .chain((0..=spans).map(|k| k as f64 / spans as f64))
+            .chain(std::iter::once(1.0))
+            .collect();
+        NurbsSurface::new(
+            2,
+            1,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            knots,
+            vec![side(0.0), side(1.0), side(1e-7)],
+            vec![vec![1.0; spans + 1]; 3],
+        )
+        .unwrap()
+    }
+
+    /// Two sides of a thousand pieces each, every piece of one within the
+    /// reach of every piece of the other, take up no more than
+    /// [`MOST_PAIRS`] pairs of pieces before they read as not apart.
+    #[test]
+    fn sides_of_many_crowded_pieces_take_up_a_bounded_number_of_pairs() {
+        let strip = zigzag_strip(1000);
+        let ((u0, u1), _) = (strip.domain_u(), strip.domain_v());
+        let (near, far) = (
+            side(&strip, true, u0).unwrap(),
+            side(&strip, true, u1).unwrap(),
+        );
+        assert_eq!(near.len(), 1000);
+        let (read, taken) = apart_counted(&near, &far, false, 1e-6, 1e-13);
+        assert!(!read && taken <= MOST_PAIRS, "{read} after {taken} pairs");
+        assert!(!sides_are_apart(&strip, 1e-6));
     }
 
     /// A patch of degrees 2 and 1 a million from the origin whose side at
