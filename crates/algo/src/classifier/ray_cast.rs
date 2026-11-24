@@ -2691,7 +2691,7 @@ impl LateralTrim {
 
     /// Whether `point` lies on the face, and whether it lies within `near`
     /// of a wire.
-    fn reads(&self, point: Point3, near: f64) -> (bool, bool) {
+    pub fn reads(&self, point: Point3, near: f64) -> (bool, bool) {
         use brepkit_topology::face::FaceSurface;
         match &self.surface {
             FaceSurface::Cylinder(cyl) => {
@@ -2765,7 +2765,9 @@ impl SphereFaceTrim {
         on && !close
     }
 
-    fn reads(&self, point: Point3, near: f64) -> (bool, bool) {
+    /// Whether `point`, on the face's surface, lies on the face, and whether
+    /// it lies within `near` of a wire.
+    pub fn reads(&self, point: Point3, near: f64) -> (bool, bool) {
         match &self.geom {
             // A loop grazes along the whole of its planes; a point is near
             // the face's boundary only where the other loops admit it too.
@@ -2830,7 +2832,9 @@ impl TorusFaceTrim {
         on && !close
     }
 
-    fn reads(&self, point: Point3, near: f64) -> (bool, bool) {
+    /// Whether `point`, on the face's surface, lies on the face, and whether
+    /// it lies within `near` of a wire.
+    pub fn reads(&self, point: Point3, near: f64) -> (bool, bool) {
         match &self.geom {
             FaceGeom::Torus {
                 surface,

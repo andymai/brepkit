@@ -416,6 +416,22 @@ impl OnFace<'_> {
         }
     }
 
+    /// Whether `p` lies on the face, and whether it lies within `near` of
+    /// its boundary. A plane face bounded by lines and arcs reads only the
+    /// points clear of its boundary as on it.
+    fn reads(self, p: Point3, near: f64) -> (bool, bool) {
+        match self {
+            Self::Lateral(trim) => trim.reads(p, near),
+            Self::Ball(trim) => trim.reads(p, near),
+            Self::Ring(trim) => trim.reads(p, near),
+            Self::Plane(region) => {
+                let clear = region.holds_clear(p, near);
+                (clear, !clear && region.holds(p, near))
+            }
+            Self::Sampled(region) => region.reads(p, near),
+        }
+    }
+
     /// Whether `p` lies inside the face farther than `near` from its boundary.
     fn holds_clear(self, p: Point3, near: f64) -> bool {
         match self {
@@ -770,14 +786,9 @@ fn check_edge_face_pairs(
                 // is the coplanar-rim configuration the splitters handle from
                 // the faces' boundaries; such a flip adds no crossing.
                 let rim = matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_));
-                let held = |p: Point3| {
-                    if rim {
-                        trim.holds_clear(p, trim_reach(p, tol))
-                    } else {
-                        trim.holds(p, trim_reach(p, tol))
-                    }
-                };
-                let on_face = |p: Point3| trim.holds(p, trim_reach(p, tol));
+                let trim = OnFace::Lateral(trim);
+                let held = |p: Point3| face_holds(topo, fid, trim, p, !rim, tol);
+                let on_face = |p: Point3| face_holds(topo, fid, trim, p, true, tol);
                 merge_roots(&mut crossings, found, exact, (held, on_face), tol);
             }
             // An edge crossing a ball or a ring between two samples (a
@@ -809,14 +820,8 @@ fn check_edge_face_pairs(
             if let Some(trim) = round {
                 let rim = !matches!(curve, EdgeCurve::NurbsCurve(_));
                 let (found, exact) = side_flips(&curve, start_pos, end_pos, t0, t1, surface, tol)?;
-                let held = |p: Point3| {
-                    if rim {
-                        trim.holds_clear(p, trim_reach(p, tol))
-                    } else {
-                        trim.holds(p, trim_reach(p, tol))
-                    }
-                };
-                let on_face = |p: Point3| trim.holds(p, trim_reach(p, tol));
+                let held = |p: Point3| face_holds(topo, fid, trim, p, !rim, tol);
+                let on_face = |p: Point3| face_holds(topo, fid, trim, p, true, tol);
                 let found = found.into_iter().map(SideRoot::at).collect();
                 merge_roots(&mut crossings, found, exact, (held, on_face), tol);
             }
@@ -1061,6 +1066,85 @@ fn check_edge_face_pairs(
     }
 
     Ok(())
+}
+
+/// Whether `p`, a root on a face's surface, counts on the face, read by its
+/// `trim`. A point the trim reads clear of the face's wires takes the
+/// trim's side. One it reads within [`trim_reach`] of a wire is placed by
+/// its distance from the face's edges: within the tolerance of an edge it
+/// is that edge's contact, kept only where `boundary` asks; farther, it
+/// takes the trim's side again, which solves each wire's crossing on the
+/// edge's own curve, so no point clear of an edge by the tolerance is
+/// dropped from inside the face or kept from outside it.
+fn face_holds(
+    topo: &Topology,
+    fid: FaceId,
+    trim: OnFace<'_>,
+    p: Point3,
+    boundary: bool,
+    tol: Tolerance,
+) -> bool {
+    let (on, close) = trim.reads(p, trim_reach(p, tol));
+    if !close {
+        return on;
+    }
+    if near_an_edge(topo, fid, p, tol).unwrap_or(true) {
+        boundary
+    } else {
+        on
+    }
+}
+
+/// Whether `p` lies within the tolerance of an edge of face `fid`, or of
+/// the edge's own tolerance or its vertices' where those are wider. The
+/// distance to a line is to its segment; to a circle, an ellipse or a
+/// B-spline, to the point its projection finds on the whole curve where
+/// that lies in the edge's range, else to the edge's ends. `None` where a
+/// lookup fails.
+fn near_an_edge(topo: &Topology, fid: FaceId, p: Point3, tol: Tolerance) -> Option<bool> {
+    use std::f64::consts::TAU;
+    for eid in brepkit_topology::explorer::face_edges(topo, fid).ok()? {
+        let edge = topo.edge(eid).ok()?;
+        let (sv, ev) = (
+            topo.vertex(edge.start()).ok()?,
+            topo.vertex(edge.end()).ok()?,
+        );
+        let (start, end) = (sv.point(), ev.point());
+        let reach = tol
+            .linear
+            .max(
+                edge.tolerance()
+                    .map_or(0.0, |t| t.min(crate::ds::shape_store::MAX_WIDEN)),
+            )
+            .max(sv.tolerance())
+            .max(ev.tolerance());
+        let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+        let (lo, hi) = (t0.min(t1), t0.max(t1));
+        let ends = (p - start).length().min((p - end).length());
+        let foot = match edge.curve() {
+            EdgeCurve::Line => Some(point_to_segment(p, start, end)),
+            EdgeCurve::Circle(c) => {
+                let t = c.project(p);
+                let t = lo + (t - lo).rem_euclid(TAU);
+                (t <= hi).then(|| (c.evaluate(t) - p).length())
+            }
+            EdgeCurve::Ellipse(e) => {
+                let t = e.project(p);
+                let t = lo + (t - lo).rem_euclid(TAU);
+                (t <= hi).then(|| (e.evaluate(t) - p).length())
+            }
+            EdgeCurve::NurbsCurve(n) => {
+                brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-12)
+                    .ok()
+                    .filter(|hit| (lo..=hi).contains(&hit.parameter))
+                    .map(|hit| hit.distance)
+            }
+        };
+        if foot.map_or(ends, |d| d.min(ends)) <= reach {
+            return Some(true);
+        }
+    }
+    Some(false)
 }
 
 /// How near a face's wire a point of its surface counts as on the wire:
@@ -7848,6 +7932,93 @@ mod tests {
                 misread.push(format!("{what}: {roots:?}"));
             }
         }
+        assert!(misread.is_empty(), "{misread:#?}");
+    }
+
+    /// Lines through a curved face along its normal, at a point of its
+    /// surface 2e-7, 5e-7 and 9e-7 from one of its wires: past the
+    /// tolerance of the wire, so no edge-edge contact stands for them, and
+    /// within ten tolerances. Inside the face each crosses it at that point;
+    /// outside it, none does. The faces: a ball of radius 2 less the cap
+    /// above height 1.9, near the cap's circle; a wall of radius 2 from 0 to
+    /// 270 degrees, near its foot at 135 degrees; and the patch of a ring
+    /// of radii 2 and 0.5 from ring angle 0.3 to 0.6 and tube angle 1.2 to
+    /// 1.9, near its arc at tube angle 1.9.
+    #[test]
+    fn a_crossing_near_a_wire_is_kept_inside_the_face_and_dropped_outside() {
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::surfaces::{SphericalSurface, ToroidalSurface};
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let mut misread = Vec::new();
+        for gap in [2e-7, 5e-7, 9e-7] {
+            for inside in [true, false] {
+                let way = if inside { 1.0 } else { -1.0 };
+                // The ball: the cap's circle lies at polar angle acos(0.95);
+                // a step of `gap` along a meridian is `gap / 2` of a radian.
+                let mut topo = Topology::new();
+                let face = ball_less_a_cap(&mut topo, origin, Mat4::identity());
+                let ball = SphericalSurface::new(origin, 2.0).unwrap();
+                let polar = 0.95_f64.acos() + way * gap / 2.0;
+                let at = ball.evaluate(0.7, std::f64::consts::FRAC_PI_2 - polar);
+                let normal = (at - origin) * 0.5;
+                let found = ef_vertices(
+                    &mut topo,
+                    face,
+                    EdgeCurve::Line,
+                    at + normal * 0.31,
+                    Some(at - normal * 0.27),
+                );
+                misread.push(("ball", gap, inside, found, at));
+
+                // The wall: its foot lies at height 0.
+                let mut topo = Topology::new();
+                let face = wall_patch(&mut topo);
+                let a = 135.0_f64.to_radians();
+                let at = Point3::new(2.0 * a.cos(), 2.0 * a.sin(), way * gap);
+                let out = brepkit_math::vec::Vec3::new(a.cos(), a.sin(), 0.0);
+                let found = ef_vertices(
+                    &mut topo,
+                    face,
+                    EdgeCurve::Line,
+                    at + out * 0.31,
+                    Some(at - out * 0.27),
+                );
+                misread.push(("wall", gap, inside, found, at));
+
+                // The ring patch: a step of `gap` along the tube is `gap / r`
+                // of a radian of tube angle.
+                let mut topo = Topology::new();
+                let ring = ToroidalSurface::new(origin, 2.0, 0.5).unwrap();
+                let window = ring_window(&mut topo, &ring, (0.3, 0.6), (1.2, 1.9), false);
+                let edges: Vec<OrientedEdge> = topo
+                    .wire(window)
+                    .unwrap()
+                    .edges()
+                    .iter()
+                    .rev()
+                    .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+                    .collect();
+                let outer = topo.add_wire(Wire::new(edges, true).unwrap());
+                let face =
+                    topo.add_face(Face::new(outer, vec![], FaceSurface::Torus(ring.clone())));
+                let v = 1.9 - way * gap / 0.5;
+                let (at, normal) = (ring.evaluate(0.45, v), ring.normal(0.45, v));
+                let found = ef_vertices(
+                    &mut topo,
+                    face,
+                    EdgeCurve::Line,
+                    at + normal * 0.31,
+                    Some(at - normal * 0.27),
+                );
+                misread.push(("ring", gap, inside, found, at));
+            }
+        }
+        misread.retain(|(_, _, inside, found, at)| {
+            let want = usize::from(*inside);
+            found.len() != want || found.iter().any(|p| (*p - *at).length() > 1e-8)
+        });
         assert!(misread.is_empty(), "{misread:#?}");
     }
 }
