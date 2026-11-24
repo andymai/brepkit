@@ -8731,4 +8731,110 @@ mod tests {
         }
         assert!(misread.is_empty(), "{misread:#?}");
     }
+
+    /// A unit sheet in the plane `z = 0` with a face bounded by an ellipse
+    /// pcurve about `(0.5, 0.5)`, stored, as data read from a file can
+    /// store it, with its first semi-axis 0.1 along `u` shorter than its
+    /// second, 0.4 along `v`: the face reaches `v = 0.9`. The face's box
+    /// holds all of it, and a line through `(0.5, 0.8)` crosses it there.
+    #[test]
+    fn a_face_bounded_by_an_ellipse_stored_short_axis_first_is_boxed_whole() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::curves2d::{Curve2D, Ellipse2D};
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::{Point2, Vec3};
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::pcurve::PCurve;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let tol = Tolerance::new();
+        let rows = vec![
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+            vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+        ];
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let sheet =
+            NurbsSurface::new(1, 1, knots.clone(), knots, rows, vec![vec![1.0; 2]; 2]).unwrap();
+        let mut stored =
+            serde_json::to_value(Ellipse2D::new(Point2::new(0.5, 0.5), 0.4, 0.1, 0.0).unwrap())
+                .unwrap();
+        let long = stored["semi_major"].take();
+        stored["semi_major"] = stored["semi_minor"].take();
+        stored["semi_minor"] = long;
+        let flat: Ellipse2D = serde_json::from_value(stored).unwrap();
+        assert!(flat.semi_minor() > flat.semi_major());
+        let pcurve = Curve2D::Ellipse(flat);
+        assert!(pcurve.is_well_formed());
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let rim = Ellipse3D::new_with_ref(
+            Point3::new(0.5, 0.5, 0.0),
+            z,
+            0.4,
+            0.1,
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap();
+        let mut topo = Topology::new();
+        let v = topo.add_vertex(Vertex::new(Point3::new(0.6, 0.5, 0.0), 1e-7));
+        let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Ellipse(rim)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(sheet)));
+        topo.pcurves_mut()
+            .set(e, face, PCurve::new(pcurve, 0.0, std::f64::consts::TAU));
+        let held = build_face_containment(&topo, face, tol).unwrap().bbox;
+        assert!(held.max.y() >= 0.9, "{held:?}");
+        let at = Point3::new(0.5, 0.8, 0.0);
+        let found = ef_vertices(&mut topo, face, EdgeCurve::Line, at + z, Some(at - z));
+        assert!(
+            found.len() == 1 && (found[0] - at).length() < 1e-7,
+            "{found:?}"
+        );
+    }
+
+    /// An ellipse stored with its first semi-axis 1 along `x` shorter than
+    /// its second, 3 along `y`, and its twin stored long axis first: 3
+    /// along `y` and 1 along `-x`, the same curve a quarter turn on. Each
+    /// meets a ball of radius 2 less a cap at the same points, in the plane
+    /// `z = 0.3`, and a wall of radius 2 that spans 270 degrees at the same
+    /// points, in the plane `z = 2`: four on the ball, three on the wall.
+    #[test]
+    fn an_ellipse_stored_short_axis_first_meets_surfaces_as_its_twin_does() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::vec::Vec3;
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let mut misread = Vec::new();
+        for (what, height, want) in [("ball", 0.3, 4), ("wall", 2.0, 3)] {
+            let centre = Point3::new(0.0, 0.0, height);
+            let short_first = Ellipse3D::with_axes(centre, z, 1.0, 3.0, x, y).unwrap();
+            let long_first = Ellipse3D::with_axes(centre, z, 3.0, 1.0, y, -x).unwrap();
+            let mut sets = Vec::new();
+            for el in [short_first, long_first] {
+                let mut topo = Topology::new();
+                let face = if what == "ball" {
+                    ball_less_a_cap(&mut topo, origin, Mat4::identity())
+                } else {
+                    wall_patch(&mut topo)
+                };
+                let start = el.evaluate(0.0);
+                let mut found = ef_vertices(&mut topo, face, EdgeCurve::Ellipse(el), start, None);
+                found.sort_by(|p, q| p.x().total_cmp(&q.x()).then(p.y().total_cmp(&q.y())));
+                sets.push(found);
+            }
+            let same = sets[0].len() == sets[1].len()
+                && sets[0]
+                    .iter()
+                    .zip(&sets[1])
+                    .all(|(p, q)| (*p - *q).length() < 1e-7);
+            if sets[0].len() != want || !same {
+                misread.push(format!("{what}: {sets:?}"));
+            }
+        }
+        assert!(misread.is_empty(), "{misread:#?}");
+    }
 }

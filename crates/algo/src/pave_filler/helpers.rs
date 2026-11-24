@@ -375,6 +375,11 @@ fn sides_are_free(surface: &NurbsSurface, reach: f64) -> bool {
 /// and a B-spline's control points, which hold it where its weights are
 /// positive normal floats and the interval lies within its knots. Past
 /// them its end pieces run on out of that box. `None` otherwise.
+///
+/// An ellipse `c + a cos t u + b sin t v` reaches `hypot(a u.x, b v.x)` from
+/// its centre along `x` and `hypot(a u.y, b v.y)` along `y`, whichever of its
+/// semi-axes is the longer: data read from a file can hold the shorter
+/// first. Each reach is grown by the rounding of the evaluator.
 fn pcurve_box(
     pcurve: &brepkit_topology::pcurve::PCurve,
 ) -> Option<(brepkit_math::vec::Point2, brepkit_math::vec::Point2)> {
@@ -398,7 +403,17 @@ fn pcurve_box(
             pcurve.evaluate(pcurve.t_end()),
         ],
         Curve2D::Circle(c) => return Some(around(c.center(), c.radius())),
-        Curve2D::Ellipse(e) => return Some(around(e.center(), e.semi_major())),
+        Curve2D::Ellipse(e) => {
+            let (a, b) = (e.semi_major(), e.semi_minor());
+            let (sin, cos) = e.rotation().sin_cos();
+            let c = e.center();
+            let grow = 8.0 * f64::EPSILON * (a + b + c.x().abs().max(c.y().abs()));
+            let (x, y) = ((a * cos).hypot(b * sin), (a * sin).hypot(b * cos));
+            return Some((
+                Point2::new(c.x() - x - grow, c.y() - y - grow),
+                Point2::new(c.x() + x + grow, c.y() + y + grow),
+            ));
+        }
         Curve2D::Nurbs(n) => {
             let (first, last) = n.domain();
             let (t0, t1) = (pcurve.t_start(), pcurve.t_end());
