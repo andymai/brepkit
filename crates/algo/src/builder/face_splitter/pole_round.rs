@@ -232,7 +232,8 @@ pub(super) type Piece = (Vec<OrientedPCurveEdge>, Vec<Vec<OrientedPCurveEdge>>);
 /// A loop that winds as the outline does is a piece's outline, one that
 /// winds against it a hole. Each hole goes to the smallest outline that
 /// holds the middle of its first edge, of those that do not run along that
-/// edge (a hole's twin, the outline of the piece inside it). The areas
+/// edge (a hole's twin, the outline of the piece inside it), and that
+/// outline must run none of the hole's edges. The areas
 /// must balance: the pieces' outlines less their holes cover the face's
 /// own area. Read on the same samples, each section the pieces run both
 /// ways cancels and each piece of the outline counts once, so a piece left
@@ -240,7 +241,8 @@ pub(super) type Piece = (Vec<OrientedPCurveEdge>, Vec<Vec<OrientedPCurveEdge>>);
 ///
 /// `None` when a loop does not map, bounds no area, runs an edge both ways
 /// or passes a vertex twice (two regions toured as one, touching there), a
-/// hole finds no outline, the areas do not balance, or two pieces overlap.
+/// hole finds no outline or one that shares an edge with it, the areas do
+/// not balance, or two pieces overlap.
 pub(super) fn pieces(
     view: &PoleView,
     boundary: &[OrientedPCurveEdge],
@@ -314,6 +316,15 @@ pub(super) fn pieces(
             })
             .min_by(|a, b| a.1.2.total_cmp(&b.1.2))
             .map(|(i, _)| i)?;
+        // A hole lies inside its piece's outline: an edge on both bounds
+        // the piece on both sides.
+        if outers[owner]
+            .0
+            .iter()
+            .any(|e| hole.iter().any(|h| same_edge(e, h, near)))
+        {
+            return None;
+        }
         pieces[owner].1.push(hole);
     }
     // Loops that use each half once and balance the area can still overlap:
@@ -477,21 +488,21 @@ mod tests {
         let [o1, i1, o2, i2] = &arcs;
         let sections = halves(&arcs);
         let at = |lp, outline| oriented(&view, &rim, lp, outline);
-        // Each whole circle as a hole, starting on its arc outside the
-        // other disc, so both go to the face.
-        let hole = |outer: &OrientedPCurveEdge, inner: &OrientedPCurveEdge| {
-            let mut lp = at(round(outer, inner), false);
-            if lp[0].source_edge_idx != outer.source_edge_idx {
+        // A loop turned to start on `arc`.
+        let from = |mut lp: Vec<OrientedPCurveEdge>, arc: &OrientedPCurveEdge| {
+            if lp[0].source_edge_idx != arc.source_edge_idx {
                 lp.rotate_left(1);
             }
             lp
         };
+        // Each whole circle as a hole, starting on its arc outside the
+        // other disc, so both go to the face.
         let overlapping = vec![
             vec![rim.clone()],
             at(round(o1, o2), true),
             at(round(i1, i2), true),
-            hole(o1, i1),
-            hole(o2, i2),
+            from(at(round(o1, i1), false), o1),
+            from(at(round(o2, i2), false), o2),
         ];
         assert!(
             pieces(
@@ -503,6 +514,18 @@ mod tests {
             )
             .is_none()
         );
+        // Each whole circle as an outline, the union and the lens as holes.
+        // The lens starts on the first circle's arc inside the second disc,
+        // so it goes to the second circle, whose outline runs the lens's
+        // other arc.
+        let paired = vec![
+            vec![rim.clone()],
+            at(round(o1, i1), true),
+            at(round(o2, i2), true),
+            from(at(round(o1, o2), false), o1),
+            from(at(round(i1, i2), false), i1),
+        ];
+        assert!(pieces(&view, std::slice::from_ref(&rim), &sections, paired, 1e-7).is_none());
 
         let partition = vec![
             vec![rim.clone()],
