@@ -467,29 +467,31 @@ impl Curve2D {
     /// curve that was read from data and not built by a constructor need
     /// not be: the data can hold any values.
     ///
-    /// Every number is finite. A line's direction is not zero, a circle's
-    /// radius and an ellipse's semi-axes are positive, and an ellipse's
-    /// `semi_major` is at least its `semi_minor`, as its constructor gives
-    /// it: code that reads its size from `semi_major` alone needs that. A
-    /// NURBS curve's knots pass [`crate::nurbs::basis::knots_are_sound`] for
-    /// its degree and number of control points, each control point has a
-    /// weight that passes [`crate::nurbs::basis::weight_is_sound`], and the
-    /// weights and points pass
-    /// [`crate::nurbs::basis::weighted_points_are_bounded`].
+    /// Every number is finite, and each coordinate, radius and semi-axis is
+    /// at most [`crate::curves::SIZE_LIMIT`] in magnitude. A line's direction
+    /// is not zero, a circle's radius and an ellipse's semi-axes are
+    /// positive, and an ellipse's `semi_major` is at least its `semi_minor`,
+    /// as its constructor gives it: code that reads its size from
+    /// `semi_major` alone needs that. A NURBS curve's knots pass
+    /// [`crate::nurbs::basis::knots_are_sound`] for its degree and number of
+    /// control points, each control point has a weight that passes
+    /// [`crate::nurbs::basis::weight_is_sound`], and the weights and points
+    /// pass [`crate::nurbs::basis::weighted_points_are_bounded`].
     #[must_use]
     pub fn is_well_formed(&self) -> bool {
-        let point = |p: Point2| p.x().is_finite() && p.y().is_finite();
+        use crate::curves::SIZE_LIMIT;
+        let point = |p: Point2| p.x().abs() <= SIZE_LIMIT && p.y().abs() <= SIZE_LIMIT;
+        let length = |a: f64| a > 0.0 && a <= SIZE_LIMIT;
         match self {
             Self::Line(c) => {
                 let d = c.direction();
                 point(c.origin()) && point(Point2::new(d.x(), d.y())) && d.length() > 0.0
             }
-            Self::Circle(c) => point(c.center) && c.radius.is_finite() && c.radius > 0.0,
+            Self::Circle(c) => point(c.center) && length(c.radius),
             Self::Ellipse(c) => {
                 point(c.center)
-                    && [c.semi_major, c.semi_minor]
-                        .iter()
-                        .all(|&a| a.is_finite() && a > 0.0)
+                    && length(c.semi_major)
+                    && length(c.semi_minor)
                     && c.semi_minor <= c.semi_major
                     && c.rotation.is_finite()
             }
@@ -612,6 +614,41 @@ mod tests {
         assert!(!ellipse(0.1, 0.4).is_well_formed());
         assert!(ellipse(0.4, 0.1).is_well_formed());
         assert!(ellipse(0.4, 0.4).is_well_formed());
+    }
+
+    /// A curve is well formed only while each point it gives stays finite:
+    /// its coordinates, radius and semi-axes are at most
+    /// [`crate::curves::SIZE_LIMIT`] in magnitude.
+    #[test]
+    fn a_curve_past_the_size_limit_is_not_well_formed() {
+        use crate::curves::SIZE_LIMIT;
+        let circle = |c: f64, radius| {
+            Curve2D::Circle(Circle2D {
+                center: Point2::new(c, 0.0),
+                radius,
+            })
+        };
+        let ellipse = |c: f64, semi_major| {
+            Curve2D::Ellipse(Ellipse2D {
+                center: Point2::new(0.0, c),
+                semi_major,
+                semi_minor: 1.0,
+                rotation: 0.0,
+            })
+        };
+        for (c, r, good) in [
+            (SIZE_LIMIT, SIZE_LIMIT, true),
+            (-SIZE_LIMIT * 2.0, 1.0, false),
+            (0.0, SIZE_LIMIT * 2.0, false),
+        ] {
+            assert_eq!(circle(c, r).is_well_formed(), good, "{c} {r}");
+            assert_eq!(ellipse(c, r).is_well_formed(), good, "{c} {r}");
+        }
+        let line = Curve2D::Line(Line2D {
+            origin: Point2::new(SIZE_LIMIT * 2.0, 0.0),
+            direction: Vec2::new(1.0, 0.0),
+        });
+        assert!(!line.is_well_formed());
     }
 
     const TOL: f64 = 1e-10;

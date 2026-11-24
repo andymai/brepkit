@@ -3155,8 +3155,9 @@ mod tests {
 
     /// A circle's or a cylinder's radius comes from the file. A radius that
     /// is not finite and positive gives a curve or surface with no points,
-    /// and a centre that is not finite gives points that are not finite: the
-    /// reader refuses each. The file it was made from reads.
+    /// and one past the size limit, or a centre that is not finite or past
+    /// it, gives points that may not be finite: the reader refuses each. The
+    /// file it was made from reads.
     #[test]
     fn a_circle_or_cylinder_the_reader_cannot_evaluate_is_refused() {
         let mut topo = Topology::new();
@@ -3233,11 +3234,13 @@ mod tests {
 
         let mut malformed = Vec::new();
         for entity in ["CIRCLE", "CYLINDRICAL_SURFACE"] {
-            for value in ["NaN", "inf", "-inf", "1.E400", "0.", "-2."] {
+            for value in ["NaN", "inf", "-inf", "1.E400", "1.E305", "0.", "-2."] {
                 malformed.push((format!("{entity} {value}"), sized(entity, value)));
             }
         }
-        malformed.push(("centre NaN".to_owned(), centred("NaN")));
+        for x in ["NaN", "1.E305"] {
+            malformed.push((format!("centre {x}"), centred(x)));
+        }
         for (what, bad) in &malformed {
             let found = read_step(bad, &mut Topology::new());
             assert!(

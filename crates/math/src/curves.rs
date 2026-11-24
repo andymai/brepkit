@@ -11,6 +11,15 @@ use crate::aabb::Aabb3;
 use crate::frame::Frame3;
 use crate::vec::{Point3, Vec3};
 
+/// The largest size a well-formed analytic curve or surface holds.
+///
+/// Each radius, semi-axis, distance and coordinate is at most this. A point
+/// of a conic or a surface is its centre plus a few radii along unit axes,
+/// so within this limit each point and derivative stays finite, as
+/// [`crate::nurbs::basis::WEIGHTED_LIMIT`] keeps a spline's. The largest in
+/// any test fixture or test file is 1.3e5.
+pub const SIZE_LIMIT: f64 = crate::nurbs::basis::WEIGHTED_LIMIT;
+
 /// The box of `center + a cos(t) u + b sin(t) v` over a full turn: along
 /// each axis the offset reaches `sqrt((a u_i)² + (b v_i)²)`.
 fn conic_aabb(center: Point3, (a, u): (f64, Vec3), (b, v): (f64, Vec3)) -> Aabb3 {

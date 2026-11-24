@@ -772,6 +772,59 @@ mod tests {
         }
     }
 
+    /// A dump circle or cylinder of radius 1e300 is well formed, since each
+    /// point it gives is finite. The mesher's grids cannot hold its points:
+    /// their integer cells overflow. Meshing it, the solid or one face, gives
+    /// an error, in a debug build and in a release build.
+    #[test]
+    fn a_dump_too_large_to_mesh_gives_an_error_from_the_mesher() {
+        use brepkit_operations::OperationsError;
+        use brepkit_operations::tessellate::{tessellate, tessellate_solid};
+        use serde_json::{Value, json};
+
+        let mut topo = Topology::new();
+        let rod = make_cylinder(&mut topo, 3.0, 4.0).unwrap();
+        let dump: Value = serde_json::from_slice(&serialize_solid(&topo, rod).unwrap()).unwrap();
+        // Each entity in `list` whose `field` holds a `variant`, its radius
+        // set to 1e300.
+        let enlarged = |list: &str, field: &str, variant: &str| {
+            let mut dump = dump.clone();
+            for entity in dump[list].as_array_mut().unwrap() {
+                if let Some(shape) = entity[field].get_mut(variant) {
+                    shape["radius"] = json!(1e300);
+                }
+            }
+            serde_json::to_vec(&dump).unwrap()
+        };
+        let too_large = |found: &Result<usize, OperationsError>| {
+            matches!(found, Err(OperationsError::InvalidInput { reason })
+                if reason.contains("too far out to mesh"))
+        };
+        // With its rims enlarged every face is too large; with its side
+        // enlarged only the side is, and the caps mesh.
+        for (bytes, every_face) in [
+            (enlarged("edges", "curve", "Circle"), true),
+            (enlarged("faces", "surface", "Cylinder"), false),
+        ] {
+            let mut fresh = Topology::new();
+            let solid = deserialize_solid(&bytes, &mut fresh).unwrap();
+            let found = tessellate_solid(&fresh, solid, 0.1).map(|mesh| mesh.positions.len());
+            assert!(too_large(&found), "{found:?}");
+            for face in solid_faces(&fresh, solid).unwrap() {
+                let side = matches!(
+                    fresh.face(face).unwrap().surface(),
+                    FaceSurface::Cylinder(_)
+                );
+                let found = tessellate(&fresh, face, 0.1).map(|mesh| mesh.positions.len());
+                if every_face || side {
+                    assert!(too_large(&found), "side {side}: {found:?}");
+                } else {
+                    assert!(found.is_ok(), "{found:?}");
+                }
+            }
+        }
+    }
+
     /// A circle or a surface of revolution whose frame has two axes alike,
     /// axes not at right angles, or a left-handed turn is not the shape its
     /// type names: a dump that holds one is refused. A knot span or weights
