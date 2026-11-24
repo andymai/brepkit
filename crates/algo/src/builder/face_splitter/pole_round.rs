@@ -65,14 +65,16 @@ impl PoleView {
     }
 
     /// Points on the ball, mapped.
+    #[cfg(test)]
     fn polygon(&self, pts: &[Point3]) -> Option<Vec<Point2>> {
         pts.iter().map(|&p| self.map(p)).collect()
     }
 
-    /// Twice the signed area a run of edges adds to a loop it lies in: the
-    /// shoelace terms of each edge's samples, its end included. The terms of
-    /// an edge and of its twin, walked the other way on the same samples,
-    /// cancel.
+    /// Twice the signed area a run of edges adds to a loop it lies in, read
+    /// on [`SAMPLES`] samples of each edge: the shoelace terms of each edge's
+    /// samples, its end included. The terms of an edge and of its twin,
+    /// walked the other way on the same samples, cancel.
+    #[cfg(test)]
     fn twice_area(&self, edges: &[OrientedPCurveEdge]) -> Option<f64> {
         let mut sum = 0.0;
         for e in edges {
@@ -88,25 +90,14 @@ impl PoleView {
         Some(sum)
     }
 
-    /// Whether a loop of signed area `area`, sampled as `poly`, bounds no
-    /// area: its area is within its perimeter times `tol`, a length on the
-    /// ball, which the plane reads over the ball's radius.
-    fn flat_reading(&self, area: f64, poly: &[Point2], tol: f64) -> bool {
-        let perimeter: f64 = poly
-            .iter()
-            .zip(poly.iter().cycle().skip(1))
-            .map(|(a, b)| (*b - *a).length())
-            .sum();
-        area.abs() <= perimeter * tol / self.radius
-    }
-
-    /// Whether a loop bounds no area ([`Self::flat_reading`]), or does not
-    /// map.
+    /// Whether a loop bounds no area: whether its reading
+    /// ([`Self::area_reading`]) proves its area within its perimeter times
+    /// `tol`, a length on the ball, which the plane reads over the ball's
+    /// radius. A loop the reading leaves unresolved stands; one that does
+    /// not map bounds none.
     fn flat(&self, lp: &[OrientedPCurveEdge], tol: f64) -> bool {
-        match (self.loop_polygon(lp), self.twice_area(lp)) {
-            (Some(poly), Some(twice)) => self.flat_reading(0.5 * twice, &poly, tol),
-            _ => true,
-        }
+        self.area_reading(lp, Some(tol))
+            .is_none_or(|r| r.area.abs() + r.error <= r.perimeter * tol / self.radius)
     }
 
     /// The signed area of a loop; 0 where it does not map.
@@ -240,40 +231,47 @@ impl PoleView {
         Some(bound * 2.0_f64.madd(joins, (to - from).length()))
     }
 
-    /// The signed area of a loop's image, with its sign proved: the area of
-    /// a polygon of its sides' ends, where that exceeds twice the most that
-    /// the loop's area differs from it, the sum of [`Self::side_area_bound`]
-    /// over the sides. Each round cuts in two each side whose bound exceeds
-    /// a quarter of the polygon's area over the number of sides: where none
-    /// does, the sum is at most a quarter of the area. `None` where a side
-    /// would be cut more than [`CUTS`] times, the sides grow past
-    /// [`MOST_SIDES`], or a side does not map.
-    fn proved_area(&self, lp: &[OrientedPCurveEdge]) -> Option<f64> {
+    /// A loop's image read on a polygon of its sides' ends, the sides cut
+    /// in two until the reading proves the area's sign (the area exceeds
+    /// twice the error) or, given `tol`, proves that the loop bounds no area
+    /// (the area and the error together lie within the perimeter times
+    /// `tol`, over the ball's radius). Each round cuts each side whose bound
+    /// ([`Self::side_area_bound`]) exceeds the easier of the two targets
+    /// over twice the number of sides: where none does, the error is at
+    /// most half that target. The reading stops unresolved where a side
+    /// would be cut more than [`CUTS`] times, the sides would grow past
+    /// [`MOST_SIDES`], or no side is cut. `None` where a side does not map.
+    fn area_reading(&self, lp: &[OrientedPCurveEdge], tol: Option<f64>) -> Option<AreaReading> {
         let mut sides: Vec<(Side, u32)> = loop_sides(lp).into_iter().map(|s| (s, 0)).collect();
         loop {
             let images: Vec<Point2> = sides
                 .iter()
                 .map(|(s, _)| self.map(s.from))
                 .collect::<Option<_>>()?;
-            let area = 0.5
-                * images
+            let pairs = || images.iter().zip(images.iter().cycle().skip(1));
+            let reading = AreaReading {
+                area: 0.5
+                    * pairs()
+                        .map(|(p, q)| p.x() * q.y() - q.x() * p.y())
+                        .sum::<f64>(),
+                error: sides
                     .iter()
-                    .zip(images.iter().cycle().skip(1))
-                    .map(|(p, q)| p.x() * q.y() - q.x() * p.y())
-                    .sum::<f64>();
-            let bounds: Vec<f64> = sides
-                .iter()
-                .map(|(s, _)| self.side_area_bound(s))
-                .collect::<Option<_>>()?;
-            if area.abs() > 2.0 * bounds.iter().sum::<f64>() {
-                return Some(area);
+                    .map(|(s, _)| self.side_area_bound(s))
+                    .sum::<Option<f64>>()?,
+                perimeter: pairs().map(|(p, q)| (*q - *p).length()).sum(),
+            };
+            let band = tol.map_or(0.0, |t| reading.perimeter * t / self.radius);
+            let size = reading.area.abs();
+            if size > 2.0 * reading.error || (tol.is_some() && size + reading.error <= band) {
+                return Some(reading);
             }
-            let share = area.abs() / (4.0 * f64::from(u32::try_from(sides.len()).ok()?));
+            let target = (0.5 * size).max(band - size);
+            let share = target / (2.0 * f64::from(u32::try_from(sides.len()).ok()?));
             let mut next = Vec::with_capacity(sides.len());
-            for ((side, cuts), bound) in sides.iter().zip(&bounds) {
-                if *bound > share {
+            for (side, cuts) in &sides {
+                if self.side_area_bound(side)? > share {
                     if *cuts >= CUTS {
-                        return None;
+                        return Some(reading);
                     }
                     let (first, second) = side.halves();
                     next.extend([(first, cuts + 1), (second, cuts + 1)]);
@@ -281,11 +279,19 @@ impl PoleView {
                     next.push((*side, *cuts));
                 }
             }
-            if next.len() > MOST_SIDES {
-                return None;
+            if next.len() > MOST_SIDES || next.len() == sides.len() {
+                return Some(reading);
             }
             sides = next;
         }
+    }
+
+    /// The signed area of a loop's image where its reading proves its sign
+    /// ([`Self::area_reading`]).
+    fn proved_area(&self, lp: &[OrientedPCurveEdge]) -> Option<f64> {
+        self.area_reading(lp, None)
+            .filter(|r| r.area.abs() > 2.0 * r.error)
+            .map(|r| r.area)
     }
 
     /// Whether the point `at` on the ball lies inside the loop of `sides`:
@@ -322,25 +328,17 @@ impl PoleView {
         self.clear_side(q, first, cuts - 1, poly)?;
         self.clear_side(q, second, cuts - 1, poly)
     }
-
-    /// A loop of edges, each sampled along its own curve in the way the
-    /// loop walks it, mapped.
-    fn loop_polygon(&self, lp: &[OrientedPCurveEdge]) -> Option<Vec<Point2>> {
-        let mut pts = Vec::new();
-        for e in lp {
-            walk_edge(e, &mut pts);
-        }
-        self.polygon(&pts)
-    }
 }
 
 /// `e`'s start, then samples along its curve toward its end, in the way the
 /// loop walks it.
+#[cfg(test)]
 fn walk_edge(e: &OrientedPCurveEdge, out: &mut Vec<Point3>) {
     walk_edge_in(e, SAMPLES, out);
 }
 
 /// [`walk_edge`] in `steps` steps.
+#[cfg(test)]
 fn walk_edge_in(e: &OrientedPCurveEdge, steps: u32, out: &mut Vec<Point3>) {
     use std::f64::consts::TAU;
     out.push(e.start_3d);
@@ -466,8 +464,7 @@ fn edge_sides(e: &OrientedPCurveEdge, steps: u32) -> Vec<Side<'_>> {
     let closed = (e.start_3d - e.end_3d).length() < CLOSED;
     let (s3, e3) = curve_ends(e);
     let turn = if e.forward { TAU } else { -TAU };
-    // The curve's parameters in the way the loop walks it, as
-    // `walk_edge_in` takes them.
+    // The curve's parameters in the way the loop walks it.
     let ts: Vec<f64> = match curve {
         EdgeCurve::Circle(c) if closed => {
             let a0 = c.project(e.start_3d);
@@ -548,6 +545,16 @@ fn piece_hull(curve: &EdgeCurve, a: f64, b: f64) -> Option<Vec<Point3>> {
             .map(|&[x, y, z, w]| (w > 0.0).then(|| Point3::new(x / w, y / w, z / w)))
             .collect(),
     }
+}
+
+/// A loop's image read on a polygon of its sides' ends: the polygon's
+/// signed area, a bound on how far the loop's area differs from it (the
+/// sum of [`PoleView::side_area_bound`] over the sides), and the polygon's
+/// perimeter.
+struct AreaReading {
+    area: f64,
+    error: f64,
+    perimeter: f64,
 }
 
 /// How a side's hull lies about the side's middle, in the ball's own
@@ -756,9 +763,11 @@ pub(super) fn pieces(
         if !closed || both_ways || pinched {
             return None;
         }
-        let poly = view.loop_polygon(&lp)?;
-        let area = view.proved_area(&lp)? * face_area.signum();
-        if view.flat_reading(area, &poly, tol) {
+        let reading = view
+            .area_reading(&lp, None)
+            .filter(|r| r.area.abs() > 2.0 * r.error)?;
+        let area = reading.area * face_area.signum();
+        if area.abs() <= reading.perimeter * tol / view.radius {
             return None;
         }
         if area > 0.0 {
@@ -1491,6 +1500,112 @@ mod tests {
                 .all(|e| e.forward != with_face.forward)
                 && (outline[0].source_edge_idx.is_none() || outline[0].forward == with_face.forward)
         })));
+    }
+
+    /// A section `e` laid out in the chart of the unit ball about `z`, as
+    /// the splitter lays a section: its pcurve from its curve's own way, its
+    /// ends read on it.
+    fn laid(e: &OrientedPCurveEdge) -> OrientedPCurveEdge {
+        use super::super::super::pcurve_compute::compute_pcurve_on_surface;
+        use super::super::conversion::uv_endpoints_from_pcurve;
+        use brepkit_topology::face::FaceSurface;
+        let chart =
+            FaceSurface::Sphere(SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0).unwrap());
+        let (s3, e3) = curve_ends(e);
+        let pcurve = compute_pcurve_on_surface(&e.curve_3d, s3, e3, &chart, &[], None);
+        let (a, c) = uv_endpoints_from_pcurve(&pcurve, s3, e3, &chart, &[]);
+        let (start_uv, end_uv) = if e.forward { (a, c) } else { (c, a) };
+        OrientedPCurveEdge {
+            pcurve,
+            start_uv,
+            end_uv,
+            ..e.clone()
+        }
+    }
+
+    /// The capped unit ball's rim laid out in its chart, running its
+    /// circle's own way, toward -u.
+    fn laid_rim() -> OrientedPCurveEdge {
+        use brepkit_topology::face::FaceSurface;
+        use std::f64::consts::{PI, TAU};
+        let chart =
+            FaceSurface::Sphere(SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0).unwrap());
+        let rim = small_circle(1.0, Vec3::new(0.0, 0.0, -1.0), PI - 0.95_f64.acos());
+        let at = rim.evaluate(0.0);
+        let (u0, v0) = chart.project_point(at).unwrap();
+        let mut outline = edge(&EdgeCurve::Circle(rim), at, at, true);
+        outline.start_uv = Point2::new(u0, v0);
+        outline.end_uv = Point2::new(u0 - TAU, v0);
+        outline.pcurve =
+            Curve2D::Line(Line2D::new(outline.start_uv, Vec2::new(-TAU, 0.0)).unwrap());
+        outline
+    }
+
+    /// A small circle of the unit ball 0.3 rad round, as a closed rational
+    /// quadratic spline in four arcs: three over the first 1e-6 of its
+    /// domain run all but 1e-3 rad of the turn, and the fourth runs the rest
+    /// over the remainder. Steps of a 64th of the domain all fall on the
+    /// fourth arc.
+    fn squeezed_circle() -> OrientedPCurveEdge {
+        use std::f64::consts::TAU;
+        let circle = small_circle(1.0, unit(0.6, 0.0, -1.0), 0.3);
+        let (c, r) = (circle.center(), circle.radius());
+        let (u, v) = (circle.u_axis(), circle.v_axis());
+        let on = |a: f64| c + u * (r * a.cos()) + v * (r * a.sin());
+        let last = 1e-3;
+        let big = (TAU - last) / 3.0;
+        let ends = [0.0, big, 2.0 * big, TAU - last, TAU];
+        let mut points = vec![on(0.0)];
+        let mut weights = vec![1.0];
+        for w in ends.windows(2) {
+            let half = 0.5 * (w[1] - w[0]);
+            let apex = on(w[0] + half);
+            points.push(c + (apex - c) * (1.0 / half.cos()));
+            weights.push(half.cos());
+            points.push(on(w[1]));
+            weights.push(1.0);
+        }
+        let knots = vec![
+            0.0,
+            0.0,
+            0.0,
+            1e-6 / 3.0,
+            1e-6 / 3.0,
+            2e-6 / 3.0,
+            2e-6 / 3.0,
+            1e-6,
+            1e-6,
+            1.0,
+            1.0,
+            1.0,
+        ];
+        let at = points[0];
+        let curve = NurbsCurve::new(2, knots, points, weights).unwrap();
+        let mut e = edge(&EdgeCurve::NurbsCurve(curve), at, at, true);
+        e.source_edge_idx = Some(0);
+        e
+    }
+
+    #[test]
+    fn a_squeezed_spline_circle_stands_in_the_face_trace() {
+        let (view, _) = capped_ball(1.0);
+        let circle = squeezed_circle();
+        // Its 64 steps read no area; it bounds the cap's 2 pi (1 - cos 0.3).
+        assert!(view.loop_area(std::slice::from_ref(&circle)).abs() < 1e-9);
+        let cap = std::f64::consts::TAU * (1.0 - 0.3_f64.cos());
+        let area = view.proved_area(std::slice::from_ref(&circle)).unwrap();
+        // The reading proves the area within half its size.
+        assert!((area.abs() - cap).abs() < 0.5 * area.abs(), "{area}");
+        assert!(!view.flat(std::slice::from_ref(&circle), 1e-7));
+
+        // With no loops from the walk, the face trace reads the face round
+        // the circle's disc, and the disc.
+        let mut edges = vec![laid_rim()];
+        edges.extend(halves(std::slice::from_ref(&circle)).iter().map(laid));
+        assert_eq!(view.face_left_in_uv(&edges[..1]), Some(true));
+        let split = read(&view, &edges, &edges, 1, Vec::new(), 1e-7).unwrap();
+        assert_eq!(split.len(), 2);
+        assert_eq!(split.iter().map(|p| p.1.len()).sum::<usize>(), 1);
     }
 
     #[test]
