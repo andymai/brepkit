@@ -358,15 +358,14 @@ impl BrepKernel {
 
     /// Elevate the degree of an edge's NURBS curve.
     ///
+    /// The elevated degree may be at most 25, and the new curve at most 2^20
+    /// control points or knots; a larger `elevate_by` is refused with an
+    /// error before anything is allocated for it.
+    ///
     /// Returns a new edge handle.
     #[wasm_bindgen(js_name = "curveDegreeElevate")]
     pub fn curve_degree_elevate(&mut self, edge: u32, elevate_by: u32) -> Result<u32, JsError> {
-        let curve = self.extract_nurbs_curve(edge)?;
-        let elevated =
-            brepkit_math::nurbs::decompose::curve_degree_elevate(&curve, elevate_by as usize)?;
-        Ok(edge_id_to_u32(
-            self.nurbs_curve_to_edge_from_curve(elevated)?,
-        ))
+        Ok(self.curve_degree_elevate_impl(edge, elevate_by)?)
     }
 
     /// Read-only canonical NURBS data for the curve underlying an edge.
@@ -429,6 +428,24 @@ impl BrepKernel {
             | FaceSurface::Sphere(_)
             | FaceSurface::Torus(_) => Ok(serde_json::Value::Null),
         }
+    }
+
+    /// Inner implementation for `curve_degree_elevate`, bounded by
+    /// [`brepkit_math::nurbs::decompose::MAX_ELEVATED_DEGREE`] and
+    /// [`brepkit_math::nurbs::decompose::ELEVATED_NET_LIMIT`].
+    pub(crate) fn curve_degree_elevate_impl(
+        &mut self,
+        edge: u32,
+        elevate_by: u32,
+    ) -> Result<u32, WasmError> {
+        let curve = self.extract_nurbs_curve(edge)?;
+        let by = usize::try_from(elevate_by).map_err(|_| WasmError::InvalidInput {
+            reason: format!("elevate_by {elevate_by} does not fit this target"),
+        })?;
+        let elevated = brepkit_math::nurbs::decompose::curve_degree_elevate(&curve, by)?;
+        Ok(edge_id_to_u32(
+            self.nurbs_curve_to_edge_from_curve(elevated)?,
+        ))
     }
 }
 

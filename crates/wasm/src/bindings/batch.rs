@@ -1636,6 +1636,12 @@ impl BrepKernel {
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(eid))
             }
+            "curveDegreeElevate" => {
+                let eid = self
+                    .curve_degree_elevate_impl(get_u32(args, "edge")?, get_u32(args, "elevateBy")?)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(eid))
+            }
             "makeNurbsEdge" => {
                 let numbers = |key: &str| -> Result<Vec<f64>, String> {
                     args[key]

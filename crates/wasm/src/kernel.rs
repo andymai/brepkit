@@ -2062,6 +2062,40 @@ mod js_curve_tests {
         }
     }
 
+    /// `curveDegreeElevate` takes its count from JS. Raising a quadratic
+    /// past degree 25, by the largest `u32` or by one past the bound, is
+    /// refused through the batch with an error, before anything is allocated
+    /// for it. Raising it to degree 25 is built.
+    #[test]
+    fn curve_degree_elevate_refuses_a_count_past_its_bound_through_the_batch() {
+        let (degree, knots, points, weights) = quadratic();
+        let mut k = BrepKernel::new();
+        let made = batch_one(
+            &mut k,
+            "makeNurbsEdge",
+            &json!({
+                "startX": 0.0, "startY": 0.0, "startZ": 0.0,
+                "endX": 3.0, "endY": 0.0, "endZ": 0.0,
+                "degree": degree, "knots": knots, "controlPoints": points, "weights": weights,
+            }),
+        );
+        let edge = made["ok"].as_u64().unwrap();
+        for by in [u64::from(u32::MAX), 24] {
+            let found = batch_one(
+                &mut k,
+                "curveDegreeElevate",
+                &json!({"edge": edge, "elevateBy": by}),
+            );
+            assert!(found["error"].is_string(), "{by}: {found}");
+        }
+        let raised = batch_one(
+            &mut k,
+            "curveDegreeElevate",
+            &json!({"edge": edge, "elevateBy": 23}),
+        );
+        assert!(raised["ok"].is_number(), "{raised}");
+    }
+
     /// A JSON number cannot be NaN or infinite, and an array from JS can:
     /// `makeNurbsEdge` refuses a knot, a point or a weight that is not
     /// finite.
