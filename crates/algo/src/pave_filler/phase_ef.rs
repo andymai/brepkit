@@ -3861,9 +3861,13 @@ fn side_roots(
             k += 1;
             continue;
         };
-        // Whether the run starts or ends at an end of the curve or at a
-        // place where the forms may be zero, which hold its contact there.
-        let held_before = k == 0 || matches!(marks[k - 1], Mark::Root(..));
+        // Whether the run starts or ends at an end of the curve, or at the
+        // end of a piece that holds a place where the forms may be zero:
+        // its contact is the one there. Along such a piece read for one
+        // root, the form runs one way from the root to the run.
+        let root_at = |i: usize| matches!(marks.get(i), Some(Mark::Root(..)));
+        let side_at = |i: usize| matches!(marks.get(i), Some(Mark::Side(_)));
+        let held_before = k == 0 || root_at(k - 1) || (k >= 2 && side_at(k - 1) && root_at(k - 2));
         let mut positive = true;
         let mut parts: Vec<(f64, f64, Off)> = Vec::new();
         while let Some(&Mark::Near(a, b, side)) = marks.get(k) {
@@ -3885,7 +3889,7 @@ fn side_roots(
                 }
             }
         }
-        let held_after = matches!(marks.get(k), None | Some(Mark::Root(..)));
+        let held_after = k == marks.len() || root_at(k) || (side_at(k) && root_at(k + 1));
         for (j, &(a, b, off)) in parts.iter().enumerate() {
             let (first, last) = (j == 0, j + 1 == parts.len());
             match off {
@@ -8673,5 +8677,58 @@ mod tests {
             near_an_edge(&topo, face, thin.evaluate(std::f64::consts::FRAC_PI_2), tol),
             Some(false)
         );
+    }
+
+    /// An ellipse about the axis of a unit wall, of semi-axes `1 + 3e-8`
+    /// and `1 - 3e-8`, its centre moved along its longer axis by 4e-8 to
+    /// 7e-8. Its distance from the wall, about `3e-8 cos 2t + shift cos t`,
+    /// stays within the tolerance all round: it crosses the wall twice, and
+    /// between the crossings, inside, comes nearest the wall again at
+    /// `t = π`, 3e-8 or less off it. That stretch within the tolerance
+    /// reaches both crossings and is their contact: from any start, the
+    /// exact pass reads the two crossings and no touch.
+    #[test]
+    fn a_stretch_within_the_tolerance_between_crossings_is_theirs() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Vec3;
+        let tol = Tolerance::new();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let wall = FaceSurface::Cylinder(
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z, 1.0).unwrap(),
+        );
+        let mut misread = Vec::new();
+        for shift in [4e-8, 5e-8, 6e-8, 7e-8] {
+            let el = Ellipse3D::new_with_ref(
+                Point3::new(0.0, shift, 0.0),
+                z,
+                1.0 + 3e-8,
+                1.0 - 3e-8,
+                Vec3::new(0.0, 1.0, 0.0),
+            )
+            .unwrap();
+            let curve = EdgeCurve::Ellipse(el.clone());
+            for lo in [0.0, 1.0, 2.5, 4.0] {
+                let start = el.evaluate(lo);
+                let roots = analytic_side_roots(
+                    &curve,
+                    start,
+                    start,
+                    lo,
+                    lo + std::f64::consts::TAU,
+                    &wall,
+                    tol,
+                );
+                let crossings = roots.as_ref().ok().and_then(Option::as_ref).map(|r| {
+                    r.iter()
+                        .all(|root| matches!(root, SideRoot::Crossing(..)))
+                        .then_some(r.len())
+                });
+                if crossings != Some(Some(2)) {
+                    misread.push(format!("shift {shift} from {lo}: {roots:?}"));
+                }
+            }
+        }
+        assert!(misread.is_empty(), "{misread:#?}");
     }
 }
