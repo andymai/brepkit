@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.48](https://github.com/andymai/brepkit/compare/v4.11.47...v4.11.48) (2026-11-24)
+
+
+### Bug Fixes
+
+* **algo:** box a curved face by all of it in phase EF, and read a ball face's side only where its wire lies there ([#2791](https://github.com/andymai/brepkit/issues/2791)) ([90c13b1](https://github.com/andymai/brepkit/commit/90c13b1328970153b08310e077ddb9a54e4b514e))
+
 ## [4.11.47](https://github.com/andymai/brepkit/compare/v4.11.46...v4.11.47) (2026-11-24)
 
 
