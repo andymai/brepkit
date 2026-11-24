@@ -4415,9 +4415,17 @@ fn dedup_collinear_sections(sections: &mut Vec<SectionEdge>, tol: f64) {
     // A section whose ends (nearly) meet, a closed rim, takes no part: as the
     // first of a pair its chord is too short to give a line, and as the
     // second its interval along any line is shorter than the overlap the
-    // test needs. A face cut by many holes carries one rim per hole.
+    // test needs. A face cut by many holes carries one rim per hole. Nor does
+    // a circle or ellipse arc: it never runs along a line, and the line along
+    // its chord (a circle crossed by a line) bounds the segment between them.
     let open: Vec<usize> = (0..n)
-        .filter(|&k| (sections[k].end - sections[k].start).length() >= tol * 0.5)
+        .filter(|&k| {
+            (sections[k].end - sections[k].start).length() >= tol * 0.5
+                && !matches!(
+                    sections[k].curve_3d,
+                    EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)
+                )
+        })
         .collect();
     for (a, &i) in open.iter().enumerate() {
         if to_remove[i] {
