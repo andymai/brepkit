@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795471882685,
+  "lastUpdate": 1795489106050,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -77165,6 +77165,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19533033,
             "range": "± 93405",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "39a174ddb6e61d1469fd83c9ab5dd012c1be3e5f",
+          "message": "fix(operations,algo): bound make_sphere's hemispheres by one circle at the equator (#2786)\n\n## Summary\n\nOn main, `make_sphere` bounds its two hemispheres with a polygon of\n`segments` straight edges at the equator, not a circle. So every later\nstep that tests a point against those faces tests against the chords\n(#2739). At 32 segments they lie up to 0.0048 rad inside the sphere. A\nblind rod that ends just past an unturned ball's equator is refused. A\nhole past the equator can cross its face's outline.\n\nWith this change, the two hemispheres share one closed circle edge at\nthe equator. A blind rod just past the equator cuts, fuses and\nintersects exactly, and ball volumes match 4/3 π r³ within 1e-9. Over\nrandom sweep seeds 1 to 3, 7, 12 and 8 more cases come out exact, and\nnone gets worse. The pose sweep and the truth audit give the same output\nas main.\n\nFixes #2739.\n\n## The change\n\n- **The primitive.** The equator is one closed `Circle3D` with its\nvertex at (r, 0, 0), whose angle is the sphere's u along v = 0. The\nnorth face runs it forward and the south face runs it back. `segments`\nshaped only the chords, so it is unused now and documented as such, and\nit must still be at least 4. The STEP reader's whole-sphere read builds\nthe same circle.\n- **Engine faults the switch exposed.** Each was found with a failing\ncase first.\n- Same-domain detection read the two hemispheres of one closed circle as\nduplicates and dropped one. `complementary_regions_of_closed_surface`\nnow tells their way round a closed edge.\n- The split of a face with no seam took only chord outlines. It now also\ntakes outlines of arcs of the face's chart equator, with the seam plane\nfrom the circle.\n- Phase EF missed two crossings 0.028 apart between its 64 samples, and\nnever tested a line against a ball. A line, circle or ellipse against a\ncylinder or a ball now finds its crossings exactly. Its side is a closed\nform of degree 2 in the angle, or in t for a line. `quadric_side_roots`\nisolates its roots by Taylor bounds that prove each piece holds no root\nor at most one.\n- A line is read about its point nearest the axis or centre, so no large\nterms cancel.\n- Each value carries a bound on its rounding, and a sign within it is\nunknown. An empty result needs a known sign everywhere, or the scan\nsamples instead.\n- The edge-face pass now sends a line against a cylinder face this way\ntoo. On main it took an older quadratic, which put a long line's\ncrossings 3.9e-5 off a unit rod. Other pairs still sample, and there a\nsample exactly on the surface is itself a root.\n- The offset engine projected only the two ends of an edge between two\nfaces of one surface. A closed circle has one vertex, so no edge came\nout and each hemisphere's offset face had no wire. A closed curved edge\nnow projects 33 points along it.\n- Phase FF windowed a closed marched footprint by 24 samples.\n`split_closed_section_at_crossings` now cuts it where it leaves a face,\nat the pair's edge crossings.\n- **The analytic volume of balls.** `try_analytic_solid_volume` gave one\nball's volume for any shell of faces on spheres of one radius. It\nchecked only that the vertices lay at one distance. With one vertex per\nball, two touching balls and the lens of two equal balls read as one\nball. It now also requires one centre.\n\n## Tests\n\n- `make_sphere_equator_is_one_circle` pins the primitive, and\n`make_sphere_volume` now holds 1e-9, from 1%.\n- `blind_rods_just_past_a_balls_equator_are_exact` runs 5 rod shapes\nthat rise 1e-4 to 1e-2 past the equator, in 5 poses, through cut,\nintersect and fuse. All 75 are valid with closed meshes, within 6e-9 of\na quadrature oracle, and four point probes on each read as the operation\nkeeps them.\n- `a_circle_crossing_a_wall_twice_between_two_samples_crosses_it_twice`\nfinds 4 crossings, where main finds 0.\n`a_sample_on_the_surface_is_a_crossing_or_a_touch` finds two crossings\nand a touch at samples that lie exactly on a ball.\n`an_ellipse_crossing_four_times_by_its_seam_keeps_all_four` finds all\nfour crossings of an ellipse with three in one sample interval, against\na ball and a cylinder. `a_long_line_crosses_a_wall_and_a_ball_on_them`\nruns a line 2e6 long through the edge-face pass, and every vertex lies\nwithin 1e-7 of its surface.\n`a_long_line_and_a_tangent_segment_keep_their_contacts` keeps the\ncrossings of a line 2e6 long through a unit ball and the touch of a\nsegment on a ball of radius 175.\n- `sphere_same_surface_produces_projected_points` runs a ball's offset\nequator through the 2D phase and the wire build, and gets one closed\ncircle and one wire for each hemisphere.\n- `ball_offsets_and_wall_hold_their_closed_forms` offsets a ball by +0.5\nand -0.5 and makes a wall round a cavity, in 3 poses, each within 1e-9\nof its closed form.\n- Four tests pinned the chord geometry, and each now states the circle's\nvalue. `a_balls_equator_lies_in_one_surface` reads 1 edge, not 16. The\nthree #2738 chord mesher tests build a chord ball by hand, because STEP\nfiles can still hold chord balls.\n- The golden files for a ball of radius 3 and the sphere mesh gain 2\nmesh vertices. The mesh's centre of mass at deflection 0.1 moves 5.85e-4\nin x, and its volume does not change.\n- The lib tests of every crate (3900) and brepkit-wasm native (296)\npass, and so do all brepkit-operations and brepkit-io tests (3289).\n\n## Still open\n\n- #2520: `gfa::fuse_n` of rod, ball and rod fails in 196 of 256 poses,\nas on main. The chords were not the cause. With faces unified, one pose\nwith exactly opposite rods now refuses, where main was exact.\n- #2762: `fuse_n` of the ball, box and slab is exact in 4 of 6 cases,\nagainst 1 on main. The two cases with the slab off centre give an\ninvalid solid, and fusing the ball and the slab first still refuses.",
+          "timestamp": "2026-11-24T02:54:14Z",
+          "tree_id": "7f7c88ad7ef90afd8c00ad1d1afd27e0d2f18aeb",
+          "url": "https://github.com/andymai/brepkit/commit/39a174ddb6e61d1469fd83c9ab5dd012c1be3e5f"
+        },
+        "date": 1795489096299,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1201039,
+            "range": "± 2835",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1271503,
+            "range": "± 42614",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13380,
+            "range": "± 17",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 802778,
+            "range": "± 3306",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27284567,
+            "range": "± 180552",
             "unit": "ns/iter"
           }
         ]
