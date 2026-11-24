@@ -6851,7 +6851,7 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
 /// wire's edges exactly (`torus_edge_reach`); a wire with an edge that does
 /// not read so takes the whole torus's box. `None` on a horn or spindle
 /// torus, whose far sheet's points do not project to their own angles.
-fn torus_patch_box(
+pub(super) fn torus_patch_box(
     topo: &Topology,
     face_id: FaceId,
     torus: &brepkit_math::surfaces::ToroidalSurface,
