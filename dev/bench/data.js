@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795536918814,
+  "lastUpdate": 1795539122936,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -77651,6 +77651,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27254760,
             "range": "± 96826",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "16993cf34ab48cb3ce0e7e8726ff6f5d5f4dac0f",
+          "message": "fix(algo): find an edge's crossings of a ring face exactly, and box a NURBS face by its control points, in phase EF (#2815)\n\n## Summary\n\nOn main, phase EF can miss an edge's crossing of a face with no error,\nin two cases:\n\n- **Ring faces (#2792).** Tori have no side-flip pass, so a crossing\ncounts only where a sample lands on it. In 3 poses of 17 crossings and\ntouches, main finds 2.\n- **NURBS faces (#2794).** A NURBS face takes its boundary's box, grown\nby half its diagonal. Take a dome bounded by its rim alone. Its box tops\nout at z = 2, but the dome rises to 4. A line at z = 3.5 finds no\ncrossing.\n\nWith this change, phase EF finds all 17 ring crossings, and the line\nfinds both dome crossings within 1e-7 of the dome. The pose sweep and\nthe truth audit give the same output as main, in the same time.\n\nFixes #2792. Fixes #2794.\n\n## The change\n\n- **A side form for rings.** The new `RingForm` reads (|q|² + R² − r²)²\n− 4R²ρ². That equals (d² − r²)(e² − r²), with the sign of the distance\nto the tube.\n- It is degree 4 along a line, and of trigonometric degree 4 round a\ncircle or an ellipse. A line is read about its point nearest the centre.\n- Each value and each of its four derivatives carries a rounding bound,\nwith a bound on the fifth derivative. The Taylor-bound root search from\n#2786 now takes any side form.\n- A crossing is kept where the new `TorusFaceTrim` holds it. That trim\nreads a whole ring, a band of whole turns, or a patch, through\n`torus_face_geom`, which the ray-cast classifier also uses.\n- **A NURBS face box proved from its control points.** The box is the\nsurface's control-point box, grown by 1e-9 relative for rounding.\n- The surface is first cut to the face's range by knot insertion only\nwhere the range is proved. The surface must not be periodic, each pcurve\nmust end on its edge's vertices, and each wire's loop must close.\n  - A face with a weight that is not a positive normal float is refused.\n- Phase FF's call to the old box always returned its input, so it is\nremoved. FF does not change.\n\n- **The exact pass is the whole answer.** Where it runs for an edge and\na face, its proved roots and contacts replace the sample scan. That\ncovers cylinders, cones, balls and rings.\n- A thin ring is also read by a tube form, (ρ − R)² + h² − r², whose\nrounding does not grow with R. A stretch whose side no form can prove\nwithin the tolerance is refused.\n- A curve that passes within the tolerance is a touch, found at each\nleast the side form's slope proves. A piece proved within the tolerance\nthroughout is one contact stretch.\n- A conic's speed comes from its axes as stored, so scaled axes give the\nsame roots.\n  - A root past the curve's end is read at that end.\n- **Crossings near a face's wire.** A crossing inside the trim's margin\nis placed by its distance to the face's edges. So a crossing just inside\nthe face is kept, and one just outside is dropped.\n- **Rounding.** Each proved box grows by a stated count of roundings of\nthe largest number its evaluator sums. A test of two things apart also\ncounts the rounding of its inputs.\n\n## Tests\n\n- `edges_crossing_a_ring_between_samples_find_each_crossing` runs the\nissue's lines at four heights and moved along y. It also runs the circle\nthrough the tube, an ellipse with 4 crossings and a tangent line, in 3\nposes. Each vertex lies within 1e-7 of the ring and of the edge.\n- `a_ring_is_read_exactly_on_its_side_form` checks crossings to 1e-12,\ntwo touches (one of fourth order), and a line 2e6 long with 4 crossings.\nA line 1e-6 above the tube finds none.\n- `a_ring_face_keeps_only_the_crossings_it_holds` reads a whole ring\nless a window, and the window alone.\n- `a_line_far_above_a_domes_rim_crosses_the_dome` runs in 3 poses. On\nmain, 660 of 1089 dome points lie outside the box, and on this branch\nnone do.\n- `a_nurbs_face_with_pcurves_is_boxed_by_its_surface_cut_to_them` and\n`a_nurbs_face_with_a_weight_that_bounds_nothing_is_refused` pin the cut\nand the refusal.\n- Regressions cover each review round:\n  - crossings on samples off a face, and a segment just outside a ring;\n- a thin tube crossed twice, and tubes of radius 1e-6 at shallow angles;\n- one contact per tangency, and curves within the tolerance once or\ntwice;\n- a circle a constant distance off a surface, and conics on scaled axes;\n- crossings near a wire, and boxes and closed tubes up to 1e11 from the\norigin.\n- Over 30 NURBS-heavy test files, each of 335 NURBS face boxes is\nsmaller than on main, at 0.37 to 0.78 of the old diagonal. Run times are\nthe same within noise.\n- brepkit-algo (631) passes, and so do all brepkit-operations and\nbrepkit-io tests (3291, 26 skipped). Random sweep seeds 1 to 3 give the\nsame result for each case as main.\n\n## Still open\n\n- B-spline edges, spindle rings, and ring faces that `torus_face_geom`\ncannot read still use sampled side flips (#2812).\n- Phase EF keeps a crossing on a NURBS face's untrimmed surface inside\nits box but off the face (#2813).\n- Booleans store no pcurves, so a small NURBS piece takes its whole\nsurface's box (#2814).",
+          "timestamp": "2026-11-24T16:47:48Z",
+          "tree_id": "f83d851c0eff64fe1845b98b5287bf934a75c513",
+          "url": "https://github.com/andymai/brepkit/commit/16993cf34ab48cb3ce0e7e8726ff6f5d5f4dac0f"
+        },
+        "date": 1795539106144,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 988559,
+            "range": "± 4562",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1053685,
+            "range": "± 9996",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 10700,
+            "range": "± 25",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 608227,
+            "range": "± 5935",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 21219383,
+            "range": "± 249473",
             "unit": "ns/iter"
           }
         ]
