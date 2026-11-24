@@ -2492,8 +2492,28 @@ fn curve_derivative_bounds(
 ) -> Option<[f64; 3]> {
     match curve {
         EdgeCurve::Line => Some([(end_pos - start_pos).length(), 0.0, 0.0]),
-        EdgeCurve::Circle(c) => Some([c.radius(); 3]),
-        EdgeCurve::Ellipse(e) => Some([e.semi_major().max(e.semi_minor()); 3]),
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+            curve_speed(curve, start_pos, end_pos).map(|reach| [reach; 3])
+        }
+        EdgeCurve::NurbsCurve(_) => None,
+    }
+}
+
+/// A bound on the length of each derivative of a line, a circle or an
+/// ellipse by its parameter: a line's from start to end, and a conic's
+/// [`conic_reach`] of its two axes as they are stored, which need not be of
+/// unit length (a circle of radius 1e-12 on axes 1e12 long is a unit
+/// circle, and runs at speed 1). `None` for a B-spline.
+fn curve_speed(curve: &EdgeCurve, start_pos: Point3, end_pos: Point3) -> Option<f64> {
+    match curve {
+        EdgeCurve::Line => Some((end_pos - start_pos).length()),
+        EdgeCurve::Circle(c) => Some(conic_reach(c.radius(), c.radius(), c.u_axis(), c.v_axis())),
+        EdgeCurve::Ellipse(e) => Some(conic_reach(
+            e.semi_major(),
+            e.semi_minor(),
+            e.u_axis(),
+            e.v_axis(),
+        )),
         EdgeCurve::NurbsCurve(_) => None,
     }
 }
@@ -2610,7 +2630,10 @@ impl SideForm {
             }
             EdgeCurve::Circle(c) => {
                 let e = across(c.center() - center);
-                let made_of = size(c.center()) + e.length() + 2.0 * c.radius();
+                let made_of = size(c.center())
+                    + e.length()
+                    + (c.u_axis() * c.radius()).length()
+                    + (c.v_axis() * c.radius()).length();
                 (
                     true,
                     0.0,
@@ -2622,7 +2645,10 @@ impl SideForm {
             }
             EdgeCurve::Ellipse(el) => {
                 let e = across(el.center() - center);
-                let made_of = size(el.center()) + e.length() + el.semi_major() + el.semi_minor();
+                let made_of = size(el.center())
+                    + e.length()
+                    + (el.u_axis() * el.semi_major()).length()
+                    + (el.v_axis() * el.semi_minor()).length();
                 (
                     true,
                     0.0,
@@ -2812,7 +2838,10 @@ impl RingForm {
             }
             EdgeCurve::Circle(c) => {
                 let e = c.center() - center;
-                let made_of = size(c.center()) + e.length() + 2.0 * c.radius();
+                let made_of = size(c.center())
+                    + e.length()
+                    + (c.u_axis() * c.radius()).length()
+                    + (c.v_axis() * c.radius()).length();
                 (
                     true,
                     0.0,
@@ -2824,7 +2853,10 @@ impl RingForm {
             }
             EdgeCurve::Ellipse(el) => {
                 let e = el.center() - center;
-                let made_of = size(el.center()) + e.length() + el.semi_major() + el.semi_minor();
+                let made_of = size(el.center())
+                    + e.length()
+                    + (el.u_axis() * el.semi_major()).length()
+                    + (el.v_axis() * el.semi_minor()).length();
                 (
                     true,
                     0.0,
@@ -3257,11 +3289,8 @@ fn side_roots(
     if form.slack() > 0.1 * tol.linear {
         return Ok(None);
     }
-    let speed = match curve {
-        EdgeCurve::Line => (end_pos - start_pos).length(),
-        EdgeCurve::Circle(c) => c.radius(),
-        EdgeCurve::Ellipse(el) => el.semi_major(),
-        EdgeCurve::NurbsCurve(_) => return Ok(None),
+    let Some(speed) = curve_speed(curve, start_pos, end_pos) else {
+        return Ok(None);
     };
     let (lo, hi) = (t0.min(t1), t0.max(t1));
     if hi - lo <= 0.0 || speed <= 0.0 || !speed.is_finite() {
@@ -7408,5 +7437,79 @@ mod tests {
             ),
             "{ef:?}"
         );
+    }
+
+    /// A unit circle about the origin tilted 0.4 of a radian about `x`, and
+    /// the same circle stored with radius 1e-12 on axes 1e12 long, which
+    /// give the same point at each parameter. Over `[0.3, 0.3 + 2π]` each
+    /// meets a ring of radii 1 and 0.1, a ball of radius 1 about
+    /// `(0.3, 0, 0)` and a wall of radius 0.7 about `z` through
+    /// `(0.5, 0, 0)` at the same parameters.
+    #[test]
+    fn a_circle_on_scaled_axes_meets_surfaces_as_the_unit_circle_does() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::{CylindricalSurface, SphericalSurface, ToroidalSurface};
+        use brepkit_math::vec::Vec3;
+        let tol = Tolerance::new();
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let (sin, cos) = 0.4_f64.sin_cos();
+        let normal = Vec3::new(0.0, -sin, cos);
+        let unit = Circle3D::new_with_ref(origin, normal, 1.0, Vec3::new(1.0, 0.0, 0.0)).unwrap();
+        let scaled = Circle3D::with_axes(
+            origin,
+            unit.normal(),
+            1e-12,
+            unit.u_axis() * 1e12,
+            unit.v_axis() * 1e12,
+        )
+        .unwrap();
+        for k in 0..8_u32 {
+            let t = f64::from(k);
+            assert!((unit.evaluate(t) - scaled.evaluate(t)).length() < 1e-12);
+        }
+        let (t0, t1) = (0.3, 0.3 + std::f64::consts::TAU);
+        let mut misread = Vec::new();
+        for (what, surface, count) in [
+            (
+                "ring",
+                FaceSurface::Torus(ToroidalSurface::new(origin, 1.0, 0.1).unwrap()),
+                4,
+            ),
+            (
+                "ball",
+                FaceSurface::Sphere(
+                    SphericalSurface::new(Point3::new(0.3, 0.0, 0.0), 1.0).unwrap(),
+                ),
+                2,
+            ),
+            (
+                "wall",
+                FaceSurface::Cylinder(
+                    CylindricalSurface::new(
+                        Point3::new(0.5, 0.0, 0.0),
+                        Vec3::new(0.0, 0.0, 1.0),
+                        0.7,
+                    )
+                    .unwrap(),
+                ),
+                2,
+            ),
+        ] {
+            let read = |c: &Circle3D| {
+                let curve = EdgeCurve::Circle(c.clone());
+                let start = c.evaluate(t0);
+                analytic_side_roots(&curve, start, start, t0, t1, &surface, tol)
+                    .unwrap()
+                    .map(|roots| roots.iter().map(|r| r.at().0).collect::<Vec<_>>())
+            };
+            let (a, b) = (read(&unit), read(&scaled));
+            let same = matches!((&a, &b), (Some(a), Some(b)) if a.len() == count
+                && b.len() == count
+                && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9));
+            if !same {
+                misread.push(format!("{what}: unit {a:?}, scaled {b:?}"));
+            }
+        }
+        assert!(misread.is_empty(), "{misread:#?}");
     }
 }
