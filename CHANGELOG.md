@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.49](https://github.com/andymai/brepkit/compare/v4.11.48...v4.11.49) (2026-11-24)
+
+
+### Bug Fixes
+
+* **io,operations:** refuse malformed NURBS on load, and report an edge whose curve misses its vertex ([#2807](https://github.com/andymai/brepkit/issues/2807)) ([9f8aed4](https://github.com/andymai/brepkit/commit/9f8aed488e33b8d2d48ba7208cf7ea9609daf600))
+
 ## [4.11.48](https://github.com/andymai/brepkit/compare/v4.11.47...v4.11.48) (2026-11-24)
 
 
