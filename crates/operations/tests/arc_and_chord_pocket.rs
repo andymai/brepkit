@@ -2,7 +2,7 @@
 //! between them is a face of its own.
 //!
 //! Edges imprinted on a plate's top (an arc about (5, 4) of radius root 2 from
-//! (6, 5) to (4, 5), its chord, and lines from the chord's ends to the rim)
+//! (6, 5) to (4, 5), its chord, and lines from the chord's ends to a point)
 //! split off the segment, and a D pocket under the arc and its chord, and a
 //! round pocket whose floor a box cuts along the same chord, keep their
 //! closed-form volumes. Every case runs upright, turned and mirrored.
@@ -120,13 +120,14 @@ mod tests {
         areas
     }
 
-    /// The arc and its chord on a line across the top, and the arc, its chord
-    /// and two lines up to (5, 10) on the rim, imprinted in either order: the
-    /// segment is a face of the top, and the solid stays valid, closed and of
-    /// the plate's volume.
+    /// The arc, its chord and two lines up to (5, 8) inside the top or to
+    /// (5, 10) on its rim, and the arc and its chord on a line across the top,
+    /// imprinted in either order: the segment is a face of the top, and the
+    /// solid stays valid, closed and of the plate's volume.
     #[test]
     fn imprinting_an_arc_and_its_chord_splits_off_their_segment() {
         let cases = [
+            (((5.0, 8.0), (5.0, 8.0)), [SEGMENT, 3.0 - SEGMENT, 97.0]),
             (((10.0, 5.0), (0.0, 5.0)), [SEGMENT, 50.0 - SEGMENT, 50.0]),
             (((5.0, 10.0), (5.0, 10.0)), [SEGMENT, 5.0 - SEGMENT, 95.0]),
         ];
