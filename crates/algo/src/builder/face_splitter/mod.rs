@@ -13253,19 +13253,24 @@ fn same_nurbs_data(
     if !positive(mw) || !positive(nw) {
         return false;
     }
-    let most = |w: &[f64]| w.iter().copied().fold(0.0_f64, f64::max);
+    let max_or_nan = crate::builder::pcurve_compute::max_or_nan;
+    let most = |w: &[f64]| w.iter().copied().fold(0.0_f64, max_or_nan);
     let (top_m, top_n) = (most(mw), most(nw));
     let reach = mp
         .iter()
         .map(|&p| (p - mp[0]).length())
-        .fold(0.0_f64, f64::max);
+        .fold(0.0_f64, max_or_nan);
+    // Each set of weights is read against its own largest, so the ratios
+    // stay near one whatever the scale: raw products of weights can
+    // underflow to 0 / 0 or overflow to inf / inf.
     let within = |pairs: &mut dyn Iterator<Item = ((Point3, f64), (Point3, f64))>| {
         let (mut moved, mut ratio) = (0.0_f64, 0.0_f64);
         for ((p, wp), (q, wq)) in pairs {
-            moved = moved.max((q - p).length());
-            ratio = ratio.max(((wq * top_m) / (wp * top_n) - 1.0).abs());
+            moved = max_or_nan(moved, (q - p).length());
+            ratio = max_or_nan(ratio, ((wq / top_n) / (wp / top_m) - 1.0).abs());
         }
-        ratio < 0.5 && (2.0 * ratio / (1.0 - ratio)).madd(reach, moved) <= tol
+        let bound = (2.0 * ratio / (1.0 - ratio)).madd(reach, moved);
+        ratio < 0.5 && bound.is_finite() && bound <= tol
     };
     let ours = || mp.iter().copied().zip(mw.iter().copied());
     let forward = mk.iter().zip(nk).all(|(x, y)| x.to_bits() == y.to_bits())
@@ -16476,30 +16481,43 @@ mod tests {
     fn highest_y(s: &SectionEdge) -> f64 {
         (0..=2000)
             .map(|k| evaluate_edge_at_t(&s.curve_3d, s.start, s.end, f64::from(k) / 2000.0).y())
-            .fold(f64::NEG_INFINITY, f64::max)
+            .fold(
+                f64::NEG_INFINITY,
+                crate::builder::pcurve_compute::max_or_nan,
+            )
     }
 
     /// Two cubics on one knot vector through one set of control points, with
-    /// weights 1e-15 at all four, and 1e-15, 1e-13, 1e-13, 1e-15: their ends
-    /// and middles meet, but the first reaches y = 0.289 and the second
-    /// 0.855. Weights that differ only by a common scale are one curve.
+    /// weights `s` at all four, and `s, 100 s, 100 s, s`, for `s` of 1e-15,
+    /// 1e-200 and 1e200: their ends and middles meet, but the first reaches
+    /// y = 0.289 and the second 0.855. Raw products of the weights underflow
+    /// or overflow at the two far scales. Weights that differ only by a
+    /// common scale are one curve.
     #[test]
-    fn b_splines_whose_tiny_weights_differ_in_ratio_are_two_curves() {
+    fn b_splines_whose_weights_differ_in_ratio_are_two_curves() {
         let knots = [0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
         let points = [(0.0, 0.0), (1.0, 1.0), (2.0, -1.0), (3.0, 0.0)];
-        let even = spline_section(3, &knots, &points, &[1e-15; 4]);
-        let uneven = spline_section(3, &knots, &points, &[1e-15, 1e-13, 1e-13, 1e-15]);
-        assert!((section_middle(&even) - section_middle(&uneven)).length() < 1e-9);
-        let (low, high) = (highest_y(&even), highest_y(&uneven));
-        assert!(
-            (low - 0.289).abs() < 1e-3 && (high - 0.855).abs() < 1e-3,
-            "{low} {high}"
-        );
-        assert!(!same_section_curve(&even, &uneven, 1e-5));
-        assert!(!same_section_curve(&uneven, &even, 1e-5));
-        let scaled = spline_section(3, &knots, &points, &[2.5e-15; 4]);
-        assert!(same_section_curve(&even, &scaled, 1e-5));
-        assert!(same_section_curve(&uneven, &uneven.clone(), 1e-5));
+        for s in [1e-15, 1e-200, 1e200] {
+            let even = spline_section(3, &knots, &points, &[s; 4]);
+            let uneven = spline_section(3, &knots, &points, &[s, 100.0 * s, 100.0 * s, s]);
+            assert!((section_middle(&even) - section_middle(&uneven)).length() < 1e-9);
+            let (low, high) = (highest_y(&even), highest_y(&uneven));
+            assert!(
+                (low - 0.289).abs() < 1e-3 && (high - 0.855).abs() < 1e-3,
+                "scale {s}: {low} {high}"
+            );
+            assert!(!same_section_curve(&even, &uneven, 1e-5), "scale {s}");
+            assert!(!same_section_curve(&uneven, &even, 1e-5), "scale {s}");
+            let scaled = spline_section(3, &knots, &points, &[2.5 * s; 4]);
+            assert!(same_section_curve(&even, &scaled, 1e-5), "scale {s}");
+            let scaled = spline_section(
+                3,
+                &knots,
+                &points,
+                &[2.5 * s, 250.0 * s, 250.0 * s, 2.5 * s],
+            );
+            assert!(same_section_curve(&uneven, &scaled, 1e-5), "scale {s}");
+        }
     }
 
     /// Two cubics on the parameter span [0, 1e-12] through six control

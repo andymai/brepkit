@@ -924,13 +924,16 @@ fn straight_pcurve(
     let mut off_surface = 0.0_f64;
     let mut size = 1.0_f64;
     for (&q, &p) in uv_pts.iter().zip(pts_3d) {
-        off_surface = off_surface.max((lift(q)? - p).length());
-        size = size.max(p.x().abs()).max(p.y().abs()).max(p.z().abs());
+        off_surface = max_or_nan(off_surface, (lift(q)? - p).length());
+        size = [p.x(), p.y(), p.z()]
+            .into_iter()
+            .fold(size, |m, c| max_or_nan(m, c.abs()));
     }
     let bound = straight_image_bound(uv_pts, pts_3d, curve, ends, surface, lift)?;
     let rounding = 64.0 * f64::EPSILON * size;
     let tol = brepkit_math::tolerance::Tolerance::new().linear;
-    (bound + rounding - off_surface <= tol.max(off_surface)).then_some(line)
+    let excess = bound + rounding - off_surface;
+    (excess.is_finite() && excess <= max_or_nan(tol, off_surface)).then_some(line)
 }
 
 /// A bound on how far the image on `surface` of the straight run in (u, v)
@@ -989,7 +992,8 @@ fn straight_image_bound(
             (at(k), at(k + 1))
         });
         let stray = piece_stray(curve, pts_3d[k], pts_3d[k + 1], span)?;
-        pieces = pieces.max(gaps[k].max(gaps[k + 1]) + (step * step / 8.0).madd(bend, stray));
+        let piece = max_or_nan(gaps[k], gaps[k + 1]) + (step * step / 8.0).madd(bend, stray);
+        pieces = max_or_nan(pieces, piece);
     }
 
     let EdgeCurve::Circle(circle) = curve else {
@@ -1036,6 +1040,8 @@ fn straight_image_bound(
         let apart = arcs_apart(arc, centre, dv, edge, circle, sweep)?;
         Some(speed_u.madd(du.abs(), apart))
     });
+    // A NaN bound proves nothing, and `f64::min` passes over it to the
+    // least of the others.
     Some(
         [parallel, meridian]
             .into_iter()
@@ -1055,7 +1061,7 @@ fn image_bend_bound(surface: &FaceSurface, a: Point2, b: Point2) -> Option<f64> 
         FaceSurface::Cylinder(c) => (c.radius(), 0.0, 0.0),
         FaceSurface::Cone(c) => {
             let cos_a = c.half_angle().cos();
-            (cos_a * a.y().abs().max(b.y().abs()), cos_a, 0.0)
+            (cos_a * max_or_nan(a.y().abs(), b.y().abs()), cos_a, 0.0)
         }
         FaceSurface::Sphere(s) => (s.radius(), s.radius(), s.radius()),
         FaceSurface::Torus(t) => (
@@ -1086,6 +1092,9 @@ fn piece_stray(curve: &EdgeCurve, a: Point3, b: Point3, span: Option<(f64, f64)>
         EdgeCurve::Ellipse(e) => sagitta(e.project(b) - e.project(a), e.semi_major()),
         EdgeCurve::NurbsCurve(nurbs) => {
             let (t0, t1) = span?;
+            if !(t0.is_finite() && t1.is_finite()) {
+                return None;
+            }
             let (lo, hi) = (t0.min(t1), t0.max(t1));
             let mut breaks = vec![lo];
             breaks.extend(nurbs.knots().iter().copied().filter(|&k| k > lo && k < hi));
@@ -1102,11 +1111,21 @@ fn piece_stray(curve: &EdgeCurve, a: Point3, b: Point3, span: Option<(f64, f64)>
                         return None;
                     }
                     let p = Point3::new(x / weight, y / weight, z / weight);
-                    most = most.max(segment_distance_3d(p, a, b));
+                    most = max_or_nan(most, segment_distance_3d(p, a, b));
                 }
             }
             Some(most)
         }
+    }
+}
+
+/// The larger of `a` and `b`, or NaN where either is NaN. `f64::max` drops
+/// a NaN, so a bound built with it could pass a term it never read.
+pub(super) fn max_or_nan(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() {
+        f64::NAN
+    } else {
+        a.max(b)
     }
 }
 
@@ -1127,10 +1146,13 @@ fn segment_distance_3d(p: Point3, a: Point3, b: Point3) -> f64 {
 /// quarter turn apart. `None` when a step reads a quarter turn or more.
 fn circle_sweep(circle: &brepkit_math::curves::Circle3D, pts_3d: &[Point3]) -> Option<(f64, f64)> {
     let theta0 = circle.project(*pts_3d.first()?);
+    if theta0.is_nan() {
+        return None;
+    }
     let mut sweep = 0.0;
     for w in pts_3d.windows(2) {
         let step = shorter_arc_delta(circle.project(w[1]) - circle.project(w[0]));
-        if step.abs() >= std::f64::consts::FRAC_PI_2 {
+        if step.is_nan() || step.abs() >= std::f64::consts::FRAC_PI_2 {
             return None;
         }
         sweep += step;
@@ -1158,7 +1180,7 @@ fn arcs_apart(
     circle: &brepkit_math::curves::Circle3D,
     sweep: f64,
 ) -> Option<f64> {
-    let turn = omega.abs().max(sweep.abs()) / std::f64::consts::FRAC_PI_2;
+    let turn = max_or_nan(omega.abs(), sweep.abs()) / std::f64::consts::FRAC_PI_2;
     if !turn.is_finite() || turn > 64.0 {
         return None;
     }
@@ -1177,7 +1199,10 @@ fn arcs_apart(
         #[allow(clippy::cast_precision_loss)]
         let t = if j == pieces { 1.0 } else { j as f64 * h };
         let gap = (p(t)? - q(t)).length();
-        most = most.max((h * h / 8.0).madd(k, before.max(gap)) / shrink);
+        most = max_or_nan(
+            most,
+            (h * h / 8.0).madd(k, max_or_nan(before, gap)) / shrink,
+        );
         before = gap;
     }
     Some(most)
@@ -2072,7 +2097,7 @@ mod tests {
                 let uv = pcurve.evaluate((hi - lo).madd(f64::from(k) / 2000.0, lo));
                 off(surface.evaluate(uv.x(), uv.y()).unwrap())
             })
-            .fold(0.0, f64::max);
+            .fold(0.0, max_or_nan);
         (worst, kind)
     }
 
@@ -2287,7 +2312,7 @@ mod tests {
                     let q = pcurve.evaluate(hi * f64::from(k) / 2000.0);
                     on(frame.evaluate(q.x(), q.y()))
                 })
-                .fold(0.0, f64::max)
+                .fold(0.0, max_or_nan)
         };
         let radius = 1e4;
         let circle =
