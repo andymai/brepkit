@@ -493,22 +493,49 @@ mod tests {
         }
     }
 
+    /// A ball of radius 3 offset by 0.5: its equator, one closed edge,
+    /// projects to points spread round the offset ball's equator. Through
+    /// the 2D phase they make one closed circle of radius 3.5 about the
+    /// centre, and each hemisphere's offset face is bounded by one wire of
+    /// that circle alone.
     #[test]
     fn sphere_same_surface_produces_projected_points() {
         let mut topo = Topology::new();
         let solid = brepkit_operations::primitives::make_sphere(&mut topo, 3.0, 16).unwrap();
-        let data = run_phases_1_2_3(&topo, solid, 0.5);
+        let mut data = run_phases_1_2_3(&topo, solid, 0.5);
+        assert_eq!(data.intersections.len(), 1, "one equator");
+        let points = &data.intersections[0].curve_points;
+        assert!(points.len() >= 8, "{points:?}");
+        let mut widest = 0.0_f64;
+        for p in points {
+            assert!((p.x().hypot(p.y()) - 3.5).abs() < 1e-9, "{p:?}");
+            assert!(p.z().abs() < 1e-9, "{p:?}");
+            widest = widest.max((*p - points[0]).length());
+        }
+        assert!((widest - 7.0).abs() < 1e-6, "the points span {widest}");
+
+        crate::inter2d::intersect_pcurves_2d(&mut topo, solid, &mut data).unwrap();
+        let new_edges = data.intersections[0].new_edges.clone();
+        assert_eq!(new_edges.len(), 1, "{new_edges:?}");
+        let edge = topo.edge(new_edges[0]).unwrap();
+        assert_eq!(edge.start(), edge.end(), "a closed edge");
+        let EdgeCurve::Circle(circle) = edge.curve() else {
+            unreachable!("the equator offsets to {:?}", edge.curve());
+        };
+        assert!((circle.radius() - 3.5).abs() < 1e-9, "{circle:?}");
         assert!(
-            !data.intersections.is_empty(),
-            "sphere offset should have intersections"
+            (circle.center() - Point3::new(0.0, 0.0, 0.0)).length() < 1e-9,
+            "{circle:?}"
         );
-        for fi in &data.intersections {
-            assert!(
-                fi.curve_points.len() >= 2,
-                "edge {:?} should have projected curve points, got {}",
-                fi.original_edge,
-                fi.curve_points.len()
-            );
+        assert!(circle.normal().z().abs() > 1.0 - 1e-12, "{circle:?}");
+
+        crate::loops::build_wire_loops(&mut topo, &mut data).unwrap();
+        assert_eq!(data.face_wires.len(), 2, "{:?}", data.face_wires);
+        for wires in data.face_wires.values() {
+            assert_eq!(wires.len(), 1, "{wires:?}");
+            let edges = topo.wire(wires[0]).unwrap().edges().to_vec();
+            assert_eq!(edges.len(), 1, "{edges:?}");
+            assert_eq!(edges[0].edge(), new_edges[0]);
         }
     }
 }
