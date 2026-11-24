@@ -2657,16 +2657,18 @@ impl SideForm {
 /// A function of a curve's parameter whose sign is the side of a surface
 /// that the curve's point lies on, read with a bound on its rounding.
 trait SideFunction {
-    /// The function at `t`, and the size below which its sign is not known:
-    /// its rounding, or the floor where that is more.
-    fn value(&self, t: f64) -> (f64, f64);
+    /// The function at `t`; the size below which its sign is not known, its
+    /// rounding or the floor where that is more; and whether that size is
+    /// its rounding. `None` where the function cannot be read at `t`.
+    fn value(&self, t: f64) -> Option<(f64, f64, bool)>;
 
     /// The function's first four derivatives at `t`, and a bound on the
-    /// rounding in each.
-    fn derivatives(&self, t: f64) -> ([f64; 4], [f64; 4]);
+    /// rounding in each, or `None` where they cannot be read.
+    fn derivatives(&self, t: f64) -> Option<([f64; 4], [f64; 4])>;
 
-    /// A bound on the size of the fifth derivative anywhere.
-    fn fifth_bound(&self) -> f64;
+    /// A bound on the size of the fifth derivative over the parameters
+    /// `piece`, or `None` where none is known.
+    fn fifth_bound(&self, piece: (f64, f64)) -> Option<f64>;
 
     /// A bound on the rounding in the curve's point from the points and
     /// vectors it is made from.
@@ -2679,18 +2681,19 @@ trait SideFunction {
 }
 
 impl SideFunction for SideForm {
-    fn value(&self, t: f64) -> (f64, f64) {
+    fn value(&self, t: f64) -> Option<(f64, f64, bool)> {
         let (x, _, w) = self.frame(t);
         let (n, r) = (x.length(), self.radius);
         let f = (n - r) * (n + r);
         let off = (4.0 * f64::EPSILON).madd(w.length() + n + r, self.slack);
         let rounding = 2.0 * off * (n + r + self.slack);
-        (f, rounding.max(self.floor * (n + r)))
+        let floor = self.floor * (n + r);
+        Some((f, rounding.max(floor), rounding > floor))
     }
 
     /// The rounding in the `j`th derivative is at most `2^(j + 1)` times
     /// that in one dot product of `x` and its derivatives.
-    fn derivatives(&self, t: f64) -> ([f64; 4], [f64; 4]) {
+    fn derivatives(&self, t: f64) -> Option<([f64; 4], [f64; 4])> {
         let (x, x1, w) = self.frame(t);
         let d = if self.conic {
             // x'' = -w, x''' = -x', x'''' = w.
@@ -2707,18 +2710,18 @@ impl SideFunction for SideForm {
         let whole = big + step;
         let err = whole * (4.0 * f64::EPSILON).madd(step, self.slack)
             + 3.0 * f64::EPSILON * whole * whole;
-        (d, [4.0 * err, 8.0 * err, 16.0 * err, 32.0 * err])
+        Some((d, [4.0 * err, 8.0 * err, 16.0 * err, 32.0 * err]))
     }
 
-    fn fifth_bound(&self) -> f64 {
-        if self.conic {
+    fn fifth_bound(&self, _piece: (f64, f64)) -> Option<f64> {
+        Some(if self.conic {
             // f^(5) = 2 (15 x'' . x''' + x . x'), with |x'|, |x''| at most
             // the root of the sum of the squares of the two axes.
             let a = self.first.length().hypot(self.second.length());
             2.0 * a * 16.0f64.madd(a, self.base.length())
         } else {
             0.0
-        }
+        })
     }
 
     fn slack(&self) -> f64 {
@@ -2838,7 +2841,8 @@ impl RingForm {
             slack,
             floor,
         };
-        (form.fifth_bound().is_finite() && slack.is_finite()).then_some(form)
+        (form.fifth_bound((0.0, 0.0)).is_some_and(f64::is_finite) && slack.is_finite())
+            .then_some(form)
     }
 
     /// `q(t)` and its first four derivatives, each in the ring's axes, with
@@ -2876,32 +2880,9 @@ impl RingForm {
     fn readings(&self, t: f64) -> ([f64; 5], [f64; 5], [f64; 3]) {
         let eps = f64::EPSILON;
         let (q, lengths, parts) = self.frame(t);
-        // A product of `q^(i)` and `q^(j)`, whose parts are each off by at
-        // most `parts[i]` and `parts[j]`, is off by at most this.
-        let dot = |i: usize, j: usize| {
-            let (a, b) = (lengths[i], lengths[j]);
-            2.0 * a.madd(parts[j], b * parts[i]) + 3.0 * parts[i] * parts[j] + 4.0 * eps * a * b
-        };
+        let (mut s, mut s_off, p, p_off) = squares(&q, &lengths, &parts);
         let (r2, rr) = (self.major * self.major, self.minor * self.minor);
         let k = (self.major - self.minor) * (self.major + self.minor);
-        let (mut s, mut s_off, mut p, mut p_off) = ([0.0; 5], [0.0; 5], [0.0; 5], [0.0; 5]);
-        for n in 0..5 {
-            let (mut across, mut along, mut sizes, mut spread) = (0.0, 0.0, 0.0, 0.0);
-            for i in 0..=n {
-                let (a, b) = (q[i], q[n - i]);
-                let flat = a[0].madd(b[0], a[1] * b[1]);
-                across = CHOOSE[n][i].madd(flat, across);
-                along = CHOOSE[n][i].madd(a[2] * b[2], along);
-                sizes = CHOOSE[n][i].madd(flat.abs() + (a[2] * b[2]).abs(), sizes);
-                spread = CHOOSE[n][i].madd(dot(i, n - i), spread);
-            }
-            #[allow(clippy::cast_precision_loss)]
-            let terms = (n + 3) as f64 * eps;
-            s[n] = across + along;
-            s_off[n] = terms.madd(sizes, spread);
-            p[n] = across;
-            p_off[n] = terms.madd(sizes, spread);
-        }
         s[0] += k;
         s_off[0] += 4.0 * eps * (r2 + rr) + eps * s[0].abs();
         let four = 4.0 * r2;
@@ -2928,8 +2909,47 @@ impl RingForm {
     }
 }
 
+/// `|q|²` and `ρ²`, the square of `q`'s distance from the axis, and their
+/// first four derivatives, each with a bound on its rounding, from `q` and
+/// its derivatives in a ring's axes (the axis last), their lengths, and a
+/// bound on the rounding in each of their parts: each `n`th derivative is
+/// the sum of `C(n, i)` products of `q^(i)` and `q^(n - i)`.
+#[allow(clippy::type_complexity)]
+fn squares(
+    q: &[[f64; 3]; 5],
+    lengths: &[f64; 5],
+    parts: &[f64; 5],
+) -> ([f64; 5], [f64; 5], [f64; 5], [f64; 5]) {
+    let eps = f64::EPSILON;
+    // A product of `q^(i)` and `q^(j)`, whose parts are each off by at
+    // most `parts[i]` and `parts[j]`, is off by at most this.
+    let dot = |i: usize, j: usize| {
+        let (a, b) = (lengths[i], lengths[j]);
+        2.0 * a.madd(parts[j], b * parts[i]) + 3.0 * parts[i] * parts[j] + 4.0 * eps * a * b
+    };
+    let (mut s, mut s_off, mut p, mut p_off) = ([0.0; 5], [0.0; 5], [0.0; 5], [0.0; 5]);
+    for n in 0..5 {
+        let (mut across, mut along, mut sizes, mut spread) = (0.0, 0.0, 0.0, 0.0);
+        for i in 0..=n {
+            let (a, b) = (q[i], q[n - i]);
+            let flat = a[0].madd(b[0], a[1] * b[1]);
+            across = CHOOSE[n][i].madd(flat, across);
+            along = CHOOSE[n][i].madd(a[2] * b[2], along);
+            sizes = CHOOSE[n][i].madd(flat.abs() + (a[2] * b[2]).abs(), sizes);
+            spread = CHOOSE[n][i].madd(dot(i, n - i), spread);
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let terms = (n + 3) as f64 * eps;
+        s[n] = across + along;
+        s_off[n] = terms.madd(sizes, spread);
+        p[n] = across;
+        p_off[n] = terms.madd(sizes, spread);
+    }
+    (s, s_off, p, p_off)
+}
+
 impl SideFunction for RingForm {
-    fn value(&self, t: f64) -> (f64, f64) {
+    fn value(&self, t: f64) -> Option<(f64, f64, bool)> {
         let (f, off, q) = self.readings(t);
         // Near the ring the form is the distance from it times
         // `(d + r)(e² - r²)`.
@@ -2938,21 +2958,22 @@ impl SideFunction for RingForm {
         let d = (rho - big).hypot(q[2]);
         let e2 = (rho + big).madd(rho + big, q[2] * q[2]);
         let scale = (d + small) * small.madd(-small, e2);
-        (f[0], off[0].max(self.floor * scale))
+        let floor = self.floor * scale;
+        Some((f[0], off[0].max(floor), off[0] > floor))
     }
 
-    fn derivatives(&self, t: f64) -> ([f64; 4], [f64; 4]) {
+    fn derivatives(&self, t: f64) -> Option<([f64; 4], [f64; 4])> {
         let (f, off, _) = self.readings(t);
-        ([f[1], f[2], f[3], f[4]], [off[1], off[2], off[3], off[4]])
+        Some(([f[1], f[2], f[3], f[4]], [off[1], off[2], off[3], off[4]]))
     }
 
     /// Along a line the form is of degree four. Round a conic, `|q|` is at
     /// most `|base| + a` and each derivative of `q` at most `a`, for `a`
     /// the root of the sum of the squares of the two axes, which bounds each
     /// `S^(n)` and `P^(n)`, and so the fifth derivative.
-    fn fifth_bound(&self) -> f64 {
+    fn fifth_bound(&self, _piece: (f64, f64)) -> Option<f64> {
         if !self.conic {
-            return 0.0;
+            return Some(0.0);
         }
         let a = self.first.length().hypot(self.second.length());
         let sizes = [self.base.length() + a, a, a, a, a, a];
@@ -2965,7 +2986,7 @@ impl SideFunction for RingForm {
         let p5 = s[5];
         s[0] += (self.major - self.minor) * (self.major + self.minor);
         let squares = (0..=5).fold(0.0, |acc: f64, i| CHOOSE[5][i].madd(s[i] * s[5 - i], acc));
-        (4.0 * self.major * self.major).madd(p5, squares) * (1.0 + 1e-12)
+        Some((4.0 * self.major * self.major).madd(p5, squares) * (1.0 + 1e-12))
     }
 
     fn slack(&self) -> f64 {
@@ -2978,10 +2999,169 @@ impl SideFunction for RingForm {
     }
 }
 
+/// The side of a ring that a point of a line, a circle or an ellipse lies
+/// on, read as `(ρ - R)² + h² - r²`, the square of the point's distance from
+/// the core circle less the tube's: for `q` the point less the centre, `ρ`
+/// its distance from the axis and `h` its height along it. Its rounding
+/// grows with the distance from the core circle, where [`RingForm`]'s grows
+/// with `R⁴`: on a thin ring the quartic cancels to more than the tube's
+/// width, and this form still reads the tube's inside. It is read only
+/// away from the axis, where `ρ` is smooth: each derivative of `ρ` comes
+/// from those of `ρ² = P` by `2 ρ ρ^(n) = P^(n) - Σ C(n, k) ρ^(k) ρ^(n - k)`
+/// over `0 < k < n`.
+struct TubeForm(RingForm);
+
+impl TubeForm {
+    /// `ρ - R`, `h` and their first four derivatives at `t`, each with a bound
+    /// on its rounding, or `None` where `ρ` is too near zero to divide by.
+    #[allow(clippy::type_complexity)]
+    fn parts(&self, t: f64) -> Option<([f64; 5], [f64; 5], [f64; 5], [f64; 5])> {
+        let eps = f64::EPSILON;
+        let ring = &self.0;
+        let (q, lengths, parts) = ring.frame(t);
+        let (_, _, p, p_off) = squares(&q, &lengths, &parts);
+        let rho = q[0][0].hypot(q[0][1]);
+        let rho_off = 2.0f64.madd(parts[0], eps * rho);
+        if rho.is_nan() || rho <= 8.0 * rho_off {
+            return None;
+        }
+        let (mut r, mut r_off) = ([0.0; 5], [0.0; 5]);
+        (r[0], r_off[0]) = (rho, rho_off);
+        for n in 1..5 {
+            let (mut sum, mut spread, mut sizes) = (p[n], p_off[n], p[n].abs());
+            for k in 1..n {
+                let c = CHOOSE[n][k];
+                let (a, b) = (r[k], r[n - k]);
+                sum = c.madd(-(a * b), sum);
+                sizes = c.madd((a * b).abs(), sizes);
+                let product =
+                    a.abs().madd(r_off[n - k], b.abs() * r_off[k]) + r_off[k] * r_off[n - k];
+                spread = c.madd(product, spread);
+            }
+            #[allow(clippy::cast_precision_loss)]
+            let terms = (n + 2) as f64 * eps;
+            r[n] = sum / (2.0 * rho);
+            // Twice the sum, for the rounding of `ρ` in the divisor, which
+            // is at most an eighth of it.
+            r_off[n] = 2.0
+                * (terms.madd(sizes, spread) / (2.0 * rho)
+                    + r[n].abs() * (rho_off / rho + 2.0 * eps));
+        }
+        let mut u = r;
+        u[0] = rho - ring.major;
+        let mut u_off = r_off;
+        u_off[0] = eps.madd(u[0].abs(), rho_off);
+        let h = std::array::from_fn(|n| q[n][2]);
+        let h_off = std::array::from_fn(|n| parts[n]);
+        Some((u, u_off, h, h_off))
+    }
+
+    /// The form and its first four derivatives at `t`, each with a bound on
+    /// its rounding, and the point's distance from the core circle.
+    fn readings(&self, t: f64) -> Option<([f64; 5], [f64; 5], f64)> {
+        let eps = f64::EPSILON;
+        let (u, u_off, h, h_off) = self.parts(t)?;
+        let small = self.0.minor;
+        let (mut g, mut g_off) = ([0.0; 5], [0.0; 5]);
+        for n in 0..5 {
+            let (mut sum, mut spread, mut sizes) = (0.0, 0.0, 0.0);
+            for k in 0..=n {
+                let c = CHOOSE[n][k];
+                for (x, x_off) in [(&u, &u_off), (&h, &h_off)] {
+                    let (a, b) = (x[k], x[n - k]);
+                    sum = c.madd(a * b, sum);
+                    sizes = c.madd((a * b).abs(), sizes);
+                    let product =
+                        a.abs().madd(x_off[n - k], b.abs() * x_off[k]) + x_off[k] * x_off[n - k];
+                    spread = c.madd(product, spread);
+                }
+            }
+            #[allow(clippy::cast_precision_loss)]
+            let terms = (n + 4) as f64 * eps;
+            g[n] = sum;
+            g_off[n] = terms.madd(sizes, spread);
+        }
+        g[0] = small.madd(-small, g[0]);
+        g_off[0] = 2.0 * (eps.madd(small * small + g[0].abs(), g_off[0]));
+        for off in &mut g_off[1..] {
+            *off *= 2.0;
+        }
+        Some((g, g_off, u[0].hypot(h[0])))
+    }
+}
+
+impl SideFunction for TubeForm {
+    fn value(&self, t: f64) -> Option<(f64, f64, bool)> {
+        let (g, off, d) = self.readings(t)?;
+        // Near the tube the form is the distance from it times `d + r`.
+        let floor = self.0.floor * (d + self.0.minor);
+        Some((g[0], off[0].max(floor), off[0] > floor))
+    }
+
+    fn derivatives(&self, t: f64) -> Option<([f64; 4], [f64; 4])> {
+        let (g, off, _) = self.readings(t)?;
+        Some(([g[1], g[2], g[3], g[4]], [off[1], off[2], off[3], off[4]]))
+    }
+
+    /// Over the piece `|q|`, `ρ - R` and `h` move from their values at its
+    /// middle by at most the curve's speed times half the piece, and `ρ`
+    /// stays at least its value there less that. Each derivative of `q` is
+    /// at most the speed for a line's first and zero past it, and for a
+    /// conic the root of the sum of the squares of its two axes, which
+    /// bounds those of `P`, then of `ρ` by the recurrence above, and so the
+    /// fifth derivative. `None` where `ρ` may reach zero on the piece.
+    fn fifth_bound(&self, (a, b): (f64, f64)) -> Option<f64> {
+        let ring = &self.0;
+        let m = f64::midpoint(a, b);
+        let half = 0.5 * (b - a).abs();
+        let (u, u_off, h, h_off) = self.parts(m)?;
+        let (q, lengths, parts) = ring.frame(m);
+        let speed = if ring.conic {
+            ring.first.length().hypot(ring.second.length())
+        } else {
+            ring.first.length()
+        };
+        let reach = speed * half;
+        let rho = q[0][0].hypot(q[0][1]);
+        let least = rho - reach - 2.0f64.madd(parts[0], f64::EPSILON * rho);
+        if least.is_nan() || least <= 0.0 {
+            return None;
+        }
+        let mut sizes = [speed; 6];
+        sizes[0] = lengths[0] + parts[0] + reach;
+        if !ring.conic {
+            sizes[2..].fill(0.0);
+        }
+        let product = |x: &[f64; 6], n: usize| {
+            (0..=n).fold(0.0, |acc: f64, k| CHOOSE[n][k].madd(x[k] * x[n - k], acc))
+        };
+        let mut rho_d = [0.0; 6];
+        for n in 1..6 {
+            let mixed = (1..n).fold(0.0, |acc: f64, k| {
+                CHOOSE[n][k].madd(rho_d[k] * rho_d[n - k], acc)
+            });
+            rho_d[n] = (product(&sizes, n) + mixed) / (2.0 * least);
+        }
+        let mut us = rho_d;
+        us[0] = u[0].abs() + u_off[0] + reach;
+        let mut hs = sizes;
+        hs[0] = h[0].abs() + h_off[0] + reach;
+        Some((product(&us, 5) + product(&hs, 5)) * (1.0 + 1e-12))
+    }
+
+    fn slack(&self) -> f64 {
+        self.0.slack
+    }
+
+    fn side(&self, t: f64) -> f64 {
+        self.0.side(t)
+    }
+}
+
 /// Where a line, a circle or an ellipse meets a cylinder, a ball or a ring
 /// between parameters `t0` and `t1`, found by [`side_roots`] on its
-/// [`SideForm`] or [`RingForm`]. `None` for any other curve or surface, or
-/// where [`side_roots`] cannot read the curve.
+/// [`SideForm`], or its [`RingForm`] and [`TubeForm`]. `None` for any other
+/// curve or surface, or where [`side_roots`] cannot read the curve.
 ///
 /// # Errors
 ///
@@ -3001,45 +3181,50 @@ fn analytic_side_roots(
         let Some(form) = RingForm::new(curve, start_pos, end_pos, ring, floor) else {
             return Ok(None);
         };
-        side_roots(&form, curve, ends, (t0, t1), surface, tol)
+        let tube = TubeForm(form);
+        side_roots(&[&form, &tube], curve, ends, (t0, t1), surface, tol)
     } else {
         let Some(form) = SideForm::new(curve, start_pos, end_pos, surface, floor) else {
             return Ok(None);
         };
-        side_roots(&form, curve, ends, (t0, t1), surface, tol)
+        side_roots(&[&form], curve, ends, (t0, t1), surface, tol)
     }
 }
 
 /// Where a line, a circle or an ellipse between `ends` meets `surface`
-/// between its parameters `range`, found on `form`, its side of the
-/// surface: each piece of the range is halved until Taylor's bounds about
-/// its middle, with the rounding, show that the form keeps clear of zero
-/// along it, or that its slope does, so that it holds at most one root.
-/// Below the parameter step that moves the curve by the tolerance, or where
-/// an end's side is not known, a piece holds a place where the curve may
-/// meet the surface.
+/// between its parameters `range`, found on `forms`, readings of its side
+/// of the surface that share their signs: each piece of the range is halved
+/// until Taylor's bounds about its middle, on one of the forms with the
+/// rounding, show that it keeps clear of zero along it, or that its slope
+/// does, so that it holds at most one root. Below the parameter step that
+/// moves the curve by the tolerance, or where an end's side is not known on
+/// any form, a piece holds a place where the curve may meet the surface.
 ///
 /// Such places with no stretch on one side for sure between them, or
 /// nearer each other than four steps, are one contact: a crossing where
-/// the curve lies on two sides of it, a touch where it lies on one. A
-/// crossing lies between two parameters whose sides the form proves, and
-/// is bisected there down to two neighbouring values on the curve's own
-/// distance from the surface ([`SideFunction::side`]), whose terms do not
-/// cancel as the form's can on a thin ring. Of the two, the one whose point
-/// lies nearer the surface is kept (a crossing of a line that lands on a
-/// vertex lands there exactly). A touch is read where the form turns, or
-/// failing that where the distance comes least, and is kept where its point
-/// lies within the tolerance of the surface. `None` for a curve whose
-/// rounding is not well below the tolerance, or a curve so near the surface
-/// along its length that its pieces cannot be read.
+/// the curve lies on two sides of it, a touch where it lies on one. Within
+/// a stretch whose sides the forms leave unknown only because the curve
+/// comes within the floor of the surface, a crossing and a touch are one
+/// contact. A crossing lies between two parameters whose sides a form
+/// proves, and is bisected there down to two neighbouring values on the
+/// curve's own distance from the surface ([`SideFunction::side`]), whose
+/// terms do not cancel as a form's can on a thin ring. Of the two, the one
+/// whose point lies nearer the surface is kept (a crossing of a line that
+/// lands on a vertex lands there exactly). A touch is read where a form
+/// turns, or failing that where the distance comes least, and is kept
+/// where its point lies within the tolerance of the surface. `None` for a
+/// curve whose rounding is not well below the tolerance, or a curve so near
+/// the surface along its length that its pieces cannot be read.
 ///
 /// # Errors
 ///
-/// Returns [`AlgoError::IntersectionFailed`] for a crossing the form proves
-/// whose point, so bisected, still lies past the tolerance of the surface.
+/// Returns [`AlgoError::IntersectionFailed`] for a crossing a form proves
+/// whose point, so bisected, still lies past the tolerance of the surface,
+/// and for a contact longer than two steps where the forms leave a side
+/// unknown for their rounding alone: two crossings can hide there.
 #[allow(clippy::too_many_lines)]
 fn side_roots(
-    form: &impl SideFunction,
+    forms: &[&dyn SideFunction],
     curve: &EdgeCurve,
     (start_pos, end_pos): (Point3, Point3),
     (t0, t1): (f64, f64),
@@ -3050,12 +3235,16 @@ fn side_roots(
     // length would leave unread.
     const MOST_PIECES: usize = 1 << 14;
     /// What a piece shows, in order along the curve: a stretch on one side
-    /// for sure, or a place where the form may be zero, and whether it
-    /// passes through zero there for sure.
+    /// for sure, or a place where the forms may be zero, whether the curve
+    /// passes through zero there for sure, and whether a side there is
+    /// unknown for the rounding alone.
     enum Mark {
         Side(bool),
-        Root(f64, bool),
+        Root(f64, bool, bool),
     }
+    let Some(&form) = forms.first() else {
+        return Ok(None);
+    };
     if form.slack() > 0.1 * tol.linear {
         return Ok(None);
     }
@@ -3074,11 +3263,21 @@ fn side_roots(
         && ((hi - lo) - std::f64::consts::TAU).abs() <= 1e-9;
     let point_at = |t: f64| curve.evaluate_with_endpoints(t, start_pos, end_pos);
     let sure = |t: f64| {
-        let (f, unsure) = form.value(t);
-        (f.abs() > unsure).then_some(f > 0.0)
+        forms.iter().find_map(|f| {
+            f.value(t)
+                .and_then(|(v, unsure, _)| (v.abs() > unsure).then_some(v > 0.0))
+        })
     };
-    // The last bracket in which `sign` of the form changes between `a` and
-    // `b`, by halving to two neighbouring values.
+    // No form's side at `t` is sure, and each that can be read there leaves
+    // it unknown for its rounding, not for the floor.
+    let rounded = |t: f64| {
+        sure(t).is_none()
+            && forms
+                .iter()
+                .all(|f| f.value(t).is_none_or(|(_, _, by_rounding)| by_rounding))
+    };
+    // The last bracket in which `sign` changes between `a` and `b`, by
+    // halving to two neighbouring values.
     let halve = |mut a: f64, mut b: f64, sign: &dyn Fn(f64) -> bool| {
         let from = sign(a);
         if sign(b) == from {
@@ -3102,9 +3301,16 @@ fn side_roots(
         let off = |t: f64| distance_to_surface(point_at(t), surface);
         if off(b) < off(a) { b } else { a }
     };
-    let above = |t: f64| form.value(t).0 > 0.0;
+    let above = |t: f64| form.value(t).is_some_and(|(v, _, _)| v > 0.0);
     let outside = |t: f64| form.side(t) > 0.0;
-    let rising = |t: f64| form.derivatives(t).0[0] > 0.0;
+    // The sign of the slope of the last form that can be read at `t`.
+    let rising = |t: f64| {
+        forms
+            .iter()
+            .rev()
+            .find_map(|f| f.derivatives(t))
+            .is_some_and(|(d, _)| d[0] > 0.0)
+    };
     // A crossing between `a`, on the side `from` for sure, and `b`, on the
     // other: bisected on the curve's distance where its signs agree with
     // the form's at both ends, as they do unless rounding swamps it, else
@@ -3125,7 +3331,7 @@ fn side_roots(
     };
     let beyond = |t: f64, way: f64| beyond_at(t, way).map(|(_, side)| side);
     // Where the curve's distance from the surface comes least between `a`
-    // and `b`, by golden-section search.
+    // and `b`, by golden-section search, which reads only between them.
     let least = |mut a: f64, mut b: f64| {
         let g = 0.5 * (5.0_f64.sqrt() - 1.0);
         let off = |t: f64| form.side(t).abs();
@@ -3148,44 +3354,56 @@ fn side_roots(
     // The pieces are read first half first, so the marks come in order.
     let mut pieces = vec![(lo, hi)];
     let mut read = 0;
-    let rest = form.fifth_bound();
     while let Some((a, b)) = pieces.pop() {
         read += 1;
         if read > MOST_PIECES {
             return Ok(None);
         }
         let (h, m) = (b - a, f64::midpoint(a, b));
-        let (f, unsure) = form.value(m);
-        let (d, err) = form.derivatives(m);
-        // Taylor's bounds about the middle, with the fifth derivative's
-        // bound for the remainder and each derivative's rounding: how far
-        // the form, and its slope, can move from their values there across
-        // the piece.
-        let r = 0.5 * h;
-        let (r2, r3, r4) = (r * r, r * r * r, r * r * r * r);
-        let size = |j: usize| d[j - 1].abs() + err[j - 1];
-        let reach = (rest * r4 * r).madd(1.0 / 120.0, size(4) * r4 / 24.0)
-            + size(3) * r3 / 6.0
-            + size(2) * r2 / 2.0
-            + size(1) * r;
-        if f.abs() > unsure + reach {
-            marks.push(Mark::Side(f > 0.0));
+        let (mut side, mut one_way) = (None, false);
+        for f in forms {
+            let (Some((v, unsure, _)), Some((d, err)), Some(rest)) =
+                (f.value(m), f.derivatives(m), f.fifth_bound((a, b)))
+            else {
+                continue;
+            };
+            // Taylor's bounds about the middle, with the fifth derivative's
+            // bound for the remainder and each derivative's rounding: how
+            // far the form, and its slope, can move from their values there
+            // across the piece.
+            let r = 0.5 * h;
+            let (r2, r3, r4) = (r * r, r * r * r, r * r * r * r);
+            let size = |j: usize| d[j - 1].abs() + err[j - 1];
+            let reach = (rest * r4 * r).madd(1.0 / 120.0, size(4) * r4 / 24.0)
+                + size(3) * r3 / 6.0
+                + size(2) * r2 / 2.0
+                + size(1) * r;
+            if v.abs() > unsure + reach {
+                side = Some(v > 0.0);
+                break;
+            }
+            let slope_reach =
+                (rest * r4).madd(1.0 / 24.0, size(4) * r3 / 6.0) + size(3) * r2 / 2.0 + size(2) * r;
+            if d[0].abs() > err[0] + slope_reach {
+                one_way = true;
+                break;
+            }
+        }
+        if let Some(side) = side {
+            marks.push(Mark::Side(side));
             continue;
         }
-        let slope_reach =
-            (rest * r4).madd(1.0 / 24.0, size(4) * r3 / 6.0) + size(3) * r2 / 2.0 + size(2) * r;
-        let one_way = d[0].abs() > err[0] + slope_reach;
         if one_way || h <= shortest {
             let (side_a, side_b) = (sure(a), sure(b));
             marks.extend(side_a.map(Mark::Side));
             match (side_a, side_b) {
                 (Some(x), Some(y)) if x != y => {
-                    marks.push(Mark::Root(cross(a, b, x).map_or(m, nearer), true));
+                    marks.push(Mark::Root(cross(a, b, x).map_or(m, nearer), true, false));
                 }
                 (Some(_), Some(_)) if one_way => {}
-                (Some(_), None) => marks.push(Mark::Root(b, false)),
-                (None, Some(_)) => marks.push(Mark::Root(a, false)),
-                _ => marks.push(Mark::Root(m, false)),
+                (Some(_), None) => marks.push(Mark::Root(b, false, rounded(b))),
+                (None, Some(_)) => marks.push(Mark::Root(a, false, rounded(a))),
+                _ => marks.push(Mark::Root(m, false, rounded(a) || rounded(m) || rounded(b))),
             }
             marks.extend(side_b.map(Mark::Side));
             continue;
@@ -3203,16 +3421,19 @@ fn side_roots(
                 k += 1;
                 continue;
             }
-            Mark::Root(t, _) => t,
+            Mark::Root(t, ..) => t,
         };
         let from = before.or_else(|| beyond(first, -1.0));
-        let (mut last, mut crossed, mut at) = (first, 0usize, first);
+        let (mut last, mut crossed, mut at, mut unread) = (first, 0usize, first, false);
         let mut after: Option<bool> = None;
         while k < marks.len() {
             match marks[k] {
-                Mark::Root(t, sure_crossing) if after.is_none() || t - last <= 4.0 * shortest => {
+                Mark::Root(t, sure_crossing, by_rounding)
+                    if after.is_none() || t - last <= 4.0 * shortest =>
+                {
                     last = t;
                     after = None;
+                    unread |= by_rounding;
                     if sure_crossing {
                         crossed += 1;
                         at = t;
@@ -3225,6 +3446,14 @@ fn side_roots(
                 }
             }
             k += 1;
+        }
+        if unread && last - first > 2.0 * shortest {
+            return Err(AlgoError::IntersectionFailed(format!(
+                "a {} runs from t = {first} to {last} within the rounding of a {}, where it \
+                 may cross it more than once",
+                curve.type_tag(),
+                surface.type_tag()
+            )));
         }
         let to = after.or_else(|| beyond(last, 1.0));
         let (Some(from), Some(to)) = (from, to) else {
@@ -3264,14 +3493,11 @@ fn side_roots(
             }
             roots.push(SideRoot::Crossing(t, point_at(t)));
         } else {
+            let (a, b) = ((first - shortest).max(lo), (last + shortest).min(hi));
             let t = halve(first - shortest, last + shortest, &rising)
                 .map_or_else(|| f64::midpoint(first, last), nearer)
                 .clamp(lo, hi);
-            let t = if within(t) {
-                t
-            } else {
-                least((first - shortest).max(lo), (last + shortest).min(hi))
-            };
+            let t = if within(t) { t } else { least(a, b) };
             if within(t) {
                 roots.push(SideRoot::Touch(t, point_at(t)));
             }
@@ -6982,5 +7208,46 @@ mod tests {
         );
         let found = ef_vertices(&mut topo, face, EdgeCurve::Line, start, Some(end));
         assert!(found.is_empty(), "{found:?}");
+    }
+
+    /// A segment along `x` from `-100.5` to `-99.57` through the tube of a
+    /// ring of radii 100 and 1e-5 crosses it twice, at `x = -100 ± 1e-5`,
+    /// 200 tolerances apart: both crossings are read, and phase EF puts a
+    /// vertex at each. The ring's quartic alone, whose rounding hides the
+    /// tube's inside, reads no contact there and refuses.
+    #[test]
+    fn a_line_through_a_thin_tube_of_a_large_ring_crosses_it_twice() {
+        use brepkit_math::mat::Mat4;
+        let tol = Tolerance::new();
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let mut topo = Topology::new();
+        let (face, ring) = whole_ring_of(&mut topo, origin, Mat4::identity(), (100.0, 1e-5));
+        let (start, end) = (Point3::new(-100.5, 0.0, 0.0), Point3::new(-99.57, 0.0, 0.0));
+        let quartic =
+            RingForm::new(&EdgeCurve::Line, start, end, &ring, 1e-3 * tol.linear).unwrap();
+        let surface = FaceSurface::Torus(ring);
+        let alone = side_roots(
+            &[&quartic],
+            &EdgeCurve::Line,
+            (start, end),
+            (0.0, 1.0),
+            &surface,
+            tol,
+        );
+        assert!(alone.is_err(), "{alone:?}");
+        let roots = analytic_side_roots(&EdgeCurve::Line, start, end, 0.0, 1.0, &surface, tol);
+        let crossings = roots.as_ref().map(|r| {
+            r.as_ref().map(|r| {
+                r.iter()
+                    .filter(|root| matches!(root, SideRoot::Crossing(..)))
+                    .count()
+            })
+        });
+        assert!(matches!(crossings, Ok(Some(2))), "{roots:?}");
+        let found = ef_vertices(&mut topo, face, EdgeCurve::Line, start, Some(end));
+        assert_eq!(found.len(), 2, "{found:?}");
+        for (p, x) in found.iter().zip([-100.0 - 1e-5, -100.0 + 1e-5]) {
+            assert!((*p - Point3::new(x, 0.0, 0.0)).length() < 1e-7, "{p:?}");
+        }
     }
 }
