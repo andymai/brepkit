@@ -76,9 +76,9 @@ fn wires_box(topo: &Topology, face_id: FaceId) -> Result<Option<Aabb3>, AlgoErro
 }
 
 /// A box that holds the whole of a face on a cylinder, cone, sphere or
-/// torus; `None` for a plane or a NURBS face, or where a wire cannot be
-/// boxed. A face's boundary alone does not bound it: a ball less a small
-/// cap is bounded by the cap's circle, and holds nearly all of the ball.
+/// torus; `None` for a plane or a NURBS face. A face's boundary alone does
+/// not bound it: a ball less a small cap is bounded by the cap's circle,
+/// and holds nearly all of the ball.
 ///
 /// Along any axis, the highest and lowest points of a face lie on its
 /// boundary or at a point inside it where the surface's normal is along
@@ -87,6 +87,15 @@ fn wires_box(topo: &Topology, face_id: FaceId) -> Result<Option<Aabb3>, AlgoErro
 /// boundary, at that height; a cone's apex is the one point of its own. On
 /// a sphere they are the poles along each axis, counted where the face's
 /// wires hold them. A torus face takes the box of its patch.
+///
+/// Where a wire has an edge that cannot be boxed, a ball or a ring face
+/// takes the box of its whole surface.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a topology lookup fails, or if a cylinder or a
+/// cone face has a wire edge that cannot be boxed: nothing then bounds the
+/// face along the axis.
 pub(super) fn analytic_face_box(
     topo: &Topology,
     face_id: FaceId,
@@ -98,7 +107,14 @@ pub(super) fn analytic_face_box(
         return Ok(None);
     }
     let Some(wires) = wires_box(topo, face_id)? else {
-        return Ok(None);
+        return match surface {
+            FaceSurface::Sphere(ball) => Ok(Some(ball.aabb())),
+            FaceSurface::Torus(ring) => Ok(Some(ring.aabb())),
+            FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => Err(AlgoError::IntersectionFailed(
+                format!("face {face_id:?} has a wire edge whose span cannot be bounded"),
+            )),
+            FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => Ok(None),
+        };
     };
     let near = 10.0 * tol.linear;
     let with = |b: Aabb3, p: Point3| b.union(Aabb3::from_points([p]));
