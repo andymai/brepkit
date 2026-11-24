@@ -535,6 +535,8 @@ fn check_edge_face_pairs(
         (0..faces.len()).map(|_| None).collect();
     let mut regions: Vec<Option<Option<super::fill_face_info::PlaneRegion>>> =
         (0..faces.len()).map(|_| None).collect();
+    let mut nurbs_trims: Vec<Option<Option<super::nurbs_trim::NurbsFaceTrim>>> =
+        (0..faces.len()).map(|_| None).collect();
     let mut surveys = survey_pairs(
         topo,
         edges,
@@ -826,6 +828,23 @@ fn check_edge_face_pairs(
                 let found = found.into_iter().map(SideRoot::at).collect();
                 merge_roots(&mut crossings, found, exact, (held, on_face), tol);
             }
+            // A NURBS face's box also holds parts of its surface that are
+            // not the face, as a hole in it: a crossing counts where the
+            // face's pcurves hold it.
+            if let FaceSurface::Nurbs(sheet) = surface
+                && let Some(trim) = nurbs_trims[face_idx]
+                    .get_or_insert_with(|| {
+                        face_tolerance(topo, fid, tol)
+                            .and_then(|reach| {
+                                super::nurbs_trim::NurbsFaceTrim::new(topo, fid, sheet, tol, reach)
+                            })
+                            .ok()
+                            .flatten()
+                    })
+                    .as_ref()
+            {
+                crossings.retain(|&(_, p)| nurbs_face_holds(topo, fid, trim, p, tol));
+            }
 
             // A line or conic that runs within the tolerance of a quadric
             // over several samples only touches it, at the one contact the
@@ -1093,6 +1112,23 @@ fn face_holds(
         boundary
     } else {
         on
+    }
+}
+
+/// Whether `p`, a crossing of a NURBS face's surface, counts on the face,
+/// read by its `trim`: inside the face's wires, or where the trim cannot
+/// place it. Outside them, it counts only within the tolerance of an edge
+/// of the face, where it is that edge's contact.
+fn nurbs_face_holds(
+    topo: &Topology,
+    fid: FaceId,
+    trim: &super::nurbs_trim::NurbsFaceTrim,
+    p: Point3,
+    tol: Tolerance,
+) -> bool {
+    match trim.holds(p, trim_reach(p, tol), tol) {
+        Some(true) | None => true,
+        Some(false) => near_an_edge(topo, fid, p, tol).unwrap_or(true),
     }
 }
 
@@ -7212,6 +7248,148 @@ mod tests {
                 "weight {weight}"
             );
         }
+    }
+
+    /// The sheet of [`bumped_sheet`] placed by `centre` and `turn`, with its
+    /// face bounded by the square `[0.1, 0.9]²` and a round hole of radius
+    /// 0.1 about `(0.75, 0.75)`, where the sheet is flat: lines and a
+    /// circle, each with its pcurve on the face. The sheet's `x` and `y`
+    /// are its parameters.
+    fn holed_sheet(topo: &mut Topology, centre: Point3, turn: brepkit_math::mat::Mat4) -> FaceId {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::curves2d::{Circle2D, Curve2D, Line2D};
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::{Point2, Vec3};
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::pcurve::PCurve;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let place = |x: f64, y: f64, z: f64| centre + turned(turn, Vec3::new(x, y, z));
+        let at = [0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0];
+        let rows: Vec<Vec<Point3>> = at
+            .iter()
+            .enumerate()
+            .map(|(i, &x)| {
+                at.iter()
+                    .enumerate()
+                    .map(|(j, &y)| place(x, y, if (i, j) == (3, 3) { 8.0 } else { 0.0 }))
+                    .collect()
+            })
+            .collect();
+        let knots = vec![0.0, 0.0, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.0, 1.0];
+        let sheet =
+            NurbsSurface::new(2, 2, knots.clone(), knots, rows, vec![vec![1.0; 7]; 7]).unwrap();
+        let corners = [(0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9)];
+        let v = corners.map(|(x, y)| topo.add_vertex(Vertex::new(place(x, y, 0.0), 1e-7)));
+        let mut sides = Vec::new();
+        let mut pcurves = Vec::new();
+        for k in 0..4 {
+            let (a, b) = (corners[k], corners[(k + 1) % 4]);
+            let e = topo.add_edge(Edge::new(v[k], v[(k + 1) % 4], EdgeCurve::Line));
+            sides.push(OrientedEdge::new(e, true));
+            let (from, to) = (Point2::new(a.0, a.1), Point2::new(b.0, b.1));
+            let line = Line2D::new(from, to - from).unwrap();
+            pcurves.push((
+                e,
+                PCurve::new(Curve2D::Line(line), 0.0, (to - from).length()),
+            ));
+        }
+        let rim = Circle3D::new_with_ref(
+            place(0.75, 0.75, 0.0),
+            turned(turn, Vec3::new(0.0, 0.0, 1.0)),
+            0.1,
+            turned(turn, Vec3::new(1.0, 0.0, 0.0)),
+        )
+        .unwrap();
+        let start = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
+        let hole_edge = topo.add_edge(Edge::new(start, start, EdgeCurve::Circle(rim)));
+        let round = Circle2D::new(Point2::new(0.75, 0.75), 0.1).unwrap();
+        pcurves.push((
+            hole_edge,
+            PCurve::new(Curve2D::Circle(round), 0.0, std::f64::consts::TAU),
+        ));
+        let outer = topo.add_wire(Wire::new(sides, true).unwrap());
+        let hole =
+            topo.add_wire(Wire::new(vec![OrientedEdge::new(hole_edge, false)], true).unwrap());
+        let face = topo.add_face(Face::new(outer, vec![hole], FaceSurface::Nurbs(sheet)));
+        for (e, pcurve) in pcurves {
+            topo.pcurves_mut().set(e, face, pcurve);
+        }
+        face
+    }
+
+    /// Lines along the normal of a sheet with a round hole, in four poses,
+    /// two of them a million from the origin: through the hole's middle, a
+    /// line finds no crossing, though the sheet runs on under the hole
+    /// inside the face's box; through the face, flat or on its bump, one.
+    /// Lines `gap` from the hole's wire and from the outer wire, for gaps of
+    /// two to nine tolerances, cross the face only on its side of the wire,
+    /// each at its point on the sheet.
+    #[test]
+    fn a_line_through_a_hole_in_a_nurbs_face_does_not_cross_it() {
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::vec::Vec3;
+        let poses = [
+            (Point3::new(0.0, 0.0, 0.0), Mat4::identity()),
+            (
+                Point3::new(0.4, -1.3, 2.2),
+                Mat4::rotation_z(0.7) * Mat4::rotation_x(1.1) * Mat4::rotation_y(0.3),
+            ),
+            (
+                Point3::new(1e6, -2e6, 5e5),
+                Mat4::rotation_x(std::f64::consts::PI),
+            ),
+            (
+                Point3::new(-1e6, 3e5, 1e6),
+                Mat4::rotation_y(0.9) * Mat4::rotation_z(-0.4),
+            ),
+        ];
+        let mut lines: Vec<((f64, f64), usize)> = vec![
+            ((0.75, 0.75), 0),
+            ((0.68, 0.71), 0),
+            ((0.3, 0.8), 1),
+            ((0.75, 0.25), 1),
+            ((0.4, 0.4), 1),
+        ];
+        for gap in [2e-7, 5e-7, 9e-7] {
+            lines.extend([
+                ((0.85 + gap, 0.75), 1),
+                ((0.85 - gap, 0.75), 0),
+                ((0.75, 0.65 - gap), 1),
+                ((0.75, 0.65 + gap), 0),
+                ((0.9 - gap, 0.5), 1),
+                ((0.9 + gap, 0.5), 0),
+                ((0.3, 0.1 + gap), 1),
+                ((0.3, 0.1 - gap), 0),
+            ]);
+        }
+        let mut misread = Vec::new();
+        for (centre, turn) in poses {
+            let mut topo = Topology::new();
+            let face = holed_sheet(&mut topo, centre, turn);
+            let FaceSurface::Nurbs(sheet) = topo.face(face).unwrap().surface().clone() else {
+                unreachable!()
+            };
+            let normal = turned(turn, Vec3::new(0.0, 0.0, 1.0));
+            for &((x, y), want) in &lines {
+                let hit = sheet.evaluate(x, y);
+                let found = ef_vertices(
+                    &mut topo,
+                    face,
+                    EdgeCurve::Line,
+                    hit + normal * 0.31,
+                    Some(hit - normal * 0.27),
+                );
+                let off = found
+                    .iter()
+                    .map(|p| (*p - hit).length())
+                    .fold(0.0_f64, f64::max);
+                if found.len() != want || off > 1e-7 {
+                    misread.push((centre.x(), x, y, want, found.len(), off));
+                }
+            }
+        }
+        assert!(misread.is_empty(), "{misread:#?}");
     }
 
     /// On the patch of a ring of radii 2000 and 500 from ring angle 0.3 to

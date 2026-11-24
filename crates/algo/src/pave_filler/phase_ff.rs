@@ -6821,7 +6821,10 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
         FaceSurface::Torus(t) => torus_patch_box(topo, face_id, t),
         // A NURBS face can bulge far past its boundary (a lofted wall
         // between its two rims); its control net bounds it.
-        FaceSurface::Nurbs(n) => Some(n.aabb()),
+        FaceSurface::Nurbs(n) => {
+            super::helpers::weights_bound(face_id, n)?;
+            Some(n.aabb())
+        }
         // A cone's tip rises past the wire round its base.
         FaceSurface::Cone(_) => super::helpers::analytic_face_box(topo, face_id, tol)?,
         FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) => None,
@@ -11417,6 +11420,49 @@ fn piece_side(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+
+    /// A face on a flat B-spline sheet over the unit square, bounded by the
+    /// square's four sides, whose sheet has a weight that is zero, or below
+    /// the least normal float, has no box its control points prove: phase
+    /// FF refuses it, as it boxes the face with a weight of one.
+    #[test]
+    fn a_nurbs_face_with_a_weight_that_bounds_nothing_has_no_box() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        for weight in [1.0, 0.0, 1e-310] {
+            let mut topo = Topology::new();
+            let rows = [0.0, 1.0]
+                .iter()
+                .map(|&x| [0.0, 1.0].iter().map(|&y| Point3::new(x, y, 0.0)).collect())
+                .collect();
+            let knots = vec![0.0, 0.0, 1.0, 1.0];
+            let sheet = NurbsSurface::new(
+                1,
+                1,
+                knots.clone(),
+                knots,
+                rows,
+                vec![vec![1.0, 1.0], vec![1.0, weight]],
+            )
+            .unwrap();
+            let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)];
+            let v =
+                corners.map(|(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)));
+            let sides = (0..4)
+                .map(|k| {
+                    let e = topo.add_edge(Edge::new(v[k], v[(k + 1) % 4], EdgeCurve::Line));
+                    OrientedEdge::new(e, true)
+                })
+                .collect();
+            let wire = topo.add_wire(Wire::new(sides, true).unwrap());
+            let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(sheet)));
+            let boxed = compute_face_bbox(&topo, face, Tolerance::new());
+            assert_eq!(boxed.is_ok(), weight > 0.5, "weight {weight}: {boxed:?}");
+        }
+    }
 
     /// On a closed rational unit circle sampled 512 times from 0 to 1, the
     /// points at 0.99999 and at 0.00001 are both nearest the sample at the

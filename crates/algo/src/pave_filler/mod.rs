@@ -15,6 +15,7 @@ pub mod link_existing;
 pub mod make_blocks;
 pub mod make_pcurves;
 pub mod make_split_edges;
+mod nurbs_trim;
 pub mod phase_ee;
 pub mod phase_ef;
 pub mod phase_ff;

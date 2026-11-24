@@ -189,17 +189,7 @@ pub(super) fn nurbs_face_box(
     tol: Tolerance,
     reach: f64,
 ) -> Result<Aabb3, AlgoError> {
-    if !surface
-        .weights()
-        .iter()
-        .flatten()
-        .all(|&w| w > 0.0 && w.is_normal())
-    {
-        return Err(AlgoError::IntersectionFailed(format!(
-            "face {face_id:?} has a weight that is not a positive normal float, so its control \
-             points do not bound it"
-        )));
-    }
+    weights_bound(face_id, surface)?;
     let held = pcurve_parameters(topo, face_id, surface, tol, reach)?
         .and_then(|range| cut_net_box(surface, range))
         .unwrap_or_else(|| surface.aabb());
@@ -214,6 +204,27 @@ pub(super) fn nurbs_face_box(
         .flatten()
         .fold(0.0_f64, |m, p| m.max(largest_coordinate(*p)));
     Ok(held.expanded(rounding_reach(size, roundings)))
+}
+
+/// Refuses face `face_id` where a weight of its NURBS `surface` is not a
+/// positive normal float: its control points then bound nothing.
+///
+/// # Errors
+///
+/// Returns [`AlgoError::IntersectionFailed`] for such a weight.
+pub(super) fn weights_bound(face_id: FaceId, surface: &NurbsSurface) -> Result<(), AlgoError> {
+    if surface
+        .weights()
+        .iter()
+        .flatten()
+        .all(|&w| w > 0.0 && w.is_normal())
+    {
+        return Ok(());
+    }
+    Err(AlgoError::IntersectionFailed(format!(
+        "face {face_id:?} has a weight that is not a positive normal float, so its control \
+         points do not bound it"
+    )))
 }
 
 /// A box that holds a face of an analytic surface, `held`, grown by a bound
@@ -253,18 +264,9 @@ fn rounding_reach(size: f64, roundings: f64) -> f64 {
 }
 
 /// The box `[u0, u1, v0, v1]` in a NURBS surface's parameters of a face's
-/// pcurves, which holds the parameters of every point of the face. On a
-/// surface whose sides are free ([`sides_are_free`]), a face reaches a side
-/// only along edges of its own, so it is the part of the surface that its
-/// wires enclose, and each wire's pcurves run round a closed loop in the
-/// parameters, which encloses only points of its own box. The box is grown
-/// by the widest gap between the ends of two pcurves that meet.
-///
-/// `None` where a side of the surface is not proved free within `reach`, an
-/// edge of a wire has no pcurve on the face or one that cannot be boxed,
-/// the ends of a pcurve do not lie on its edge's vertices, or two pcurves
-/// that meet in a wire leave a gap of more than a millionth of the
-/// parameters' spans.
+/// pcurves ([`pcurve_loops`]), which holds the parameters of every point of
+/// the face, grown by the widest gap between the ends of two pcurves that
+/// meet. `None` where [`pcurve_loops`] reads no loops.
 fn pcurve_parameters(
     topo: &Topology,
     face_id: FaceId,
@@ -272,6 +274,43 @@ fn pcurve_parameters(
     tol: Tolerance,
     reach: f64,
 ) -> Result<Option<[f64; 4]>, AlgoError> {
+    Ok(
+        pcurve_loops(topo, face_id, surface, tol, reach)?.map(|loops| {
+            let ([u0, u1, v0, v1], gap) = (loops.bounds, loops.gap);
+            [u0 - gap, u1 + gap, v0 - gap, v1 + gap]
+        }),
+    )
+}
+
+/// A NURBS face's wires as closed loops of their edges' pcurves on the face.
+pub(super) struct PcurveLoops {
+    /// Each wire's pcurves in the wire's order, each with whether the wire
+    /// runs it from its start to its end.
+    pub(super) loops: Vec<Vec<(brepkit_topology::pcurve::PCurve, bool)>>,
+    /// The box `[u0, u1, v0, v1]` of the pcurves.
+    pub(super) bounds: [f64; 4],
+    /// The widest gap between the ends of two pcurves that meet in a wire.
+    pub(super) gap: f64,
+}
+
+/// A face's wires as loops of pcurves in its NURBS surface's parameters. On
+/// a surface whose sides are free ([`sides_are_free`]), a face reaches a
+/// side only along edges of its own, so it is the part of the surface that
+/// its wires enclose, and each wire's pcurves run round a closed loop in the
+/// parameters, which encloses only points of its own box.
+///
+/// `None` where a side of the surface is not proved free within `reach`, an
+/// edge of a wire has no pcurve on the face or one that cannot be boxed,
+/// the ends of a pcurve do not lie on its edge's vertices, or two pcurves
+/// that meet in a wire leave a gap of more than a millionth of the
+/// parameters' spans.
+pub(super) fn pcurve_loops(
+    topo: &Topology,
+    face_id: FaceId,
+    surface: &NurbsSurface,
+    tol: Tolerance,
+    reach: f64,
+) -> Result<Option<PcurveLoops>, AlgoError> {
     use brepkit_math::vec::Point2;
     if !sides_are_free(surface, reach) {
         return Ok(None);
@@ -281,8 +320,10 @@ fn pcurve_parameters(
     let face = topo.face(face_id)?;
     let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
     let mut gap = 0.0_f64;
+    let mut loops = Vec::new();
     for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
         let (mut first, mut last): (Option<Point2>, Option<Point2>) = (None, None);
+        let mut pcurves = Vec::new();
         for oe in topo.wire(wid)?.edges() {
             let Some(pcurve) = topo.pcurves().get(oe.edge(), face_id) else {
                 return Ok(None);
@@ -313,16 +354,22 @@ fn pcurve_parameters(
             last = Some(to);
             lo = [lo[0].min(low.x()), lo[1].min(low.y())];
             hi = [hi[0].max(high.x()), hi[1].max(high.y())];
+            pcurves.push((pcurve.clone(), oe.is_forward()));
         }
         if let (Some(start), Some(end)) = (first, last) {
             gap = gap.max((start - end).length());
         }
+        loops.push(pcurves);
     }
     let closed = lo[0] <= hi[0] && lo[1] <= hi[1] && gap <= 1e-6 * span;
     if !closed {
         return Ok(None);
     }
-    Ok(Some([lo[0] - gap, hi[0] + gap, lo[1] - gap, hi[1] + gap]))
+    Ok(Some(PcurveLoops {
+        loops,
+        bounds: [lo[0], hi[0], lo[1], hi[1]],
+        gap,
+    }))
 }
 
 /// Whether each side of a B-spline surface's domain keeps farther than
