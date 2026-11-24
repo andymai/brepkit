@@ -13196,6 +13196,15 @@ fn plane_internal_line_loops(
 /// is taken for two curves.
 fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
     let flipped = (a.start - b.start).length() > (a.start - b.end).length();
+    // An open arc reads two ways: the shorter way round between its ends,
+    // or along its curve from its start. An arc and the rest of its circle
+    // stored from the other end are one arc read the first way and two the
+    // second, so the trims must meet both ways.
+    let along = |s: &SectionEdge, t: f64| {
+        let (t0, t1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
+        s.curve_3d
+            .evaluate_with_endpoints((t1 - t0).madd(t, t0), s.start, s.end)
+    };
     let meet = |fractions: &[f64]| {
         fractions.iter().all(|&t| {
             let on_b = if flipped { 1.0 - t } else { t };
@@ -13203,6 +13212,7 @@ fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
                 - evaluate_edge_at_t(&b.curve_3d, b.start, b.end, on_b))
             .length()
                 <= tol
+                && (along(a, t) - along(b, on_b)).length() <= tol
         })
     };
     let straight = |nurbs: &brepkit_math::nurbs::curve::NurbsCurve, line: &SectionEdge| {
@@ -16556,5 +16566,141 @@ mod tests {
         assert!(apart > 1e-3, "the two cubics part by {apart}");
         assert!(!same_section_curve(&quarters, &tenths, 1e-5));
         assert!(same_section_curve(&quarters, &quarters.clone(), 1e-5));
+    }
+
+    /// The plate of [`two_arcs_between_one_pair_of_points`] split by
+    /// `sections`, its regions' areas sorted, each read by the shoelace
+    /// formula over its wires with each edge read at 2000 points.
+    fn plate_region_areas(sections: &[SectionEdge]) -> Vec<f64> {
+        let (topo, face_id, _) = two_arcs_between_one_pair_of_points();
+        let subs = split_face_2d(
+            &topo,
+            face_id,
+            sections,
+            Rank::A,
+            &brepkit_math::tolerance::Tolerance::new(),
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &std::collections::BTreeSet::new(),
+            None,
+        );
+        let wire_area = |wire: &[OrientedPCurveEdge]| {
+            let mut pts = Vec::new();
+            for e in wire {
+                let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
+                for k in 0..2000 {
+                    let f = f64::from(k) / 2000.0;
+                    let f = if e.forward { f } else { 1.0 - f };
+                    let (a, b) = if e.forward { (t0, t1) } else { (t0, t1) };
+                    pts.push(e.curve_3d.evaluate_with_endpoints(
+                        (b - a).madd(f, a),
+                        e.start_3d,
+                        e.end_3d,
+                    ));
+                }
+            }
+            let mut twice = 0.0;
+            for (i, a) in pts.iter().enumerate() {
+                let b = pts[(i + 1) % pts.len()];
+                twice += a.x() * b.y() - b.x() * a.y();
+            }
+            (0.5 * twice).abs()
+        };
+        let mut areas: Vec<f64> = subs
+            .iter()
+            .map(|s| {
+                wire_area(&s.outer_wire) - s.inner_wires.iter().map(|w| wire_area(w)).sum::<f64>()
+            })
+            .collect();
+        areas.sort_by(f64::total_cmp);
+        areas
+    }
+
+    /// One circle of radius 2 about (5, 5), as two halves between (7, 5)
+    /// and (3, 5), each half a turn counter-clockwise from its start: two
+    /// trims of one circle with one pair of ends, and the plate splits into
+    /// the disc and the rest. An arc of a sixth of a turn, and the rest of
+    /// its circle stored from the other end, are two curves too: read by
+    /// the shorter way round they are one arc, but read along the circle
+    /// from each start they are the two arcs of the circle.
+    #[test]
+    fn trims_of_one_circle_between_one_pair_of_points_stay_two() {
+        use brepkit_math::curves::Circle3D;
+        let circle =
+            Circle3D::new(Point3::new(5.0, 5.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+        let trim = |a: f64, b: f64| SectionEdge {
+            curve_3d: EdgeCurve::Circle(circle.clone()),
+            ..line_section(circle.evaluate(a), circle.evaluate(b))
+        };
+        let pi = std::f64::consts::PI;
+        let (upper, lower) = (trim(0.0, pi), trim(pi, 0.0));
+        assert!(!same_section_curve(&upper, &lower, 1e-5));
+        let areas = plate_region_areas(&[upper, lower]);
+        let want = [4.0 * pi, 100.0 - 4.0 * pi];
+        assert_eq!(areas.len(), 2, "regions of areas {areas:?}");
+        for (got, want) in areas.iter().zip(want) {
+            assert!(
+                (got - want).abs() < 1e-4,
+                "regions of areas {areas:?}, want {want}"
+            );
+        }
+        let (short, rest) = (trim(0.2, 0.2 + pi / 3.0), trim(0.2 + pi / 3.0, 0.2));
+        assert!(!same_section_curve(&short, &rest, 1e-5));
+        assert!(!same_section_curve(&rest, &short, 1e-5));
+        assert!(same_section_curve(&short, &short.clone(), 1e-5));
+    }
+
+    /// A closed B-spline (an exact circle of radius 2 about (5, 5), nine
+    /// rational quadratic points) cut at its closure point and at 0.6 of its
+    /// span into two trims with one pair of ends: they are two curves, and
+    /// the plate splits into the disc and the rest.
+    #[test]
+    fn trims_of_one_closed_b_spline_between_one_pair_of_points_stay_two() {
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let points: Vec<Point3> = [
+            (7.0, 5.0),
+            (7.0, 7.0),
+            (5.0, 7.0),
+            (3.0, 7.0),
+            (3.0, 5.0),
+            (3.0, 3.0),
+            (5.0, 3.0),
+            (7.0, 3.0),
+            (7.0, 5.0),
+        ]
+        .iter()
+        .map(|&(x, y)| Point3::new(x, y, 0.0))
+        .collect();
+        let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![
+                0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+            ],
+            points,
+            vec![1.0, w, 1.0, w, 1.0, w, 1.0, w, 1.0],
+        )
+        .unwrap();
+        let (a, b) = (curve.evaluate(0.0), curve.evaluate(0.6));
+        let trim = |from: Point3, to: Point3| SectionEdge {
+            curve_3d: EdgeCurve::NurbsCurve(curve.clone()),
+            ..line_section(from, to)
+        };
+        let (first, second) = (trim(a, b), trim(b, a));
+        assert!(
+            (section_middle(&first) - section_middle(&second)).length() > 1.0,
+            "the two trims read as one piece"
+        );
+        assert!(!same_section_curve(&first, &second, 1e-5));
+        let pi = std::f64::consts::PI;
+        let areas = plate_region_areas(&[first, second]);
+        let want = [4.0 * pi, 100.0 - 4.0 * pi];
+        assert_eq!(areas.len(), 2, "regions of areas {areas:?}");
+        for (got, want) in areas.iter().zip(want) {
+            assert!(
+                (got - want).abs() < 1e-4,
+                "regions of areas {areas:?}, want {want}"
+            );
+        }
     }
 }
