@@ -1072,15 +1072,15 @@ fn trim_reach(p: Point3, tol: Tolerance) -> f64 {
 }
 
 /// Adds to the sample scan's `crossings` the roots `found` on the surface
-/// that the face holds (`held`), in order along the curve. The scan's own
-/// crossings are kept only where the face holds them, within the tolerance
-/// of its wires counting (`on_face`): the scan reads the face's surface,
-/// which runs on past the face. Roots read exactly stand for each crossing
-/// of the scan within a hundred tolerances of them, the same root read less
-/// closely, and are all kept however near each other they lie: a thin
-/// tube's two walls lie its diameter apart. Roots read at samples are kept
-/// only away from every crossing held so far, as two flips a sample step
-/// apart are still two crossings.
+/// that the face holds (`held`), in order along the curve. Roots read
+/// exactly cover the curve's whole range, every piece of which the exact
+/// pass resolved: they are the whole answer, all kept however near each
+/// other they lie (a thin tube's two walls lie its diameter apart), and
+/// the scan's crossings and contacts go, however far from them they lie
+/// (a sample 1e-4 from a touch reads a second contact). Roots read at
+/// samples join the scan's crossings that the face holds, within its
+/// wires' margin counting (`on_face`), each only away from every crossing
+/// held so far, as two flips a sample step apart are still two crossings.
 fn merge_roots(
     crossings: &mut Vec<(f64, Point3)>,
     found: Vec<(f64, Point3)>,
@@ -1088,14 +1088,12 @@ fn merge_roots(
     (held, on_face): (impl Fn(Point3) -> bool, impl Fn(Point3) -> bool),
     tol: Tolerance,
 ) {
-    let near = 100.0 * tol.linear;
-    crossings.retain(|&(_, p)| on_face(p));
     let found = found.into_iter().filter(|&(_, p)| held(p));
     if exact {
-        let found: Vec<(f64, Point3)> = found.collect();
-        crossings.retain(|&(_, cp)| found.iter().all(|&(_, p)| (p - cp).length() >= near));
-        crossings.extend(found);
+        *crossings = found.collect();
     } else {
+        let near = 100.0 * tol.linear;
+        crossings.retain(|&(_, p)| on_face(p));
         for (t, p) in found {
             if crossings.iter().all(|&(_, cp)| (p - cp).length() >= near) {
                 crossings.push((t, p));
@@ -7295,6 +7293,120 @@ mod tests {
         assert!(
             (p - (Point3::new(2.0, 0.0, 1.0) + shift)).length() < 1e-6,
             "{p:?}"
+        );
+    }
+
+    /// Tangencies whose sample scan and exact pass both see the contact,
+    /// a sample landing 1e-4 from it: phase EF makes one vertex for each.
+    ///
+    /// - The segment along `z` at `x = -2.5` from `z = -1.0001` to `0.9999`
+    ///   touches a ring of radii 2 and 0.5 at `(-2.5, 0, 0)`, with a sample
+    ///   at `z = -0.0001`, 1e-8 off the ring.
+    /// - The circle of radius 1 about `(3, 0, 0)` in the plane `z = 0`
+    ///   touches a ball of radius 2 less a cap at `(2, 0, 0)`, with a sample
+    ///   1e-4 of a radian before it.
+    #[test]
+    fn a_tangency_seen_by_the_scan_and_the_exact_pass_is_one_contact() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::vec::Vec3;
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let mut topo = Topology::new();
+        let (face, _) = whole_ring(&mut topo, origin, Mat4::identity());
+        let found = ef_vertices(
+            &mut topo,
+            face,
+            EdgeCurve::Line,
+            Point3::new(-2.5, 0.0, -1.0001),
+            Some(Point3::new(-2.5, 0.0, 0.9999)),
+        );
+        assert_eq!(found.len(), 1, "ring: {found:?}");
+        let touch = Point3::new(-2.5, 0.0, 0.0);
+        assert!((found[0] - touch).length() < 1e-6, "ring: {found:?}");
+
+        let mut topo = Topology::new();
+        let face = ball_less_a_cap(&mut topo, origin, Mat4::identity());
+        let circle = Circle3D::new_with_ref(
+            Point3::new(3.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let start = circle.evaluate(-1e-4);
+        let found = ef_vertices(&mut topo, face, EdgeCurve::Circle(circle), start, None);
+        assert_eq!(found.len(), 1, "ball: {found:?}");
+        let touch = Point3::new(2.0, 0.0, 0.0);
+        assert!((found[0] - touch).length() < 1e-6, "ball: {found:?}");
+    }
+
+    /// A line along a ruling of a wall of radius 2, 5e-8 outside it, lies on
+    /// the wall within the tolerance along its whole length: phase EF makes
+    /// no vertex on it and reads it as one stretch on the face.
+    #[test]
+    fn a_line_along_a_walls_ruling_is_one_stretch() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let at = |deg: f64, h: f64| {
+            let a = deg.to_radians();
+            Point3::new(2.0 * a.cos(), 2.0 * a.sin(), h)
+        };
+        let circle =
+            |h: f64| EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, h), z, 2.0).unwrap());
+        let mut topo = Topology::new();
+        let corner = [at(0.0, 0.0), at(270.0, 0.0), at(270.0, 4.0), at(0.0, 4.0)];
+        let v = corner.map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+        let low = topo.add_edge(Edge::new(v[0], v[1], circle(0.0)));
+        let right = topo.add_edge(Edge::new(v[1], v[2], EdgeCurve::Line));
+        let high = topo.add_edge(Edge::new(v[3], v[2], circle(4.0)));
+        let left = topo.add_edge(Edge::new(v[0], v[3], EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(low, true),
+                    OrientedEdge::new(right, true),
+                    OrientedEdge::new(high, false),
+                    OrientedEdge::new(left, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let wall = CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), z, 2.0).unwrap();
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Cylinder(wall)));
+        let out = Vec3::new(-1.0, 1.0, 0.0) * (std::f64::consts::FRAC_1_SQRT_2 * (2.0 + 5e-8));
+        let (a, b) = (
+            topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 1.0) + out, 1e-7)),
+            topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 3.0) + out, 1e-7)),
+        );
+        let edge = topo.add_edge(Edge::new(a, b, EdgeCurve::Line));
+        let mut arena = GfaArena::new();
+        check_edge_face_pairs(
+            &mut topo,
+            &[edge],
+            (&[], &[]),
+            &[face],
+            &[HashSet::new()],
+            Tolerance::new(),
+            &mut arena,
+        )
+        .unwrap();
+        let ef = &arena.interference.ef;
+        assert_eq!(ef.len(), 1, "{ef:?}");
+        assert!(
+            matches!(
+                ef[0],
+                Interference::EF {
+                    new_vertex: None,
+                    ..
+                }
+            ),
+            "{ef:?}"
         );
     }
 }
