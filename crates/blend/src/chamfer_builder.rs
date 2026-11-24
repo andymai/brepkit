@@ -516,7 +516,7 @@ impl<'a> ChamferBuilder<'a> {
             .filter(|fid| !consumed.contains(fid))
             .collect();
 
-        if let Err(error) = close_chamfer_ends(topo, &result_faces, &cross_edges) {
+        if let Err(error) = close_chamfer_ends(topo, &mut result_faces, &cross_edges) {
             // The open curved stripes take their ends' failure.
             let open: Vec<EdgeId> = trimmed
                 .iter()
@@ -1222,7 +1222,7 @@ struct CrossEdge {
 /// the chamfer is refused.
 fn close_chamfer_ends(
     topo: &mut Topology,
-    faces: &[FaceId],
+    faces: &mut Vec<FaceId>,
     cross_edges: &[CrossEdge],
 ) -> Result<(), BlendError> {
     for cross in cross_edges {
@@ -1264,11 +1264,11 @@ fn close_chamfer_ends(
 /// the cross edge, taking the triangle. Returns whether it spliced.
 fn splice_inside_corner(
     topo: &mut Topology,
-    faces: &[FaceId],
+    faces: &mut Vec<FaceId>,
     cross: &CrossEdge,
 ) -> Result<bool, BlendError> {
     let mut uses: HashMap<EdgeId, usize> = HashMap::new();
-    for &fid in faces {
+    for &fid in faces.iter() {
         let face = topo.face(fid)?;
         for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
             for oe in topo.wire(wid)?.edges() {
@@ -1303,7 +1303,8 @@ fn splice_inside_corner(
         (to_from, cross.from, cross.to, to_to),
         (to_to, cross.to, cross.from, to_from),
     ] {
-        if splice_end_face(topo, faces, cross, beside, near, far, end_edge)? {
+        if let Some(spliced) = splice_end_face(topo, faces, cross, beside, near, far, end_edge)? {
+            merge_coplanar_beside(topo, faces, spliced, beside)?;
             return Ok(true);
         }
     }
@@ -1313,6 +1314,7 @@ fn splice_inside_corner(
 /// Splices the triangle into the end face whose wire holds `end_edge`
 /// (from the corner to `far`), on a plane holding the cross edge: the edge
 /// gives way to `beside` (from the corner to `near`) and the cross edge.
+/// Returns the face it spliced into.
 fn splice_end_face(
     topo: &mut Topology,
     faces: &[FaceId],
@@ -1321,7 +1323,7 @@ fn splice_end_face(
     near: VertexId,
     far: VertexId,
     end_edge: EdgeId,
-) -> Result<bool, BlendError> {
+) -> Result<Option<FaceId>, BlendError> {
     // The end face's edge from the corner to the other point, used once,
     // on a plane that holds the cross edge.
     for &fid in faces {
@@ -1376,10 +1378,90 @@ fn splice_end_face(
             } else if let Some(slot) = face.inner_wires_mut().iter_mut().find(|w| **w == wid) {
                 *slot = new_wire;
             }
-            return Ok(true);
+            return Ok(Some(fid));
         }
     }
-    Ok(false)
+    Ok(None)
+}
+
+/// An inside corner can be a corner of two end faces in one plane, the
+/// triangle bared between them (a strip's top running into a post that
+/// rises above it, its wall into a slab beside the post): the triangle's
+/// edge from the corner along one contact was the post's, and along the
+/// other the slab's. Spliced into one of them, the triangle now shares
+/// `beside` with the other, a face of the same plane facing the same way:
+/// the two are one face, and are merged into `spliced`. Left alone when the
+/// faces share other edges too, or their joined outline would pass a vertex
+/// twice.
+fn merge_coplanar_beside(
+    topo: &mut Topology,
+    faces: &mut Vec<FaceId>,
+    spliced: FaceId,
+    beside: EdgeId,
+) -> Result<(), BlendError> {
+    let outer_edges = |topo: &Topology, f: FaceId| -> Result<Vec<OrientedEdge>, BlendError> {
+        Ok(topo.wire(topo.face(f)?.outer_wire())?.edges().to_vec())
+    };
+    let Some(other) = faces.iter().copied().find(|&f| {
+        f != spliced
+            && outer_edges(topo, f).is_ok_and(|edges| edges.iter().any(|oe| oe.edge() == beside))
+    }) else {
+        return Ok(());
+    };
+    // One plane, facing one way.
+    let facing = |face: &Face| match face.surface() {
+        FaceSurface::Plane { normal, d } => {
+            let sign = if face.is_reversed() { -1.0 } else { 1.0 };
+            Some((*normal * sign, *d * sign))
+        }
+        FaceSurface::Nurbs(_)
+        | FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_) => None,
+    };
+    let (Some((na, da)), Some((nb, db))) = (facing(topo.face(spliced)?), facing(topo.face(other)?))
+    else {
+        return Ok(());
+    };
+    let corner = topo.vertex(topo.edge(beside)?.start())?.point();
+    let scale = 1.0 + corner.x().abs().max(corner.y().abs()).max(corner.z().abs());
+    if (na - nb).length() > 1e-9 || (da - db).abs() > 1e-6 * scale {
+        return Ok(());
+    }
+    let (a, b) = (outer_edges(topo, spliced)?, outer_edges(topo, other)?);
+    let shared: Vec<EdgeId> = a
+        .iter()
+        .map(OrientedEdge::edge)
+        .filter(|e| b.iter().any(|oe| oe.edge() == *e))
+        .collect();
+    if shared != [beside] {
+        return Ok(());
+    }
+    // Each outline from just past `beside` round to just before it: the one
+    // runs from `beside`'s far end back to its near end, the other on from
+    // there.
+    let after = |edges: &[OrientedEdge]| -> Vec<OrientedEdge> {
+        let i = edges.iter().position(|oe| oe.edge() == beside).unwrap_or(0);
+        (1..edges.len())
+            .map(|k| edges[(i + k) % edges.len()])
+            .collect()
+    };
+    let mut joined = after(&a);
+    joined.extend(after(&b));
+    let mut starts = HashSet::new();
+    for oe in &joined {
+        if !starts.insert(oe.oriented_start(topo.edge(oe.edge())?)) {
+            return Ok(());
+        }
+    }
+    let wire = topo.add_wire(Wire::new(joined, true)?);
+    let holes = topo.face(other)?.inner_wires().to_vec();
+    let face = topo.face_mut(spliced)?;
+    face.set_outer_wire(wire);
+    face.inner_wires_mut().extend(holes);
+    faces.retain(|&f| f != other);
+    Ok(())
 }
 
 /// A run of edges in an end face's wire: `len` edges from position `first`.
