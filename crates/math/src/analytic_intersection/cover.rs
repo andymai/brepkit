@@ -851,8 +851,9 @@ impl<'s, 'a> Cover<'s, 'a> {
     /// The simple leaf whose arc holds the point of the section nearest
     /// `q`, a point within `off` of both surfaces (and within rounding):
     /// that point lies within `off`, and its rounding, over the sine of the
-    /// angle between the surfaces' normals, and this leaf must hold every
-    /// point that near `q`. `None` where none is sure.
+    /// angle between the surfaces' normals, and this leaf must hold the
+    /// parameters of every point that near `q`, as the projection reads
+    /// them (see [`projection_rates`]). `None` where none is sure.
     #[allow(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
@@ -869,13 +870,13 @@ impl<'s, 'a> Cover<'s, 'a> {
         };
         let sin = na.cross(nb).length();
         let (u, v) = sheet_params(self.a, q, self.u_range, self.v_range);
-        let (_, au, av) = frame(self.a, u, v);
         let size = q.x().abs().max(q.y().abs()).max(q.z().abs());
         let rounding = 1024.0 * f64::EPSILON * (self.a.scale(q) + self.b.scale(q) + size);
         let reach = 2.5 * (off + rounding) / sin;
+        let (rate_u, rate_v) = projection_rates(self.a, q, reach)?;
         let (mu, mv) = (
-            reach / au.length() / span_u * steps,
-            reach / av.length() / span_v * steps,
+            reach * rate_u / span_u * steps,
+            reach * rate_v / span_v * steps,
         );
         let (fu, fv) = (
             (u - self.u_range.0) / span_u * steps,
@@ -946,6 +947,56 @@ fn sheet_params(
             (u.clamp(u_range.0, u_range.1), v.clamp(v_range.0, v_range.1))
         }
         _ => super::project_analytic(surface, q, u_range, v_range),
+    }
+}
+
+/// Bounds over the ball of `reach` about `q` of how fast the parameters
+/// [`sheet_params`] reads move with the point: `u` about an axis at one over
+/// the distance from it, a cylinder's `v` at one, a cone's (its height over
+/// the sine of its half-angle) at one over that sine, a ball's latitude at
+/// one over the distance from its centre, and a torus's tube angle at one
+/// over the distance from its centre circle. `None` where the ball reaches
+/// a point where they jump or have no bound: an axis, a centre, a cone's
+/// apex plane, or where a spindle torus's nearer sheet changes.
+fn projection_rates(surface: &AnalyticSurface<'_>, q: Point3, reach: f64) -> Option<(f64, f64)> {
+    let up = 1.0 + 1e-12;
+    let inverse = |least: f64| (least > 0.0).then(|| up / least);
+    let off_axis = |o: Point3, axis: Vec3| {
+        let w = q - o;
+        (w - axis * axis.dot(w)).length()
+    };
+    match surface {
+        AnalyticSurface::Cylinder(c) => {
+            Some((inverse(off_axis(c.origin(), c.axis()) - reach)?, up))
+        }
+        AnalyticSurface::Cone(c) => {
+            if c.axis().dot(q - c.apex()).abs() <= reach * up {
+                return None;
+            }
+            let along = up / c.half_angle().sin();
+            Some((inverse(off_axis(c.apex(), c.axis()) - reach)?, along))
+        }
+        AnalyticSurface::Sphere(s) => Some((
+            inverse(off_axis(s.center(), s.z_axis()) - reach)?,
+            inverse((q - s.center()).length() - reach)?,
+        )),
+        AnalyticSurface::Torus(t) => {
+            let w = q - t.center();
+            let h = t.z_axis().dot(w);
+            let rho = (w - t.z_axis() * h).length();
+            let (big, small) = (t.major_radius(), t.minor_radius());
+            let (near, far) = ((rho - big).hypot(h), (rho + big).hypot(h));
+            let tube = if small > big {
+                let (dn, df) = ((near - small).abs(), (far - small).abs());
+                if (dn - df).abs() <= 2.0 * reach * up {
+                    return None;
+                }
+                if df < dn { far } else { near }
+            } else {
+                near
+            };
+            Some((inverse(rho - reach)?, inverse(tube - reach)?))
+        }
     }
 }
 
@@ -1266,5 +1317,111 @@ mod tests {
             assert!(!cut && cover.leaves.len() == before, "edge {edge}");
         }
         assert!(tried > 0, "no cell across the region's edge");
+    }
+
+    /// A cut whose first parts fit the budget but whose parts' own cuts do
+    /// not is undone: the leaf is as it was, its parts are gone, and every
+    /// leaf stays read.
+    #[test]
+    fn a_cut_whose_parts_run_past_the_budget_is_undone() {
+        let (rod, ring) = rod_and_ring();
+        let (a, b) = (
+            AnalyticSurface::Cylinder(&rod),
+            AnalyticSurface::Torus(&ring),
+        );
+        let mut undone = 0;
+        for edge in [0.17, 0.2, 0.23, 0.25, 0.27, 0.29] {
+            let meet = Aabb3 {
+                min: Point3::new(edge, 3.9, 1.4),
+                max: Point3::new(1.0, 4.1, 1.6),
+            };
+            let build = |most: usize| {
+                Cover::new(
+                    &a,
+                    &b,
+                    ((0.0, TAU), (-10.0, 10.0)),
+                    (0.0, TAU),
+                    32,
+                    &every_cell(32),
+                    Some((meet, meet.expanded(1e-4))),
+                    1e-7,
+                    most,
+                )
+            };
+            let mut cover = build(MOST_LEAVES);
+            let lone: Vec<Vec<usize>> = cover
+                .classes()
+                .into_iter()
+                .filter(|c| c.len() == 1 && !cover.leaves[c[0]].inside)
+                .collect();
+            for class in &lone {
+                // Only a cut whose parts are cut again adds more than four.
+                let mut free = build(MOST_LEAVES);
+                let start = free.leaves.len();
+                if !free.refine(class) || free.leaves.len() <= start + 4 {
+                    continue;
+                }
+                let k = class[0];
+                let saved = cover.leaves[k];
+                let before = cover.leaves.len();
+                cover.most = before + 4;
+                assert!(!cover.refine(class), "edge {edge}: cut past the budget");
+                assert_eq!(cover.leaves.len(), before, "edge {edge}: parts left");
+                let now = cover.leaves[k];
+                assert!(
+                    now.kind == saved.kind
+                        && (now.first, now.parts) == (saved.first, saved.parts)
+                        && (now.u, now.v) == (saved.u, saved.v),
+                    "edge {edge}: leaf not restored"
+                );
+                assert!(cover.complete(), "edge {edge}: a leaf is left unread");
+                cover.most = MOST_LEAVES;
+                undone += 1;
+            }
+        }
+        assert!(undone > 0, "no cut whose parts are cut again");
+    }
+
+    /// A cone of half-angle 0.001 reads `v` as its height over the sine of
+    /// that angle, so a point 1e-7 off it along its axis reads `v` 1e-4
+    /// away. A point that near a leaf's edge was placed inside the leaf
+    /// beyond the edge, where `v` was read at the rate along the cone: a
+    /// fitted curve's point could mark a class it does not pass through.
+    #[test]
+    fn a_point_near_a_flat_cones_section_is_not_placed_past_its_reach() {
+        use crate::surfaces::ConicalSurface;
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let cone = ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), up, 0.001).unwrap();
+        let rod = CylindricalSurface::new(Point3::new(3.0, 0.0, 0.0), up, 1.0).unwrap();
+        let (a, b) = (
+            AnalyticSurface::Cone(&cone),
+            AnalyticSurface::Cylinder(&rod),
+        );
+        let mut cover = Cover::new(
+            &a,
+            &b,
+            ((0.0, TAU), (1.0, 5.0)),
+            (-1.0, 1.0),
+            32,
+            &every_cell(32),
+            None,
+            1e-7,
+            MOST_LEAVES,
+        );
+        assert!(cover.complete());
+        let classes = cover.classes();
+        assert!(!classes.is_empty());
+        let mut tried = 0;
+        for class in &classes {
+            for z in cover.seeds(class) {
+                for sign in [1.0, -1.0] {
+                    let q = z + up * (sign * 1e-7);
+                    tried += 1;
+                    let placed = cover.locate(q, 1e-7);
+                    assert!(placed.is_none(), "{q:?}, by an edge, placed in {placed:?}");
+                }
+            }
+        }
+        assert!(tried > 0);
     }
 }

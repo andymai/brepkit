@@ -2672,7 +2672,9 @@ fn marched_sections_near(
     // marched, which its middle then lies on.
     // March from a seed on the section and fit what the march traces,
     // unless its middle lies on a curve already marched. The march's points
-    // where its branch is then marched, `None` where it traces no curve.
+    // where its branch is then marched, `None` where it traces no curve. A
+    // march is kept among the marched only with its curve: a march with no
+    // curve reaches no part of the section.
     let trace = |seed: Point3,
                  marched: &mut Vec<Vec<Point3>>,
                  curves: &mut Vec<IntersectionCurve>|
@@ -2704,7 +2706,6 @@ fn marched_sections_near(
         if marched.iter().any(|m| on_march(&a, &b, middle, m)) {
             return Ok(Some(march_result));
         }
-        marched.push(march_result.clone());
 
         // Two points far closer than a step only crowd the fit.
         let crowd = 1e-3 * march_step;
@@ -2722,7 +2723,14 @@ fn marched_sections_near(
             }
         }
         if spaced.len() < 2 {
-            return Ok(None);
+            // A march shorter than that, clipped to a short piece of the
+            // section, keeps both its ends.
+            match (march_result.first(), march_result.last()) {
+                (Some(&first), Some(&last)) if (last - first).length() > 0.0 => {
+                    spaced = vec![first, last];
+                }
+                _ => return Ok(None),
+            }
         }
         if fit_tol < 0.5 * Tolerance::new().linear {
             return Err(MathError::ConvergenceFailure { iterations: 0 });
@@ -2736,6 +2744,7 @@ fn marched_sections_near(
                 param2: (0.0, 0.0),
             })
             .collect();
+        marched.push(march_result.clone());
         curves.push(IntersectionCurve {
             curve,
             points: ipts,
