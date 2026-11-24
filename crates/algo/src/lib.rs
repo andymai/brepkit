@@ -30,4 +30,5 @@ pub use builder::FaceClass;
 pub use builder::pcurve_compute::compute_pcurve_on_surface;
 pub use builder::plane_frame::PlaneFrame;
 pub(crate) mod ds;
+mod nurbs_sides;
 pub(crate) mod pave_filler;

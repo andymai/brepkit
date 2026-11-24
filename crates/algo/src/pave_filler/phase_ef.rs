@@ -338,17 +338,7 @@ fn build_face_containment(
 /// and still be on the face: ten tolerances, or more where the face's edges
 /// or vertices carry a wider tolerance of their own.
 fn face_tolerance(topo: &Topology, fid: FaceId, tol: Tolerance) -> Result<f64, AlgoError> {
-    let mut widest = 10.0 * tol.linear;
-    for eid in brepkit_topology::explorer::face_edges(topo, fid)? {
-        let edge = topo.edge(eid)?;
-        if let Some(t) = edge.tolerance() {
-            widest = widest.max(t.min(crate::ds::shape_store::MAX_WIDEN));
-        }
-        for v in [edge.start(), edge.end()] {
-            widest = widest.max(topo.vertex(v)?.tolerance());
-        }
-    }
-    Ok(widest)
+    crate::nurbs_sides::face_reach(topo, topo.face(fid)?, tol)
 }
 
 /// A box that holds an edge's curve from `t0` to `t1`, grown by the
@@ -7247,6 +7237,65 @@ mod tests {
                 build_face_containment(&topo, face, Tolerance::new()).is_err(),
                 "weight {weight}"
             );
+        }
+    }
+
+    /// A face bounded by one small loop with its pcurve, run so the face is
+    /// the rest of its surface, on a surface whose sides do not keep apart:
+    /// a sheet folded across a corner, a tube closed to a hundred millionth
+    /// of its size, one run past its start, one closed exactly a million from
+    /// the origin, and a ball with its poles for sides. Its box holds every point of the
+    /// surface, read densely.
+    #[test]
+    fn a_face_on_a_surface_whose_sides_meet_is_boxed_whole() {
+        use crate::nurbs_sides::tests::{ball, corner_sheet, tube};
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::curves2d::{Circle2D, Curve2D};
+        use brepkit_math::vec::{Point2, Vec3};
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::pcurve::PCurve;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let cases = [
+            ("fold", corner_sheet(true)),
+            ("tube closed to 1e-8", tube(2e-8, Vec3::new(0.0, 0.0, 0.0))),
+            (
+                "tube run past its start",
+                tube(-2e-3, Vec3::new(0.0, 0.0, 0.0)),
+            ),
+            ("closed tube far off", tube(0.0, Vec3::new(1e6, -2e6, 5e5))),
+            ("ball", ball(Point3::new(0.0, 0.0, 0.0))),
+        ];
+        for (name, surface) in cases {
+            let mut topo = Topology::new();
+            let loop_uv = Circle2D::new(Point2::new(0.75, 0.6), 0.05).unwrap();
+            let start = loop_uv.evaluate(0.0);
+            let corner = surface.evaluate(start.x(), start.y());
+            let v = topo.add_vertex(Vertex::new(corner, 1e-7));
+            let round = Circle3D::new_with_ref(
+                corner - Vec3::new(0.0, 0.0, 0.01),
+                Vec3::new(1.0, 0.0, 0.0),
+                0.01,
+                Vec3::new(0.0, 0.0, 1.0),
+            )
+            .unwrap();
+            let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(round)));
+            let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, false)], true).unwrap());
+            let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface.clone())));
+            topo.pcurves_mut().set(
+                e,
+                face,
+                PCurve::new(Curve2D::Circle(loop_uv), 0.0, std::f64::consts::TAU),
+            );
+            let held = build_face_containment(&topo, face, Tolerance::new())
+                .unwrap()
+                .bbox;
+            let off_box = (0..=40_u32)
+                .flat_map(|i| (0..=40_u32).map(move |j| (i, j)))
+                .map(|(i, j)| surface.evaluate(f64::from(i) / 40.0, f64::from(j) / 40.0))
+                .filter(|&p| !held.contains_point(p))
+                .count();
+            assert_eq!(off_box, 0, "{name}: {held:?}");
         }
     }
 

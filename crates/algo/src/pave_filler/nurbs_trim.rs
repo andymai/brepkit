@@ -180,8 +180,8 @@ impl Piece {
 /// A NURBS face's wires in its surface's parameters, each the closed run of
 /// its edges' pcurves ([`super::helpers::pcurve_loops`]), the end of each
 /// joined to the start of the next by a segment. On a surface whose sides
-/// are free, a point of the face is a point of the surface whose parameters
-/// lie inside the loops.
+/// keep apart, a point of the face is a point of the surface whose
+/// parameters lie inside the loops.
 ///
 /// A point's side is read by a ray from its parameters toward growing `v`:
 /// each piece of a loop whose box lies past the point along `v` and across
@@ -289,7 +289,9 @@ impl NurbsFaceTrim {
     /// face: its parameters, where the surface's point there lies within
     /// `near` of it, read against the loops. `None` where no such parameters
     /// are found, or the parameters lie in the box of a piece of a loop
-    /// halved as far as it goes.
+    /// halved as far as it goes. A surface that runs through one point twice
+    /// away from its sides gives that point two places in its parameters,
+    /// and the reading takes the one the projection finds.
     pub(super) fn holds(&self, p: Point3, near: f64, tol: Tolerance) -> Option<bool> {
         let foot =
             brepkit_math::nurbs::projection::project_point_to_surface(&self.surface, p, tol.linear)

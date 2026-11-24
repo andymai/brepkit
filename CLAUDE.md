@@ -155,6 +155,7 @@ Quick reference — find the right file for any task:
 | Phases VV/VE/EE/VF/EF/FF | `pave_filler/phase_*.rs` |
 | Sections along loose tool edges (imprint) | `pave_filler/tool_edges.rs` |
 | A NURBS face's pcurves in its surface's parameters (on which side of its wires a point lies) | `pave_filler/nurbs_trim.rs` |
+| Whether a NURBS surface's sides keep apart (no seam, fold or pole), for phase EF and the ray cast | `nurbs_sides.rs` |
 | Pave block splitting + edge creation | `pave_filler/make_blocks.rs`, `make_split_edges.rs` |
 | FaceInfo population | `pave_filler/fill_face_info.rs` |
 | Builder (face splitting + assembly) | `builder/mod.rs`, `builder/assemble.rs` |
