@@ -317,19 +317,14 @@ fn build_face_containment(
         });
     }
 
-    if let Some(held) = super::helpers::analytic_face_box(topo, fid, tol)? {
-        return Ok(FaceContainment {
-            bbox: held.expanded(face_tolerance(topo, fid, tol)?),
-            planar: None,
-        });
-    }
-    // A NURBS face takes its boundary's box grown by half its diagonal; its
-    // control points bound how far past that it rises.
-    let bbox = bbox.expanded((diag * 0.5).max(tol.linear * 10.0));
+    let held = match &surface {
+        FaceSurface::Nurbs(n) => Some(super::helpers::nurbs_face_box(topo, fid, n, tol)?),
+        _ => super::helpers::analytic_face_box(topo, fid, tol)?,
+    };
     Ok(FaceContainment {
-        bbox: match &surface {
-            FaceSurface::Nurbs(n) => super::helpers::nurbs_face_box(topo, fid, n, bbox, tol)?,
-            _ => bbox,
+        bbox: match held {
+            Some(held) => held.expanded(face_tolerance(topo, fid, tol)?),
+            None => bbox,
         },
         planar: None,
     })
@@ -6010,5 +6005,261 @@ mod tests {
             (0.0, 1.0),
         );
         assert!(over.is_empty(), "{over:?}");
+    }
+
+    /// A dome about the turned `z` at `centre`: a B-spline surface whose
+    /// rows round `u` are the rational quadratic unit circle, scaled along
+    /// `v` by the profile `(r, z)` from `(1, 0)` up to `(0, 4)` over four
+    /// knot spans. Its last row stands 1e-6 off its first, so it closes on
+    /// itself only to that, as a fitted surface may. Its one face is bounded
+    /// by its rim, the unit circle at the foot, alone.
+    fn dome(
+        topo: &mut Topology,
+        centre: Point3,
+        turn: brepkit_math::mat::Mat4,
+    ) -> (FaceId, brepkit_math::nurbs::surface::NurbsSurface) {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let at = |x: f64, y: f64, z: f64| centre + turned(turn, Vec3::new(x, y, z));
+        let corner = std::f64::consts::FRAC_1_SQRT_2;
+        let round = [
+            (1.0, 0.0, 1.0),
+            (1.0, 1.0, corner),
+            (0.0, 1.0, 1.0),
+            (-1.0, 1.0, corner),
+            (-1.0, 0.0, 1.0),
+            (-1.0, -1.0, corner),
+            (0.0, -1.0, 1.0),
+            (1.0, -1.0, corner),
+            (1.0, 0.0, 1.0),
+        ];
+        let profile = [
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (1.0, 2.0),
+            (0.9, 3.0),
+            (0.5, 4.0),
+            (0.0, 4.0),
+        ];
+        let rows: Vec<Vec<Point3>> = round
+            .iter()
+            .enumerate()
+            .map(|(i, &(x, y, _))| {
+                let off = if i == round.len() - 1 { 1e-6 } else { 0.0 };
+                profile
+                    .iter()
+                    .map(|&(r, z)| at(r * x, r.madd(y, off), z))
+                    .collect()
+            })
+            .collect();
+        let weights = round.iter().map(|&(_, _, w)| vec![w; 6]).collect();
+        let surface = NurbsSurface::new(
+            2,
+            2,
+            vec![
+                0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+            ],
+            vec![0.0, 0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0, 1.0],
+            rows,
+            weights,
+        )
+        .unwrap();
+        assert!(!surface.is_periodic_u() && !surface.is_periodic_v());
+        let rim = Circle3D::new_with_ref(
+            at(0.0, 0.0, 0.0),
+            turned(turn, Vec3::new(0.0, 0.0, 1.0)),
+            1.0,
+            turned(turn, Vec3::new(1.0, 0.0, 0.0)),
+        )
+        .unwrap();
+        let v = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
+        let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(rim)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface.clone())));
+        (face, surface)
+    }
+
+    /// A dome bounded by its rim alone rises to 4 over a rim of radius 1,
+    /// whose box grown by half its diagonal reaches 1.41: the box phase EF
+    /// holds the face in holds every point of it, and a line across the
+    /// dome at height 3.5, far above the rim, crosses it twice, in three
+    /// poses. Each crossing lies on the dome and on the line.
+    #[test]
+    fn a_line_far_above_a_domes_rim_crosses_the_dome() {
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::nurbs::projection::project_point_to_surface;
+        use brepkit_math::vec::Vec3;
+        let poses = [
+            (Point3::new(0.0, 0.0, 0.0), Mat4::identity()),
+            (
+                Point3::new(0.4, -1.3, 2.2),
+                Mat4::rotation_z(0.7) * Mat4::rotation_x(1.1) * Mat4::rotation_y(0.3),
+            ),
+            (
+                Point3::new(-3.0, 0.5, 0.0),
+                Mat4::rotation_x(std::f64::consts::PI),
+            ),
+        ];
+        for (centre, turn) in poses {
+            let at = |x: f64, y: f64, z: f64| centre + turned(turn, Vec3::new(x, y, z));
+            let mut topo = Topology::new();
+            let (face, surface) = dome(&mut topo, centre, turn);
+            let held = build_face_containment(&topo, face, Tolerance::new())
+                .unwrap()
+                .bbox;
+            let off_box: Vec<Point3> = (0..=32_u32)
+                .flat_map(|i| (0..=32_u32).map(move |j| (i, j)))
+                .map(|(i, j)| surface.evaluate(f64::from(i) / 32.0, f64::from(j) / 32.0))
+                .filter(|&p| !held.contains_point(p))
+                .collect();
+            let (start, end) = (at(0.0, -3.0, 3.5), at(0.0, 3.0, 3.5));
+            let found = ef_vertices(&mut topo, face, EdgeCurve::Line, start, Some(end));
+            assert!(
+                off_box.is_empty() && found.len() == 2,
+                "{centre:?}: {} points off {held:?}, crossings {found:?}",
+                off_box.len()
+            );
+            for p in &found {
+                let off = project_point_to_surface(&surface, *p, 1e-12)
+                    .unwrap()
+                    .distance;
+                assert!(off < 1e-7, "{p:?} lies {off} off the dome");
+                let from_line = point_to_segment(*p, start, end);
+                assert!(from_line < 1e-7, "{p:?} lies {from_line} off the line");
+            }
+        }
+    }
+
+    /// A biquadratic B-spline sheet over `[0, 1]²` with `x = u` and `y = v`,
+    /// flat but for a bump of height 4.5 at its middle, and its face bounded
+    /// by the square `[0.1, 0.9]²`, where the sheet is flat: four lines with
+    /// their pcurves on the face. `shift` moves the first pcurve off its
+    /// edge by that much in `u`.
+    fn bumped_sheet(
+        topo: &mut Topology,
+        shift: f64,
+    ) -> (FaceId, brepkit_math::nurbs::surface::NurbsSurface) {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::Point2;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::pcurve::PCurve;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        // The knots' Greville points, which make `x` and `y` the parameters.
+        let at = [0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0];
+        let rows: Vec<Vec<Point3>> = at
+            .iter()
+            .enumerate()
+            .map(|(i, &x)| {
+                at.iter()
+                    .enumerate()
+                    .map(|(j, &y)| Point3::new(x, y, if (i, j) == (3, 3) { 8.0 } else { 0.0 }))
+                    .collect()
+            })
+            .collect();
+        let knots = vec![0.0, 0.0, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.0, 1.0];
+        let surface =
+            NurbsSurface::new(2, 2, knots.clone(), knots, rows, vec![vec![1.0; 7]; 7]).unwrap();
+        let corners = [(0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9)];
+        let v = corners.map(|(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)));
+        let mut sides = Vec::new();
+        let mut lines = Vec::new();
+        for k in 0..4 {
+            let (a, b) = (corners[k], corners[(k + 1) % 4]);
+            let e = topo.add_edge(Edge::new(v[k], v[(k + 1) % 4], EdgeCurve::Line));
+            sides.push(OrientedEdge::new(e, true));
+            let from = Point2::new(a.0 + if k == 0 { shift } else { 0.0 }, a.1);
+            let to = Point2::new(b.0, b.1);
+            let line = Line2D::new(from, to - from).unwrap();
+            lines.push((
+                e,
+                PCurve::new(Curve2D::Line(line), 0.0, (to - from).length()),
+            ));
+        }
+        let wire = topo.add_wire(Wire::new(sides, true).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface.clone())));
+        for (e, pcurve) in lines {
+            topo.pcurves_mut().set(e, face, pcurve);
+        }
+        (face, surface)
+    }
+
+    /// A NURBS face whose pcurves bound the square `[0.1, 0.9]²` of a sheet
+    /// over `[0, 1]²` is boxed by the sheet cut to that square: the box holds
+    /// every point of the face, and reaches no more than its tolerance past
+    /// the square along `x` and `y`. Its bump rises to 4.5 far inside a
+    /// boundary that lies flat, and a line across it at height 3 crosses it
+    /// at `x = 0.4` and `0.6`. With a pcurve that does not end on its edge's
+    /// vertex, the face takes the box of the whole sheet's control points.
+    #[test]
+    fn a_nurbs_face_with_pcurves_is_boxed_by_its_surface_cut_to_them() {
+        let tol = Tolerance::new();
+        let mut topo = Topology::new();
+        let (face, surface) = bumped_sheet(&mut topo, 0.0);
+        let held = build_face_containment(&topo, face, tol).unwrap().bbox;
+        for i in 0..=40_u32 {
+            for j in 0..=40_u32 {
+                let (u, v) = (
+                    0.02f64.madd(f64::from(i), 0.1),
+                    0.02f64.madd(f64::from(j), 0.1),
+                );
+                let p = surface.evaluate(u, v);
+                assert!(held.contains_point(p), "({u}, {v}) at {p:?} off {held:?}");
+            }
+        }
+        let reach = 1e-5;
+        for (low, high) in [(held.min.x(), held.max.x()), (held.min.y(), held.max.y())] {
+            assert!(low > 0.1 - reach && high < 0.9 + reach, "{held:?}");
+        }
+        let (start, end) = (Point3::new(-1.0, 0.5, 3.0), Point3::new(2.0, 0.5, 3.0));
+        let found = ef_vertices(&mut topo, face, EdgeCurve::Line, start, Some(end));
+        assert_eq!(found.len(), 2, "{found:?}");
+        for (p, x) in found.iter().zip([0.4, 0.6]) {
+            assert!((*p - Point3::new(x, 0.5, 3.0)).length() < 1e-7, "{p:?}");
+        }
+
+        let mut topo = Topology::new();
+        let (face, surface) = bumped_sheet(&mut topo, 0.05);
+        let held = build_face_containment(&topo, face, tol).unwrap().bbox;
+        let whole = surface.aabb();
+        assert!(
+            held.contains_point(whole.min) && held.contains_point(whole.max),
+            "{held:?} against {whole:?}"
+        );
+    }
+
+    /// A NURBS face whose surface has a weight that is zero, or below the
+    /// least normal float, has no box its control points prove: phase EF
+    /// refuses it.
+    #[test]
+    fn a_nurbs_face_with_a_weight_that_bounds_nothing_is_refused() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        for weight in [0.0, 1e-310] {
+            let mut topo = Topology::new();
+            let (face, surface) = bumped_sheet(&mut topo, 0.0);
+            let mut weights = surface.weights().to_vec();
+            weights[3][3] = weight;
+            let odd = NurbsSurface::new(
+                2,
+                2,
+                surface.knots_u().to_vec(),
+                surface.knots_v().to_vec(),
+                surface.control_points().to_vec(),
+                weights,
+            )
+            .unwrap();
+            topo.face_mut(face)
+                .unwrap()
+                .set_surface(FaceSurface::Nurbs(odd));
+            assert!(
+                build_face_containment(&topo, face, Tolerance::new()).is_err(),
+                "weight {weight}"
+            );
+        }
     }
 }
