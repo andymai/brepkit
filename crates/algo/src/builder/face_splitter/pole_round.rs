@@ -11,7 +11,7 @@
 use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::decompose::curve_bezier_between;
 use brepkit_math::surfaces::SphericalSurface;
-use brepkit_math::vec::{Point2, Point3, Vec3};
+use brepkit_math::vec::{Point2, Point3, Vec2, Vec3};
 use brepkit_topology::edge::EdgeCurve;
 
 use super::super::classify_2d::{distance_to_polygon_boundary, point_in_polygon_2d};
@@ -122,8 +122,29 @@ impl PoleView {
     /// the north pole, whose distance from the centre falls as `v` rises,
     /// and turns it about the south pole.
     pub(super) fn face_left_in_uv(&self, boundary: &[OrientedPCurveEdge]) -> Option<bool> {
-        let area = self.twice_area(boundary)?;
-        (area.abs() > 1e-9).then_some((area > 0.0) == self.north)
+        let area = self.proved_area(boundary)?;
+        (area.abs() > 5e-10).then_some((area > 0.0) == self.north)
+    }
+
+    /// How a side's hull ([`Side::hull`]) lies about the side's middle, in
+    /// the ball's own units.
+    fn spread(&self, side: &Side, hull: &[Point3]) -> Spread {
+        let (a, b) = (side.from, side.to);
+        let m = a + (b - a) * 0.5;
+        let r = self.radius;
+        let most = |f: &dyn Fn(Point3) -> f64| hull.iter().map(|&h| f(h)).fold(0.0, f64::max) / r;
+        let d = (m - self.center) * (1.0 / r);
+        let w = 1.0 + d.dot(self.pole);
+        let rise = most(&|h| (h - m).dot(self.pole).abs());
+        Spread {
+            middle: d,
+            w,
+            low: w - rise,
+            level: d.dot(self.x).hypot(d.dot(self.y)),
+            off: most(&|h| segment_distance(h, a, b)),
+            reach: most(&|h| (h - m).length()),
+            rise,
+        }
     }
 
     /// A bound on how far the image of each point of a side's hull
@@ -139,39 +160,132 @@ impl PoleView {
     /// same most of the segment between the ends' images.
     fn side_bound(&self, side: &Side) -> Option<f64> {
         let hull = side.hull()?;
-        let (a, b) = (side.from, side.to);
-        let m = a + (b - a) * 0.5;
-        let r = self.radius;
-        // In the ball's own units, about the held pole `n`: `f(d) = k(w) (d
-        // x, d y)` with `w = 1 + d n` and `k(w) = sqrt(2 / w)`, so that
-        // `|Df [v]| <= |k'| |(d x, d y)| |v| + k |v|` and `|D2 f [u, u]| <=
-        // k'' (n u)^2 |(d x, d y)| + 2 |k'| |n u| |u|`. Along a segment from
-        // `m`, `w` falls by at most `|n u|`, and `k`, `|k'|` and `k''` rise
-        // as `w` falls.
-        let off = hull
-            .iter()
-            .map(|&h| segment_distance(h, a, b))
-            .fold(0.0, f64::max)
-            / r;
-        let reach = hull.iter().map(|&h| (h - m).length()).fold(0.0, f64::max) / r;
-        let rise = hull
-            .iter()
-            .map(|&h| (h - m).dot(self.pole).abs())
-            .fold(0.0, f64::max)
-            / r;
-        let d = (m - self.center) * (1.0 / r);
-        let w = 1.0 + d.dot(self.pole);
-        let low = w - rise;
-        if low <= 0.0 {
+        // About the held pole `n`: `f(d) = k(w) (d x, d y)` with `w = 1 + d
+        // n` and `k(w) = sqrt(2 / w)`, so that `|Df [v]| <= |k'| |(d x, d
+        // y)| |v| + k |v|` and `|D2 f [u, u]| <= k'' (n u)^2 |(d x, d y)| + 2
+        // |k'| |n u| |u|`. Along a segment from `m`, `w` falls by at most
+        // `|n u|`, and `k`, `|k'|` and `k''` rise as `w` falls.
+        let s = self.spread(side, &hull);
+        if s.low <= 0.0 {
             return Some(f64::INFINITY);
         }
-        let k = |w: f64| (2.0 / w).sqrt();
-        let k1 = |w: f64| k(w) / (2.0 * w);
-        let k2 = |w: f64| 3.0 * k(w) / (4.0 * w * w);
-        let level = d.dot(self.x).hypot(d.dot(self.y));
-        let slope = k1(w).madd(level, k(w));
-        let bend = (k2(low) * (level + reach) * rise).madd(rise, 2.0 * k1(low) * rise * reach);
-        Some(slope.madd(off, bend))
+        let slope = k1(s.w).madd(s.level, k(s.w));
+        let bend = (k2(s.low) * (s.level + s.reach) * s.rise)
+            .madd(s.rise, 2.0 * k1(s.low) * s.rise * s.reach);
+        Some(slope.madd(s.off, bend))
+    }
+
+    /// Whether the image of a side's piece of curve runs one way along the
+    /// segment between the images of the side's ends. The curve runs in a
+    /// direction of the cone of [`piece_tangents`] at a point of the hull;
+    /// it does where the map's derivative there takes each of the cone's
+    /// edges `v` onto a direction with a positive part along the segment.
+    /// That part differs from its value at the middle by at most the most
+    /// of `|D2 f [u, v]| <= k'' |n u| |n v| |(d x, d y)| + |k'| (|n u| |v| +
+    /// |n v| |u|)` ([`Self::side_bound`]). `None` where the side has no
+    /// hull or its ends do not map.
+    fn runs_along(&self, side: &Side) -> Option<bool> {
+        let hull = side.hull()?;
+        let s = self.spread(side, &hull);
+        let along = self.map(side.to)? - self.map(side.from)?;
+        let length = along.length();
+        if s.low <= 0.0 || length <= 0.0 {
+            return Some(false);
+        }
+        let along = along * (1.0 / length);
+        let level = Vec2::new(s.middle.dot(self.x), s.middle.dot(self.y));
+        for v in piece_tangents(side)? {
+            let v = v * (1.0 / self.radius);
+            let (nv, size) = (v.dot(self.pole).abs(), v.length());
+            if size <= 0.0 {
+                continue;
+            }
+            let image = level * (-k1(s.w) * v.dot(self.pole))
+                + Vec2::new(v.dot(self.x), v.dot(self.y)) * k(s.w);
+            let drift = (k2(s.low) * s.rise * nv).madd(
+                s.level + s.reach,
+                k1(s.low) * s.rise.madd(size, nv * s.reach),
+            );
+            if image.dot(along) <= drift {
+                return Some(false);
+            }
+        }
+        Some(true)
+    }
+
+    /// A bound on the signed area between a side and its piece of curve.
+    /// Put `x` along the segment `K` between the images of the side's ends
+    /// and `y` across it. The piece's image, with straight joins from `K`'s
+    /// ends to the image's ends (`l_a` and `l_b` long), and `K` walked back,
+    /// close a curve `C` whose area is `-∮ y dx`. Along `K`, `y` is 0;
+    /// elsewhere `|y|` is at most the side's bound `B` ([`Self::side_bound`]).
+    /// Where the image runs one way along `K` ([`Self::runs_along`]), `x`
+    /// varies along the joins and the image by at most `|K| + 2 (l_a +
+    /// l_b)`, so `|area(C)| <= B (|K| + 2 (l_a + l_b))`. Elsewhere the bound
+    /// is infinite: within a band about `K`, a curve can wind a point more
+    /// than once. `None` where the side has no hull or does not map.
+    fn side_area_bound(&self, side: &Side) -> Option<f64> {
+        let bound = self.side_bound(side)?;
+        if !bound.is_finite() || !self.runs_along(side)? {
+            return Some(f64::INFINITY);
+        }
+        let (s3, e3) = curve_ends(side.edge);
+        let curve = &side.edge.curve_3d;
+        let (from, to) = (self.map(side.from)?, self.map(side.to)?);
+        let join = |t: f64, end: Point2| {
+            self.map(curve.evaluate_with_endpoints(t, s3, e3))
+                .map(|p| (p - end).length())
+        };
+        let joins = join(side.a, from)? + join(side.b, to)?;
+        Some(bound * 2.0_f64.madd(joins, (to - from).length()))
+    }
+
+    /// The signed area of a loop's image, with its sign proved: the area of
+    /// a polygon of its sides' ends, where that exceeds twice the most that
+    /// the loop's area differs from it, the sum of [`Self::side_area_bound`]
+    /// over the sides. Each round cuts in two each side whose bound exceeds
+    /// a quarter of the polygon's area over the number of sides: where none
+    /// does, the sum is at most a quarter of the area. `None` where a side
+    /// would be cut more than [`CUTS`] times, the sides grow past
+    /// [`MOST_SIDES`], or a side does not map.
+    fn proved_area(&self, lp: &[OrientedPCurveEdge]) -> Option<f64> {
+        let mut sides: Vec<(Side, u32)> = loop_sides(lp).into_iter().map(|s| (s, 0)).collect();
+        loop {
+            let images: Vec<Point2> = sides
+                .iter()
+                .map(|(s, _)| self.map(s.from))
+                .collect::<Option<_>>()?;
+            let area = 0.5
+                * images
+                    .iter()
+                    .zip(images.iter().cycle().skip(1))
+                    .map(|(p, q)| p.x() * q.y() - q.x() * p.y())
+                    .sum::<f64>();
+            let bounds: Vec<f64> = sides
+                .iter()
+                .map(|(s, _)| self.side_area_bound(s))
+                .collect::<Option<_>>()?;
+            if area.abs() > 2.0 * bounds.iter().sum::<f64>() {
+                return Some(area);
+            }
+            let share = area.abs() / (4.0 * f64::from(u32::try_from(sides.len()).ok()?));
+            let mut next = Vec::with_capacity(sides.len());
+            for ((side, cuts), bound) in sides.iter().zip(&bounds) {
+                if *bound > share {
+                    if *cuts >= CUTS {
+                        return None;
+                    }
+                    let (first, second) = side.halves();
+                    next.extend([(first, cuts + 1), (second, cuts + 1)]);
+                } else {
+                    next.push((*side, *cuts));
+                }
+            }
+            if next.len() > MOST_SIDES {
+                return None;
+            }
+            sides = next;
+        }
     }
 
     /// Whether the point `at` on the ball lies inside the loop of `sides`:
@@ -436,6 +550,65 @@ fn piece_hull(curve: &EdgeCurve, a: f64, b: f64) -> Option<Vec<Point3>> {
     }
 }
 
+/// How a side's hull lies about the side's middle, in the ball's own
+/// units: where the middle lies from the ball's centre, `w = 1 + d n` there
+/// (`n` the held pole), the least `w` on a segment from it to the hull,
+/// how far the middle lies from the axis, and the most that a hull point
+/// lies off the side, from the middle, and along the axis from the middle.
+struct Spread {
+    middle: Vec3,
+    w: f64,
+    low: f64,
+    level: f64,
+    off: f64,
+    reach: f64,
+    rise: f64,
+}
+
+/// The equal-area map's stretch at `w` ([`PoleView::side_bound`]):
+/// `k(w) = sqrt(2 / w)`, and the sizes of its first and second derivatives.
+fn k(w: f64) -> f64 {
+    (2.0 / w).sqrt()
+}
+
+fn k1(w: f64) -> f64 {
+    k(w) / (2.0 * w)
+}
+
+fn k2(w: f64) -> f64 {
+    3.0 * k(w) / (4.0 * w * w)
+}
+
+/// The most sides a loop is cut into to prove its area's sign.
+const MOST_SIDES: usize = 1 << 16;
+
+/// Directions whose sums with weights not below zero hold the direction
+/// in which a side's piece of curve runs, from parameter `a` to `b`. A
+/// rational Bezier piece with positive weights runs along a sum of its
+/// points' differences `P_j - P_i` (`i < j`) with weights not below zero,
+/// so along a sum of the differences of neighbours. A conic's piece of
+/// under half a turn runs between the directions at its ends. `None` where
+/// the piece has no hull ([`piece_hull`]).
+fn piece_tangents(side: &Side) -> Option<Vec<Vec3>> {
+    let (a, b) = (side.a, side.b);
+    let way = if b < a { -1.0 } else { 1.0 };
+    let conic = |at_a: Vec3, at_b: Vec3| {
+        (0.5 * (b - a).abs() <= std::f64::consts::FRAC_PI_2).then(|| vec![at_a * way, at_b * way])
+    };
+    match &side.edge.curve_3d {
+        EdgeCurve::Line => {
+            let (s3, e3) = curve_ends(side.edge);
+            Some(vec![(e3 - s3) * way])
+        }
+        EdgeCurve::Circle(c) => conic(c.tangent(a), c.tangent(b)),
+        EdgeCurve::Ellipse(el) => conic(el.tangent(a), el.tangent(b)),
+        EdgeCurve::NurbsCurve(_) => {
+            let points = piece_hull(&side.edge.curve_3d, a, b)?;
+            Some(points.windows(2).map(|w| w[1] - w[0]).collect())
+        }
+    }
+}
+
 /// How far `p` lies from the segment from `a` to `b`.
 fn segment_distance(p: Point3, a: Point3, b: Point3) -> f64 {
     let ab = b - a;
@@ -520,14 +693,16 @@ pub(super) fn read(
 /// out would leave the face standing whole across it. The edges of the
 /// face's arrangement cross nowhere but at its vertices, so each loop is a
 /// simple closed curve in the plane. A loop that winds as the outline does
-/// is a piece's outline, and one that winds against it a hole. Each hole
-/// goes to the smallest outline that holds the middle of its first edge,
-/// of those that do not run along that edge (a hole's twin, the outline of
-/// the piece inside it).
+/// is a piece's outline, and one that winds against it a hole: the way
+/// each winds is the sign of its area, proved ([`PoleView::proved_area`]).
+/// Each hole goes to the smallest outline that holds the middle of its
+/// first edge ([`PoleView::inside`]), of those that do not run along that
+/// edge (a hole's twin, the outline of the piece inside it).
 ///
 /// That the pieces tile the face is then proved, not sampled. Each piece's
 /// mark (one inside its outline, less one inside each of its holes) sums
-/// over the pieces to the windings of all the loops: each section runs once
+/// over the pieces to the windings of all the loops, as each loop winds the
+/// way its role says: each section runs once
 /// each way and cancels, so the sum is the outline's winding, one inside
 /// the face and none outside. The pieces tile the face where each piece's
 /// mark is one or none everywhere: where each hole lies inside its outline
@@ -535,8 +710,9 @@ pub(super) fn read(
 ///
 /// `None` when a loop does not map, is not closed, bounds no area, runs an
 /// edge both ways or passes a vertex twice (two regions toured as one,
-/// touching there), the loops do not run each half once, a hole finds no
-/// outline, or the tiling is not proved.
+/// touching there), the loops do not run each half once, a loop's way
+/// round is not proved, a hole finds no outline, or the tiling is not
+/// proved.
 pub(super) fn pieces(
     view: &PoleView,
     boundary: &[OrientedPCurveEdge],
@@ -544,7 +720,7 @@ pub(super) fn pieces(
     loops: Vec<Vec<OrientedPCurveEdge>>,
     tol: f64,
 ) -> Option<Vec<Piece>> {
-    let face_area = 0.5 * view.twice_area(boundary)?;
+    let face_area = view.proved_area(boundary)?;
     if face_area.abs() <= 1e-9 || sections.is_empty() {
         return None;
     }
@@ -558,7 +734,7 @@ pub(super) fn pieces(
     if free.contains(&true) {
         return None;
     }
-    let mut outers: Vec<(Vec<OrientedPCurveEdge>, Vec<Point2>, f64)> = Vec::new();
+    let mut outers: Vec<(Vec<OrientedPCurveEdge>, f64)> = Vec::new();
     let mut holes: Vec<Vec<OrientedPCurveEdge>> = Vec::new();
     for lp in loops {
         let closed = lp
@@ -578,30 +754,33 @@ pub(super) fn pieces(
             return None;
         }
         let poly = view.loop_polygon(&lp)?;
-        let area = 0.5 * view.twice_area(&lp)? * face_area.signum();
+        let area = view.proved_area(&lp)? * face_area.signum();
         if view.flat_reading(area, &poly, tol) {
             return None;
         }
         if area > 0.0 {
-            outers.push((lp, poly, area));
+            outers.push((lp, area));
         } else {
             holes.push(lp);
         }
     }
     let mut pieces: Vec<Piece> = outers
         .iter()
-        .map(|(lp, _, _)| (lp.clone(), Vec::new()))
+        .map(|(lp, _)| (lp.clone(), Vec::new()))
         .collect();
+    let reads: Vec<Vec<Side>> = outers.iter().map(|(lp, _)| loop_sides(lp)).collect();
     for hole in holes {
         let first = hole.first()?;
-        let probe = view.map(edge_middle(first))?;
+        let probe = edge_middle(first);
         let owner = outers
             .iter()
+            .zip(&reads)
             .enumerate()
-            .filter(|(_, (lp, poly, _))| {
-                !lp.iter().any(|e| same_edge(e, first, near)) && point_in_polygon_2d(probe, poly)
+            .filter(|(_, ((lp, _), read))| {
+                !lp.iter().any(|e| same_edge(e, first, near))
+                    && view.inside(probe, read) == Some(true)
             })
-            .min_by(|a, b| a.1.2.total_cmp(&b.1.2))
+            .min_by(|a, b| (a.1).0.1.total_cmp(&(b.1).0.1))
             .map(|(i, _)| i)?;
         pieces[owner].1.push(hole);
     }
@@ -1159,9 +1338,15 @@ mod tests {
     #[test]
     fn each_side_bound_holds_the_image_of_its_curve() {
         let (view, rim) = capped_ball(1.0);
-        // Steps over the lobe, crossing arcs, and circles near the far pole:
+        // Steps over a lobe, crossing arcs, and circles near the far pole:
         // the rim round it, and one that passes 0.05 rad from it.
-        let mut edges = vec![lobed_spline(), rim, ring(unit(0.25, 0.0, 1.0), 0.3, 1)];
+        let mut edges = vec![
+            lobed_spline(),
+            flipped_spline(),
+            twin(&flipped_spline()),
+            rim,
+            ring(unit(0.25, 0.0, 1.0), 0.3, 1),
+        ];
         edges.extend(crossing_arcs(1.0, 0.2, 0.3));
         for e in &edges {
             let (s3, e3) = curve_ends(e);
@@ -1182,13 +1367,126 @@ mod tests {
                     continue;
                 }
                 let chord = [view.map(side.from).unwrap(), view.map(side.to).unwrap()];
+                // Where the side is read as running one way along its
+                // chord, each image lies farther along it than the last.
+                // Both read to within the rounding of the points' images.
+                let one_way = view.runs_along(side).unwrap();
+                let along = chord[1] - chord[0];
+                let mut last = f64::NEG_INFINITY;
                 for k in 0..=200 {
                     let t = side.a + (side.b - side.a) * f64::from(k) / 200.0;
-                    let at = e.curve_3d.evaluate_with_endpoints(t, s3, e3);
-                    let off = distance_to_polygon_boundary(view.map(at).unwrap(), &chord);
-                    assert!(off <= bound, "{off} over {bound}");
+                    let at = view
+                        .map(e.curve_3d.evaluate_with_endpoints(t, s3, e3))
+                        .unwrap();
+                    let off = distance_to_polygon_boundary(at, &chord);
+                    assert!(off <= bound + 1e-15, "{off} over {bound}");
+                    let x = (at - chord[0]).dot(along);
+                    assert!(!one_way || x >= last - 1e-15, "{x} back from {last}");
+                    last = x;
                 }
             }
         }
+    }
+
+    /// A closed quadratic spline in the plane `z = -1`, which the view about
+    /// the unit ball's south pole maps onto itself. It runs clockwise round
+    /// a triangle about 0.1 across, from its top to near its top, then
+    /// counter-clockwise round a lobe 0.15 round that holds the triangle,
+    /// back to its start. The lobe's points act on the last ten knot spans
+    /// only, each a ten-thousandth as long as each of the five others, so
+    /// that steps of a 128th of the domain step over the lobe and read the
+    /// spline as running clockwise.
+    fn flipped_spline() -> OrientedPCurveEdge {
+        use std::f64::consts::TAU;
+        let corners = [(0.0, 0.06), (0.05, -0.03), (-0.05, -0.03)];
+        let on = |(ax, ay): (f64, f64), (bx, by): (f64, f64), t: f64| {
+            Point3::new(ax + (bx - ax) * t, ay + (by - ay) * t, -1.0)
+        };
+        let mut points: Vec<Point3> = (0..3)
+            .flat_map(|k| {
+                let (a, b) = (corners[k], corners[(k + 1) % 3]);
+                [on(a, b, 0.0), on(a, b, 0.5)]
+            })
+            .collect();
+        points.push(on(corners[2], corners[0], 0.85));
+        let start = points[6].y().atan2(points[6].x());
+        points.extend((1..10).map(|j| {
+            let (s, c) = (TAU * f64::from(j)).madd(0.1, start).sin_cos();
+            Point3::new(0.15 * c, 0.15 * s, -1.0)
+        }));
+        points.push(points[0]);
+        let spans: Vec<f64> = (0..points.len() - 2)
+            .map(|k| if k >= 5 { 1e-4 } else { 1.0 })
+            .collect();
+        let total: f64 = spans.iter().sum();
+        let mut knots = vec![0.0; 3];
+        let mut run = 0.0;
+        for span in &spans[..spans.len() - 1] {
+            run += span;
+            knots.push(run / total);
+        }
+        knots.extend([1.0; 3]);
+        let weights = vec![1.0; points.len()];
+        let at = points[0];
+        let curve = NurbsCurve::new(2, knots, points, weights).unwrap();
+        let mut e = edge(&EdgeCurve::NurbsCurve(curve), at, at, true);
+        e.source_edge_idx = Some(0);
+        e
+    }
+
+    /// The signed area that the closed spline `e` bounds in the plane `z =
+    /// -1`, as it walks it: on its points at steps of 1e-5 of its domain,
+    /// and of 1e-8 over its last 2e-4.
+    fn fine_area(e: &OrientedPCurveEdge) -> f64 {
+        let EdgeCurve::NurbsCurve(curve) = &e.curve_3d else {
+            unreachable!()
+        };
+        let mut ts: Vec<f64> = (0..100_000).map(|k| f64::from(k) / 1e5).collect();
+        ts.extend((0..20_000).map(|k| 1.0 - 2e-4 + f64::from(k) * 1e-8));
+        ts.sort_by(f64::total_cmp);
+        let fine: Vec<Point3> = ts.iter().map(|&t| curve.evaluate(t)).collect();
+        let twice: f64 = fine
+            .iter()
+            .zip(fine.iter().cycle().skip(1))
+            .map(|(p, q)| p.x() * q.y() - q.x() * p.y())
+            .sum();
+        if e.forward { 0.5 * twice } else { -0.5 * twice }
+    }
+
+    #[test]
+    fn a_loop_whose_steps_wind_the_other_way_keeps_its_way_round() {
+        let (view, rim) = capped_ball(1.0);
+        let spline = flipped_spline();
+        assert!(fine_area(&spline) > 0.04);
+        assert!(view.loop_area(std::slice::from_ref(&spline)) < 0.0);
+        assert!(
+            view.proved_area(std::slice::from_ref(&spline))
+                .is_none_or(|a| a > 0.0)
+        );
+
+        // The face less the spline's disc, and the disc. Read from the
+        // steps, the loop that winds as the face does goes to the face as
+        // its hole, and its twin stands as the disc's outline. That must be
+        // refused, or the face's hole be the loop that winds against it.
+        let face = view.loop_area(std::slice::from_ref(&rim));
+        let with_face = if (fine_area(&spline) > 0.0) == (face > 0.0) {
+            spline.clone()
+        } else {
+            twin(&spline)
+        };
+        let loops = vec![
+            vec![rim.clone()],
+            vec![with_face.clone()],
+            vec![twin(&with_face)],
+        ];
+        let sections = halves(std::slice::from_ref(&spline));
+        let split = pieces(&view, std::slice::from_ref(&rim), &sections, loops, 1e-7);
+        assert!(split.is_none_or(|s| s.iter().all(|(outline, holes)| {
+            holes
+                .iter()
+                .flatten()
+                .all(|e| e.forward != with_face.forward)
+                && (outline[0].source_edge_idx.is_none() || outline[0].forward == with_face.forward)
+        })));
     }
 }
