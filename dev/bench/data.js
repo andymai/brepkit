@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795492629347,
+  "lastUpdate": 1795500920837,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -77273,6 +77273,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19505311,
             "range": "± 106552",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "1fedae6dc6724d26553742298ead18d590f93f90",
+          "message": "fix(math): prove that the marcher's seeds reach every part of a section, or refuse (#2790)\n\n## Summary\n\nOn main, the general marcher takes one seed from each grid cell it keeps\non the two surface patches. A second section loop in the same cells of\nboth patches gets no seed. So the marcher traces one loop and loses the\nother with no error (#2778). The boolean then splits nothing there.\n\nWith this change, a cover over the first patch proves that the march\nreaches every part of the section, or the march refuses. Take a probe of\n96 shallow twin dips of a rod into a ring. Main traces both loops in 45,\nrefuses 19 and silently loses a loop in 32. This branch traces 76,\nrefuses 20 and loses none. The three marched booleans of #2750 take\nwithin 2% of main's time.\n\nFixes #2778.\n\n## The change\n\nThe new `analytic_intersection/cover.rs` cuts the first patch's kept\ncells into leaves.\n\n- On each leaf, bounds on the second derivatives of the other surface's\ndistance prove one of two things. The leaf holds no section point, or it\nis simple. On a simple leaf one partial derivative keeps its sign and\neach edge holds at most one zero. So the section there is at most one\narc.\n- Simple leaves that share an edge with a sign change join one class. A\nloop cannot lie inside one simple leaf.\n- Any other leaf is cut until its size times the crossing's sine is\nbelow 16 times the tolerance. Below that, a fit within the tolerance\ncannot tell the arcs apart.\n- After the march, each class must be reached by a point of a kept\ncurve, placed in a leaf with each surface's own projection rates. A\nclass nothing reaches is cut, or refuses the section. A cut that runs\npast the budget is undone.\n- The leaf grid is offset from the seed grid, because a section along a\ngrid line otherwise blocked every sign reading.\n- Past 65536 leaves the cover stops, and the marcher seeds from both\npatches' cells as on main. When the cover finishes, the second patch's\nseeds are dropped, since the proof makes them redundant. That pays for\nmost of the cover's cost.\n\n## Tests\n\n- `two_loops_in_one_cell_of_each_patch_are_both_traced` dips a rod of\nradius 0.6 into the top of a ring of radii 4 and 1.5 by 8e-6. The\nsection is two loops 0.47 apart, each about 0.17 long, smaller than a\ncell of either patch. In three poses, both orders, it needs both loops\nwithin 1e-7 of both surfaces, against a closed-form oracle. On main it\ntraces one loop.\n- Mean of 30 runs in a profiling build, in ms, upright / turned /\nmirrored:\n\n| Boolean | main | this branch |\n|---|---|---|\n| ring ∩ rod | 11.72 / 11.88 / 11.76 | 11.74 / 11.77 / 11.56 |\n| ring − rod | 8.22 / 8.32 / 8.24 | 8.33 / 8.36 / 8.21 |\n| cone tip − rod | 1.82 / 2.01 / 1.83 | 1.85 / 2.01 / 1.84 |\n\n- brepkit-math and brepkit-algo (1375) pass, and so do all\nbrepkit-operations and brepkit-io tests (3287, 26 skipped).\n- The pose sweep is unchanged. In the truth audit, the ring ∩ rod line\nmoves from 6e-8 to 7e-8, because its curves now start from other seeds.\n\n## Still open\n\n- On a crossing as shallow as 7e-5 rad, a fit within 1e-7 of both\nsurfaces can lie up to 3e-3 off the section along it. The regression\nallows for this.\n- 20 of the 96 probe cases refuse, mostly because the fit runs out of\npasses. Many of them lost a loop with no error on main.\n- The proof does not cover a part of the section that stays near a node\nor a touch, nor a cover past its 65536 leaves.",
+          "timestamp": "2026-11-24T06:12:13Z",
+          "tree_id": "e1017cbcad317a014ec191d11c3375ca01bc9644",
+          "url": "https://github.com/andymai/brepkit/commit/1fedae6dc6724d26553742298ead18d590f93f90"
+        },
+        "date": 1795500907147,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 679151,
+            "range": "± 4805",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 729165,
+            "range": "± 15600",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8342,
+            "range": "± 22",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 454906,
+            "range": "± 2055",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 15176907,
+            "range": "± 98546",
             "unit": "ns/iter"
           }
         ]
