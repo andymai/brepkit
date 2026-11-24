@@ -2801,6 +2801,32 @@ trait SideFunction {
     /// surface, over the points within `reach` of the curve's point at `t`:
     /// its size divided by this is at most that distance there.
     fn scale_over(&self, t: f64, reach: f64) -> f64;
+
+    /// The least and the greatest distance from the surface over the
+    /// points within `reach` of the curve's point at `t` where the function
+    /// has the sign `positive` and a size from `least` to `most`.
+    fn distance_bounds(&self, sizes: (f64, f64), positive: bool, t: f64, reach: f64) -> (f64, f64);
+}
+
+/// The least and the greatest of `|d - r|` where `d² - r²` has the sign
+/// `positive` and a size from `least` to `most`: `d - r` is
+/// `(d² - r²) / (d + r)` and `d` is the root of `r² ± size`, so the
+/// distance grows with the size. Each bound is rounded outward.
+fn square_gap_bounds((least, most): (f64, f64), positive: bool, r: f64) -> (f64, f64) {
+    let (down, up) = (1.0 - 8.0 * f64::EPSILON, 1.0 + 8.0 * f64::EPSILON);
+    let rr = r * r;
+    if positive {
+        (
+            least / ((rr * up + least * up).sqrt() * up + r * up) * down,
+            most / ((rr * down + most * down).sqrt() * down + r * down) * up,
+        )
+    } else {
+        let root = |x: f64| x.max(0.0).sqrt();
+        (
+            least / (r * up + root((rr * up - least * down) * up) * up) * down,
+            most / (r * down + root((rr * down - most * up) * down) * down) * up,
+        )
+    }
 }
 
 impl SideFunction for SideForm {
@@ -2860,6 +2886,10 @@ impl SideFunction for SideForm {
     /// axis or the centre, which moves by at most `reach`.
     fn scale_over(&self, t: f64, reach: f64) -> f64 {
         self.frame(t).0.length() + reach + self.radius
+    }
+
+    fn distance_bounds(&self, sizes: (f64, f64), positive: bool, _: f64, _: f64) -> (f64, f64) {
+        square_gap_bounds(sizes, positive, self.radius)
     }
 }
 
@@ -3143,6 +3173,12 @@ impl SideFunction for RingForm {
         let e = (rho + self.major).hypot(q[2]) + reach;
         (d + self.minor) * e.madd(e, -self.minor * self.minor)
     }
+
+    /// The quartic's size bounds its distance only through its scale, and
+    /// leaves the greatest distance unbounded.
+    fn distance_bounds(&self, (least, _): (f64, f64), _: bool, t: f64, reach: f64) -> (f64, f64) {
+        (least / self.scale_over(t, reach), f64::INFINITY)
+    }
 }
 
 /// The side of a ring that a point of a line, a circle or an ellipse lies
@@ -3309,6 +3345,10 @@ impl SideFunction for TubeForm {
         let q = self.0.frame(t).0[0];
         (q[0].hypot(q[1]) - self.0.major).hypot(q[2]) + reach + self.0.minor
     }
+
+    fn distance_bounds(&self, sizes: (f64, f64), positive: bool, _: f64, _: f64) -> (f64, f64) {
+        square_gap_bounds(sizes, positive, self.0.minor)
+    }
 }
 
 /// Where a line, a circle or an ellipse meets a cylinder, a ball or a ring
@@ -3365,7 +3405,11 @@ fn analytic_side_roots(
 /// whose point lies nearer the surface is kept (a crossing of a line that
 /// lands on a vertex lands there exactly). A touch is read where a form
 /// turns, or failing that where the distance comes least, and is kept
-/// where its point lies within the tolerance of the surface. `None` for a
+/// where its point lies within the tolerance of the surface. A stretch on
+/// one side that may come within the tolerance is read on pieces proved
+/// clear of it, proved within it throughout, or neither: a stretch within
+/// it throughout is one contact, and each other holds a touch at each
+/// place it comes nearest the surface within the tolerance. `None` for a
 /// curve whose rounding is not well below the tolerance, or a curve so near
 /// the surface along its length that its pieces cannot be read.
 ///
@@ -3374,7 +3418,8 @@ fn analytic_side_roots(
 /// Returns [`AlgoError::IntersectionFailed`] for a crossing a form proves
 /// whose point, so bisected, still lies past the tolerance of the surface,
 /// and for a contact longer than two steps where the forms leave a side
-/// unknown for their rounding alone: two crossings can hide there.
+/// unknown for their rounding alone: two crossings can hide there; and for
+/// a stretch within the tolerance whose nearest places cannot be told apart.
 #[allow(clippy::too_many_lines)]
 fn side_roots(
     forms: &[&dyn SideFunction],
@@ -3396,6 +3441,15 @@ fn side_roots(
         Side(bool),
         Near(f64, f64, bool),
         Root(f64, bool, bool),
+    }
+    /// What a piece of a stretch that may come within the tolerance shows:
+    /// clear of the surface by the tolerance for sure, within it throughout
+    /// for sure, or neither.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Off {
+        Clear,
+        Within,
+        Unsure,
     }
     let Some(&form) = forms.first() else {
         return Ok(None);
@@ -3518,32 +3572,21 @@ fn side_roots(
         let (h, m) = (b - a, f64::midpoint(a, b));
         let (mut side, mut one_way, mut near) = (None, false, false);
         for f in forms {
-            let (Some((v, unsure, _)), Some((d, err)), Some(rest)) =
-                (f.value(m), f.derivatives(m), f.fifth_bound((a, b)))
+            let Some(([v, unsure, reach], [d0, err0, slope_reach])) = taylor_reach(*f, (a, b))
             else {
                 continue;
             };
-            // Taylor's bounds about the middle, with the fifth derivative's
-            // bound for the remainder and each derivative's rounding: how
-            // far the form, and its slope, can move from their values there
-            // across the piece.
-            let r = 0.5 * h;
-            let (r2, r3, r4) = (r * r, r * r * r, r * r * r * r);
-            let size = |j: usize| d[j - 1].abs() + err[j - 1];
-            let reach = (rest * r4 * r).madd(1.0 / 120.0, size(4) * r4 / 24.0)
-                + size(3) * r3 / 6.0
-                + size(2) * r2 / 2.0
-                + size(1) * r;
             if v.abs() > unsure + reach {
                 side = Some(v > 0.0);
-                // The least distance the piece may come to the surface.
-                let least_off = (v.abs() - unsure - reach) / f.scale_over(m, speed * r);
-                near = least_off < tol.linear;
-                break;
-            }
-            let slope_reach =
-                (rest * r4).madd(1.0 / 24.0, size(4) * r3 / 6.0) + size(3) * r2 / 2.0 + size(2) * r;
-            if d[0].abs() > err[0] + slope_reach {
+                // The least distance the piece may come to the surface, on
+                // the first form that bounds it past the tolerance.
+                let sizes = (v.abs() - unsure - reach, v.abs() + unsure + reach);
+                let (least, _) = f.distance_bounds(sizes, v > 0.0, m, speed * 0.5 * h);
+                near = least < tol.linear;
+                if !near {
+                    break;
+                }
+            } else if side.is_none() && d0.abs() > err0 + slope_reach {
                 one_way = true;
                 break;
             }
@@ -3667,48 +3710,157 @@ fn side_roots(
         }
     }
     // A run of pieces on one side for sure that may come within the
-    // tolerance of the surface holds a touch at each place inside it where
-    // the curve comes nearest the surface, if that is within the tolerance.
-    // A least at an end of the run falls on into what lies beside: a place
-    // where the forms may be zero, whose contact is read above; an end of
-    // the curve, whose contact is its vertex's; or a piece proved farther
-    // than the tolerance.
+    // tolerance of the surface is halved, down to the step, into pieces
+    // proved clear of the surface by the tolerance, pieces proved within it
+    // throughout, and pieces neither is proved on, before its leasts are
+    // sought: along a curve a constant distance off the surface, the form
+    // has no least to find. A stretch within the tolerance throughout is
+    // one contact, a touch where the curve comes nearest the surface along
+    // it. Each other stretch holds a touch at each place inside it where
+    // the curve comes nearest the surface, if that is within the
+    // tolerance. A stretch within the tolerance that reaches an end of the
+    // curve, or a place where the forms may be zero, is the contact there:
+    // the vertex's, or the one read above. A least within a step of an end
+    // of the run, or of a stretch within the tolerance, falls on into what
+    // lies beside: such a contact, a piece on one side for sure along which
+    // the distance runs one way on to the next contact, or the stretch's
+    // own touch.
+    // A piece whose distance from the surface is proved to move by less
+    // than a small share of the tolerance across it takes the side of the
+    // tolerance that its middle lies on: the floor below which a form
+    // takes no side leaves the pieces where the curve runs at the
+    // tolerance's distance unproved either way, however short.
+    let fine = tol.linear / 256.0;
+    let off_of = |(a, b): (f64, f64)| {
+        let m = f64::midpoint(a, b);
+        let mut off = Off::Unsure;
+        for f in forms {
+            let Some(([v, unsure, reach], _)) = taylor_reach(*f, (a, b)) else {
+                continue;
+            };
+            if v.abs() <= unsure + reach {
+                continue;
+            }
+            let sizes = (v.abs() - unsure - reach, v.abs() + unsure + reach);
+            let (least, most) = f.distance_bounds(sizes, v > 0.0, m, speed * 0.5 * (b - a));
+            if least >= tol.linear {
+                return Off::Clear;
+            }
+            if most < tol.linear {
+                off = Off::Within;
+            } else if most - least <= fine && off == Off::Unsure {
+                off = if f.side(m).abs() < tol.linear {
+                    Off::Within
+                } else {
+                    Off::Clear
+                };
+            }
+        }
+        off
+    };
     let within_tolerance = |t: f64| distance_to_surface(point_at(t), surface) < tol.linear;
+    let mut halved = 0;
     let mut k = 0;
     while k < marks.len() {
-        let Mark::Near(from, _, positive) = marks[k] else {
+        let Mark::Near(..) = marks[k] else {
             k += 1;
             continue;
         };
-        let mut to = from;
-        while let Some(&Mark::Near(_, b, _)) = marks.get(k) {
-            to = b;
+        // Whether the run starts or ends at an end of the curve or at a
+        // place where the forms may be zero, which hold its contact there.
+        let held_before = k == 0 || matches!(marks[k - 1], Mark::Root(..));
+        let mut positive = true;
+        let mut parts: Vec<(f64, f64, Off)> = Vec::new();
+        while let Some(&Mark::Near(a, b, side)) = marks.get(k) {
+            positive = side;
             k += 1;
+            let mut pieces = vec![(a, b)];
+            while let Some((a, b)) = pieces.pop() {
+                let off = off_of((a, b));
+                if off == Off::Unsure && b - a > shortest && halved < MOST_PIECES {
+                    halved += 1;
+                    let m = f64::midpoint(a, b);
+                    pieces.push((m, b));
+                    pieces.push((a, m));
+                    continue;
+                }
+                match parts.last_mut() {
+                    Some(last) if last.2 == off => last.1 = b,
+                    _ => parts.push((a, b, off)),
+                }
+            }
         }
-        // The last form reads the side nearest to a distance, whose leasts
-        // lie where the distance's do: the ring's quartic carries a factor
-        // that changes by half along a curve round the tube.
-        let Some(lows) = forms
-            .iter()
-            .rev()
-            .find_map(|f| lows_of(*f, (from, to), positive, shortest))
-        else {
-            return Err(AlgoError::IntersectionFailed(format!(
-                "where a {} runs within the tolerance of a {} from t = {from} to {to}, its \
-                 nearest places cannot be told apart",
-                curve.type_tag(),
-                surface.type_tag()
-            )));
-        };
-        for (a, b) in lows {
-            let t = least(a, b);
-            if t - from > shortest && to - t > shortest && within_tolerance(t) {
-                roots.push(SideRoot::Touch(t, point_at(t)));
+        let held_after = matches!(marks.get(k), None | Some(Mark::Root(..)));
+        for (j, &(a, b, off)) in parts.iter().enumerate() {
+            let (first, last) = (j == 0, j + 1 == parts.len());
+            match off {
+                Off::Clear => {}
+                Off::Within => {
+                    if (first && held_before) || (last && held_after) {
+                        continue;
+                    }
+                    let t = least(a, b);
+                    let inside = (!first || t - a > shortest) && (!last || b - t > shortest);
+                    if inside && within_tolerance(t) {
+                        roots.push(SideRoot::Touch(t, point_at(t)));
+                    }
+                }
+                Off::Unsure => {
+                    // The last form reads the side nearest to a distance,
+                    // whose leasts lie where the distance's do: the ring's
+                    // quartic carries a factor that changes by half along a
+                    // curve round the tube.
+                    let Some(lows) = forms
+                        .iter()
+                        .rev()
+                        .find_map(|f| lows_of(*f, (a, b), positive, shortest))
+                    else {
+                        return Err(AlgoError::IntersectionFailed(format!(
+                            "where a {} runs within the tolerance of a {} from t = {a} to {b}, \
+                             its nearest places cannot be told apart",
+                            curve.type_tag(),
+                            surface.type_tag()
+                        )));
+                    };
+                    let open_before = first || parts[j - 1].2 == Off::Within;
+                    let open_after = last || parts[j + 1].2 == Off::Within;
+                    for (la, lb) in lows {
+                        let t = least(la, lb);
+                        let inside =
+                            (!open_before || t - a > shortest) && (!open_after || b - t > shortest);
+                        if inside && within_tolerance(t) {
+                            roots.push(SideRoot::Touch(t, point_at(t)));
+                        }
+                    }
+                }
             }
         }
     }
     roots.sort_by(|x, y| x.at().0.total_cmp(&y.at().0));
     Ok(Some(roots))
+}
+
+/// Taylor's bounds about the middle of `piece` on `form`, with the fifth
+/// derivative's bound for the remainder and each derivative's rounding: the
+/// form's value there, the size below which its sign is not known, and how
+/// far the form can move from that value across the piece; then its slope
+/// there, that slope's rounding, and how far the slope can move. `None`
+/// where the form cannot be read on the piece.
+fn taylor_reach(form: &dyn SideFunction, (a, b): (f64, f64)) -> Option<([f64; 3], [f64; 3])> {
+    let m = f64::midpoint(a, b);
+    let (v, unsure, _) = form.value(m)?;
+    let (d, err) = form.derivatives(m)?;
+    let rest = form.fifth_bound((a, b))?;
+    let r = 0.5 * (b - a);
+    let (r2, r3, r4) = (r * r, r * r * r, r * r * r * r);
+    let size = |j: usize| d[j - 1].abs() + err[j - 1];
+    let reach = (rest * r4 * r).madd(1.0 / 120.0, size(4) * r4 / 24.0)
+        + size(3) * r3 / 6.0
+        + size(2) * r2 / 2.0
+        + size(1) * r;
+    let slope_reach =
+        (rest * r4).madd(1.0 / 24.0, size(4) * r3 / 6.0) + size(3) * r2 / 2.0 + size(2) * r;
+    Some(([v, unsure, reach], [d[0], err[0], slope_reach]))
 }
 
 /// The brackets in the parameters `run`, along which `form` keeps one sign
@@ -8281,5 +8433,105 @@ mod tests {
             }
         }
         assert!(worst == 0.0, "points stand {worst} past their boxes");
+    }
+
+    /// A circle a constant distance off a surface: about the centre of a
+    /// unit ball in a turned plane through it, and of a ball of radius 2 in
+    /// its equator's plane, about the axis of a wall of radius 2, and a
+    /// ring's core circle moved along its axis by the
+    /// tube's radius and that distance. At 1.5e-7 off, outside or inside,
+    /// the circle keeps clear of the surface by more than the tolerance and
+    /// meets it nowhere. At 5e-8 off it lies within the tolerance along its
+    /// whole length, one contact stretch that reaches its ends, whose
+    /// contact is its vertex's. The exact pass reads neither as an error,
+    /// and phase EF puts no vertex on either.
+    #[test]
+    fn a_circle_a_constant_distance_off_a_surface_is_clear_or_one_stretch() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_math::vec::Vec3;
+        let tol = Tolerance::new();
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let mut misread = Vec::new();
+        for gap in [1.5e-7, -1.5e-7, 5e-8, -5e-8] {
+            let unit = Circle3D::new(origin, Vec3::new(0.3, -0.5, 0.8), 1.0 + gap).unwrap();
+            let start = unit.evaluate(0.0);
+            let roots = analytic_side_roots(
+                &EdgeCurve::Circle(unit),
+                start,
+                start,
+                0.0,
+                std::f64::consts::TAU,
+                &FaceSurface::Sphere(SphericalSurface::new(origin, 1.0).unwrap()),
+                tol,
+            );
+            if !matches!(&roots, Ok(Some(r)) if r.is_empty()) {
+                misread.push(format!("unit ball at {gap}: {roots:?}"));
+            }
+            for what in ["ball", "wall", "ring"] {
+                let mut topo = Topology::new();
+                let (face, circle) = match what {
+                    "ball" => (
+                        ball_less_a_cap(&mut topo, origin, Mat4::identity()),
+                        Circle3D::new(origin, z, 2.0 + gap).unwrap(),
+                    ),
+                    "wall" => (
+                        wall_patch(&mut topo),
+                        Circle3D::new(Point3::new(0.0, 0.0, 2.0), z, 2.0 + gap).unwrap(),
+                    ),
+                    _ => (
+                        whole_ring_of(&mut topo, origin, Mat4::identity(), (2.0, 0.5)).0,
+                        Circle3D::new(Point3::new(0.0, 0.0, 0.5 + gap), z, 2.0).unwrap(),
+                    ),
+                };
+                let surface = topo.face(face).unwrap().surface().clone();
+                let curve = EdgeCurve::Circle(circle.clone());
+                let start = circle.evaluate(0.0);
+                let roots = analytic_side_roots(
+                    &curve,
+                    start,
+                    start,
+                    0.0,
+                    std::f64::consts::TAU,
+                    &surface,
+                    tol,
+                );
+                if !matches!(&roots, Ok(Some(r)) if r.is_empty()) {
+                    misread.push(format!("{what} at {gap}: {roots:?}"));
+                }
+                let a = topo.add_vertex(Vertex::new(start, 1e-7));
+                let edge = topo.add_edge(brepkit_topology::edge::Edge::new(a, a, curve));
+                let mut arena = GfaArena::new();
+                let ran = check_edge_face_pairs(
+                    &mut topo,
+                    &[edge],
+                    (&[], &[]),
+                    &[face],
+                    &[HashSet::new()],
+                    tol,
+                    &mut arena,
+                );
+                let made = arena
+                    .interference
+                    .ef
+                    .iter()
+                    .filter(|i| {
+                        matches!(
+                            i,
+                            Interference::EF {
+                                new_vertex: Some(_),
+                                ..
+                            }
+                        )
+                    })
+                    .count();
+                if ran.is_err() || made > 0 {
+                    misread.push(format!("{what} at {gap} in EF: {ran:?}, {made} vertices"));
+                }
+            }
+        }
+        assert!(misread.is_empty(), "{misread:#?}");
     }
 }
