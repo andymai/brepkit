@@ -13200,15 +13200,27 @@ fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
     // Each bound reads a conic's sizes from its radius or semi-axes, true
     // only on unit, square axes.
     let unit = |s: &SectionEdge| {
-        unit_conic(&s.curve_3d).map(|curve_3d| SectionEdge {
-            curve_3d,
-            ..s.clone()
+        unit_conic(&s.curve_3d).map(|(curve_3d, gap)| {
+            (
+                SectionEdge {
+                    curve_3d,
+                    ..s.clone()
+                },
+                gap,
+            )
         })
     };
-    let (Some(a), Some(b)) = (unit(a), unit(b)) else {
+    let (Some((a, gap_a)), Some((b, gap_b))) = (unit(a), unit(b)) else {
         return false;
     };
     let (a, b) = (&a, &b);
+    // Each stored arc lies within its arc gap of its unit form's, and the
+    // two gaps may take at most a quarter of the tolerance.
+    let off_forms = crate::builder::pcurve_compute::unit_conic_arc_gap(gap_a)
+        + crate::builder::pcurve_compute::unit_conic_arc_gap(gap_b);
+    if off_forms.is_nan() || off_forms > 0.25 * tol {
+        return false;
+    }
     let along = |s: &SectionEdge, t: f64| {
         let (t0, t1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
         s.curve_3d
@@ -13242,7 +13254,7 @@ fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
         let (n0, n1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
         [shorter, (n0, n1 - n0)]
     };
-    let within = |bound: f64| !bound.is_nan() && bound <= tol;
+    let within = |bound: f64| !bound.is_nan() && bound + off_forms <= tol;
     match (&a.curve_3d, &b.curve_3d) {
         (EdgeCurve::Line, EdgeCurve::Line) => true,
         (EdgeCurve::Circle(p), EdgeCurve::Circle(q)) => {
@@ -17199,5 +17211,34 @@ mod tests {
             Ellipse3D::with_axes(centre, z, 3.0, 1.5, x, (y + x * 1e-6).normalize().unwrap())
                 .unwrap();
         assert!(!same_section_curve(&section(ellipse), &section(askew), tol));
+    }
+
+    /// The upper half of a circle of radius 2e9, stored on the unit axes
+    /// and on the axes (1, 0, 0) and (0, 1 + 1.4e-14, 0): the two stand
+    /// 2.8e-5 apart at the top, past the 1e-5 margin, so they are two
+    /// curves. A copy on the unit axes is the same curve.
+    #[test]
+    fn a_huge_circle_on_axes_of_slightly_unequal_length_is_its_own_curve() {
+        use brepkit_math::curves::Circle3D;
+        let tol = 1e-5;
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let centre = Point3::new(0.0, 0.0, 0.0);
+        let unit = Circle3D::with_axes(centre, z, 2e9, x, y).unwrap();
+        let longer = Circle3D::with_axes(centre, z, 2e9, x, y * (1.0 + 1.4e-14)).unwrap();
+        let half = |c: &Circle3D| SectionEdge {
+            curve_3d: EdgeCurve::Circle(c.clone()),
+            ..line_section(c.evaluate(0.0), c.evaluate(std::f64::consts::PI))
+        };
+        let top = (longer.evaluate(std::f64::consts::FRAC_PI_2)
+            - unit.evaluate(std::f64::consts::FRAC_PI_2))
+        .length();
+        assert!(top > tol, "the halves stand {top:e} apart at the top");
+        assert!(!same_section_curve(&half(&unit), &half(&longer), tol));
+        assert!(!same_section_curve(&half(&longer), &half(&unit), tol));
+        assert!(same_section_curve(&half(&unit), &half(&unit.clone()), tol));
     }
 }

@@ -800,12 +800,20 @@ fn proved_conic_pcurve(
     surface: &FaceSurface,
     frame: Option<&PlaneFrame>,
 ) -> Option<Curve2D> {
-    let curve = &unit_conic(curve)?;
+    let (curve, gap) = unit_conic(curve)?;
+    let curve = &curve;
+    // The pcurve follows the unit form's arc between the points nearest the
+    // first and last samples, within the arc gap of the stored arc, which
+    // may take at most a quarter of the tolerance.
+    let off_form = unit_conic_arc_gap(gap);
+    if off_form > 0.25 * brepkit_math::tolerance::Tolerance::new().linear {
+        return None;
+    }
     if let Some(f) = frame {
         let (theta0, sweep) = conic_sweep(curve, pts_3d)?;
         return plane_conic_span(curve, (theta0, theta0 + sweep), f);
     }
-    proved_hermite_pcurve(curve, pts_3d, surface)
+    proved_hermite_pcurve(curve, pts_3d, surface, off_form)
 }
 
 /// A line, circle or ellipse edge along its samples, by the fraction `s` of
@@ -949,6 +957,7 @@ fn proved_hermite_pcurve(
     curve: &EdgeCurve,
     pts_3d: &[Point3],
     surface: &FaceSurface,
+    off_form: f64,
 ) -> Option<Curve2D> {
     let run = match curve {
         EdgeCurve::Line => EdgeRun::Line(*pts_3d.first()?, *pts_3d.last()?),
@@ -972,7 +981,7 @@ fn proved_hermite_pcurve(
     let allowed = 64.0f64.madd(
         -f64::EPSILON * size,
         brepkit_math::tolerance::Tolerance::new().linear,
-    );
+    ) - off_form;
     if allowed.is_nan() || allowed <= 0.0 {
         return None;
     }
@@ -1300,7 +1309,9 @@ fn straight_image_bound(
     surface: &FaceSurface,
     lift: impl Fn(Point2) -> Option<Point3>,
 ) -> Option<f64> {
-    let curve = &unit_conic(curve)?;
+    let raw = curve;
+    let (curve, gap) = unit_conic(curve)?;
+    let curve = &curve;
     let n = uv_pts.len() - 1;
     if pts_3d.len() != n + 1 || n == 0 {
         return None;
@@ -1325,7 +1336,7 @@ fn straight_image_bound(
             let at = |j: usize| (t1 - t0).madd(j as f64 * step, t0);
             (at(k), at(k + 1))
         });
-        let stray = piece_stray(curve, pts_3d[k], pts_3d[k + 1], span)?;
+        let stray = piece_stray(raw, pts_3d[k], pts_3d[k + 1], span)?;
         let piece = max_or_nan(gaps[k], gaps[k + 1]) + (step * step / 8.0).madd(bend, stray);
         pieces = max_or_nan(pieces, piece);
     }
@@ -1375,11 +1386,13 @@ fn straight_image_bound(
         Some(speed_u.madd(du.abs(), apart))
     });
     // A NaN bound proves nothing, and `f64::min` passes over it to the
-    // least of the others.
+    // least of the others. The two arc bounds compare the unit form's arc,
+    // which the stored one lies within the arc gap of.
     Some(
         [parallel, meridian]
             .into_iter()
             .flatten()
+            .map(|bound| bound + unit_conic_arc_gap(gap))
             .fold(pieces, f64::min),
     )
 }
@@ -1416,12 +1429,17 @@ fn image_bend_bound(surface: &FaceSurface, a: Point2, b: Point2) -> Option<f64> 
 /// `span`, the farthest point of the hulls of its Bezier pieces. `None` for
 /// a sweep over a quarter turn or a weight not above nothing.
 fn piece_stray(curve: &EdgeCurve, a: Point3, b: Point3, span: Option<(f64, f64)>) -> Option<f64> {
-    let curve = &unit_conic(curve)?;
+    let (curve, gap) = unit_conic(curve)?;
+    let curve = &curve;
+    // The stored piece lies within the arc gap of the unit form's piece
+    // between the points nearest `a` and `b`, which lie within the gap of
+    // `a` and `b`, so its chord within the gap of theirs.
+    let extra = gap + unit_conic_arc_gap(gap);
     let sagitta = |phi: f64, semi: f64| {
         let phi = shorter_arc_delta(phi).abs();
         (phi <= std::f64::consts::FRAC_PI_2).then(|| 2.0 * semi * (phi / 4.0).sin().powi(2))
     };
-    match curve {
+    let stray = match curve {
         EdgeCurve::Line => Some(0.0),
         EdgeCurve::Circle(c) => sagitta(c.project(b) - c.project(a), c.radius()),
         EdgeCurve::Ellipse(e) => sagitta(e.project(b) - e.project(a), e.semi_major()),
@@ -1451,7 +1469,8 @@ fn piece_stray(curve: &EdgeCurve, a: Point3, b: Point3, span: Option<(f64, f64)>
             }
             Some(most)
         }
-    }
+    };
+    stray.map(|stray| stray + extra)
 }
 
 /// The larger of `a` and `b`, or NaN where either is NaN. `f64::max` drops
@@ -1476,58 +1495,93 @@ fn segment_distance_3d(p: Point3, a: Point3, b: Point3) -> f64 {
     (p - (a + ab * t)).length()
 }
 
-/// The circle or ellipse `curve` with the sizes its bounds read: on unit
-/// axes square to each other, its normal their cross product, and its point
-/// at each parameter kept. A circle's axes may share any length, its radius
-/// then that length times the stored one: its parameter, read from the
-/// angle of a point's shadow on its axes, does not change with their length.
-/// An ellipse's axes must be unit already, as its projection reads its
-/// semi-axes against unit axes. `None` past 64 units of rounding, relative
-/// to the axes' lengths, on any of these, or where a size is not finite. A
-/// line or a B-spline comes back as it is.
-pub(super) fn unit_conic(curve: &EdgeCurve) -> Option<EdgeCurve> {
+/// The circle or ellipse `curve` with the sizes its bounds read, on unit
+/// axes square to each other with its normal their cross product, and a
+/// bound on how far its point at each parameter lies from the stored
+/// conic's. The first axis keeps its direction and the second is squared to
+/// it; a circle's radius is the stored one times the first axis's length,
+/// an ellipse's semi-axes the stored ones times their axes' lengths. A
+/// circle's axes may have any length: its parameter, read from the angle of
+/// a point's shadow on its axes, does not change with their common length.
+/// An ellipse's axes must be unit within 64 units of rounding, as its
+/// projection reads its semi-axes against unit axes. `None` where a length
+/// or a size is not finite or not positive, or an ellipse's major semi-axis
+/// comes out shorter than its minor. A line or a B-spline comes back as it
+/// is, with no gap.
+///
+/// At one parameter the stored point is `c + cos t A + sin t B` and the
+/// unit form's `c + cos t A' + sin t B'`, so the two lie within
+/// `|A - A'| + |B - B'|` of each other: that covers a difference in the
+/// axes' lengths and their skew. Each difference is read as it is computed,
+/// plus its rounding, and is nothing where the two are the same to the bit.
+pub(super) fn unit_conic(curve: &EdgeCurve) -> Option<(EdgeCurve, f64)> {
     let slack = 64.0 * f64::EPSILON;
-    let square = |u: Vec3, v: Vec3| {
+    // The unit first axis, the second squared to it, and both lengths.
+    let frame = |u: Vec3, v: Vec3| {
         let (lu, lv) = (u.length(), v.length());
-        (lu.is_finite() && lv.is_finite() && lu > 0.0 && lv > 0.0)
-            .then(|| (u.dot(v).abs() <= slack * lu * lv).then_some((lu, lv)))
-            .flatten()
+        if !(lu.is_finite() && lv.is_finite() && lu > 0.0 && lv > 0.0) {
+            return None;
+        }
+        let first = u * (1.0 / lu);
+        let rest = v - first * first.dot(v);
+        let second = rest.normalize().ok()?;
+        Some((first, second, lu, lv))
     };
-    let near = |x: f64, y: f64| (x - y).abs() <= slack * x.abs().max(y.abs());
+    // `|a x - b y|` for sizes `a`, `b` and axes `x`, `y`, with its rounding.
+    let apart = |a: f64, x: Vec3, b: f64, y: Vec3| {
+        let bits = |v: Vec3| [v.x().to_bits(), v.y().to_bits(), v.z().to_bits()];
+        if a.to_bits() == b.to_bits() && bits(x) == bits(y) {
+            return 0.0;
+        }
+        let gap = (x * a - y * b).length();
+        (2.0 * f64::EPSILON).madd(a * x.length() + b * y.length(), gap) * (1.0 + f64::EPSILON)
+    };
+    let gap_ok = |gap: f64| (gap.is_finite() && gap >= 0.0).then_some(gap);
     match curve {
         EdgeCurve::Circle(c) => {
-            let (lu, lv) = square(c.u_axis(), c.v_axis())?;
-            if !near(lu, lv) {
-                return None;
-            }
-            let (u, v) = (c.u_axis() * (1.0 / lu), c.v_axis() * (1.0 / lv));
+            let (u, w, lu, _) = frame(c.u_axis(), c.v_axis())?;
             let radius = c.radius() * lu;
-            if !radius.is_finite() {
+            if !(radius.is_finite() && radius > 0.0) {
                 return None;
             }
-            brepkit_math::curves::Circle3D::with_axes(c.center(), u.cross(v), radius, u, v)
-                .ok()
-                .map(EdgeCurve::Circle)
+            let gap =
+                apart(c.radius(), c.u_axis(), radius, u) + apart(c.radius(), c.v_axis(), radius, w);
+            let unit =
+                brepkit_math::curves::Circle3D::with_axes(c.center(), u.cross(w), radius, u, w)
+                    .ok()?;
+            Some((EdgeCurve::Circle(unit), gap_ok(gap)?))
         }
         EdgeCurve::Ellipse(e) => {
-            let (lu, lv) = square(e.u_axis(), e.v_axis())?;
-            if !near(lu, 1.0) || !near(lv, 1.0) || e.semi_major() < e.semi_minor() {
+            let (u, w, lu, lv) = frame(e.u_axis(), e.v_axis())?;
+            let near_one = |l: f64| (l - 1.0).abs() <= slack;
+            let (major, minor) = (e.semi_major() * lu, e.semi_minor() * lv);
+            if !near_one(lu) || !near_one(lv) || major < minor || minor.is_nan() || minor <= 0.0 {
                 return None;
             }
-            let (u, v) = (e.u_axis(), e.v_axis());
-            brepkit_math::curves::Ellipse3D::with_axes(
+            let gap = apart(e.semi_major(), e.u_axis(), major, u)
+                + apart(e.semi_minor(), e.v_axis(), minor, w);
+            let unit = brepkit_math::curves::Ellipse3D::with_axes(
                 e.center(),
-                u.cross(v),
-                e.semi_major(),
-                e.semi_minor(),
+                u.cross(w),
+                major,
+                minor,
                 u,
-                v,
+                w,
             )
-            .ok()
-            .map(EdgeCurve::Ellipse)
+            .ok()?;
+            Some((EdgeCurve::Ellipse(unit), gap_ok(gap)?))
         }
-        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => Some(curve.clone()),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => Some((curve.clone(), 0.0)),
     }
+}
+
+/// How far an arc of a stored conic and the arc of its [`unit_conic`]
+/// form between the nearest points to its ends can stand apart, `gap` the
+/// forms' gap at one parameter: the gap, plus the shift of each end, at most
+/// twice the gap as each end's nearest point lies no farther than its point
+/// at the same parameter.
+pub(super) const fn unit_conic_arc_gap(gap: f64) -> f64 {
+    3.0 * gap
 }
 
 /// The parameter of a circular or elliptic edge at its first sample and
@@ -1535,7 +1589,7 @@ pub(super) fn unit_conic(curve: &EdgeCurve) -> Option<EdgeCurve> {
 /// under a quarter turn apart. `None` for another curve, or when a step
 /// reads a quarter turn or more.
 fn conic_sweep(curve: &EdgeCurve, pts_3d: &[Point3]) -> Option<(f64, f64)> {
-    let curve = &unit_conic(curve)?;
+    let curve = &unit_conic(curve)?.0;
     let project = |p: Point3| match curve {
         EdgeCurve::Circle(c) => Some(c.project(p)),
         EdgeCurve::Ellipse(e) => Some(e.project(p)),
@@ -2639,10 +2693,48 @@ mod tests {
         assert!(off <= 1e-7, "the plane's pcurve strays {off:e}");
     }
 
+    /// How far a B-spline pcurve's image, read at 401 points, stands off the
+    /// stored circle `c` over its parameters from `t0` to `t1`: each distance
+    /// from a search over 801 of the stored circle's own points and a golden
+    /// section about the nearest.
+    fn stray_from_stored(
+        pcurve: &Curve2D,
+        surface: &FaceSurface,
+        c: &brepkit_math::curves::Circle3D,
+        (t0, t1): (f64, f64),
+    ) -> f64 {
+        let (lo, hi) = match pcurve {
+            Curve2D::Nurbs(n) => n.domain(),
+            Curve2D::Line(_) | Curve2D::Circle(_) | Curve2D::Ellipse(_) => return f64::NAN,
+        };
+        let step = (t1 - t0) / 800.0;
+        (0..=400)
+            .map(|k| {
+                let q = pcurve.evaluate((hi - lo).madd(f64::from(k) / 400.0, lo));
+                let p = surface.evaluate(q.x(), q.y()).unwrap();
+                let gap = |t: f64| (c.evaluate(t) - p).length();
+                let nearest = (0..=800)
+                    .map(|j| step.madd(f64::from(j), t0))
+                    .min_by(|&x, &y| gap(x).total_cmp(&gap(y)))
+                    .unwrap();
+                let (mut a, mut b) = (nearest - step, nearest + step);
+                for _ in 0..200 {
+                    let (m1, m2) = ((b - a).madd(0.381_966, a), (a - b).madd(0.381_966, b));
+                    if gap(m1) < gap(m2) {
+                        b = m2;
+                    } else {
+                        a = m1;
+                    }
+                }
+                gap(f64::midpoint(a, b)).min(gap(nearest))
+            })
+            .fold(0.0, max_or_nan)
+    }
+
     /// The quarter turns of [`a_quarter_turn_on_a_large_surface_gets_a_proved_pcurve`]
     /// with each circle stored on axes 1e12 long and its radius divided by
     /// as much: the pcurve is proved, as for the unit form, and lies within
-    /// the tolerance. An ellipse on axes 2 and 3 long, whose projection
+    /// the tolerance of the stored circle, read from its own points. An ellipse on axes 2 and 3 long, whose projection
     /// misreads its points, or on axes slightly askew, gets no proved
     /// pcurve.
     #[test]
@@ -2704,7 +2796,9 @@ mod tests {
                     proved.is_some(),
                     "{what} pose {k}: no proved pcurve on long axes"
                 );
-                // Read against the unit form: the same points.
+                let EdgeCurve::Circle(stored) = &long else {
+                    continue;
+                };
                 let mut pcurves = vec![(
                     "section",
                     compute_pcurve_on_surface(&long, a, b, &surface, &[], None),
@@ -2726,11 +2820,12 @@ mod tests {
                         ends,
                     ));
                 }
-                for (way, pcurve, ends) in pcurves {
-                    let (off, kind) = pcurve_stray(&pcurve, &surface, &curve, ends);
+                for (way, pcurve, _) in pcurves {
+                    assert!(matches!(pcurve, Curve2D::Nurbs(_)), "{what} pose {k} {way}");
+                    let off = stray_from_stored(&pcurve, &surface, stored, (at, at + span));
                     assert!(
                         off <= 1e-7,
-                        "{what} pose {k} {way}: the {kind} pcurve on long axes strays {off:e}"
+                        "{what} pose {k} {way}: the pcurve on long axes strays {off:e}"
                     );
                 }
             }
