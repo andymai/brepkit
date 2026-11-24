@@ -3070,6 +3070,8 @@ fn side_roots(
         return Ok(None);
     }
     let shortest = tol.linear / speed;
+    let whole_turn = matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
+        && ((hi - lo) - std::f64::consts::TAU).abs() <= 1e-9;
     let point_at = |t: f64| curve.evaluate_with_endpoints(t, start_pos, end_pos);
     let sure = |t: f64| {
         let (f, unsure) = form.value(t);
@@ -3232,7 +3234,12 @@ fn side_roots(
         let within = |t: f64| distance_to_surface(point_at(t), surface) < tol.linear;
         if crossing {
             // Several places, or one where no end's side was sure: the
-            // crossing lies between the sure sides either side of them.
+            // crossing lies between the sure sides either side of them,
+            // which can lie past the curve's ends. Round a whole turn of a
+            // conic that is the same place a turn back. Past an end of any
+            // other curve it is not the curve's: its part on the curve is a
+            // contact at that end, which lies in the same stretch without a
+            // sure side.
             let t = if crossed == 1 {
                 at
             } else {
@@ -3242,6 +3249,11 @@ fn side_roots(
                     }
                     _ => f64::midpoint(first, last),
                 }
+            };
+            let t = if whole_turn && !(lo..=hi).contains(&t) {
+                (t - lo).rem_euclid(std::f64::consts::TAU) + lo
+            } else {
+                t.clamp(lo, hi)
             };
             if !within(t) {
                 return Err(AlgoError::IntersectionFailed(format!(
@@ -6943,5 +6955,32 @@ mod tests {
         );
         check("wall", found, at(135.0, 2.0));
         assert!(misread.is_empty(), "{misread:#?}");
+    }
+
+    /// A segment along `y` at `x = -2` just under the top of the tube of a
+    /// ring of radii 2 and 0.5, from `y = 0.0076` to `0.1`, lies outside the
+    /// ring; it would enter it only at `y ≈ 0.0065`, before its start. No
+    /// root is read off the segment, and phase EF puts no vertex on it.
+    #[test]
+    fn a_segment_just_outside_a_ring_has_no_root_on_its_extension() {
+        use brepkit_math::mat::Mat4;
+        let tol = Tolerance::new();
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let mut topo = Topology::new();
+        let (face, ring) = whole_ring(&mut topo, origin, Mat4::identity());
+        let (start, end) = (
+            Point3::new(-2.0, 0.0076, 0.5 - 1.1e-10),
+            Point3::new(-2.0, 0.1, 0.5 - 1.1e-10),
+        );
+        let surface = FaceSurface::Torus(ring);
+        let roots = analytic_side_roots(&EdgeCurve::Line, start, end, 0.0, 1.0, &surface, tol)
+            .unwrap()
+            .unwrap_or_default();
+        assert!(
+            roots.iter().all(|r| (0.0..=1.0).contains(&r.at().0)),
+            "{roots:?}"
+        );
+        let found = ef_vertices(&mut topo, face, EdgeCurve::Line, start, Some(end));
+        assert!(found.is_empty(), "{found:?}");
     }
 }
