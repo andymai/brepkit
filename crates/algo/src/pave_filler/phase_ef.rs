@@ -5417,7 +5417,10 @@ mod tests {
                     q,
                 );
                 let off = (x.x().hypot(x.y()) - big).hypot(x.z()) - small;
-                assert!(off.abs() < 1e-12, "{x:?} lies {off} off the ring");
+                assert!(
+                    off.abs() < 1e-12 * big.max(1.0),
+                    "{x:?} lies {off} off the ring"
+                );
                 let (u, v) = (x.y().atan2(x.x()), x.z().atan2(x.x().hypot(x.y()) - big));
                 assert!(
                     u > u0 - 1e-9 && u < u1 + 1e-9 && v > v0 - 1e-9 && v < v1 + 1e-9,
@@ -6261,5 +6264,46 @@ mod tests {
                 "weight {weight}"
             );
         }
+    }
+
+    /// On the patch of a ring of radii 2000 and 500 from ring angle 0.3 to
+    /// 0.6 and tube angle 1.2 to 1.9, a line along the normal through a
+    /// point 2.5e-4 inside the arc at tube angle 1.9 crosses the patch there,
+    /// between two of its samples. The point lies 5e-7 of a radian inside
+    /// in tube angle, which is far more than the tolerance along the tube:
+    /// phase EF puts a vertex at the crossing.
+    #[test]
+    fn a_crossing_just_inside_a_large_ring_patchs_arc_is_kept() {
+        use brepkit_math::surfaces::ToroidalSurface;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let ring = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 2000.0, 500.0).unwrap();
+        let mut topo = Topology::new();
+        let window = ring_window(&mut topo, &ring, (0.3, 0.6), (1.2, 1.9), false);
+        let edges: Vec<OrientedEdge> = topo
+            .wire(window)
+            .unwrap()
+            .edges()
+            .iter()
+            .rev()
+            .map(|oe| OrientedEdge::new(oe.edge(), !oe.is_forward()))
+            .collect();
+        let outer = topo.add_wire(Wire::new(edges, true).unwrap());
+        let face = topo.add_face(Face::new(outer, vec![], FaceSurface::Torus(ring.clone())));
+        let v = 1.9 - 2.5e-4 / 500.0;
+        let (hit, normal) = (ring.evaluate(0.45, v), ring.normal(0.45, v));
+        let found = ef_vertices(
+            &mut topo,
+            face,
+            EdgeCurve::Line,
+            hit + normal * 10.07,
+            Some(hit - normal * 9.93),
+        );
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(
+            (found[0] - hit).length() < 1e-7,
+            "{:?} against {hit:?}",
+            found[0]
+        );
     }
 }

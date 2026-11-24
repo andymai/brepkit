@@ -2869,10 +2869,7 @@ impl TorusFaceTrim {
                 v_mid,
                 holes_only,
             } => {
-                let project = |p: Point3| torus_patch_uv(surface, *v_mid, p);
-                let (u, v) = project(point);
-                let (inside, close) =
-                    trim.contains(u, v, 1.0, torus_radius_at(surface, v), near, &project);
+                let (inside, close) = torus_trim_reads(surface, trim, *v_mid, point, near);
                 (inside != *holes_only, close)
             }
             _ => (true, false),
@@ -4407,6 +4404,27 @@ fn torus_patch_uv(
     (u, v_mid + wrap_pi(v - v_mid))
 }
 
+/// Whether `point`, on a torus patch's surface, lies on the patch by its
+/// `trim` read about `v_mid`, and whether it lies within `near` of one of
+/// its wires. The trim's `v` is the tube angle, so the ring's radius and
+/// `near` go to it in units of the tube's radius, in which a step along the
+/// tube is its angle. A wire at ring angle `g` from the point lies at least
+/// `ρ |sin g|` from it, for `ρ` the point's own distance from the axis,
+/// whatever the wire's distance is, so the trim reads `g` at `ρ`.
+fn torus_trim_reads(
+    surface: &brepkit_math::surfaces::ToroidalSurface,
+    trim: &UvTrim,
+    v_mid: f64,
+    point: Point3,
+    near: f64,
+) -> (bool, bool) {
+    let project = |p: Point3| torus_patch_uv(surface, v_mid, p);
+    let (u, v) = project(point);
+    let tube = surface.minor_radius();
+    let ring = torus_radius_at(surface, v);
+    trim.contains(u, v, 1.0, ring / tube, near / tube, &project)
+}
+
 /// The distance from the torus axis at tube angle `v`.
 fn torus_radius_at(surface: &brepkit_math::surfaces::ToroidalSurface, v: f64) -> f64 {
     surface.minor_radius().madd(v.cos(), surface.major_radius())
@@ -4593,7 +4611,7 @@ fn ray_torus_trim_crossings(
         if (surface.evaluate(u, v) - hit).length() > near.max(1e-9 * surface.major_radius()) {
             continue;
         }
-        let (inside, close) = trim.contains(u, v, 1.0, torus_radius_at(surface, v), near, &project);
+        let (inside, close) = torus_trim_reads(surface, trim, v_mid, hit, near);
         suspicious |= close;
         crossings += i32::from(inside != holes_only);
     }
@@ -6397,5 +6415,121 @@ mod tests {
         let on = |q: Point3| trim.contains_strict(q, &std::cell::Cell::new(None), 1e-3);
         assert!(on(p(0.25, 0.5, 0.0)));
         assert!(!on(p(0.75, 0.5, 0.0)));
+    }
+
+    /// The patch of a ring about `z` from ring angle `u.0` to `u.1` and
+    /// tube angle `v.0` to `v.1`, bounded by two arcs about the axis and two
+    /// round the tube.
+    fn ring_patch(
+        topo: &mut Topology,
+        ring: &brepkit_math::surfaces::ToroidalSurface,
+        (u0, u1): (f64, f64),
+        (v0, v1): (f64, f64),
+    ) -> brepkit_topology::face::FaceId {
+        use brepkit_math::curves::Circle3D;
+        let (big, small) = (ring.major_radius(), ring.minor_radius());
+        let along = |v: f64| {
+            let (sin, cos) = v.sin_cos();
+            Circle3D::new_with_ref(
+                Point3::new(0.0, 0.0, small * sin),
+                Vec3::new(0.0, 0.0, 1.0),
+                small.madd(cos, big),
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap()
+        };
+        let round = |u: f64| {
+            let (sin, cos) = u.sin_cos();
+            Circle3D::new_with_ref(
+                Point3::new(big * cos, big * sin, 0.0),
+                Vec3::new(sin, -cos, 0.0),
+                small,
+                Vec3::new(cos, sin, 0.0),
+            )
+            .unwrap()
+        };
+        let corner = |topo: &mut Topology, u: f64, v: f64| {
+            topo.add_vertex(Vertex::new(ring.evaluate(u, v), 1e-7))
+        };
+        let (a, b, c, d) = (
+            corner(topo, u0, v0),
+            corner(topo, u1, v0),
+            corner(topo, u1, v1),
+            corner(topo, u0, v1),
+        );
+        let low = topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(along(v0))));
+        let right = topo.add_edge(Edge::new(b, c, EdgeCurve::Circle(round(u1))));
+        let high = topo.add_edge(Edge::new(d, c, EdgeCurve::Circle(along(v1))));
+        let left = topo.add_edge(Edge::new(a, d, EdgeCurve::Circle(round(u0))));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(low, true),
+                    OrientedEdge::new(right, true),
+                    OrientedEdge::new(high, false),
+                    OrientedEdge::new(left, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        topo.add_face(Face::new(wire, vec![], FaceSurface::Torus(ring.clone())))
+    }
+
+    /// A patch from ring angle 0.3 to 0.6 and tube angle 1.2 to 1.9, on a
+    /// ring of radii 2000 and 500 and on one of radii 2e-3 and 5e-4, reads
+    /// a point of it as near a wire where it lies within `near` of it along
+    /// the surface, in tube angle and in ring angle alike. On the large
+    /// ring, a ray along the normal through a point 2.5e-4 inside the arc
+    /// at tube angle 1.9 crosses the patch with no doubt.
+    #[test]
+    fn a_ring_patch_reads_a_point_near_its_wires_by_length() {
+        use brepkit_math::surfaces::ToroidalSurface;
+        let near = 1e-6;
+        let mut misread = Vec::new();
+        for (big, small) in [(2000.0, 500.0), (2e-3, 5e-4)] {
+            let ring = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), big, small).unwrap();
+            let mut topo = Topology::new();
+            let face = ring_patch(&mut topo, &ring, (0.3, 0.6), (1.2, 1.9));
+            let trim = TorusFaceTrim::new(&topo, face).unwrap().unwrap();
+            let ring_at = small.madd(1.55_f64.cos(), big);
+            for off in [0.1, 0.5, 2.0, 10.0] {
+                let gap = off * near;
+                let inside_v = ring.evaluate(0.45, 1.9 - gap / small);
+                let inside_u = ring.evaluate(0.6 - gap / ring_at, 1.55);
+                for (what, p) in [("tube", inside_v), ("ring", inside_u)] {
+                    let clear = trim.holds_clear(p, near);
+                    if clear != (gap > near) || !trim.holds(p, near) {
+                        misread.push(format!("{big}: {what} {gap:e} inside reads clear {clear}"));
+                    }
+                }
+            }
+        }
+        assert!(misread.is_empty(), "{misread:#?}");
+        let ring = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 2000.0, 500.0).unwrap();
+        let mut topo = Topology::new();
+        let face = ring_patch(&mut topo, &ring, (0.3, 0.6), (1.2, 1.9));
+        let geom = torus_trim_geom(&topo, topo.face(face).unwrap(), &ring)
+            .unwrap()
+            .unwrap();
+        assert!(matches!(geom, FaceGeom::TorusTrim { .. }));
+        if let FaceGeom::TorusTrim {
+            trim,
+            v_mid,
+            holes_only,
+            ..
+        } = &geom
+        {
+            let v = 1.9 - 2.5e-4 / 500.0;
+            let (hit, normal) = (ring.evaluate(0.45, v), ring.normal(0.45, v));
+            let (count, suspicious) = ray_torus_trim_crossings(
+                hit + normal * 100.0,
+                -normal,
+                &ring,
+                (trim, *v_mid, *holes_only),
+                Tolerance::new(),
+            );
+            assert_eq!((count, suspicious), (1, false));
+        }
     }
 }
