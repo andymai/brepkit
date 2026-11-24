@@ -13196,6 +13196,19 @@ fn plane_internal_line_loops(
 /// too, a quick refusal and never a proof. Any other pair is taken for two
 /// curves.
 fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
+    use crate::builder::pcurve_compute::unit_conic;
+    // Each bound reads a conic's sizes from its radius or semi-axes, true
+    // only on unit, square axes.
+    let unit = |s: &SectionEdge| {
+        unit_conic(&s.curve_3d).map(|curve_3d| SectionEdge {
+            curve_3d,
+            ..s.clone()
+        })
+    };
+    let (Some(a), Some(b)) = (unit(a), unit(b)) else {
+        return false;
+    };
+    let (a, b) = (&a, &b);
     let along = |s: &SectionEdge, t: f64| {
         let (t0, t1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
         s.curve_3d
@@ -17110,5 +17123,81 @@ mod tests {
             assert!(same_section_curve(&arc, &copy, tol), "turned by {angle:e}");
             assert!(same_section_curve(&copy, &arc, tol), "turned by {angle:e}");
         }
+    }
+
+    /// A section's circle stored on axes `scale` long, its radius divided by
+    /// `scale`: the same points at the same parameters.
+    fn on_long_axes(s: &SectionEdge, scale: f64) -> SectionEdge {
+        let EdgeCurve::Circle(c) = &s.curve_3d else {
+            return s.clone();
+        };
+        let long = brepkit_math::curves::Circle3D::with_axes(
+            c.center(),
+            c.normal(),
+            c.radius() / scale,
+            c.u_axis() * scale,
+            c.v_axis() * scale,
+        )
+        .unwrap();
+        SectionEdge {
+            curve_3d: EdgeCurve::Circle(long),
+            ..s.clone()
+        }
+    }
+
+    /// The pair of [`large_arc_and_its_turned_copy`] with both circles
+    /// stored on axes 1e12 long: the copy turned by 1.06e-9 still stays a
+    /// curve of its own, and the copy turned by nothing still merges. An
+    /// ellipse on axes of other lengths, whose projection misreads its
+    /// points, or on axes slightly askew, is refused.
+    #[test]
+    fn arcs_on_long_axes_merge_as_their_unit_forms_do() {
+        use brepkit_math::curves::Ellipse3D;
+        let tol = 1e-5;
+        for (angle, merges) in [(1.06e-9, false), (0.0, true)] {
+            let (arc, copy) = large_arc_and_its_turned_copy(angle);
+            assert_eq!(
+                same_section_curve(&arc, &copy, tol),
+                merges,
+                "unit, {angle:e}"
+            );
+            let (long_arc, long_copy) = (on_long_axes(&arc, 1e12), on_long_axes(&copy, 1e12));
+            for (a, b) in [
+                (&long_arc, &long_copy),
+                (&arc, &long_copy),
+                (&long_arc, &copy),
+            ] {
+                assert_eq!(
+                    same_section_curve(a, b, tol),
+                    merges,
+                    "long axes, {angle:e}"
+                );
+            }
+        }
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let (x, y) = (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
+        let centre = Point3::new(5.0, 5.0, 0.0);
+        let ellipse = Ellipse3D::with_axes(centre, z, 3.0, 1.5, x, y).unwrap();
+        let (a, b) = (ellipse.evaluate(0.4), ellipse.evaluate(1.9));
+        let section = |e: Ellipse3D| SectionEdge {
+            curve_3d: EdgeCurve::Ellipse(e),
+            ..line_section(a, b)
+        };
+        let scaled = Ellipse3D::with_axes(centre, z, 1.5, 0.5, x * 2.0, y * 3.0).unwrap();
+        assert!((scaled.evaluate(0.4) - a).length() < 1e-12);
+        assert!(!same_section_curve(
+            &section(ellipse.clone()),
+            &section(scaled),
+            tol
+        ));
+        assert!(same_section_curve(
+            &section(ellipse.clone()),
+            &section(ellipse.clone()),
+            tol
+        ));
+        let askew =
+            Ellipse3D::with_axes(centre, z, 3.0, 1.5, x, (y + x * 1e-6).normalize().unwrap())
+                .unwrap();
+        assert!(!same_section_curve(&section(ellipse), &section(askew), tol));
     }
 }

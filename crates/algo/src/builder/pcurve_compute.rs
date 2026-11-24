@@ -800,6 +800,7 @@ fn proved_conic_pcurve(
     surface: &FaceSurface,
     frame: Option<&PlaneFrame>,
 ) -> Option<Curve2D> {
+    let curve = &unit_conic(curve)?;
     if let Some(f) = frame {
         let (theta0, sweep) = conic_sweep(curve, pts_3d)?;
         return plane_conic_span(curve, (theta0, theta0 + sweep), f);
@@ -1299,6 +1300,7 @@ fn straight_image_bound(
     surface: &FaceSurface,
     lift: impl Fn(Point2) -> Option<Point3>,
 ) -> Option<f64> {
+    let curve = &unit_conic(curve)?;
     let n = uv_pts.len() - 1;
     if pts_3d.len() != n + 1 || n == 0 {
         return None;
@@ -1414,6 +1416,7 @@ fn image_bend_bound(surface: &FaceSurface, a: Point2, b: Point2) -> Option<f64> 
 /// `span`, the farthest point of the hulls of its Bezier pieces. `None` for
 /// a sweep over a quarter turn or a weight not above nothing.
 fn piece_stray(curve: &EdgeCurve, a: Point3, b: Point3, span: Option<(f64, f64)>) -> Option<f64> {
+    let curve = &unit_conic(curve)?;
     let sagitta = |phi: f64, semi: f64| {
         let phi = shorter_arc_delta(phi).abs();
         (phi <= std::f64::consts::FRAC_PI_2).then(|| 2.0 * semi * (phi / 4.0).sin().powi(2))
@@ -1473,11 +1476,66 @@ fn segment_distance_3d(p: Point3, a: Point3, b: Point3) -> f64 {
     (p - (a + ab * t)).length()
 }
 
+/// The circle or ellipse `curve` with the sizes its bounds read: on unit
+/// axes square to each other, its normal their cross product, and its point
+/// at each parameter kept. A circle's axes may share any length, its radius
+/// then that length times the stored one: its parameter, read from the
+/// angle of a point's shadow on its axes, does not change with their length.
+/// An ellipse's axes must be unit already, as its projection reads its
+/// semi-axes against unit axes. `None` past 64 units of rounding, relative
+/// to the axes' lengths, on any of these, or where a size is not finite. A
+/// line or a B-spline comes back as it is.
+pub(super) fn unit_conic(curve: &EdgeCurve) -> Option<EdgeCurve> {
+    let slack = 64.0 * f64::EPSILON;
+    let square = |u: Vec3, v: Vec3| {
+        let (lu, lv) = (u.length(), v.length());
+        (lu.is_finite() && lv.is_finite() && lu > 0.0 && lv > 0.0)
+            .then(|| (u.dot(v).abs() <= slack * lu * lv).then_some((lu, lv)))
+            .flatten()
+    };
+    let near = |x: f64, y: f64| (x - y).abs() <= slack * x.abs().max(y.abs());
+    match curve {
+        EdgeCurve::Circle(c) => {
+            let (lu, lv) = square(c.u_axis(), c.v_axis())?;
+            if !near(lu, lv) {
+                return None;
+            }
+            let (u, v) = (c.u_axis() * (1.0 / lu), c.v_axis() * (1.0 / lv));
+            let radius = c.radius() * lu;
+            if !radius.is_finite() {
+                return None;
+            }
+            brepkit_math::curves::Circle3D::with_axes(c.center(), u.cross(v), radius, u, v)
+                .ok()
+                .map(EdgeCurve::Circle)
+        }
+        EdgeCurve::Ellipse(e) => {
+            let (lu, lv) = square(e.u_axis(), e.v_axis())?;
+            if !near(lu, 1.0) || !near(lv, 1.0) || e.semi_major() < e.semi_minor() {
+                return None;
+            }
+            let (u, v) = (e.u_axis(), e.v_axis());
+            brepkit_math::curves::Ellipse3D::with_axes(
+                e.center(),
+                u.cross(v),
+                e.semi_major(),
+                e.semi_minor(),
+                u,
+                v,
+            )
+            .ok()
+            .map(EdgeCurve::Ellipse)
+        }
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => Some(curve.clone()),
+    }
+}
+
 /// The parameter of a circular or elliptic edge at its first sample and
 /// its signed sweep over the samples `pts_3d`, which lie evenly along it
 /// under a quarter turn apart. `None` for another curve, or when a step
 /// reads a quarter turn or more.
 fn conic_sweep(curve: &EdgeCurve, pts_3d: &[Point3]) -> Option<(f64, f64)> {
+    let curve = &unit_conic(curve)?;
     let project = |p: Point3| match curve {
         EdgeCurve::Circle(c) => Some(c.project(p)),
         EdgeCurve::Ellipse(e) => Some(e.project(p)),
@@ -2579,6 +2637,133 @@ mod tests {
             })
             .fold(0.0, max_or_nan);
         assert!(off <= 1e-7, "the plane's pcurve strays {off:e}");
+    }
+
+    /// The quarter turns of [`a_quarter_turn_on_a_large_surface_gets_a_proved_pcurve`]
+    /// with each circle stored on axes 1e12 long and its radius divided by
+    /// as much: the pcurve is proved, as for the unit form, and lies within
+    /// the tolerance. An ellipse on axes 2 and 3 long, whose projection
+    /// misreads its points, or on axes slightly askew, gets no proved
+    /// pcurve.
+    #[test]
+    fn a_conic_on_long_axes_gets_the_proof_of_its_unit_form() {
+        use brepkit_math::curves::{Circle3D, Ellipse3D};
+        use std::f64::consts::FRAC_PI_2;
+        for k in 0..3 {
+            let pose = Pose::new(k, 1e4);
+            for (what, surface, curve, at, span) in arcs_of_span(&pose, 1e4, FRAC_PI_2) {
+                let long = match &curve {
+                    EdgeCurve::Circle(c) => EdgeCurve::Circle(
+                        Circle3D::with_axes(
+                            c.center(),
+                            c.normal(),
+                            c.radius() * 1e-12,
+                            c.u_axis() * 1e12,
+                            c.v_axis() * 1e12,
+                        )
+                        .unwrap(),
+                    ),
+                    EdgeCurve::Ellipse(e) => EdgeCurve::Ellipse(
+                        Ellipse3D::with_axes(
+                            e.center(),
+                            e.normal(),
+                            e.semi_major() / 2.0,
+                            e.semi_minor() / 3.0,
+                            e.u_axis() * 2.0,
+                            e.v_axis() * 3.0,
+                        )
+                        .unwrap(),
+                    ),
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => unreachable!(),
+                };
+                let point = |t: f64| match &curve {
+                    EdgeCurve::Circle(c) => c.evaluate(t),
+                    EdgeCurve::Ellipse(e) => e.evaluate(t),
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => unreachable!(),
+                };
+                let (a, b) = (point(at), point(at + span));
+                let (samples, _) = sample_edge_on_surface(&long, a, b, &surface);
+                let proved = proved_conic_pcurve(&long, &samples, &surface, None);
+                if let EdgeCurve::Ellipse(e) = &curve {
+                    assert!(proved.is_none(), "{what} pose {k}: proved on scaled axes");
+                    let askew = Ellipse3D::with_axes(
+                        e.center(),
+                        e.normal(),
+                        e.semi_major(),
+                        e.semi_minor(),
+                        e.u_axis(),
+                        (e.v_axis() + e.u_axis() * 1e-6).normalize().unwrap(),
+                    )
+                    .unwrap();
+                    let askew = EdgeCurve::Ellipse(askew);
+                    let (samples, _) = sample_edge_on_surface(&askew, a, b, &surface);
+                    assert!(proved_conic_pcurve(&askew, &samples, &surface, None).is_none());
+                    continue;
+                }
+                assert!(
+                    proved.is_some(),
+                    "{what} pose {k}: no proved pcurve on long axes"
+                );
+                // Read against the unit form: the same points.
+                let mut pcurves = vec![(
+                    "section",
+                    compute_pcurve_on_surface(&long, a, b, &surface, &[], None),
+                    (a, b),
+                )];
+                for (forward, way) in [(true, "forward"), (false, "back")] {
+                    let ends = if forward { (a, b) } else { (b, a) };
+                    pcurves.push((
+                        way,
+                        compute_boundary_pcurve_on_surface(
+                            &long,
+                            a,
+                            b,
+                            forward,
+                            &surface,
+                            &[],
+                            None,
+                        ),
+                        ends,
+                    ));
+                }
+                for (way, pcurve, ends) in pcurves {
+                    let (off, kind) = pcurve_stray(&pcurve, &surface, &curve, ends);
+                    assert!(
+                        off <= 1e-7,
+                        "{what} pose {k} {way}: the {kind} pcurve on long axes strays {off:e}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A piece of a circle of radius 1e4 stored as radius 1e-8 on axes 1e12
+    /// long: the bound on how far it strays from its chord covers its true
+    /// sagitta, as for its unit form.
+    #[test]
+    fn a_circle_on_long_axes_strays_from_its_chord_by_its_true_sagitta() {
+        use brepkit_math::curves::Circle3D;
+        let unit =
+            Circle3D::new(Point3::new(1.0, 2.0, 3.0), Vec3::new(0.0, 0.0, 1.0), 1e4).unwrap();
+        let long = Circle3D::with_axes(
+            unit.center(),
+            unit.normal(),
+            1e-8,
+            unit.u_axis() * 1e12,
+            unit.v_axis() * 1e12,
+        )
+        .unwrap();
+        let (a, b) = (unit.evaluate(0.3), unit.evaluate(0.4));
+        assert!((long.evaluate(0.3) - a).length() < 1e-9);
+        let middle = unit.evaluate(0.35);
+        let sagitta = (middle - (a + (b - a) * 0.5)).length();
+        for curve in [EdgeCurve::Circle(unit), EdgeCurve::Circle(long)] {
+            let stray = piece_stray(&curve, a, b, None).unwrap();
+            assert!(
+                stray >= sagitta,
+                "stray {stray:e} under the sagitta {sagitta:e}"
+            );
+        }
     }
 
     /// Arcs that a straight run in (u, v) traces exactly, on surfaces of
