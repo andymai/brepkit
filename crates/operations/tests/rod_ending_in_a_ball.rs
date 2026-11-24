@@ -368,6 +368,10 @@ fn two_rods_fuse_onto_a_ball_with_its_faces_unified() {
         (0.0, PI, 1.0, false, (false, false)),
         (0.3, 2.2, 0.4, false, (false, true)),
         (0.3, 2.9, -0.41, false, (false, false)),
+        // The second cap's sections end a whole turn of the chart from the
+        // outline's copies of their ends.
+        (0.0, 2.9, -0.41, false, (false, false)),
+        (0.3, 2.9, -0.41, false, (false, true)),
     ] {
         for (at, mirrored) in poses() {
             two_rods_joined_at_one_ball(

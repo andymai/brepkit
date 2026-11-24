@@ -10527,7 +10527,21 @@ fn split_face_2d_impl(
     // junction can carry UV copies ~1e-6 apart (the fit-error class), which
     // lands them in different graph cells and the section reads as pendant.
     // Adopting the boundary's UV copy is a sub-weld no-op in 3D.
+    // On a ball face round a pole, a section can end a whole turn from the
+    // boundary's copy of its end: the one-turn window holds the outline and
+    // the section's middle. The section keeps its own copy of the end,
+    // moved onto the boundary's.
     {
+        let turn = if round_a_pole {
+            super::pcurve_compute::surface_periods(&surface).0
+        } else {
+            None
+        };
+        let near_copy = |auv: Point2, uv: Point2| {
+            let du = auv.x() - uv.x();
+            let du = turn.map_or(du, |p| du - (du / p).round() * p);
+            Point2::new(uv.x() + du, auv.y())
+        };
         let (bnd, secs) = all_edges.split_at_mut(n_boundary_edges);
         let mut anchors: Vec<(Point3, Point2)> = bnd
             .iter()
@@ -10542,11 +10556,12 @@ fn split_face_2d_impl(
                 };
                 let snapped = anchors
                     .iter()
+                    .map(|&(a3, auv)| (a3, near_copy(auv, uv)))
                     .filter(|(a3, auv)| {
                         (*a3 - p3).length() < tol.linear && (*auv - uv).length() < 1e-2
                     })
                     .min_by(|(_, a), (_, b)| (*a - uv).length().total_cmp(&(*b - uv).length()))
-                    .map(|(_, auv)| *auv);
+                    .map(|(_, auv)| auv);
                 let final_uv = snapped.unwrap_or(uv);
                 if pick_start {
                     e.start_uv = final_uv;
