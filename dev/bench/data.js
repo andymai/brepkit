@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795542603177,
+  "lastUpdate": 1795546320998,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -77759,6 +77759,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19406236,
             "range": "± 97849",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "4af2de9f2635d8272c5eb6f6ef5907b401ac8e43",
+          "message": "fix(algo): keep an arc apart from the line between its ends in the plane arrangement (#2837)\n\n## Summary\n\nOn main, an arc and the line between its ends lose the segment between\nthem on a plane face (#2822). Three layers drop it:\n\n- `plane_internal_line_loops` dedups sections on their ends, and keeps\none of the arc and the chord. #2825 fixes this layer.\n- The greedy walker then gives loops that the later checks refuse, so\nthe face goes to the plane arrangement.\n- `split_plane_face_by_arrangement` reads arcs by their chords. It\nsplits two arcs with the same ends at their middles, but not an arc\nagainst a line. So the sub-edge dedup keeps the arc and drops the line.\n\nThis change fixes the arrangement layer. Where the arc and chord reach\nthe face's rim, the split is now exact on its own. In the issue's case,\nthe cluster lies clear of the rim and also needs #2825. On a local merge\nwith #2825, every case is exact in 3 poses, in both section orders, with\nand without a hole.\n\nFor #2822. A follow-up commit after #2825 merges adds the issue's own\ncase as a test.\n\n## The change\n\nIn the arrangement, lines now join the groups of sections with the same\ntwo ends, keyed by their chord middle. So an arc splits at its middle\nagainst a line with the same ends, and the two stay apart. Two lines\nwith the same ends still merge.\n\n## Tests\n\nThe segment's area is π/2 − 1 = 0.5708.\n\n| Case | main | this branch |\n|---|---|---|\n| chord to the rim, split and imprint | 49.43, 50.57 | 0.5708, 49.43, 50\n|\n| apex on the rim | 4.429, 95.571 | 0.5708, 4.429, 95 |\n\n- `the_arrangement_keeps_an_arc_apart_from_its_chord` and\n`an_arc_and_its_chord_meeting_the_rim_split_off_their_segment` check\neach area within 1e-9 against its closed form, in 3 poses and both\norders. The second includes a plate with a hole. Both fail on main.\n- `arc_and_chord_pocket.rs` imprints an arc and its chord on a plate,\nwhich fails on main. It also guards a D pocket and a round pocket cut\nalong a chord. Each is valid with a closed mesh, the right volume within\n1e-9, and point classes, in 3 poses.\n- brepkit-algo (647) and the boolean lib tests (230) pass, and so do all\nbrepkit-operations and brepkit-io tests (3312, 28 skipped). The random\nsweep, the pose sweep and the truth audit give the same output as main.\n\n## Still open\n\n- `split_face_2d` peels a circle as a lone cap even where another\nsection crosses it, with no error (#2835).\n- The walker's turn rule and the `DropLargest` path give wrong loops\nthat later checks catch (#2836).\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the plane arrangement dropping the segment between an arc and the\nline between its ends, so face splitting keeps them apart.\n\nThe arrangement read each arc by its chord: it split two section arcs\nthat share ends at their middles, but not an arc against a line with the\nsame ends. The sub-edge dedup then kept the arc and dropped the line,\nmerging the segment into the region across the line. Lines now join the\ngroups of inputs keyed by their chord middle, so an arc splits at its\nmiddle against a line with the same ends, while two lines with the same\nends still merge.\n\nWhere the arc and chord meet the rim, the split is now exact on its own.\nThe case where the cluster lies clear of the rim also needs #2825.\n\n- Tests check piece areas to closed forms in 3 poses and both section\norders, with and without a hole, plus imprinted arcs and D and round\npockets cut along a chord.\n\n<sup>Written for commit 8496d1a6d89ced6dd0fa0e23d1a68a47e5788c69.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2837?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2837?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2837&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-24T18:48:24Z",
+          "tree_id": "cbe4f111b1edb7b2aece067713c23cb4fe8d9048",
+          "url": "https://github.com/andymai/brepkit/commit/4af2de9f2635d8272c5eb6f6ef5907b401ac8e43"
+        },
+        "date": 1795546309535,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 877466,
+            "range": "± 24368",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 932360,
+            "range": "± 15791",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9666,
+            "range": "± 28",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 503672,
+            "range": "± 11513",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19449015,
+            "range": "± 114362",
             "unit": "ns/iter"
           }
         ]
