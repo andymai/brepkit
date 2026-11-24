@@ -47,14 +47,17 @@ type Table = [[f64; ORDER + 1]; ORDER + 1];
 
 /// A pcurve on `surface` for the edge `curve` from `start` to `end`, on the
 /// span `[0, 1]`, whose image is proved within `tolerance` of the edge at
-/// the same fraction of both spans, or `None`.
+/// the same fraction of both spans, as a reader evaluates the spline, or
+/// `None`.
 ///
 /// `None` on a periodic surface, a surface with a weight that is not a
 /// positive normal float, an edge of no length, where a point of the edge
 /// does not project onto the surface, where the surface's parameters do not
 /// move along the edge (a pole), past [`MOST_PIECES`], where a term of the
 /// bound underflows, or where the bound does not hold: an edge that lies
-/// farther than `tolerance` from the surface gets none.
+/// farther than `tolerance` from the surface gets none, and so does one on
+/// a surface whose parameters lie so far from nothing that reading them
+/// rounds by more than `tolerance` in space.
 #[must_use]
 pub fn proved_nurbs_pcurve(
     curve: &EdgeCurve,
@@ -109,7 +112,20 @@ pub fn proved_nurbs_pcurve(
     let first = run.at(0.0)?;
     let found =
         brepkit_math::nurbs::projection::project_point_to_surface(surface, first.0, newton).ok()?;
-    let mut done = vec![jets.node(&run, 0.0, Point2::new(found.u, found.v), newton)?];
+    let start = jets.node(&run, 0.0, Point2::new(found.u, found.v), newton)?;
+    // A surface whose parameters lie far from nothing, beside its own
+    // size, reads any spline there to more than the tolerance: the first
+    // piece's bound holds at least this.
+    let (su, sv) = partials_on(surface, start.uv, jets.spans(start.uv, [false, false]))?;
+    let mut at_start: Table = [[0.0; ORDER + 1]; ORDER + 1];
+    (at_start[1][0], at_start[0][1]) = (
+        length(su.x(), su.y(), su.z()),
+        length(sv.x(), sv.y(), sv.z()),
+    );
+    if read_rounding(&at_start, start.uv.x().abs(), start.uv.y().abs()) > allowed {
+        return None;
+    }
+    let mut done = vec![start];
     // Each pending node is found once, the first time a piece ends there.
     let mut pending: Vec<(f64, Option<Node>)> =
         stops.into_iter().skip(1).rev().map(|s| (s, None)).collect();
@@ -525,7 +541,17 @@ impl<'a> Jets<'a> {
             return f64::NAN;
         };
         let ml = |slots: &[(f64, f64)]| multilinear(&m, slots);
-        let ends = max_or_nan(a.gap, b.gap);
+        // A reader evaluates the stored spline, not the exact cubic: the
+        // (u, v) it gets stand off the exact ones by the rounding of its
+        // sums, a share of the largest Bezier coordinate, and the surface
+        // carries that into space by its partials over the box.
+        let far_u = [p0, p1, p2, p3]
+            .iter()
+            .fold(0.0_f64, |m, q| max_or_nan(m, q.x().abs()));
+        let far_v = [p0, p1, p2, p3]
+            .iter()
+            .fold(0.0_f64, |m, q| max_or_nan(m, q.y().abs()));
+        let ends = max_or_nan(a.gap, b.gap) + read_rounding(&m, far_u + f1.0, far_v + f1.1);
         if order == 1 {
             return (0.5 * h).madd(ml(&[f1]) + c[1], ends);
         }
@@ -571,6 +597,19 @@ impl<'a> Jets<'a> {
                 + b.rate_3d_in.length());
         (4.0 / 27.0 * h).madd(rates + rate_rounding, rest.madd(image + c[order], ends))
     }
+}
+
+/// How far a point of the surface at (u, v) read from a stored cubic
+/// spline can stand from the one at the exact (u, v), where the surface's
+/// first partials are bounded by `m` and the spline's Bezier points reach
+/// `far_u` and `far_v` from nothing: a coordinate of the spline sums four
+/// points times basis values, each read to a few roundings, within
+/// `ROUNDINGS` roundings of the largest coordinate. The caller adds the
+/// spline's rates to the reaches for the rounding of the reader's
+/// parameter, which lies in `[0, 1]`.
+fn read_rounding(m: &Table, far_u: f64, far_v: f64) -> f64 {
+    const ROUNDINGS: f64 = 64.0;
+    ROUNDINGS * f64::EPSILON * m[1][0].madd(far_u, m[0][1] * far_v)
 }
 
 /// The most `|u|` and `|v|` parts among vectors.
@@ -1488,6 +1527,40 @@ mod tests {
             }
         }
         assert!(read > 10, "{read}");
+    }
+
+    /// On the flat patch `S(u, v) = (u - 1e12, v, 0)` over `[1e12, 1e12 + 4]`
+    /// by `[0, 4]`, a pcurve's (u, v) round by a unit of 1e12 wherever it
+    /// is read, which the surface carries to 1e-4 in space. The line across
+    /// the patch, whose cubic pieces are exact, gets a pcurve only where
+    /// its image, read through the stored spline, lies within the tolerance
+    /// of the edge; the same patch on `[0, 4]`, or on `[1e3, 1e3 + 4]`,
+    /// gets one.
+    #[test]
+    fn a_patch_far_out_in_its_parameters_gets_a_pcurve_only_within_the_tolerance() {
+        let tol = 1e-7;
+        for shift in [0.0, 1.0e3, 1.0e12] {
+            let patch = NurbsSurface::new(
+                1,
+                1,
+                vec![shift, shift, shift + 4.0, shift + 4.0],
+                vec![0.0, 0.0, 4.0, 4.0],
+                vec![
+                    vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 4.0, 0.0)],
+                    vec![Point3::new(4.0, 0.0, 0.0), Point3::new(4.0, 4.0, 0.0)],
+                ],
+                vec![vec![1.0; 2]; 2],
+            )
+            .unwrap();
+            let (a, b) = (Point3::new(0.5, 2.0, 0.0), Point3::new(3.5, 2.0, 0.0));
+            let line = EdgeCurve::Line;
+            let pcurve = proved_nurbs_pcurve(&line, a, b, &patch, tol);
+            if let Some(pcurve) = &pcurve {
+                let far = stray(pcurve, &line, a, b, &patch);
+                assert!(far <= tol, "shift {shift}: {far:e}");
+            }
+            assert_eq!(pcurve.is_some(), shift < 1.0e6, "shift {shift}");
+        }
     }
 
     /// A surface's weights scaled alike, by 1e-200 or by 1e200, leave its
