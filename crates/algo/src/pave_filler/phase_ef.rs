@@ -772,12 +772,12 @@ fn check_edge_face_pairs(
                 let rim = matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_));
                 let held = |p: Point3| {
                     if rim {
-                        trim.holds_clear(p, 10.0 * tol.linear)
+                        trim.holds_clear(p, trim_reach(p, tol))
                     } else {
-                        trim.holds(p, 10.0 * tol.linear)
+                        trim.holds(p, trim_reach(p, tol))
                     }
                 };
-                let on_face = |p: Point3| trim.holds(p, 10.0 * tol.linear);
+                let on_face = |p: Point3| trim.holds(p, trim_reach(p, tol));
                 merge_roots(&mut crossings, found, exact, (held, on_face), tol);
             }
             // An edge crossing a ball or a ring between two samples (a
@@ -811,12 +811,12 @@ fn check_edge_face_pairs(
                 let (found, exact) = side_flips(&curve, start_pos, end_pos, t0, t1, surface, tol)?;
                 let held = |p: Point3| {
                     if rim {
-                        trim.holds_clear(p, 10.0 * tol.linear)
+                        trim.holds_clear(p, trim_reach(p, tol))
                     } else {
-                        trim.holds(p, 10.0 * tol.linear)
+                        trim.holds(p, trim_reach(p, tol))
                     }
                 };
-                let on_face = |p: Point3| trim.holds(p, 10.0 * tol.linear);
+                let on_face = |p: Point3| trim.holds(p, trim_reach(p, tol));
                 let found = found.into_iter().map(SideRoot::at).collect();
                 merge_roots(&mut crossings, found, exact, (held, on_face), tol);
             }
@@ -1061,6 +1061,14 @@ fn check_edge_face_pairs(
     }
 
     Ok(())
+}
+
+/// How near a face's wire a point of its surface counts as on the wire:
+/// ten tolerances, or more far from the origin, where reading the point's
+/// place on the surface rounds its coordinates' size away.
+fn trim_reach(p: Point3, tol: Tolerance) -> f64 {
+    let size = p.x().abs() + p.y().abs() + p.z().abs();
+    (10.0 * tol.linear).max(64.0 * f64::EPSILON * size)
 }
 
 /// Adds to the sample scan's `crossings` the roots `found` on the surface
@@ -2658,9 +2666,10 @@ impl SideForm {
 /// that the curve's point lies on, read with a bound on its rounding.
 trait SideFunction {
     /// The function at `t`; the size below which its sign is not known, its
-    /// rounding or the floor where that is more; and whether that size is
-    /// its rounding. `None` where the function cannot be read at `t`.
-    fn value(&self, t: f64) -> Option<(f64, f64, bool)>;
+    /// rounding or the floor where that is more; and that size as a
+    /// distance from the surface. `None` where the function cannot be read
+    /// at `t`.
+    fn value(&self, t: f64) -> Option<(f64, f64, f64)>;
 
     /// The function's first four derivatives at `t`, and a bound on the
     /// rounding in each, or `None` where they cannot be read.
@@ -2681,14 +2690,15 @@ trait SideFunction {
 }
 
 impl SideFunction for SideForm {
-    fn value(&self, t: f64) -> Option<(f64, f64, bool)> {
+    fn value(&self, t: f64) -> Option<(f64, f64, f64)> {
         let (x, _, w) = self.frame(t);
         let (n, r) = (x.length(), self.radius);
         let f = (n - r) * (n + r);
         let off = (4.0 * f64::EPSILON).madd(w.length() + n + r, self.slack);
         let rounding = 2.0 * off * (n + r + self.slack);
         let floor = self.floor * (n + r);
-        Some((f, rounding.max(floor), rounding > floor))
+        let unsure = rounding.max(floor);
+        Some((f, unsure, unsure / (n + r)))
     }
 
     /// The rounding in the `j`th derivative is at most `2^(j + 1)` times
@@ -2949,7 +2959,7 @@ fn squares(
 }
 
 impl SideFunction for RingForm {
-    fn value(&self, t: f64) -> Option<(f64, f64, bool)> {
+    fn value(&self, t: f64) -> Option<(f64, f64, f64)> {
         let (f, off, q) = self.readings(t);
         // Near the ring the form is the distance from it times
         // `(d + r)(e² - r²)`.
@@ -2958,8 +2968,8 @@ impl SideFunction for RingForm {
         let d = (rho - big).hypot(q[2]);
         let e2 = (rho + big).madd(rho + big, q[2] * q[2]);
         let scale = (d + small) * small.madd(-small, e2);
-        let floor = self.floor * scale;
-        Some((f[0], off[0].max(floor), off[0] > floor))
+        let unsure = off[0].max(self.floor * scale);
+        Some((f[0], unsure, unsure / scale))
     }
 
     fn derivatives(&self, t: f64) -> Option<([f64; 4], [f64; 4])> {
@@ -3091,11 +3101,12 @@ impl TubeForm {
 }
 
 impl SideFunction for TubeForm {
-    fn value(&self, t: f64) -> Option<(f64, f64, bool)> {
+    fn value(&self, t: f64) -> Option<(f64, f64, f64)> {
         let (g, off, d) = self.readings(t)?;
         // Near the tube the form is the distance from it times `d + r`.
-        let floor = self.0.floor * (d + self.0.minor);
-        Some((g[0], off[0].max(floor), off[0] > floor))
+        let scale = d + self.0.minor;
+        let unsure = off[0].max(self.0.floor * scale);
+        Some((g[0], unsure, unsure / scale))
     }
 
     fn derivatives(&self, t: f64) -> Option<([f64; 4], [f64; 4])> {
@@ -3269,12 +3280,16 @@ fn side_roots(
         })
     };
     // No form's side at `t` is sure, and each that can be read there leaves
-    // it unknown for its rounding, not for the floor.
+    // it unknown as far as the tolerance from the surface or farther. A
+    // stretch whose sides are unknown only closer than that lies on the
+    // surface within the tolerance, whatever it crosses there: its floor
+    // is a thousandth of the tolerance, and its rounding grows with how far
+    // the curve and the surface lie from the origin.
     let rounded = |t: f64| {
         sure(t).is_none()
             && forms
                 .iter()
-                .all(|f| f.value(t).is_none_or(|(_, _, by_rounding)| by_rounding))
+                .all(|f| f.value(t).is_none_or(|(_, _, band)| band >= tol.linear))
     };
     // The last bracket in which `sign` changes between `a` and `b`, by
     // halving to two neighbouring values.
@@ -3449,8 +3464,8 @@ fn side_roots(
         }
         if unread && last - first > 2.0 * shortest {
             return Err(AlgoError::IntersectionFailed(format!(
-                "a {} runs from t = {first} to {last} within the rounding of a {}, where it \
-                 may cross it more than once",
+                "a {} runs from t = {first} to {last} where the rounding of a {} hides its \
+                 side by the tolerance or more, and it may cross it more than once",
                 curve.type_tag(),
                 surface.type_tag()
             )));
@@ -7249,5 +7264,37 @@ mod tests {
         for (p, x) in found.iter().zip([-100.0 - 1e-5, -100.0 + 1e-5]) {
             assert!((*p - Point3::new(x, 0.0, 0.0)).length() < 1e-7, "{p:?}");
         }
+    }
+
+    /// A line along `y` resting on a wall of radius 2 about `z`, both moved
+    /// a million from the origin, touches the wall at one point. Its side
+    /// is unknown along the stretch where it lies within the wall's
+    /// rounding, which grows with the distance from the origin, but stays
+    /// far inside the tolerance there: the exact pass reads one touch, where
+    /// it refused it as two crossings that could hide there.
+    #[test]
+    fn a_line_touching_a_wall_far_from_the_origin_touches_it_once() {
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_math::vec::Vec3;
+        let tol = Tolerance::new();
+        let shift = Vec3::new(1e6, -2e6, 5e5);
+        let origin = Point3::new(0.0, 0.0, 0.0) + shift;
+        let wall = FaceSurface::Cylinder(
+            CylindricalSurface::new(origin, Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap(),
+        );
+        let (start, end) = (
+            Point3::new(2.0, -3.1, 1.0) + shift,
+            Point3::new(2.0, 2.9, 1.0) + shift,
+        );
+        let roots = analytic_side_roots(&EdgeCurve::Line, start, end, 0.0, 1.0, &wall, tol);
+        assert!(matches!(roots, Ok(Some(_))), "{roots:?}");
+        let roots = roots.unwrap().unwrap();
+        assert_eq!(roots.len(), 1, "{roots:?}");
+        assert!(matches!(roots[0], SideRoot::Touch(..)), "{roots:?}");
+        let p = roots[0].at().1;
+        assert!(
+            (p - (Point3::new(2.0, 0.0, 1.0) + shift)).length() < 1e-6,
+            "{p:?}"
+        );
     }
 }
