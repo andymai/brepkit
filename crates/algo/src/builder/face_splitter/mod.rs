@@ -7,6 +7,7 @@
 mod containment;
 mod conversion;
 mod edge_splitting;
+mod pole_round;
 mod sampling;
 mod special_cases;
 mod tube_band;
@@ -6759,8 +6760,87 @@ pub fn split_face_2d(
         impl std::hash::BuildHasher,
     >,
     kept_splits: &std::collections::BTreeSet<brepkit_topology::vertex::VertexId>,
-    split_registry: Option<&mut std::collections::HashMap<usize, Vec<Point3>>>,
+    mut split_registry: Option<&mut std::collections::HashMap<usize, Vec<Point3>>>,
 ) -> Vec<SplitSubFace> {
+    // A ball face with a pole of every chart on it is split in a chart with
+    // one pole off it where its own paths find no chart with its poles
+    // clear, and so is one its own paths leave whole or split into nothing.
+    // That split stands only where its loops were read in that chart: about
+    // the pole it holds, or as loops that wind no pole. Elsewhere the face's
+    // own paths stand.
+    if let Ok(face) = topo.face(face_id)
+        && matches!(face.surface(), FaceSurface::Sphere(_))
+        && face.inner_wires().is_empty()
+        && !sections.is_empty()
+    {
+        let up_front = matches!(
+            pole_clear_chart(topo, face_id, face, sections, true),
+            Some(BallChart::PoleOff)
+        );
+        if up_front {
+            let mut read_about_a_pole = false;
+            let pieces = split_face_2d_impl(
+                topo,
+                face_id,
+                sections,
+                rank,
+                tol,
+                frame,
+                info,
+                edge_images,
+                kept_splits,
+                split_registry.as_deref_mut(),
+                Some(&mut read_about_a_pole),
+            );
+            if read_about_a_pole {
+                return pieces;
+            }
+        }
+        let first = split_face_2d_impl(
+            topo,
+            face_id,
+            sections,
+            rank,
+            tol,
+            frame,
+            info,
+            edge_images,
+            kept_splits,
+            split_registry.as_deref_mut(),
+            None,
+        );
+        let whole = match first.as_slice() {
+            [] => true,
+            [only] => only
+                .outer_wire
+                .iter()
+                .chain(only.inner_wires.iter().flatten())
+                .all(|e| e.source_edge_idx.is_none()),
+            _ => false,
+        };
+        if !whole || up_front {
+            return first;
+        }
+        let mut read_about_a_pole = false;
+        let retry = split_face_2d_impl(
+            topo,
+            face_id,
+            sections,
+            rank,
+            tol,
+            frame,
+            info,
+            edge_images,
+            kept_splits,
+            split_registry,
+            Some(&mut read_about_a_pole),
+        );
+        return if read_about_a_pole && retry.len() >= 2 {
+            retry
+        } else {
+            first
+        };
+    }
     let run_impl = move |secs: &[SectionEdge]| {
         split_face_2d_impl(
             topo,
@@ -6773,6 +6853,7 @@ pub fn split_face_2d(
             edge_images,
             kept_splits,
             split_registry,
+            None,
         )
     };
 
@@ -6895,6 +6976,11 @@ enum BallChart {
     /// sections as a spread of axes allows; `clear` when that is as far as
     /// the face's own chart must keep them to be read as it lies.
     Turned { chart: FaceSurface, clear: bool },
+    /// Where no chart has both poles off the face and clear of it, and the
+    /// face's own chart has both poles on it or one near its wires: a chart
+    /// with one pole off the face and the other on it, both clear
+    /// ([`pole_off_ball_axis`]). The face's outline winds it once.
+    PoleOff,
 }
 
 /// The face's ball in a chart whose poles lie off the face and clear of its
@@ -6907,15 +6993,18 @@ fn pole_clear_sphere(
     face: &brepkit_topology::face::Face,
     sections: &[SectionEdge],
 ) -> BallChart {
-    pole_clear_chart(topo, face_id, face, sections).unwrap_or(BallChart::Unclear)
+    pole_clear_chart(topo, face_id, face, sections, false).unwrap_or(BallChart::Unclear)
 }
 
-fn pole_clear_chart(
+/// A ball face's wires and sections seen from its ball's centre: unit
+/// directions sampled along each edge, and whether its outline is all
+/// chords or all arcs of its chart's equator. `None` for another surface,
+/// a face with no sections, or a lookup that fails.
+fn ball_face_directions(
     topo: &Topology,
-    face_id: FaceId,
     face: &brepkit_topology::face::Face,
     sections: &[SectionEdge],
-) -> Option<BallChart> {
+) -> Option<(Vec<Vec3>, bool)> {
     // Samples per edge: a half turn of a great circle is read every 2.8
     // degrees, inside the 5.7 degrees that counts as near a pole.
     const SAMPLES: u32 = 64;
@@ -6955,12 +7044,50 @@ fn pole_clear_chart(
             sample(&mut dirs, edge.curve(), start, end);
         }
     }
-    if chords_only {
-        return None;
-    }
     for s in sections {
         sample(&mut dirs, &s.curve_3d, s.start, s.end);
     }
+    Some((dirs, chords_only))
+}
+
+/// A chart of a ball face's ball with one pole off the face and the other
+/// on it, both clear of the face's wires and sections
+/// ([`pole_off_ball_axis`]), whatever its outline.
+fn pole_off_chart(
+    topo: &Topology,
+    face_id: FaceId,
+    face: &brepkit_topology::face::Face,
+    sections: &[SectionEdge],
+) -> Option<FaceSurface> {
+    let FaceSurface::Sphere(sphere) = face.surface() else {
+        return None;
+    };
+    let (dirs, _) = ball_face_directions(topo, face, sections)?;
+    let trim = crate::classifier::SphereFaceTrim::new(topo, face_id).ok()??;
+    let (center, radius) = (sphere.center(), sphere.radius());
+    let axis = pole_off_ball_axis(center, radius, &dirs, &trim)?;
+    brepkit_math::surfaces::SphericalSurface::with_axis(center, radius, axis)
+        .ok()
+        .map(FaceSurface::Sphere)
+}
+
+/// [`pole_clear_sphere`]'s chart; with `pole_off`, [`BallChart::PoleOff`]
+/// where it serves.
+fn pole_clear_chart(
+    topo: &Topology,
+    face_id: FaceId,
+    face: &brepkit_topology::face::Face,
+    sections: &[SectionEdge],
+    pole_off: bool,
+) -> Option<BallChart> {
+    let FaceSurface::Sphere(sphere) = face.surface() else {
+        return None;
+    };
+    let (dirs, chords_only) = ball_face_directions(topo, face, sections)?;
+    if chords_only {
+        return None;
+    }
+    let center = sphere.center();
     // The cosine of the angle from the nearer pole about `axis` to the
     // nearest sample.
     let nearest = |axis: Vec3| dirs.iter().fold(0.0_f64, |m, d| m.max(d.dot(axis).abs()));
@@ -6968,16 +7095,19 @@ fn pole_clear_chart(
     let trim = crate::classifier::SphereFaceTrim::new(topo, face_id)
         .ok()
         .flatten();
+    let one_pole_off = |t: &crate::classifier::SphereFaceTrim| {
+        pole_off && pole_off_ball_axis(center, radius, &dirs, t).is_some()
+    };
     // A face that holds a pole of its own chart winds the chart, however
     // far its wires keep from the pole: it takes a chart whose poles lie off
     // it and clear of its wires where one is found.
     if nearest(sphere.z_axis()) < 0.1_f64.cos() {
         let z = sphere.z_axis();
+        let mut both_held = false;
         let turned = trim.as_ref().and_then(|t| {
-            let holds_pole = [z, -z]
-                .iter()
-                .any(|&a| t.holds(center + a * radius, 1e-6 * radius));
-            holds_pole
+            let held = [z, -z].map(|a| t.holds(center + a * radius, 1e-6 * radius));
+            both_held = held[0] && held[1];
+            held.contains(&true)
                 .then(|| clear_ball_axis(center, radius, &dirs, t))
                 .flatten()
                 .filter(|&axis| nearest(axis) < 0.1_f64.cos())
@@ -6990,12 +7120,15 @@ fn pole_clear_chart(
                     chart: FaceSurface::Sphere(chart),
                     clear: true,
                 },
+                None if both_held && trim.as_ref().is_some_and(one_pole_off) => BallChart::PoleOff,
                 None => BallChart::Own,
             },
         );
     }
     let trim = trim?;
-    let best = clear_ball_axis(center, radius, &dirs, &trim)?;
+    let Some(best) = clear_ball_axis(center, radius, &dirs, &trim) else {
+        return one_pole_off(&trim).then_some(BallChart::PoleOff);
+    };
     brepkit_math::surfaces::SphericalSurface::with_axis(center, radius, best)
         .ok()
         .map(|chart| BallChart::Turned {
@@ -7035,6 +7168,88 @@ fn clear_ball_axis(
         .map(|axis| (nearest(axis), axis))
         .min_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, axis)| axis)
+}
+
+/// Of the axes through `center`, one with a pole off the face that `trim`
+/// reads and the other on it, whose poles keep clear of the unit directions
+/// `dirs` (the face's wires and sections seen from its ball's centre): the
+/// pole on the face by 0.1 rad, as a chart of the face's own must, and the
+/// pole off it by 0.035 rad. The pole off the face lies in a hole or past
+/// the outline, and a narrow hole holds it nearer its wires than that. Both
+/// clear the half step between the samples of a half turn of a great circle
+/// (0.025 rad), so no wire runs through either pole between its samples.
+///
+/// A spread of axes is searched, then the best of them is moved in steps
+/// while its poles keep their sides and the nearer pole, measured against
+/// its own clearance, gains. `None` when no axis keeps both clearances.
+fn pole_off_ball_axis(
+    center: Point3,
+    radius: f64,
+    dirs: &[Vec3],
+    trim: &crate::classifier::SphereFaceTrim,
+) -> Option<Vec3> {
+    const CANDIDATES: u32 = 256;
+    const HELD_CLEAR: f64 = 0.1;
+    const OFF_CLEAR: f64 = 0.035;
+    let near = 1e-6 * radius;
+    // The angle from `pole` to the nearest direction.
+    let gap = |pole: Vec3| {
+        dirs.iter()
+            .fold(-1.0_f64, |m, d| m.max(d.dot(pole)))
+            .clamp(-1.0, 1.0)
+            .acos()
+    };
+    // The axis's poles, the one the face holds first, when it holds one.
+    let sides = |axis: Vec3| match (
+        trim.holds(center + axis * radius, near),
+        trim.holds(center - axis * radius, near),
+    ) {
+        (true, false) => Some((axis, -axis)),
+        (false, true) => Some((-axis, axis)),
+        _ => None,
+    };
+    // The nearer pole's gap as a share of its clearance: 1 or more clears.
+    let score = |axis: Vec3| {
+        sides(axis).map(|(held, off)| (gap(held) / HELD_CLEAR).min(gap(off) / OFF_CLEAR))
+    };
+    let golden = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
+    let (mut best, mut axis) = (0..CANDIDATES)
+        .map(|i| {
+            let z = 1.0 - (2.0 * f64::from(i) + 1.0) / f64::from(CANDIDATES);
+            let r = (1.0 - z * z).max(0.0).sqrt();
+            let (s, c) = (golden * f64::from(i)).sin_cos();
+            Vec3::new(r * c, r * s, z)
+        })
+        .filter_map(|axis| score(axis).map(|s| (s, axis)))
+        .max_by(|a, b| a.0.total_cmp(&b.0))?;
+    // The spread's axes lie about 0.16 rad apart: step about the best one,
+    // halving the step where no step gains, down to a ten-thousandth.
+    let mut step = 0.08_f64;
+    for _ in 0..200 {
+        if step < 1e-4 {
+            break;
+        }
+        let side = if axis.x().abs() < 0.9 {
+            Vec3::new(1.0, 0.0, 0.0)
+        } else {
+            Vec3::new(0.0, 1.0, 0.0)
+        };
+        let Ok(t1) = axis.cross(side).normalize() else {
+            break;
+        };
+        let t2 = axis.cross(t1);
+        let gain = [t1, -t1, t2, -t2]
+            .into_iter()
+            .filter_map(|d| (axis + d * step).normalize().ok())
+            .filter_map(|a| score(a).map(|s| (s, a)))
+            .filter(|&(s, _)| s > best)
+            .max_by(|a, b| a.0.total_cmp(&b.0));
+        match gain {
+            Some((s, a)) => (best, axis) = (s, a),
+            None => step *= 0.5,
+        }
+    }
+    (best >= 1.0).then_some(axis)
 }
 
 /// The centroid of a closed curved section's samples when every sample
@@ -7084,46 +7299,44 @@ fn interior_loop_center(
 /// 0.12% of its radius.
 const OUTLINE_CURVE_SAMPLES: usize = 64;
 
-/// Whether a ball face holds one pole of its own chart, with its one wire
-/// running once round the chart's axis. The face's trim must hold one pole
+/// Whether a ball face holds one pole of a chart, with its one wire running
+/// once round the chart's axis. The face's trim must hold one pole
 /// and not the other, and the wire's turn about the axis, read along its
 /// edges' own curves, must be one whole turn either way. A zone between two
 /// latitudes, bounded by a seam and two rims, holds neither pole and runs
 /// its rims round the axis both ways, for no net turn. A wire that comes
-/// near the axis, or whose samples step far round it, is not read.
-fn ball_face_round_a_pole(topo: &Topology, face_id: FaceId) -> bool {
+/// within 0.02 rad of the axis, or whose samples step more than a quarter
+/// turn round it, is not read.
+///
+/// `Some(true)` when the face holds the north pole of `chart`, a chart of
+/// its ball, and `Some(false)` when it holds the south pole.
+fn pole_held_round(
+    topo: &Topology,
+    face_id: FaceId,
+    chart: &brepkit_math::surfaces::SphericalSurface,
+) -> Option<bool> {
     use std::f64::consts::{FRAC_PI_2, TAU};
-    let Ok(face) = topo.face(face_id) else {
-        return false;
-    };
-    let FaceSurface::Sphere(sphere) = face.surface() else {
-        return false;
-    };
+    let face = topo.face(face_id).ok()?;
     if !face.inner_wires().is_empty() {
-        return false;
+        return None;
     }
-    let (center, radius) = (sphere.center(), sphere.radius());
-    let (x, y, z) = (sphere.x_axis(), sphere.y_axis(), sphere.z_axis());
-    let held = match crate::classifier::SphereFaceTrim::new(topo, face_id) {
-        Ok(Some(trim)) => [z, -z]
-            .iter()
-            .filter(|&&a| trim.holds(center + a * radius, 1e-6 * radius))
-            .count(),
-        _ => return false,
-    };
-    if held != 1 {
-        return false;
+    let (center, radius) = (chart.center(), chart.radius());
+    let (x, y, z) = (chart.x_axis(), chart.y_axis(), chart.z_axis());
+    let trim = crate::classifier::SphereFaceTrim::new(topo, face_id).ok()??;
+    let held = [z, -z].map(|a| trim.holds(center + a * radius, 1e-6 * radius));
+    if held[0] == held[1] {
+        return None;
     }
     let pts = sample_wire_outline(topo, face.outer_wire());
     if pts.len() < 3 {
-        return false;
+        return None;
     }
     let mut angles = Vec::with_capacity(pts.len());
     for p in &pts {
         let d = *p - center;
         let (a, b) = (d.dot(x), d.dot(y));
-        if a.hypot(b) < 0.05 * radius {
-            return false;
+        if a.hypot(b) < 0.02 * radius {
+            return None;
         }
         angles.push(b.atan2(a));
     }
@@ -7132,11 +7345,11 @@ fn ball_face_round_a_pole(topo: &Topology, face_id: FaceId) -> bool {
         let next = angles[(k + 1) % angles.len()];
         let step = (next - a + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI;
         if step.abs() > FRAC_PI_2 {
-            return false;
+            return None;
         }
         turn += step;
     }
-    (turn.abs() / TAU - 1.0).abs() < 1e-6
+    ((turn.abs() / TAU - 1.0).abs() < 1e-6).then_some(held[0])
 }
 
 /// A wire's outline in traversal order: each line's start, and each curved
@@ -7868,6 +8081,7 @@ fn split_face_2d_impl(
     >,
     kept_splits: &std::collections::BTreeSet<brepkit_topology::vertex::VertexId>,
     mut split_registry: Option<&mut std::collections::HashMap<usize, Vec<Point3>>>,
+    pole_off: Option<&mut bool>,
 ) -> Vec<SplitSubFace> {
     let face = match topo.face(face_id) {
         Ok(f) => f,
@@ -7925,12 +8139,21 @@ fn split_face_2d_impl(
     let sections: &[SectionEdge] = deduped_sections.as_deref().unwrap_or(sections);
     let trace_split =
         std::env::var("BK_SPLIT_TRACE").is_ok_and(|v| v == format!("{}", face_id.index()));
-    let (rechart, ball_chart_clear) = match pole_clear_sphere(topo, face_id, face, sections) {
-        BallChart::Unclear => (None, false),
+    // With `pole_off`, the face takes a chart with one pole off it, and the
+    // flag reads whether the split in that chart stands.
+    let ball_chart = if pole_off.is_some() {
+        match pole_off_chart(topo, face_id, face, sections) {
+            Some(chart) => BallChart::Turned { chart, clear: true },
+            None => return Vec::new(),
+        }
+    } else {
+        pole_clear_sphere(topo, face_id, face, sections)
+    };
+    let (rechart, ball_chart_clear) = match ball_chart {
+        BallChart::Unclear | BallChart::PoleOff => (None, false),
         BallChart::Own => (None, true),
         BallChart::Turned { chart, clear } => (Some(chart), clear),
     };
-    let rechart_is_own = rechart.is_none();
     // The sections' pcurves and end hints read the face's own chart.
     let recharted_sections: Vec<SectionEdge>;
     let sections: &[SectionEdge] = match &rechart {
@@ -8430,6 +8653,7 @@ fn split_face_2d_impl(
         && !is_plane
         && has_open_section
         && !inside_loops
+        && pole_off.is_none()
         && (u_periodic || v_periodic || matches!(surface, FaceSurface::Sphere(_)))
     {
         let mut pieces = split_noseam_face_direct(
@@ -8738,6 +8962,11 @@ fn split_face_2d_impl(
             &wire_pts,
             tol.linear,
         ) {
+            // Loops that wind no pole of the chart are holes of the face and
+            // pieces of their own in any chart.
+            if let Some(read) = pole_off {
+                *read = pieces.len() >= 2;
+            }
             return pieces;
         }
     }
@@ -9973,21 +10202,22 @@ fn split_face_2d_impl(
         }
     }
 
-    // A ball face that holds a pole of its own chart winds the chart: its
+    // A ball face that holds one pole of its chart winds the chart: its
     // outline runs one whole turn of u. A section that meets no vertex of
     // the outline keeps its points' own u, which can lie a turn off that
     // window, and its region then never closes. The region that holds the
     // pole runs that turn too. A zone between two latitudes spans a turn of
     // u as well, but holds no pole: its seam closes its regions.
     let mut round_a_pole = false;
+    let mut pole_view: Option<pole_round::PoleView> = None;
+
     if u_periodic
         && ball_chart_clear
-        && rechart_is_own
-        && matches!(surface, FaceSurface::Sphere(_))
+        && let FaceSurface::Sphere(chart) = &surface
         && original_inner_wires.is_empty()
         && all_edges.len() > n_boundary_edges
         && let (Some(u_period), _) = super::pcurve_compute::surface_periods(&surface)
-        && ball_face_round_a_pole(topo, face_id)
+        && let Some(north) = pole_held_round(topo, face_id, chart)
     {
         let (lo, hi) = all_edges[..n_boundary_edges]
             .iter()
@@ -10000,6 +10230,7 @@ fn split_face_2d_impl(
                 place_section_in_turn(e, &surface, lo, u_period);
             }
             round_a_pole = true;
+            pole_view = Some(pole_round::PoleView::new(chart, north));
         }
     }
 
@@ -11566,6 +11797,56 @@ fn split_face_2d_impl(
         outline_sign.is_some_and(|sign| area.abs() > perimeter * tol.linear && area * sign > 0.0)
     };
 
+    // A ball face round a pole of its chart, its other pole off the face, is
+    // read in a plane about the pole it holds, where every loop bounds an
+    // area ([`pole_round`]). Where the walk toured the regions about a
+    // crossing of sections as one loop, the face trace, whose successor is a
+    // function of the graph, reads them apart. It keeps each region on its
+    // left in `(u, v)`: where the face lies on its outline's right there,
+    // each of its loops is turned round.
+    let mut pole_holes: Option<Vec<Vec<Vec<OrientedPCurveEdge>>>> = None;
+    let (boundary, section_halves) = all_edges.split_at(n_boundary_edges);
+    let read_about_pole = pole_view.as_ref().and_then(|view| {
+        pole_round::pieces(view, boundary, section_halves, loops.clone(), tol.linear).or_else(
+            || {
+                let left = view.face_left_in_uv(boundary)?;
+                let area = |lp: &[OrientedPCurveEdge]| view.loop_area(lp);
+                let traced = build_wire_loops_dcel_measured(
+                    &all_edges,
+                    tol.linear,
+                    true,
+                    false,
+                    Some(&area),
+                    Some(left),
+                );
+                let traced: Vec<Vec<OrientedPCurveEdge>> = if left {
+                    traced
+                } else {
+                    traced
+                        .iter()
+                        .map(|lp| special_cases::reverse_loop(lp))
+                        .collect()
+                };
+                pole_round::pieces(view, boundary, section_halves, traced, tol.linear)
+            },
+        )
+    });
+    let loops = match read_about_pole {
+        Some(pieces) => {
+            let mut per_piece = Vec::with_capacity(pieces.len());
+            for (outline, piece_holes) in pieces {
+                outers.push((outline, 1.0));
+                per_piece.push(piece_holes);
+            }
+            pole_holes = Some(per_piece);
+            Vec::new()
+        }
+        None => loops,
+    };
+    if let Some(read) = pole_off {
+        *read = pole_holes.is_some();
+    }
+
     // A woven hole's pieces carry no section index, like the outline's
     // edges. A loop runs on the outline only where it holds an outline edge.
     let on_outline = |e: &OrientedPCurveEdge| {
@@ -11998,6 +12279,12 @@ fn split_face_2d_impl(
             ));
         }
         sub_faces.push(sub_face);
+    }
+
+    if let Some(per_piece) = pole_holes {
+        for (sub_face, piece_holes) in sub_faces.iter_mut().zip(per_piece) {
+            sub_face.inner_wires.extend(piece_holes);
+        }
     }
 
     // Simple hole matching: each hole goes to the outer that contains its
@@ -16142,8 +16429,8 @@ mod tests {
                 })
                 .collect()
         };
-        let ball =
-            || FaceSurface::Sphere(SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0).unwrap());
+        let sphere = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0).unwrap();
+        let ball = || FaceSurface::Sphere(sphere.clone());
 
         let mut topo = Topology::new();
         let low = rim(&mut topo, -0.4);
@@ -16155,7 +16442,7 @@ mod tests {
             .unwrap(),
         );
         let cap = topo.add_face(Face::new(cap, vec![], ball()));
-        assert!(ball_face_round_a_pole(&topo, cap));
+        assert!(pole_held_round(&topo, cap, &sphere).is_some());
 
         let high = rim(&mut topo, 0.6);
         let (from, to) = (
@@ -16177,6 +16464,6 @@ mod tests {
         zone.push(OrientedEdge::new(seam, false));
         let zone = topo.add_wire(Wire::new(zone, true).unwrap());
         let zone = topo.add_face(Face::new(zone, vec![], ball()));
-        assert!(!ball_face_round_a_pole(&topo, zone));
+        assert!(pole_held_round(&topo, zone, &sphere).is_none());
     }
 }

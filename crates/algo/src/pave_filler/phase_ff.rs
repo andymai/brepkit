@@ -10111,9 +10111,12 @@ fn emit_split_circle_arcs(
             side.as_ref()
                 .is_none_or(|(c, axis)| (p - *c).dot(*axis) >= -side_eps)
         };
+        // A ball face's trim reads it whole; the half-space its outline
+        // gives holds the face only while the face lies within a hemisphere
+        // (a ball less a narrow slot runs past the half-space all round).
         a_ok && b_ok
-            && side_ok(&side_a)
-            && side_ok(&side_b)
+            && (ball_a.is_some() || side_ok(&side_a))
+            && (ball_b.is_some() || side_ok(&side_b))
             && in_region(&loops_a, p)
             && in_region(&loops_b, p)
             && trim_a.as_ref().is_none_or(|t| t.holds(p, side_eps))

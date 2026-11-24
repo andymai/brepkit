@@ -310,7 +310,76 @@ fn two_nearly_opposite_rods_at_a_ball_fuse_exactly_or_refuse() {
             .into_iter()
             .chain([(Point3::new(0.0, 0.0, 0.0), true)])
         {
-            two_rods_at_one_ball_or_refused(roll, yaw, 0.0, swap, far_ends, at, mirrored);
+            two_rods_at_one_ball_or_refused(
+                roll,
+                yaw,
+                0.0,
+                swap,
+                far_ends,
+                at,
+                mirrored,
+                Join::Pairwise,
+            );
+        }
+    }
+}
+
+#[test]
+fn two_rods_and_a_ball_fuse_at_once() {
+    // `fuse_n` cuts each of the ball's hemispheres, bounded by its equator,
+    // with both caps' great circles, which cross on one of them. Every axis
+    // has a pole on such a face, and the circles' crossing can lie at the
+    // hemisphere's own pole.
+    for (roll, yaw, pitch, swap, far_ends) in [
+        (0.0, 1.0, 0.0, false, (false, false)),
+        (0.0, 1.0, 0.4, false, (false, false)),
+        (0.0, 1.0, -0.41, true, (true, true)),
+        (0.0, 2.2, 0.4, false, (false, false)),
+        (0.0, 2.2, 1.0, false, (true, false)),
+        (0.0, 2.9, 0.4, false, (true, true)),
+        (0.3, 1.0, 0.4, true, (false, false)),
+        (0.3, 2.2, 1.0, true, (false, false)),
+        (0.3, 2.9, 0.4, false, (false, false)),
+    ] {
+        for (at, mirrored) in poses() {
+            two_rods_joined_at_one_ball(
+                roll,
+                yaw,
+                pitch,
+                swap,
+                far_ends,
+                at,
+                mirrored,
+                Join::AtOnce,
+            );
+        }
+    }
+}
+
+#[test]
+fn two_rods_fuse_onto_a_ball_with_its_faces_unified() {
+    // With its faces joined, the first fuse leaves the ball one face bounded
+    // by the first cap's great circle. Every axis has a pole on that face,
+    // and the second cap's great circle crosses it.
+    for (roll, yaw, pitch, swap, far_ends) in [
+        (0.0, 1.0, 0.0, true, (true, false)),
+        (0.0, 1.0, 1.0, true, (false, true)),
+        (0.0, 2.9, 0.0, false, (false, true)),
+        (0.0, PI, 1.0, false, (false, false)),
+        (0.3, 2.2, 0.4, false, (false, true)),
+        (0.3, 2.9, -0.41, false, (false, false)),
+    ] {
+        for (at, mirrored) in poses() {
+            two_rods_joined_at_one_ball(
+                roll,
+                yaw,
+                pitch,
+                swap,
+                far_ends,
+                at,
+                mirrored,
+                Join::PairwiseUnified,
+            );
         }
     }
 }
@@ -323,6 +392,18 @@ fn poses() -> [(Point3, bool); 3] {
         (Point3::new(28.638, -8.1, 2.65), false),
         (Point3::new(28.638, -8.1, 2.65), true),
     ]
+}
+
+/// How the rods and the ball are fused.
+#[derive(Clone, Copy, Debug)]
+enum Join {
+    /// The first rod and the ball, then the second rod, faces kept apart.
+    Pairwise,
+    /// As `Pairwise`, with the faces of one surface joined after each fuse
+    /// (the default, and brepjs's `simplify`).
+    PairwiseUnified,
+    /// All three at once, with `fuse_n`.
+    AtOnce,
 }
 
 /// Two rods of length 10 from the centre of a ball of their radius at `at`,
@@ -338,16 +419,40 @@ fn two_rods_at_one_ball(
     at: Point3,
     mirrored: bool,
 ) {
-    assert!(
-        two_rods_at_one_ball_or_refused(roll, yaw, pitch, swap, far_ends, at, mirrored),
-        "roll {roll}, yaw {yaw}, pitch {pitch}, swap {swap}, far ends {far_ends:?}, at {at:?}, mirrored {mirrored}: refused"
+    two_rods_joined_at_one_ball(
+        roll,
+        yaw,
+        pitch,
+        swap,
+        far_ends,
+        at,
+        mirrored,
+        Join::Pairwise,
     );
 }
 
-/// As [`two_rods_at_one_ball`], but a fuse that refuses passes: `false`
-/// where the second fuse returns an error. A fuse that returns a solid must
-/// return the exact one.
-#[allow(clippy::too_many_lines)]
+/// [`two_rods_at_one_ball`], fused as `join` says.
+#[allow(clippy::too_many_arguments)]
+fn two_rods_joined_at_one_ball(
+    roll: f64,
+    yaw: f64,
+    pitch: f64,
+    swap: bool,
+    far_ends: (bool, bool),
+    at: Point3,
+    mirrored: bool,
+    join: Join,
+) {
+    assert!(
+        two_rods_at_one_ball_or_refused(roll, yaw, pitch, swap, far_ends, at, mirrored, join),
+        "roll {roll}, yaw {yaw}, pitch {pitch}, swap {swap}, far ends {far_ends:?}, at {at:?}, mirrored {mirrored}, {join:?}: refused"
+    );
+}
+
+/// As [`two_rods_joined_at_one_ball`], but a fuse that refuses passes:
+/// `false` where the last fuse returns an error. A fuse that returns a
+/// solid must return the exact one.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn two_rods_at_one_ball_or_refused(
     roll: f64,
     yaw: f64,
@@ -356,10 +461,11 @@ fn two_rods_at_one_ball_or_refused(
     (first_far, second_far): (bool, bool),
     at: Point3,
     mirrored: bool,
+    join: Join,
 ) -> bool {
     let length = 10.0;
     let name = format!(
-        "roll {roll}, yaw {yaw}, pitch {pitch}, swap {swap}, far ends {first_far} {second_far}, at {at:?}, mirrored {mirrored}"
+        "roll {roll}, yaw {yaw}, pitch {pitch}, swap {swap}, far ends {first_far} {second_far}, at {at:?}, mirrored {mirrored}, {join:?}"
     );
     let pose = if mirrored {
         Mat4::scale(1.0, -1.0, 1.0)
@@ -398,14 +504,21 @@ fn two_rods_at_one_ball_or_refused(
         }
     }
     let (one, two) = if swap { (other, rod) } else { (rod, other) };
-    let first = exact_fuse(&mut topo, one, ball, &name);
     let opts = BooleanOptions {
         mesh_fallback: false,
-        unify_faces: false,
+        unify_faces: matches!(join, Join::PairwiseUnified),
         ..BooleanOptions::default()
     };
-    let Ok(fused) = boolean::boolean_with_options(&mut topo, BooleanOp::Fuse, first, two, opts)
-    else {
+    let fused = match join {
+        Join::AtOnce => brepkit_algo::gfa::fuse_n(&mut topo, &[one, ball, two]).ok(),
+        Join::Pairwise | Join::PairwiseUnified => {
+            let first = boolean::boolean_with_options(&mut topo, BooleanOp::Fuse, one, ball, opts)
+                .map_err(|e| format!("{name}: {e}"))
+                .unwrap();
+            boolean::boolean_with_options(&mut topo, BooleanOp::Fuse, first, two, opts).ok()
+        }
+    };
+    let Some(fused) = fused else {
         return false;
     };
     let report = validate_solid(&topo, fused).unwrap();
