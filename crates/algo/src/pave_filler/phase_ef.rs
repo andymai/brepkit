@@ -701,10 +701,17 @@ fn check_edge_face_pairs(
                         e.tolerance()
                             .is_none_or(|t| t <= crate::ds::shape_store::MAX_WIDEN)
                     });
-                    if on_faces {
-                        line_crossings(start_pos, end_pos, t0, t1, surface)
-                    } else {
+                    if !on_faces {
                         Vec::new()
+                    } else if let Some(roots) =
+                        quadric_side_roots(&curve, start_pos, end_pos, t0, t1, surface, tol)
+                    {
+                        // On a cylinder, read about the line's point nearest
+                        // the axis: the roots of the expanded quadratic of a
+                        // long line lie far off the wall.
+                        roots.into_iter().map(SideRoot::at).collect()
+                    } else {
+                        line_crossings(start_pos, end_pos, t0, t1, surface)
                     }
                 } else {
                     find_side_flips(&curve, start_pos, end_pos, t0, t1, surface, tol)
@@ -3770,13 +3777,9 @@ mod tests {
         )
     }
 
-    /// The `x` of the vertices phase EF makes on an edge along `curve`,
-    /// against the wall of a rod like that of [`contacts_with_a_wall`], of
-    /// radius `radius`.
-    fn contacts_of_a_spline_with_a_wall(
-        curve: &brepkit_math::nurbs::curve::NurbsCurve,
-        radius: f64,
-    ) -> Vec<f64> {
+    /// The wall of a rod of radius `radius` along x, from `x = -2` to
+    /// `x = 2`, whose top lies along `z = 0`.
+    fn wall_of_a_rod(topo: &mut Topology, radius: f64) -> FaceId {
         use brepkit_math::curves::Circle3D;
         use brepkit_math::surfaces::CylindricalSurface;
         use brepkit_math::vec::Vec3;
@@ -3784,11 +3787,6 @@ mod tests {
         use brepkit_topology::face::Face;
         use brepkit_topology::vertex::Vertex;
         use brepkit_topology::wire::{OrientedEdge, Wire};
-        let (d0, d1) = curve.domain();
-        let (first, last) = (curve.evaluate(d0), curve.evaluate(d1));
-        let curve = curve.clone();
-
-        let mut topo = Topology::new();
         let x_axis = Vec3::new(1.0, 0.0, 0.0);
         let wall = CylindricalSurface::with_ref_dir(
             Point3::new(-2.0, 0.0, -radius),
@@ -3802,7 +3800,7 @@ mod tests {
             let circle = Circle3D::new(Point3::new(x, 0.0, -radius), x_axis, radius).unwrap();
             (v, topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle))))
         };
-        let ((v_lo, e_lo), (v_hi, e_hi)) = (rim(&mut topo, -2.0), rim(&mut topo, 2.0));
+        let ((v_lo, e_lo), (v_hi, e_hi)) = (rim(topo, -2.0), rim(topo, 2.0));
         let seam = topo.add_edge(Edge::new(v_lo, v_hi, EdgeCurve::Line));
         let outer = topo.add_wire(
             Wire::new(
@@ -3816,7 +3814,23 @@ mod tests {
             )
             .unwrap(),
         );
-        let face = topo.add_face(Face::new(outer, vec![], FaceSurface::Cylinder(wall)));
+        topo.add_face(Face::new(outer, vec![], FaceSurface::Cylinder(wall)))
+    }
+
+    /// The `x` of the vertices phase EF makes on an edge along `curve`,
+    /// against the wall of a rod like that of [`contacts_with_a_wall`], of
+    /// radius `radius`.
+    fn contacts_of_a_spline_with_a_wall(
+        curve: &brepkit_math::nurbs::curve::NurbsCurve,
+        radius: f64,
+    ) -> Vec<f64> {
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::vertex::Vertex;
+        let (d0, d1) = curve.domain();
+        let (first, last) = (curve.evaluate(d0), curve.evaluate(d1));
+        let curve = curve.clone();
+        let mut topo = Topology::new();
+        let face = wall_of_a_rod(&mut topo, radius);
         let (a, b) = (
             topo.add_vertex(Vertex::new(first, 1e-7)),
             topo.add_vertex(Vertex::new(last, 1e-7)),
@@ -3847,6 +3861,87 @@ mod tests {
             .collect();
         xs.sort_by(f64::total_cmp);
         xs
+    }
+
+    /// A line two million long across the wall of a unit rod, and one
+    /// through the upper half of a unit ball at height 0.5: phase EF puts a
+    /// vertex at each of the two crossings of each, within the tolerance of
+    /// the surface.
+    #[test]
+    fn a_long_line_crosses_a_wall_and_a_ball_on_them() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let tol = Tolerance::new();
+        let crossings = |topo: &mut Topology, face: FaceId, from: Point3, to: Point3| {
+            let (a, b) = (
+                topo.add_vertex(Vertex::new(from, 1e-7)),
+                topo.add_vertex(Vertex::new(to, 1e-7)),
+            );
+            let edge = topo.add_edge(Edge::new(a, b, EdgeCurve::Line));
+            let mut arena = GfaArena::new();
+            check_edge_face_pairs(
+                topo,
+                &[edge],
+                (&[], &[]),
+                &[face],
+                &[HashSet::new()],
+                tol,
+                &mut arena,
+            )
+            .unwrap();
+            arena
+                .interference
+                .ef
+                .iter()
+                .filter_map(|i| match i {
+                    Interference::EF {
+                        new_vertex: Some(v),
+                        ..
+                    } => topo.vertex(*v).ok().map(Vertex::point),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let mut topo = Topology::new();
+        let wall = wall_of_a_rod(&mut topo, 1.0);
+        let found = crossings(
+            &mut topo,
+            wall,
+            Point3::new(0.0, -1e6, -1.0),
+            Point3::new(0.0, 1e6, -1.0),
+        );
+        assert_eq!(found.len(), 2, "{found:?}");
+        for p in &found {
+            let off = p.y().hypot(p.z() + 1.0) - 1.0;
+            assert!(off.abs() < tol.linear, "{p:?} lies {off} off the wall");
+        }
+
+        let mut topo = Topology::new();
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let v = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let (z_axis, x_axis) = (Vec3::new(0.0, 0.0, 1.0), Vec3::new(1.0, 0.0, 0.0));
+        let circle = Circle3D::new_with_ref(origin, z_axis, 1.0, x_axis).unwrap();
+        let equator = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+        let outer = topo.add_wire(Wire::new(vec![OrientedEdge::new(equator, true)], true).unwrap());
+        let ball = SphericalSurface::new(origin, 1.0).unwrap();
+        let face = topo.add_face(Face::new(outer, vec![], FaceSurface::Sphere(ball)));
+        let found = crossings(
+            &mut topo,
+            face,
+            Point3::new(-1e6, 0.0, 0.5),
+            Point3::new(1e6, 0.0, 0.5),
+        );
+        assert_eq!(found.len(), 2, "{found:?}");
+        for p in &found {
+            let off = (*p - origin).length() - 1.0;
+            assert!(off.abs() < tol.linear, "{p:?} lies {off} off the ball");
+        }
     }
 
     /// An edge whose samples lie within the tolerance of a wall from
