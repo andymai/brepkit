@@ -691,6 +691,92 @@ pub(crate) fn boundary_pieces(
     Ok((0..root.len()).filter(|&i| find(&mut root, i) == i).count())
 }
 
+/// [`euler_misfit`] over all the faces of `solid`, its cavities' too.
+///
+/// # Errors
+///
+/// Returns an error if topology lookups fail.
+pub(crate) fn solid_euler_misfit(
+    topo: &Topology,
+    solid: SolidId,
+) -> Result<Option<String>, crate::OperationsError> {
+    let faces = explorer::solid_faces(topo, solid)?;
+    let piece = connected_pieces(&faces, &explorer::edge_to_face_map(topo, solid)?);
+    euler_misfit(topo, &faces, &piece)
+}
+
+/// How the counts of `faces` break the Euler-Poincaré relation, or `None`
+/// when they keep it. `piece` gives each face's piece, as
+/// [`connected_pieces`] does.
+///
+/// Each piece (its faces joined through shared edges: the outer shell, each
+/// cavity, each lump a boolean keeps apart) is a closed surface of genus
+/// `g >= 0`, so its `V - E + F - L = 2 - 2g`, `L` its faces' inner loops.
+/// Read piece by piece, one piece's surplus cannot hide another's lack. A
+/// hole that shares a vertex with another of its face's wires (a cylinder's
+/// rim tangent to a box face's edge) does not cut the face's boundary in
+/// two, so `L` counts each face's boundary pieces past the first. A piece
+/// that touches itself at a vertex (a ring cut where its two ends meet at a
+/// point) fits once that vertex counts once per sheet of faces meeting
+/// there, its faces' wires counted apart. One that touches itself along an
+/// edge, two of its edges sharing a stretch, does not.
+///
+/// # Errors
+///
+/// Returns an error if topology lookups fail.
+pub(crate) fn euler_misfit(
+    topo: &Topology,
+    faces: &[brepkit_topology::face::FaceId],
+    piece: &[usize],
+) -> Result<Option<String>, crate::OperationsError> {
+    use std::collections::{BTreeMap, HashSet};
+    let count = |n: usize| i64::try_from(n).unwrap_or(i64::MAX);
+    let fits = |chi: i64| chi <= 2 && (2 - chi) % 2 == 0;
+    let mut members: BTreeMap<usize, Vec<brepkit_topology::face::FaceId>> = BTreeMap::new();
+    for (&fid, &p) in faces.iter().zip(piece) {
+        members.entry(p).or_default().push(fid);
+    }
+    for group in members.values() {
+        let (mut edges, mut vertices) = (HashSet::new(), HashSet::new());
+        let (mut loops, mut wires) = (0_i64, 0_i64);
+        for &fid in group {
+            let face = topo.face(fid)?;
+            for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+            {
+                for oe in topo.wire(wid)?.edges() {
+                    if edges.insert(oe.edge().index()) {
+                        let edge = topo.edge(oe.edge())?;
+                        vertices.insert(edge.start().index());
+                        vertices.insert(edge.end().index());
+                    }
+                }
+            }
+            if !face.inner_wires().is_empty() {
+                wires += count(face.inner_wires().len());
+                loops += count(boundary_pieces(topo, fid)?) - 1;
+            }
+        }
+        let euler = count(vertices.len()) - count(edges.len()) + count(group.len());
+        if fits(euler - loops) {
+            continue;
+        }
+        let fans = extra_vertex_fans(topo, group)?;
+        if fans > 0 && fits(euler + fans - wires) && !edges_lie_on_each_other(topo, group)? {
+            continue;
+        }
+        return Ok(Some(format!(
+            "Euler characteristic V-E+F = {euler} is invalid for a piece of {} faces \
+             (expected V-E+F = 2(1-g)+L for a genus g >= 0, with L={loops} inner loops, \
+             got V={}, E={}, F={})",
+            group.len(),
+            vertices.len(),
+            edges.len(),
+            group.len()
+        )));
+    }
+    Ok(None)
+}
+
 /// Validate a solid with configurable tolerance options.
 ///
 /// Same checks as [`validate_solid`] but with tolerance scaling.
@@ -712,66 +798,16 @@ pub fn validate_solid_with_options(
     // geometry, above 1000 makes the check meaningless.
     let scale = options.tolerance_scale.clamp(0.1, 1000.0);
 
-    let (f, e, v) = explorer::solid_entity_counts(topo, solid)?;
-
-    // Euler-Poincaré formula for a cell complex with inner loops:
-    //   V - E + F = 2(S - g) + L
-    // where S is the number of connected pieces, g is the total genus and L
-    // is the total number of inner loops across all faces. For a genus-0
-    // solid with no cavities or holes: V-E+F = 2. A cavity is a piece of its
-    // own (it shares no edge with the outer shell), and so is each disjoint
-    // lump a boolean keeps in the outer shell (a ball cut in two by a slab).
-    // A hole that shares a vertex with another of its face's wires (a
-    // cylinder's rim tangent to a box face's edge) does not disconnect the
-    // face's boundary, so L counts each face's boundary pieces, not its
-    // wires.
-    let mut total_inner_loops: i64 = 0;
     let faces = explorer::solid_faces(topo, solid)?;
-    for fid in &faces {
-        #[allow(clippy::cast_possible_wrap)]
-        {
-            total_inner_loops += boundary_pieces(topo, *fid)? as i64 - 1;
-        }
-    }
-
-    #[allow(clippy::cast_possible_wrap)]
-    let euler = (v as i64) - (e as i64) + (f as i64);
-    // Adjusted Euler: subtract inner loops to get the standard characteristic.
-    let adjusted_euler = euler - total_inner_loops;
     let edge_map = explorer::edge_to_face_map(topo, solid)?;
     let piece = connected_pieces(&faces, &edge_map);
-    #[allow(clippy::cast_possible_wrap)]
-    let pieces = piece.iter().enumerate().filter(|&(i, &p)| i == p).count() as i64;
-    let fits = |chi: i64| {
-        let genus_times_2 = 2 * pieces - chi;
-        genus_times_2 >= 0 && genus_times_2 % 2 == 0
-    };
-    // A boundary that touches itself at a vertex (a ring cut where its two
-    // ends meet at a point, two pieces sharing a corner) fits once that
-    // vertex is counted once per sheet of faces meeting there, its face's
-    // wires counted apart. One that touches itself along an edge, two of its
-    // edges sharing a stretch, does not.
-    let fits_by_sheets = || -> Result<bool, crate::OperationsError> {
-        let fans = extra_vertex_fans(topo, &faces)?;
-        let wires: i64 = faces
-            .iter()
-            .map(|&fid| topo.face(fid).map(|f| f.inner_wires().len()))
-            .sum::<Result<usize, _>>()?
-            .try_into()
-            .unwrap_or(i64::MAX);
-        Ok(fans > 0 && fits(euler + fans - wires) && !edges_lie_on_each_other(topo, &faces)?)
-    };
-    if !fits(adjusted_euler) && !fits_by_sheets()? {
+    if let Some(description) = euler_misfit(topo, &faces, &piece)? {
         issues.push(ValidationIssue {
             severity: Severity::Error,
-            description: format!(
-                "Euler characteristic V-E+F = {euler} is invalid \
-                 (expected V-E+F = 2(S-g)+L for a genus g >= 0, with S={pieces} \
-                 pieces and L={total_inner_loops} inner loops, got V={v}, E={e}, F={f})"
-            ),
+            description,
         });
     }
-    if pieces > 1 {
+    if piece.iter().enumerate().filter(|&(i, &p)| i == p).count() > 1 {
         issues.extend(piece_issues(topo, &faces, &piece)?);
     }
     let mut boundary_edges = 0;
