@@ -777,7 +777,8 @@ fn check_edge_face_pairs(
                         trim.holds(p, 10.0 * tol.linear)
                     }
                 };
-                merge_roots(&mut crossings, found, exact, held, tol);
+                let on_face = |p: Point3| trim.holds(p, 10.0 * tol.linear);
+                merge_roots(&mut crossings, found, exact, (held, on_face), tol);
             }
             // An edge crossing a ball or a ring between two samples (a
             // ring's rim through a ball across it, a rod's seam line out
@@ -815,8 +816,9 @@ fn check_edge_face_pairs(
                         trim.holds(p, 10.0 * tol.linear)
                     }
                 };
+                let on_face = |p: Point3| trim.holds(p, 10.0 * tol.linear);
                 let found = found.into_iter().map(SideRoot::at).collect();
-                merge_roots(&mut crossings, found, exact, held, tol);
+                merge_roots(&mut crossings, found, exact, (held, on_face), tol);
             }
 
             // A line or conic that runs within the tolerance of a quadric
@@ -1062,20 +1064,24 @@ fn check_edge_face_pairs(
 }
 
 /// Adds to the sample scan's `crossings` the roots `found` on the surface
-/// that the face holds (`held`), in order along the curve. Roots read
-/// exactly stand for each crossing of the scan within a hundred tolerances
-/// of them, the same root read less closely, and are all kept however near
-/// each other they lie: a thin tube's two walls lie its diameter apart.
-/// Roots read at samples are kept only away from every crossing held so
-/// far, as two flips a sample step apart are still two crossings.
+/// that the face holds (`held`), in order along the curve. The scan's own
+/// crossings are kept only where the face holds them, within the tolerance
+/// of its wires counting (`on_face`): the scan reads the face's surface,
+/// which runs on past the face. Roots read exactly stand for each crossing
+/// of the scan within a hundred tolerances of them, the same root read less
+/// closely, and are all kept however near each other they lie: a thin
+/// tube's two walls lie its diameter apart. Roots read at samples are kept
+/// only away from every crossing held so far, as two flips a sample step
+/// apart are still two crossings.
 fn merge_roots(
     crossings: &mut Vec<(f64, Point3)>,
     found: Vec<(f64, Point3)>,
     exact: bool,
-    held: impl Fn(Point3) -> bool,
+    (held, on_face): (impl Fn(Point3) -> bool, impl Fn(Point3) -> bool),
     tol: Tolerance,
 ) {
     let near = 100.0 * tol.linear;
+    crossings.retain(|&(_, p)| on_face(p));
     let found = found.into_iter().filter(|&(_, p)| held(p));
     if exact {
         let found: Vec<(f64, Point3)> = found.collect();
@@ -6836,5 +6842,106 @@ mod tests {
             assert!(off < 1e-7, "{p:?} lies {off} off the tube");
             assert!(point_to_segment(*p, start, end) < 1e-7, "{p:?}");
         }
+    }
+
+    /// Lines whose crossings of a curved face's surface fall on the sample
+    /// scan's samples, one of them off the face: phase EF keeps only the
+    /// crossing on the face.
+    ///
+    /// - A ring of radii 2 and 0.5 less a window from ring angle 0.3 to 0.6
+    ///   and tube angle 1.2 to 1.9: the segment along `z` at ring angle 0.45
+    ///   and radius 2 from `z = -1` to `1` crosses at `z = ±0.5`, the upper
+    ///   crossing in the window.
+    /// - A ball of radius 2 less the cap past 1.9 along `(1, 1, 0)`, which
+    ///   lies inside the box of the rest: the segment through its centre
+    ///   along that way from `-4` to `4` crosses at `±2`, the one ahead in
+    ///   the cap.
+    /// - A wall of radius 2 from angle 0 to 270 degrees and height 0 to 4:
+    ///   the segment through its axis at height 2 along 315 degrees, from
+    ///   `-4` to `4`, crosses it at 135 degrees, and its surface at 315.
+    #[test]
+    fn crossings_on_samples_off_a_curved_face_are_dropped() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::surfaces::{CylindricalSurface, ToroidalSurface};
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let mut misread = Vec::new();
+        let mut check = |what: &str, found: Vec<Point3>, want: Point3| {
+            if found.len() != 1 || (found[0] - want).length() > 1e-7 {
+                misread.push(format!("{what}: {found:?}, want {want:?}"));
+            }
+        };
+
+        let mut topo = Topology::new();
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let (whole, ring) = whole_ring(&mut topo, origin, Mat4::identity());
+        let ring = ToroidalSurface::new(origin, ring.major_radius(), ring.minor_radius()).unwrap();
+        let window = ring_window(&mut topo, &ring, (0.3, 0.6), (1.2, 1.9), false);
+        let outer = topo.face(whole).unwrap().outer_wire();
+        let face = topo.add_face(Face::new(outer, vec![window], FaceSurface::Torus(ring)));
+        let (c, s) = (0.45_f64.cos(), 0.45_f64.sin());
+        let found = ef_vertices(
+            &mut topo,
+            face,
+            EdgeCurve::Line,
+            Point3::new(2.0 * c, 2.0 * s, -1.0),
+            Some(Point3::new(2.0 * c, 2.0 * s, 1.0)),
+        );
+        check("ring", found, Point3::new(2.0 * c, 2.0 * s, -0.5));
+
+        let mut topo = Topology::new();
+        let turn = Mat4::rotation_z(std::f64::consts::FRAC_PI_4)
+            * Mat4::rotation_y(std::f64::consts::FRAC_PI_2);
+        let face = ball_less_a_cap(&mut topo, origin, turn);
+        let up = turned(turn, Vec3::new(0.0, 0.0, 1.0));
+        let found = ef_vertices(
+            &mut topo,
+            face,
+            EdgeCurve::Line,
+            origin - up * 4.0,
+            Some(origin + up * 4.0),
+        );
+        check("ball", found, origin - up * 2.0);
+
+        let mut topo = Topology::new();
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let at = |deg: f64, h: f64| {
+            let a = deg.to_radians();
+            Point3::new(2.0 * a.cos(), 2.0 * a.sin(), h)
+        };
+        let circle =
+            |h: f64| EdgeCurve::Circle(Circle3D::new(Point3::new(0.0, 0.0, h), z, 2.0).unwrap());
+        let corner = [at(0.0, 0.0), at(270.0, 0.0), at(270.0, 4.0), at(0.0, 4.0)];
+        let v = corner.map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+        let low = topo.add_edge(Edge::new(v[0], v[1], circle(0.0)));
+        let right = topo.add_edge(Edge::new(v[1], v[2], EdgeCurve::Line));
+        let high = topo.add_edge(Edge::new(v[3], v[2], circle(4.0)));
+        let left = topo.add_edge(Edge::new(v[0], v[3], EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(low, true),
+                    OrientedEdge::new(right, true),
+                    OrientedEdge::new(high, false),
+                    OrientedEdge::new(left, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let wall = CylindricalSurface::new(origin, z, 2.0).unwrap();
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Cylinder(wall)));
+        let found = ef_vertices(
+            &mut topo,
+            face,
+            EdgeCurve::Line,
+            at(315.0, 2.0) + (at(315.0, 2.0) - Point3::new(0.0, 0.0, 2.0)),
+            Some(at(135.0, 2.0) + (at(135.0, 2.0) - Point3::new(0.0, 0.0, 2.0))),
+        );
+        check("wall", found, at(135.0, 2.0));
+        assert!(misread.is_empty(), "{misread:#?}");
     }
 }
