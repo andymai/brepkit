@@ -334,7 +334,11 @@ fn pcurve_parameters(
 /// end, which holds whether or not the knots are clamped, and its points
 /// lie in their box. A surface that closes on itself with its first and
 /// last control points apart, as one on knots that are not clamped does,
-/// is caught too.
+/// is caught too. The sides' control points are rounded blends, each
+/// within `4 (p + 3)` roundings of the net's largest coordinate for degree
+/// `p`, so two sides of a surface that closes exactly can stand that far
+/// apart twice over: far from the origin, more than the face's tolerance.
+/// They are apart only past `reach` and that rounding.
 fn sides_are_free(surface: &NurbsSurface, reach: f64) -> bool {
     let net = surface.control_points();
     let weights = surface.weights();
@@ -365,9 +369,16 @@ fn sides_are_free(surface: &NurbsSurface, reach: f64) -> bool {
         });
         Aabb3::try_from_points(points.collect::<Option<Vec<_>>>()?)
     };
-    let apart = |a: Option<Aabb3>, b: Option<Aabb3>| matches!((a, b), (Some(a), Some(b)) if !a.expanded(reach).intersects(b));
+    let size = net
+        .iter()
+        .flatten()
+        .fold(0.0_f64, |m, p| m.max(largest_coordinate(*p)));
+    #[allow(clippy::cast_precision_loss)]
+    let blends = |p: usize| rounding_reach(size, 8.0 * (p + 3) as f64);
+    let apart = |a: Option<Aabb3>, b: Option<Aabb3>, p: usize| matches!((a, b), (Some(a), Some(b)) if !a.expanded(reach + blends(p)).intersects(b));
     let ((u_min, u_max), (v_min, v_max)) = (surface.domain_u(), surface.domain_v());
-    apart(side(true, u_min), side(true, u_max)) && apart(side(false, v_min), side(false, v_max))
+    apart(side(true, u_min), side(true, u_max), surface.degree_u())
+        && apart(side(false, v_min), side(false, v_max), surface.degree_v())
 }
 
 /// A box in the parameters that holds a pcurve over its interval: the

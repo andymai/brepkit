@@ -8837,4 +8837,115 @@ mod tests {
         }
         assert!(misread.is_empty(), "{misread:#?}");
     }
+
+    /// Tubes of degree 3 and 5 round an octagon, upright and turned, at the
+    /// origin and 1e6 to 1e11 from it in six directions, whose rows are a
+    /// B-spline on uniform knots, not clamped. The last rows repeat the
+    /// first moved so that the blend at each end of the domain, `(1, 4, 1)
+    /// / 6` or `(1, 26, 66, 26, 1) / 120`, cancels the moves: each tube closes
+    /// on itself exactly, with a crease along the seam, though its two sides
+    /// are blends of other control points, rounded otherwise. Each face is
+    /// the tube less a small patch, and its box holds the whole tube.
+    #[test]
+    fn tubes_closed_exactly_far_from_the_origin_are_boxed_whole() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::curves2d::{Circle2D, Curve2D};
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::{Point2, Vec3};
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::pcurve::PCurve;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let turned = Mat4::rotation_z(0.7) * Mat4::rotation_x(1.1) * Mat4::rotation_y(0.3);
+        let d = Vec3::new(0.25, 0.125, -0.125);
+        let mut misread = Vec::new();
+        for (upright, degree, off, dir) in [true, false].into_iter().flat_map(|upright| {
+            [3_usize, 5].into_iter().flat_map(move |degree| {
+                [0.0, 1e6, 7e9, 1e10, 2.3e10, 1e11]
+                    .into_iter()
+                    .flat_map(move |off| (0..6_u32).map(move |dir| (upright, degree, off, dir)))
+            })
+        }) {
+            let k = f64::from(dir);
+            let shift = Vec3::new(
+                off * 0.37f64.madd(k, 1.0),
+                -off * 0.21f64.madd(k, 0.6),
+                off * 0.11f64.madd(k, 0.3),
+            );
+            let n = 8 + degree;
+            let rows: Vec<Vec<Point3>> = (0..n)
+                .map(|row| {
+                    let a = std::f64::consts::FRAC_PI_4 * (row % 8) as f64;
+                    let moved = match (row.checked_sub(8), degree) {
+                        (Some(0 | 2), 3) => d * -2.0,
+                        (Some(1), 3) => d,
+                        (Some(0 | 4), 5) => d * -26.0,
+                        (Some(1 | 3), 5) => d,
+                        _ => Vec3::new(0.0, 0.0, 0.0),
+                    };
+                    [0.0, 4.0]
+                        .map(|h| {
+                            let q = Point3::new(a.cos(), a.sin(), h);
+                            let q = if upright { q } else { turned.mul_point(q) };
+                            Point3::new(q.x() + shift.x(), q.y() + shift.y(), q.z() + shift.z())
+                                + moved
+                        })
+                        .to_vec()
+                })
+                .collect();
+            let knots = (0..=(n + degree)).map(|i| i as f64).collect();
+            let tube = NurbsSurface::new(
+                degree,
+                1,
+                knots,
+                vec![0.0, 0.0, 1.0, 1.0],
+                rows,
+                vec![vec![1.0; 2]; n],
+            )
+            .unwrap();
+            let (u0, u1) = tube.domain_u();
+            let mut topo = Topology::new();
+            let loop_uv = Circle2D::new(Point2::new(f64::midpoint(u0, u1), 0.5), 0.2).unwrap();
+            let start = loop_uv.evaluate(0.0);
+            let corner = tube.evaluate(start.x(), start.y());
+            let v = topo.add_vertex(Vertex::new(corner, 1e-7));
+            let round = Circle3D::new_with_ref(
+                corner - Vec3::new(0.0, 0.0, 0.01),
+                Vec3::new(1.0, 0.0, 0.0),
+                0.01,
+                Vec3::new(0.0, 0.0, 1.0),
+            )
+            .unwrap();
+            let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(round)));
+            let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, false)], true).unwrap());
+            let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(tube.clone())));
+            topo.pcurves_mut().set(
+                e,
+                face,
+                PCurve::new(Curve2D::Circle(loop_uv), 0.0, std::f64::consts::TAU),
+            );
+            let held = build_face_containment(&topo, face, Tolerance::new())
+                .unwrap()
+                .bbox;
+            let off_box = (0..=80_u32)
+                .flat_map(|i| (0..=4_u32).map(move |j| (i, j)))
+                .map(|(i, j)| {
+                    tube.evaluate((u1 - u0).madd(f64::from(i) / 80.0, u0), f64::from(j) / 4.0)
+                })
+                .filter(|&p| !held.contains_point(p))
+                .count();
+            if off_box > 0 {
+                misread.push(format!(
+                    "degree {degree} at {off:e} in direction {dir}, upright {upright}: \
+                     {off_box} points off {held:?}"
+                ));
+            }
+        }
+        assert!(
+            misread.is_empty(),
+            "{} misread: {misread:#?}",
+            misread.len()
+        );
+    }
 }
