@@ -1,7 +1,9 @@
 //! A ball less the cap above `z = 0.95`, and two rods into it, their axes
 //! through its centre and 0.3 rad apart, fused at once. Each rod cuts the
 //! ball's face in a small circle clear of both poles, and the two circles
-//! cross twice.
+//! cross twice. With the cap and a rod turned a quarter turn about `y`,
+//! the cut lies across `x`; at `x = 0.95` the ball's one face holds both
+//! poles of its own chart, and at `x = 0` it runs from pole to pole.
 
 #[cfg(test)]
 mod tests {
@@ -25,6 +27,7 @@ mod tests {
     use brepkit_topology::explorer::solid_faces;
     use brepkit_topology::solid::SolidId;
 
+    /// Where the cap's plane cuts the ball, before the scene is turned.
     const CAP_PLANE: f64 = 0.95;
     const ROD_RADIUS: f64 = 0.2;
     /// The angle between the rods' axes.
@@ -97,8 +100,8 @@ mod tests {
     }
 
     /// The volume of the capped ball and its first `rods` rods.
-    fn expected(rods: usize) -> f64 {
-        let h = 1.0 - CAP_PLANE;
+    fn expected(cap: f64, rods: usize) -> f64 {
+        let h = 1.0 - cap;
         let capped = 4.0 / 3.0 * PI - PI * h * h * (3.0 - h) / 3.0;
         match rods {
             1 => capped + rod_outside(),
@@ -106,17 +109,23 @@ mod tests {
         }
     }
 
-    /// The capped ball and its first `rods` rods, the cap and the rods
-    /// turned by `around` about the ball's centre, then all of it placed by
-    /// `pose`.
-    fn scene(topo: &mut Topology, rods: usize, around: &Mat4, pose: &Mat4) -> Vec<SolidId> {
+    /// The ball less the cap above `z = cap` and its first `rods` rods, the
+    /// cap and the rods turned by `around` about the ball's centre, then all
+    /// of it placed by `pose`.
+    fn scene(
+        topo: &mut Topology,
+        cap: f64,
+        rods: usize,
+        around: &Mat4,
+        pose: &Mat4,
+    ) -> Vec<SolidId> {
         let opts = BooleanOptions {
             mesh_fallback: false,
             ..BooleanOptions::default()
         };
         let ball = make_sphere(topo, 1.0, 32).unwrap();
         let lid = make_box(topo, 4.0, 4.0, 2.0).unwrap();
-        transform_solid(topo, lid, &Mat4::translation(-2.0, -2.0, CAP_PLANE)).unwrap();
+        transform_solid(topo, lid, &Mat4::translation(-2.0, -2.0, cap)).unwrap();
         let rods: Vec<SolidId> = [true, false][..rods]
             .iter()
             .map(|&first| {
@@ -135,12 +144,13 @@ mod tests {
         std::iter::once(capped).chain(rods).collect()
     }
 
-    /// Why `solid` is not the exact fuse of the capped ball and its first
-    /// `rods` rods, its points placed by `around` then `pose`.
+    /// Why `solid` is not the exact fuse of the ball less the cap above `z
+    /// = cap` and its first `rods` rods, its points placed by `around` then
+    /// `pose`.
     fn fault(
         topo: &Topology,
         solid: SolidId,
-        rods: usize,
+        (cap, rods): (f64, usize),
         around: &Mat4,
         pose: &Mat4,
     ) -> Option<String> {
@@ -162,7 +172,7 @@ mod tests {
             return Some("mesh not closed".into());
         }
         let volume = solid_volume(topo, solid, 0.0005).unwrap();
-        let truth = expected(rods);
+        let truth = expected(cap, rods);
         if (volume - truth).abs() >= 1e-6 * truth {
             return Some(format!("volume {volume} should be {truth}"));
         }
@@ -173,8 +183,8 @@ mod tests {
         // rod's end. With both rods: in the second rod, and in both rods
         // outside the ball; between the rods. With one rod: where the second
         // would be.
-        let mut inside = vec![origin, origin + a * 1.3];
-        let mut outside = vec![Point3::new(0.0, 0.1, 0.97), origin + a * 1.6];
+        let mut inside = vec![Point3::new(0.0, 0.0, cap - 0.3), origin + a * 1.3];
+        let mut outside = vec![Point3::new(0.0, 0.1, 0.5 * (1.0 + cap)), origin + a * 1.6];
         if rods == 2 {
             inside.extend([origin + b * 1.3, origin + middle * 1.05]);
             outside.push(origin + middle * 1.45);
@@ -196,7 +206,7 @@ mod tests {
         None
     }
 
-    fn faults(rods: usize, around: &Mat4) -> Vec<String> {
+    fn faults(cap: f64, rods: usize, around: &Mat4) -> Vec<String> {
         let mut faults = Vec::new();
         for (name, pose) in [
             ("upright", Mat4::identity()),
@@ -204,9 +214,9 @@ mod tests {
             ("mirrored", Mat4::scale(1.0, -1.0, 1.0)),
         ] {
             let mut topo = Topology::new();
-            let solids = scene(&mut topo, rods, around, &pose);
+            let solids = scene(&mut topo, cap, rods, around, &pose);
             let why = match brepkit_algo::gfa::fuse_n(&mut topo, &solids) {
-                Ok(solid) => fault(&topo, solid, rods, around, &pose),
+                Ok(solid) => fault(&topo, solid, (cap, rods), around, &pose),
                 Err(e) => Some(format!("error {e}")),
             };
             if let Some(why) = why {
@@ -218,17 +228,26 @@ mod tests {
 
     #[test]
     fn two_rods_whose_circles_cross_on_a_capped_ball_fuse_at_once() {
-        let faults = faults(2, &Mat4::identity());
+        let faults = faults(CAP_PLANE, 2, &Mat4::identity());
         assert!(faults.is_empty(), "{}", faults.join("\n"));
     }
 
-    /// With the cap and the rod turned a quarter turn about `y`, the ball's
-    /// one face holds both poles of its own chart.
+    /// With the cap and the rod turned a quarter turn about `y`, the cut
+    /// lies at `x = 0.95`, and the ball's one face holds both poles of its
+    /// own chart.
     #[test]
     #[ignore = "open: the ball's face takes no section from the rod, and the fuse needs the \
                 mesh fallback; with the cap above, the same rod fuses exactly"]
-    fn a_rod_into_a_ball_capped_at_its_equator_fuses() {
-        let faults = faults(1, &Mat4::rotation_y(FRAC_PI_2));
+    fn a_rod_into_a_ball_less_a_cap_turned_to_x_fuses() {
+        let faults = faults(CAP_PLANE, 1, &Mat4::rotation_y(FRAC_PI_2));
+        assert!(faults.is_empty(), "{}", faults.join("\n"));
+    }
+
+    /// The cut turned to `x = 0`: the ball's half face runs from pole to
+    /// pole of its own chart.
+    #[test]
+    fn a_rod_into_a_ball_halved_at_x_0_fuses() {
+        let faults = faults(0.0, 1, &Mat4::rotation_y(FRAC_PI_2));
         assert!(faults.is_empty(), "{}", faults.join("\n"));
     }
 }
