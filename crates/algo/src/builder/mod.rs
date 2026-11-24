@@ -20,6 +20,7 @@ pub mod face_class;
 pub mod face_splitter;
 pub mod fill_images;
 pub mod fill_images_faces;
+pub mod nurbs_pcurve;
 pub mod pcurve_compute;
 pub mod plane_frame;
 pub mod same_domain;

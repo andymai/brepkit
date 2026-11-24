@@ -3263,3 +3263,201 @@ fn two_crossings_in_one_place_cut_a_section_once() {
         assert!((p - q).length() > tol.linear, "a piece {p:?} to {q:?}");
     }
 }
+
+/// A bicubic sheet over `[-50, 50]` squared with four knot spans each way,
+/// bent along `z`, moved by `pose`.
+fn bent_sheet(pose: &dyn Fn(Point3) -> Point3) -> brepkit_math::nurbs::surface::NurbsSurface {
+    let knots = vec![0.0, 0.0, 0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0, 1.0, 1.0];
+    let points = (0..7)
+        .map(|i| {
+            (0..7)
+                .map(|j| {
+                    let (x, y) = (
+                        -50.0 + 100.0 * f64::from(i) / 6.0,
+                        -50.0 + 100.0 * f64::from(j) / 6.0,
+                    );
+                    pose(Point3::new(
+                        x,
+                        y,
+                        4.0 * ((x / 30.0).sin() + (y / 20.0).cos()),
+                    ))
+                })
+                .collect()
+        })
+        .collect();
+    brepkit_math::nurbs::surface::NurbsSurface::new(
+        3,
+        3,
+        knots.clone(),
+        knots,
+        points,
+        vec![vec![1.0; 7]; 7],
+    )
+    .unwrap()
+}
+
+/// The curve of `surface` at `at` along `v` (`along_v`) or along `u`.
+fn sheet_iso(
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    at: f64,
+    along_v: bool,
+) -> brepkit_math::nurbs::curve::NurbsCurve {
+    use brepkit_math::nurbs::basis::{basis_funs, find_span};
+    let net = surface.control_points();
+    let (knots, p, count) = if along_v {
+        (surface.knots_u(), surface.degree_u(), net.len())
+    } else {
+        (surface.knots_v(), surface.degree_v(), net[0].len())
+    };
+    let span = find_span(count, p, at, knots);
+    let basis = basis_funs(span, at, p, knots);
+    let length = if along_v { net[0].len() } else { net.len() };
+    let points = (0..length)
+        .map(|k| {
+            let mut sum = Vec3::new(0.0, 0.0, 0.0);
+            for (i, b) in basis.iter().enumerate() {
+                let c = if along_v {
+                    net[span - p + i][k]
+                } else {
+                    net[k][span - p + i]
+                };
+                sum += Vec3::new(c.x(), c.y(), c.z()) * *b;
+            }
+            Point3::new(sum.x(), sum.y(), sum.z())
+        })
+        .collect();
+    let (other, degree) = if along_v {
+        (surface.knots_v(), surface.degree_v())
+    } else {
+        (surface.knots_u(), surface.degree_u())
+    };
+    brepkit_math::nurbs::curve::NurbsCurve::new(degree, other.to_vec(), points, vec![1.0; length])
+        .unwrap()
+}
+
+/// A piece of a large B-spline sheet, a few hundredths of its parameters
+/// each way and bounded by four of the sheet's own curves, is the only face
+/// of one source of a GFA store, beside a box over it. The store proves a
+/// pcurve for each of the piece's edges, and phase EF boxes the piece by
+/// the sheet cut to them: a box that holds every point of the piece and is
+/// less than a tenth the size of the sheet's, where without the pcurves it
+/// takes the whole sheet's. In three poses, one mirrored and moved 1e4.
+#[test]
+fn a_small_piece_of_a_large_nurbs_sheet_is_boxed_to_the_piece() {
+    use brepkit_topology::face::FaceSurface;
+    let tol = brepkit_math::tolerance::Tolerance::new();
+    let turn = |p: Point3| {
+        let (s, c) = 0.7_f64.sin_cos();
+        Point3::new(
+            c * p.x() - s * p.y() + 30.0,
+            s * p.x() + c * p.y() - 12.0,
+            p.z() + 5.0,
+        )
+    };
+    let mirror = |p: Point3| Point3::new(-p.x() + 1.0e4, p.y() - 2.0e4, p.z() + 3.0e3);
+    let poses: [(&str, &dyn Fn(Point3) -> Point3); 3] = [
+        ("upright", &|p| p),
+        ("turned", &turn),
+        ("mirrored", &mirror),
+    ];
+    let ((u0, u1), (v0, v1)) = ((0.40, 0.47), (0.55, 0.61));
+    for (tag, pose) in poses {
+        let sheet = bent_sheet(pose);
+        let mut topo = Topology::new();
+        let corner = |u: f64, v: f64| sheet.evaluate(u, v);
+        let corners = [
+            corner(u0, v0),
+            corner(u1, v0),
+            corner(u1, v1),
+            corner(u0, v1),
+        ];
+        let vertices: Vec<_> = corners
+            .iter()
+            .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+            .collect();
+        let mut edge = |a: usize, b: usize, curve| {
+            topo.add_edge(Edge::new(
+                vertices[a],
+                vertices[b],
+                EdgeCurve::NurbsCurve(curve),
+            ))
+        };
+        let bottom = edge(0, 1, sheet_iso(&sheet, v0, false));
+        let right = edge(1, 2, sheet_iso(&sheet, u1, true));
+        let top = edge(3, 2, sheet_iso(&sheet, v1, false));
+        let left = edge(0, 3, sheet_iso(&sheet, u0, true));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(bottom, true),
+                    OrientedEdge::new(right, true),
+                    OrientedEdge::new(top, false),
+                    OrientedEdge::new(left, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        );
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(sheet.clone())));
+        let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+        let piece = topo.add_solid(Solid::new(shell, vec![]));
+        let middle = corner(0.435, 0.58);
+        let over = make_box(
+            &mut topo,
+            [middle.x() - 3.0, middle.y() - 3.0, middle.z() - 3.0],
+            [middle.x() + 3.0, middle.y() + 3.0, middle.z() + 3.0],
+        );
+
+        let boxed = |with_pcurves: bool| {
+            let mut store = crate::ds::GfaShapeStore::new(&topo, piece, over).unwrap();
+            if with_pcurves {
+                crate::ds::shape_store::prove_source_pcurves(
+                    &mut store.topo,
+                    &[store.solid_a, store.solid_b],
+                    &[],
+                    tol,
+                )
+                .unwrap();
+            }
+            let fid =
+                brepkit_topology::explorer::solid_faces(&store.topo, store.solid_a).unwrap()[0];
+            let face = store.topo.face(fid).unwrap();
+            let FaceSurface::Nurbs(surface) = face.surface() else {
+                unreachable!()
+            };
+            let held =
+                super::helpers::nurbs_face_box(&store.topo, fid, surface, tol, 1e-6).unwrap();
+            let carried = brepkit_topology::explorer::face_edges(&store.topo, fid)
+                .unwrap()
+                .iter()
+                .filter(|&&e| store.topo.pcurves().contains(e, fid))
+                .count();
+            (held, carried)
+        };
+        let whole = sheet.aabb();
+        let size = |b: brepkit_math::aabb::Aabb3| (b.max - b.min).length();
+        let (bare, none) = boxed(false);
+        assert_eq!(none, 0, "{tag}");
+        assert!(
+            size(bare) >= size(whole),
+            "{tag}: {bare:?} against {whole:?}"
+        );
+        let (held, carried) = boxed(true);
+        assert_eq!(carried, 4, "{tag}: pcurves");
+        assert!(
+            size(held) < 0.1 * size(whole),
+            "{tag}: {held:?} against {whole:?}"
+        );
+        for i in 0..=20 {
+            for j in 0..=20 {
+                let u = u0 + (u1 - u0) * f64::from(i) / 20.0;
+                let v = v0 + (v1 - v0) * f64::from(j) / 20.0;
+                let p = sheet.evaluate(u, v);
+                assert!(
+                    held.contains_point(p),
+                    "{tag}: ({u}, {v}) at {p:?} off {held:?}"
+                );
+            }
+        }
+    }
+}
