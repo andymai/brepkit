@@ -162,8 +162,14 @@ pub(super) fn analytic_face_box(
 /// control points the span holds, with weights that are positive and sum to
 /// one, so it lies in their box, whether or not the knots are clamped. The
 /// box is grown by a bound on the rounding of the knot insertion and of the
-/// surface's evaluation. `reach` is how far the face's own edges and
-/// vertices may stand off the surface.
+/// surface's evaluation, as a share of the size of its coordinates
+/// ([`rounding_reach`]): an evaluated point sums `(p + 1)(q + 1)` products
+/// of basis functions, each read to a few roundings for degrees `p` and
+/// `q`, and each knot inserted takes `p` or `q` steps of a rounded blend.
+/// Over dense evaluation of a sheet a million and ten billion from the
+/// origin, points stood outside the cut box by up to 2 roundings of their
+/// coordinates, and outside the whole control box by 1. `reach` is how far
+/// the face's own edges and vertices may stand off the surface.
 ///
 /// # Errors
 ///
@@ -191,19 +197,24 @@ pub(super) fn nurbs_face_box(
     let held = pcurve_parameters(topo, face_id, surface, tol, reach)?
         .and_then(|range| cut_net_box(surface, range))
         .unwrap_or_else(|| surface.aabb());
-    let size = held
-        .min
-        .x()
-        .abs()
-        .max(held.min.y().abs())
-        .max(held.min.z().abs())
-        + held
-            .max
-            .x()
-            .abs()
-            .max(held.max.y().abs())
-            .max(held.max.z().abs());
-    Ok(held.expanded(1e-9 * size.max(1.0)))
+    #[allow(clippy::cast_precision_loss)]
+    let roundings = {
+        let (p, q) = (surface.degree_u(), surface.degree_v());
+        (4 * (p + 1) * (q + 1) + 16 * (p + q + 1)) as f64
+    };
+    Ok(held.expanded(rounding_reach(held, roundings)))
+}
+
+/// `roundings` roundings of the largest coordinate of `held`'s corners: how
+/// far a point that a surface's evaluator computes, a sum of terms each
+/// rounded no more than that many times all told, can stand past a box
+/// whose corners hold the exact point.
+pub(super) fn rounding_reach(held: Aabb3, roundings: f64) -> f64 {
+    let size = [held.min, held.max]
+        .iter()
+        .flat_map(|p| [p.x(), p.y(), p.z()])
+        .fold(0.0_f64, |m, c| m.max(c.abs()));
+    roundings * f64::EPSILON * size.max(f64::MIN_POSITIVE)
 }
 
 /// The box `[u0, u1, v0, v1]` in a NURBS surface's parameters of a face's

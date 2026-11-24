@@ -317,12 +317,17 @@ fn build_face_containment(
         });
     }
 
+    // An analytic surface's point sums its centre and three rounded terms
+    // along its frame, each of a sine or cosine, a radius and an axis, and
+    // so stands within sixteen roundings of its largest coordinate of where
+    // its box's corners, read the same way, put it.
     let held = match &surface {
         FaceSurface::Nurbs(n) => {
             let reach = face_tolerance(topo, fid, tol)?;
             Some(super::helpers::nurbs_face_box(topo, fid, n, tol, reach)?)
         }
-        _ => super::helpers::analytic_face_box(topo, fid, tol)?,
+        _ => super::helpers::analytic_face_box(topo, fid, tol)?
+            .map(|b| b.expanded(super::helpers::rounding_reach(b, 16.0))),
     };
     Ok(FaceContainment {
         bbox: match held {
@@ -6825,6 +6830,15 @@ mod tests {
         topo: &mut Topology,
         shift: f64,
     ) -> (FaceId, brepkit_math::nurbs::surface::NurbsSurface) {
+        bumped_sheet_at(topo, shift, brepkit_math::vec::Vec3::new(0.0, 0.0, 0.0))
+    }
+
+    /// [`bumped_sheet`] moved by `offset`.
+    fn bumped_sheet_at(
+        topo: &mut Topology,
+        shift: f64,
+        offset: brepkit_math::vec::Vec3,
+    ) -> (FaceId, brepkit_math::nurbs::surface::NurbsSurface) {
         use brepkit_math::curves2d::{Curve2D, Line2D};
         use brepkit_math::nurbs::surface::NurbsSurface;
         use brepkit_math::vec::Point2;
@@ -6840,7 +6854,9 @@ mod tests {
             .map(|(i, &x)| {
                 at.iter()
                     .enumerate()
-                    .map(|(j, &y)| Point3::new(x, y, if (i, j) == (3, 3) { 8.0 } else { 0.0 }))
+                    .map(|(j, &y)| {
+                        Point3::new(x, y, if (i, j) == (3, 3) { 8.0 } else { 0.0 }) + offset
+                    })
                     .collect()
             })
             .collect();
@@ -6848,7 +6864,8 @@ mod tests {
         let surface =
             NurbsSurface::new(2, 2, knots.clone(), knots, rows, vec![vec![1.0; 7]; 7]).unwrap();
         let corners = [(0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9)];
-        let v = corners.map(|(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)));
+        let v = corners
+            .map(|(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0) + offset, 1e-7)));
         let mut sides = Vec::new();
         let mut lines = Vec::new();
         for k in 0..4 {
@@ -8020,5 +8037,108 @@ mod tests {
             found.len() != want || found.iter().any(|p| (*p - *at).length() > 1e-8)
         });
         assert!(misread.is_empty(), "{misread:#?}");
+    }
+
+    /// The boxes phase EF holds faces in hold every point the surfaces'
+    /// evaluators return over the faces, read densely, in a turned pose at
+    /// the origin, a million from it and ten billion from it: a ball less a
+    /// cap, a whole ring, a slender cone's tip, and a B-spline sheet cut to
+    /// its pcurves' square and whole. Each box grows by roundings of its
+    /// coordinates' size, past which an evaluated point can stand.
+    #[test]
+    fn face_boxes_hold_the_evaluated_surface_far_from_the_origin() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::surfaces::{ConicalSurface, SphericalSurface};
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let tol = Tolerance::new();
+        let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(1.1) * Mat4::rotation_y(0.3);
+        let grid = |n: u32, f: &mut dyn FnMut(f64, f64)| {
+            for i in 0..=n {
+                for j in 0..=n {
+                    f(f64::from(i) / f64::from(n), f64::from(j) / f64::from(n));
+                }
+            }
+        };
+        let mut misread = Vec::new();
+        for off in [0.0, 1e6, 1e10] {
+            let shift = Vec3::new(off * 1.3, -2.1 * off, 0.57 * off);
+            let centre = Point3::new(0.1, 0.2, 0.3) + shift;
+            let mut check = |what: &str, held: Aabb3, p: Point3| {
+                if !held.contains_point(p) {
+                    misread.push(format!("{what} at {off:e}: {p:?} off {held:?}"));
+                }
+            };
+
+            let mut topo = Topology::new();
+            let face = ball_less_a_cap(&mut topo, centre, turn);
+            let held = build_face_containment(&topo, face, tol).unwrap().bbox;
+            let ball = SphericalSurface::new(centre, 2.0).unwrap();
+            let up = turned(turn, Vec3::new(0.0, 0.0, 1.0));
+            grid(360, &mut |a, b| {
+                let p = ball.evaluate(
+                    std::f64::consts::TAU * a,
+                    std::f64::consts::PI.madd(b, -std::f64::consts::FRAC_PI_2),
+                );
+                if (p - centre).dot(up) <= 1.9 {
+                    check("ball", held, p);
+                }
+            });
+
+            let mut topo = Topology::new();
+            let (face, ring) = whole_ring(&mut topo, centre, turn);
+            let held = build_face_containment(&topo, face, tol).unwrap().bbox;
+            grid(360, &mut |a, b| {
+                let p = ring.evaluate(std::f64::consts::TAU * a, std::f64::consts::TAU * b);
+                check("ring", held, p);
+            });
+
+            let mut topo = Topology::new();
+            let angle = std::f64::consts::FRAC_PI_2 - 0.1;
+            let axis = turned(turn, Vec3::new(0.0, 0.0, -1.0));
+            let cone = ConicalSurface::new(centre - axis * 10.0, axis, angle).unwrap();
+            let base = 10.0 * angle.cos() / angle.sin();
+            let rim = Circle3D::new(centre, axis, base).unwrap();
+            let v = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
+            let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(rim.clone())));
+            let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+            let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Cone(cone.clone())));
+            let held = build_face_containment(&topo, face, tol).unwrap().bbox;
+            let v_base = cone.project_point(rim.evaluate(0.0)).1;
+            grid(360, &mut |a, b| {
+                check(
+                    "cone",
+                    held,
+                    cone.evaluate(std::f64::consts::TAU * a, v_base * b),
+                );
+            });
+
+            for shifted in [0.0, 0.05] {
+                let mut topo = Topology::new();
+                let (face, surface) = bumped_sheet_at(&mut topo, shifted, shift);
+                let held = build_face_containment(&topo, face, tol).unwrap().bbox;
+                let what = if shifted > 0.0 {
+                    "whole sheet"
+                } else {
+                    "cut sheet"
+                };
+                grid(400, &mut |a, b| {
+                    check(
+                        what,
+                        held,
+                        surface.evaluate(0.8f64.madd(a, 0.1), 0.8f64.madd(b, 0.1)),
+                    );
+                });
+            }
+        }
+        assert!(
+            misread.is_empty(),
+            "{} misses: {:#?}",
+            misread.len(),
+            &misread[..misread.len().min(5)]
+        );
     }
 }
