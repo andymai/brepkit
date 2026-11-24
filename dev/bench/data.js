@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795555439369,
+  "lastUpdate": 1795559033098,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -77975,6 +77975,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27463257,
             "range": "± 97916",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ac7dade667fae975d02d0ef1ba1dd3ef7d7cb4d5",
+          "message": "fix(algo): cut a whole circle on a plane face where another section meets it, not peel it as a cap (#2845)\n\n## Summary\n\nOn main, `split_face_2d` peels each closed circle whose centre lies well\ninside a plane face as a lone cap. It does not check for other sections\nthat touch or cross the circle, and the split skips closed sections on\nplane faces (#2835). Take a plate with a whole circle and a line across\nit. The split gives overlapping pieces of area 6.2832, 43.7168 and 50,\nand the imprint refuses as non-manifold.\n\nWith this change, a circle that another section meets is cut where they\nmeet, and each region comes out once. The imprint gives the 4 true\nfaces, valid, closed, with volume 200. The pose sweep and the truth\naudit give the same output as main.\n\nOn current main, no public operation tested here reaches the peel fault.\nThe imprint of a circle with its chord is already right through #2837\nand #2825. The fuses are right because the pave filler cuts the circle\nfirst. The fault shows through `split_face_2d`'s own inputs.\n\nFixes #2835.\n\n## The change\n\n- **The cap peel.** Each circle cap is read against every other section.\nIt is apart by distance bounds, or meets at its ends on the circle and\nat exact crossings. An ellipse, or a spline whose control-hull proof\nfails, refuses the split. A circle that something meets is cut into arcs\nof at most a third of a turn. The cut points go into the registry under\nits pave block.\n- **`plane_internal_line_loops`** dropped a line that an arc's end lands\non, as if collinear pieces replaced it. Now only a line that runs along\nit counts.\n- **The arrangement** splits an arc at its middle where one line runs\nthrough both its ends.\n- **The walker gate** flags the walk as broken where both halves of one\nsection lie in hole loops.\n- **`dedup_collinear_sections`** read arcs by their chords and dropped\nthe line pieces under a minor arc. It now skips circle and ellipse arcs.\n\n## Tests\n\n| Case | main | this branch |\n|---|---|---|\n| `split_face_2d`, circle and a line across | 6.2832, 43.7168, 50 |\n0.5708, 5.7124, 44.2876, 49.4292 |\n| `split_face_2d`, circle and its chord | 6.2832, 93.7168 | 0.5708,\n5.7124, 93.7168 |\n| `split_face_2d`, two crossing circles | π, 2π, 90.575 | the 4 lens\nregions |\n| imprint, circle and a line across | refused | 4 faces, volume 200 |\n\n- Face splitter tests cover a chord, a line across, two crossing\ncircles, and arcs ending on a line. They also cover a line into the disc\nand one clear of it. A spline proved apart leaves the cap, and a\ncrossing spline refuses. Areas hold within 1e-9 of their closed forms,\nin 3 poses.\n- `circle_crossed_on_a_plate.rs` imprints a circle with a line across\nand with its chord. It also fuses a plate, a rod and a slot box by\n`fuse_n`, by `fuse_all`, and one at a time. Each is valid and closed,\nwith volume 220 + 4π − (π/2 − 1).\n- brepkit-algo (670) and the boolean lib tests (233) pass, and so do all\nbrepkit-operations and brepkit-io tests (3323, 28 skipped). Random sweep\nseeds 1 to 3 give the same result for each case as main.\n\n## Still open\n\n- Ball faces, and ellipse and spline caps, are still peeled without the\ncheck (#2842).\n- `presplit_sections_at_registry` skips closed sections (#2843).\n- `curves_compatible` may join an arc and the rest of its circle\n(#2844).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the face splitter so a whole circle on a plane face that another\nsection meets is cut where they meet, instead of being peeled as a lone\ncap. Previously `split_face_2d` split such circles into overlapping\npieces, and imprints were refused as non-manifold (issue #2835).\n\n**Bug Fixes**\n- Circle caps are checked against every other section: apart by distance\nbounds, or cut at section ends and exact crossings. Where no bound\nproves them apart and no crossing is found (ellipses, splines), the\nsplit is refused. Splines are read one knot span at a time, so a spline\nover an interior knot is proved apart wherever it keeps clear.\n- An arc's end on a line no longer drops that line; only a line running\nalong it does. Arcs are split at their middle where a line runs through\nboth ends, and the walk is flagged as broken where both halves of a\nsection lie in hole loops.\n- Collinear dedup skips circle and ellipse arcs, so a circle with a line\nacross it imprints its four true faces where the imprint was refused.\n\n<sup>Written for commit 7e4119c615f8feb736171fb1ebe71d4320606eba.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2845?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2845?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2845&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-24T22:20:40Z",
+          "tree_id": "01470ba5ccd3814a8f6956625f12a9d3ec4a560f",
+          "url": "https://github.com/andymai/brepkit/commit/ac7dade667fae975d02d0ef1ba1dd3ef7d7cb4d5"
+        },
+        "date": 1795559023263,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 721189,
+            "range": "± 11508",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 780326,
+            "range": "± 14873",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8666,
+            "range": "± 58",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 455682,
+            "range": "± 6029",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 16498972,
+            "range": "± 141578",
             "unit": "ns/iter"
           }
         ]
