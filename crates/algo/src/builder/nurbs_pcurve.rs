@@ -52,9 +52,9 @@ type Table = [[f64; ORDER + 1]; ORDER + 1];
 /// `None` on a periodic surface, a surface with a weight that is not a
 /// positive normal float, an edge of no length, where a point of the edge
 /// does not project onto the surface, where the surface's parameters do not
-/// move along the edge (a pole), past [`MOST_PIECES`], or where the bound
-/// does not hold: an edge that lies farther than `tolerance` from the
-/// surface gets none.
+/// move along the edge (a pole), past [`MOST_PIECES`], where a term of the
+/// bound underflows, or where the bound does not hold: an edge that lies
+/// farther than `tolerance` from the surface gets none.
 #[must_use]
 pub fn proved_nurbs_pcurve(
     curve: &EdgeCurve,
@@ -674,13 +674,18 @@ fn partials_on(
     let dv = ders_basis_funs(sv, uv.y(), q, 1, surface.knots_v());
     let (first_u, first_v) = (su.checked_sub(p)?, sv.checked_sub(q)?);
     let origin = *net.get(first_u)?.get(first_v)?;
+    let scale = weight_scale(
+        (0..=p)
+            .flat_map(|i| (0..=q).map(move |j| (first_u + i, first_v + j)))
+            .filter_map(|(i, j)| weights.get(i)?.get(j).copied()),
+    )?;
     let zero = Vec3::new(0.0, 0.0, 0.0);
     let (mut a, mut a_u, mut a_v) = (zero, zero, zero);
     let (mut w, mut w_u, mut w_v) = (0.0, 0.0, 0.0);
     for i in 0..=p {
         for j in 0..=q {
             let point = *net.get(first_u + i)?.get(first_v + j)? - origin;
-            let weight = *weights.get(first_u + i)?.get(first_v + j)?;
+            let weight = *weights.get(first_u + i)?.get(first_v + j)? * scale;
             let (n_u, n_v) = (du.first()?.get(i)?, dv.first()?.get(j)?);
             let (d_u, d_v) = (du.get(1)?.get(i)?, dv.get(1)?.get(j)?);
             let (b, b_u, b_v) = (n_u * n_v * weight, d_u * n_v * weight, n_u * d_v * weight);
@@ -714,11 +719,13 @@ fn spline_rate(curve: &NurbsCurve, t: f64, below: bool) -> Option<Vec3> {
     let weights = curve.weights();
     let span = span_at(knots, p, points.len(), t, below);
     let ders = ders_basis_funs(span, t, p, 1, knots);
+    let first = span.checked_sub(p)?;
+    let scale = weight_scale(weights.get(first..=span)?.iter().copied())?;
     let (mut a, mut a1) = (Vec3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 0.0));
     let (mut w, mut w1) = (0.0, 0.0);
     for j in 0..=p {
         let i = (span + j).checked_sub(p)?;
-        let (point, weight) = (*points.get(i)?, *weights.get(i)?);
+        let (point, weight) = (*points.get(i)?, *weights.get(i)? * scale);
         let at = Vec3::new(point.x(), point.y(), point.z());
         let (n0, n1) = (
             ders.first()?.get(j)? * weight,
@@ -751,7 +758,15 @@ fn active(knots: &[f64], p: usize, count: usize, a: f64, b: f64) -> Option<(usiz
 /// order `r - 1`, `net[k]` being control point `first + k`: point `i` is
 /// `(p - r + 1) (Q[i + 1] - Q[i]) / (knots[i + p + 1] - knots[i + r])`, and
 /// nothing where that span is empty (its basis function vanishes).
-fn difference(net: &[Entry], knots: &[f64], p: usize, r: usize, first: usize) -> Vec<Entry> {
+/// `None` where a difference or a product underflows: a term that rounds
+/// to nothing, or below the least normal float, bounds nothing.
+fn difference(
+    net: &[Entry],
+    knots: &[f64],
+    p: usize,
+    r: usize,
+    first: usize,
+) -> Option<Vec<Entry>> {
     net.windows(2)
         .enumerate()
         .map(|(k, w)| {
@@ -765,12 +780,50 @@ fn difference(net: &[Entry], knots: &[f64], p: usize, r: usize, first: usize) ->
             let mut value = [0.0; 4];
             let mut size = [0.0; 4];
             for c in 0..4 {
-                value[c] = f * (w[1].0[c] - w[0].0[c]);
+                let step = w[1].0[c] - w[0].0[c];
+                value[c] = f * step;
                 size[c] = f * (w[1].1[c] + w[0].1[c]);
+                if f != 0.0 && step != 0.0 && !all_normal(&[step, value[c]]) {
+                    return None;
+                }
             }
-            (value, size)
+            Some((value, size))
         })
         .collect()
+}
+
+/// Whether each of `terms` is a normal float: none has underflowed.
+fn all_normal(terms: &[f64]) -> bool {
+    terms.iter().all(|t| t.is_normal())
+}
+
+/// The length of `[x, y, z]`, read on its largest part so that no square
+/// underflows or overflows: NaN where a part is.
+fn length(x: f64, y: f64, z: f64) -> f64 {
+    let most = x.abs().max(y.abs()).max(z.abs());
+    if most.is_nan() || [x, y, z].iter().any(|t| t.is_nan()) {
+        return f64::NAN;
+    }
+    if most == 0.0 || most.is_infinite() {
+        return most;
+    }
+    let (a, b, c) = (x / most, y / most, z / most);
+    most * a.madd(a, b.madd(b, c * c)).sqrt()
+}
+
+/// The power of two that brings the largest of `weights` to between one
+/// and two: weights scaled by it alike give the same rational curve or
+/// surface, and the scaling is exact while no weight leaves the normal
+/// floats. `None` where the largest weight is not a positive normal float.
+fn weight_scale(weights: impl IntoIterator<Item = f64>) -> Option<f64> {
+    let most = weights.into_iter().fold(0.0_f64, f64::max);
+    if !(most.is_normal() && most > 0.0) {
+        return None;
+    }
+    let exponent = most.log2().floor();
+    #[allow(clippy::cast_possible_truncation)]
+    let scale = 2f64.powi(-(exponent as i32));
+    scale.is_normal().then_some(scale)
 }
 
 /// The largest length of the `[x, y, z]` parts and the largest weight part
@@ -781,8 +834,8 @@ fn net_bound(net: &[Entry], level: usize) -> (f64, f64) {
     let grow = (3 * level + 2) as f64 * f64::EPSILON;
     net.iter()
         .fold((0.0_f64, 0.0_f64), |(m, w), (value, size)| {
-            let xyz = Vec3::new(value[0], value[1], value[2]).length();
-            let xyz_size = Vec3::new(size[0], size[1], size[2]).length();
+            let xyz = length(value[0], value[1], value[2]);
+            let xyz_size = length(size[0], size[1], size[2]);
             (
                 max_or_nan(m, grow.madd(xyz_size, xyz)),
                 max_or_nan(w, grow.madd(size[3], value[3].abs())),
@@ -790,15 +843,27 @@ fn net_bound(net: &[Entry], level: usize) -> (f64, f64) {
         })
 }
 
-/// A net's points in homogeneous form about `centre`, with their sizes.
-fn homogeneous(points: &[Point3], weights: &[f64], centre: Point3) -> Vec<Entry> {
+/// A net's points in homogeneous form about `centre`, their weights times
+/// `scale`, with their sizes. `None` where a product underflows.
+fn homogeneous(
+    points: &[Point3],
+    weights: &[f64],
+    centre: Point3,
+    scale: f64,
+) -> Option<Vec<Entry>> {
     points
         .iter()
         .zip(weights)
         .map(|(&p, &w)| {
             let d = p - centre;
+            let w = w * scale;
             let value = [w * d.x(), w * d.y(), w * d.z(), w];
-            (value, value.map(f64::abs))
+            let fine = [d.x(), d.y(), d.z()]
+                .iter()
+                .zip(&value)
+                .all(|(&part, &product)| part == 0.0 || product.is_normal())
+                && w.is_normal();
+            fine.then(|| (value, value.map(f64::abs)))
         })
         .collect()
 }
@@ -851,22 +916,24 @@ fn surface_bounds(
         (i0..=i1).flat_map(|i| (j0..=j1).map(move |j| net[i][j])),
     )?
     .center();
+    let scale = weight_scale((i0..=i1).flat_map(|i| (j0..=j1).map(move |j| weights[i][j])))?;
     let mut reach = 0.0_f64;
     let mut least = f64::INFINITY;
     for i in i0..=i1 {
         for j in j0..=j1 {
-            reach = max_or_nan(reach, (net[i][j] - centre).length());
-            least = least.min(weights[i][j]);
+            let d = net[i][j] - centre;
+            reach = max_or_nan(reach, length(d.x(), d.y(), d.z()));
+            least = least.min(weights[i][j] * scale);
         }
     }
-    if !(least > 0.0 && reach.is_finite()) {
+    if !(least.is_normal() && least > 0.0 && reach.is_finite()) {
         return None;
     }
     reach *= 1.0 + 4.0 * f64::EPSILON;
     // Rows along `u`, each a column of points along `v`.
     let base: Vec<Vec<Entry>> = (i0..=i1)
-        .map(|i| homogeneous(&net[i][j0..=j1], &weights[i][j0..=j1], centre))
-        .collect();
+        .map(|i| homogeneous(&net[i][j0..=j1], &weights[i][j0..=j1], centre, scale))
+        .collect::<Option<_>>()?;
     let mut a: Table = [[0.0; ORDER + 1]; ORDER + 1];
     let mut w: Table = [[0.0; ORDER + 1]; ORDER + 1];
     let mut along_u = base;
@@ -876,7 +943,7 @@ fn surface_bounds(
             let mut next: Vec<Vec<Entry>> = vec![Vec::new(); along_u.len().saturating_sub(1)];
             for col in 0..columns {
                 let column: Vec<Entry> = along_u.iter().map(|row| row[col]).collect();
-                for (row, entry) in difference(&column, surface.knots_u(), p, r, i0)
+                for (row, entry) in difference(&column, surface.knots_u(), p, r, i0)?
                     .into_iter()
                     .enumerate()
                 {
@@ -891,7 +958,7 @@ fn surface_bounds(
                 along_v = along_v
                     .iter()
                     .map(|row| difference(row, surface.knots_v(), q, t, j0))
-                    .collect();
+                    .collect::<Option<_>>()?;
             }
             let flat: Vec<Entry> = along_v.iter().flatten().copied().collect();
             let (xyz, weight) = net_bound(&flat, r + t);
@@ -915,22 +982,24 @@ fn curve_bounds(curve: &NurbsCurve, (a, b): (f64, f64), order: usize) -> Option<
     let rational = weights.iter().any(|&w| w.to_bits() != 1.0_f64.to_bits());
     let (i0, i1) = active(curve.knots(), p, net.len(), a, b)?;
     let centre = brepkit_math::aabb::Aabb3::try_from_points(net[i0..=i1].iter().copied())?.center();
+    let scale = weight_scale(weights[i0..=i1].iter().copied())?;
     let mut reach = 0.0_f64;
     let mut least = f64::INFINITY;
     for i in i0..=i1 {
-        reach = max_or_nan(reach, (net[i] - centre).length());
-        least = least.min(weights[i]);
+        let d = net[i] - centre;
+        reach = max_or_nan(reach, length(d.x(), d.y(), d.z()));
+        least = least.min(weights[i] * scale);
     }
-    if !(least > 0.0 && reach.is_finite()) {
+    if !(least.is_normal() && least > 0.0 && reach.is_finite()) {
         return None;
     }
     reach *= 1.0 + 4.0 * f64::EPSILON;
     let mut at: Table = [[0.0; ORDER + 1]; ORDER + 1];
     let mut wt: Table = [[0.0; ORDER + 1]; ORDER + 1];
-    let mut level = homogeneous(&net[i0..=i1], &weights[i0..=i1], centre);
+    let mut level = homogeneous(&net[i0..=i1], &weights[i0..=i1], centre, scale)?;
     for r in 0..=p.min(order) {
         if r > 0 {
-            level = difference(&level, curve.knots(), p, r, i0);
+            level = difference(&level, curve.knots(), p, r, i0)?;
         }
         let (xyz, weight) = net_bound(&level, r);
         at[r][0] = xyz;
@@ -1419,5 +1488,35 @@ mod tests {
             }
         }
         assert!(read > 10, "{read}");
+    }
+
+    /// A surface's weights scaled alike, by 1e-200 or by 1e200, leave its
+    /// points where they were: the line across the flat sheet, which bends
+    /// in its parameters, gets a pcurve within the tolerance from each, as
+    /// from the unit weights.
+    #[test]
+    fn weights_scaled_alike_give_a_pcurve_within_the_tolerance() {
+        let tol = 1e-7;
+        let flat = sheet(0.0);
+        let (a, b) = (Point3::new(-40.0, -31.0, 0.0), Point3::new(37.0, 44.0, 0.0));
+        let line = EdgeCurve::Line;
+        for scale in [1.0, 1e-200, 1e200] {
+            let scaled = NurbsSurface::new(
+                3,
+                3,
+                flat.knots_u().to_vec(),
+                flat.knots_v().to_vec(),
+                flat.control_points().to_vec(),
+                flat.weights()
+                    .iter()
+                    .map(|row| row.iter().map(|w| w * scale).collect())
+                    .collect(),
+            )
+            .unwrap();
+            let pcurve = proved_nurbs_pcurve(&line, a, b, &scaled, tol);
+            assert!(pcurve.is_some(), "weights scaled by {scale}: no pcurve");
+            let far = stray(&pcurve.unwrap(), &line, a, b, &flat);
+            assert!(far <= tol, "weights scaled by {scale}: {far:e}");
+        }
     }
 }
