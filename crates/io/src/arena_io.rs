@@ -912,4 +912,66 @@ mod tests {
             );
         }
     }
+
+    /// The constructors put an ellipse's larger semi-axis first, and code
+    /// that reads its size from `semi_major` alone relies on that order. A
+    /// dump holds whatever its bytes hold: an edge or a pcurve ellipse with
+    /// its smaller semi-axis first is refused. With its axes in order, the
+    /// dump loads.
+    #[test]
+    fn a_dump_with_an_ellipse_whose_smaller_axis_comes_first_is_refused() {
+        use brepkit_math::curves2d::Ellipse2D;
+        use brepkit_math::vec::Point2;
+        use serde_json::Value;
+
+        let mut topo = Topology::new();
+        let solid = make_cylinder(&mut topo, 3.0, 4.0).unwrap();
+        let wall = solid_faces(&topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .unwrap();
+        let rim = brepkit_topology::explorer::face_edges(&topo, wall).unwrap()[0];
+        let flat = Ellipse2D::new(Point2::new(0.5, 0.5), 0.4, 0.1, 0.0).unwrap();
+        topo.pcurves_mut()
+            .set(rim, wall, PCurve::new(Curve2D::Ellipse(flat), 0.0, 1.0));
+        let ellipse = Ellipse3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+            2.0,
+        )
+        .unwrap();
+        topo.edge_mut(rim)
+            .unwrap()
+            .set_curve(EdgeCurve::Ellipse(ellipse));
+        let bytes = serialize_solid(&topo, solid).unwrap();
+        assert!(deserialize_solid(&bytes, &mut Topology::new()).is_ok());
+
+        // The dump with the semi-axes of the ellipse that `pick` finds swapped.
+        let swapped = |pick: &dyn Fn(&mut Value) -> &mut Value| {
+            let mut dump: Value = serde_json::from_slice(&bytes).unwrap();
+            let ellipse = pick(&mut dump);
+            let (major, minor) = (ellipse["semi_major"].clone(), ellipse["semi_minor"].clone());
+            ellipse["semi_major"] = minor;
+            ellipse["semi_minor"] = major;
+            serde_json::to_vec(&dump).unwrap()
+        };
+        let edge = swapped(&|dump| {
+            dump["edges"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find_map(|e| e["curve"].get_mut("Ellipse"))
+                .unwrap()
+        });
+        let pcurve = swapped(&|dump| dump["pcurves"][0]["curve"].get_mut("Ellipse").unwrap());
+        for (bad, why) in [(edge, "malformed curve"), (pcurve, "malformed pcurve")] {
+            let found = deserialize_solid(&bad, &mut Topology::new());
+            assert!(
+                matches!(&found, Err(IoError::ParseError { reason }) if reason.contains(why)),
+                "{why}: {found:?}"
+            );
+        }
+    }
 }

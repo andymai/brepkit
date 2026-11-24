@@ -65,7 +65,9 @@ impl EdgeCurve {
     /// A NURBS curve passes [`NurbsCurve::is_well_formed`]. A circle's
     /// radius and an ellipse's semi-axes are finite and positive, the centre
     /// is finite, and the two axes and the normal make a right-handed frame
-    /// of unit axes at right angles.
+    /// of unit axes at right angles. An ellipse's `semi_major` is at least
+    /// its `semi_minor`, as its constructors give it: code that reads its
+    /// size from `semi_major` alone needs that.
     #[must_use]
     pub fn is_well_formed(&self) -> bool {
         match self {
@@ -80,6 +82,7 @@ impl EdgeCurve {
                 is_finite_point(e.center())
                     && is_length(e.semi_major())
                     && is_length(e.semi_minor())
+                    && e.semi_minor() <= e.semi_major()
                     && is_frame(e.u_axis(), e.v_axis(), e.normal())
             }
         }
@@ -492,6 +495,24 @@ mod tests {
             EdgeCurve::Circle(Circle3D::new(o, Vec3::new(1.0, -2.0, 0.5), 3.0).unwrap())
                 .is_well_formed()
         );
+    }
+
+    /// The constructors put an ellipse's larger semi-axis on `u_axis`, and
+    /// code that reads its size from `semi_major` alone relies on that
+    /// order. An ellipse read from data with the smaller one first is not
+    /// well formed.
+    #[test]
+    fn an_ellipse_with_its_smaller_axis_first_is_not_well_formed() {
+        let o = Point3::new(1.0, 2.0, 3.0);
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let ellipse = |a, b| EdgeCurve::Ellipse(Ellipse3D::with_axes(o, z, a, b, x, y).unwrap());
+        assert!(!ellipse(1.0, 4.0).is_well_formed());
+        assert!(ellipse(4.0, 1.0).is_well_formed());
+        assert!(ellipse(4.0, 4.0).is_well_formed());
     }
 
     fn make_test_vertices() -> (VertexId, VertexId) {

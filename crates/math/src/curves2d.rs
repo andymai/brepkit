@@ -467,12 +467,15 @@ impl Curve2D {
     /// curve that was read from data and not built by a constructor need
     /// not be: the data can hold any values.
     ///
-    /// Every number is finite. A line's direction is not zero, and a
-    /// circle's radius and an ellipse's semi-axes are positive. A NURBS
-    /// curve's knots pass [`crate::nurbs::basis::knots_are_sound`] for its
-    /// degree and number of control points, each control point has a weight
-    /// that passes [`crate::nurbs::basis::weight_is_sound`], and the weights
-    /// and points pass [`crate::nurbs::basis::weighted_points_are_bounded`].
+    /// Every number is finite. A line's direction is not zero, a circle's
+    /// radius and an ellipse's semi-axes are positive, and an ellipse's
+    /// `semi_major` is at least its `semi_minor`, as its constructor gives
+    /// it: code that reads its size from `semi_major` alone needs that. A
+    /// NURBS curve's knots pass [`crate::nurbs::basis::knots_are_sound`] for
+    /// its degree and number of control points, each control point has a
+    /// weight that passes [`crate::nurbs::basis::weight_is_sound`], and the
+    /// weights and points pass
+    /// [`crate::nurbs::basis::weighted_points_are_bounded`].
     #[must_use]
     pub fn is_well_formed(&self) -> bool {
         let point = |p: Point2| p.x().is_finite() && p.y().is_finite();
@@ -487,6 +490,7 @@ impl Curve2D {
                     && [c.semi_major, c.semi_minor]
                         .iter()
                         .all(|&a| a.is_finite() && a > 0.0)
+                    && c.semi_minor <= c.semi_major
                     && c.rotation.is_finite()
             }
             Self::Nurbs(c) => {
@@ -585,6 +589,29 @@ mod tests {
         assert!(Circle2D::new(o, 2.0).is_ok());
         assert!(Ellipse2D::new(o, 2.0, 1.0, 0.3).is_ok());
         assert!(Line2D::new(o, Vec2::new(1.0, 0.0)).is_ok());
+    }
+
+    /// The constructors put an ellipse's larger semi-axis first, and code
+    /// that reads its size from `semi_major` alone relies on that order. An
+    /// ellipse read from data with the smaller one first is not well formed.
+    /// With a `semi_major` of 0.1 and a `semi_minor` of 0.4 about (0.5, 0.5),
+    /// it reaches (0.5, 0.9), outside the box of half width 0.1 about its
+    /// centre.
+    #[test]
+    fn an_ellipse_with_its_smaller_axis_first_is_not_well_formed() {
+        let ellipse = |semi_major, semi_minor| {
+            Curve2D::Ellipse(Ellipse2D {
+                center: Point2::new(0.5, 0.5),
+                semi_major,
+                semi_minor,
+                rotation: 0.0,
+            })
+        };
+        let top = ellipse(0.1, 0.4).evaluate(std::f64::consts::FRAC_PI_2);
+        assert!((top.y() - 0.9).abs() < 1e-12, "{top:?}");
+        assert!(!ellipse(0.1, 0.4).is_well_formed());
+        assert!(ellipse(0.4, 0.1).is_well_formed());
+        assert!(ellipse(0.4, 0.4).is_well_formed());
     }
 
     const TOL: f64 = 1e-10;
