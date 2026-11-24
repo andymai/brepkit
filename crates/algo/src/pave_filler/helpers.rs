@@ -193,6 +193,14 @@ pub(super) fn nurbs_face_box(
     let held = pcurve_parameters(topo, face_id, surface, tol, reach)?
         .and_then(|range| cut_net_box(surface, range))
         .unwrap_or_else(|| surface.aabb());
+    Ok(held.expanded(net_rounding(surface)))
+}
+
+/// How far a point of `surface` that its evaluator returns, or a control
+/// point of the surface cut by knot insertion ([`cut_net_points`]), can
+/// stand from where the exact one lies: [`nurbs_face_box`]'s count of
+/// roundings of the largest coordinate of the surface's control points.
+pub(super) fn net_rounding(surface: &NurbsSurface) -> f64 {
     #[allow(clippy::cast_precision_loss)]
     let roundings = {
         let (p, q) = (surface.degree_u(), surface.degree_v());
@@ -203,7 +211,7 @@ pub(super) fn nurbs_face_box(
         .iter()
         .flatten()
         .fold(0.0_f64, |m, p| m.max(largest_coordinate(*p)));
-    Ok(held.expanded(rounding_reach(size, roundings)))
+    rounding_reach(size, roundings)
 }
 
 /// Refuses face `face_id` where a weight of its NURBS `surface` is not a
@@ -285,8 +293,8 @@ fn pcurve_parameters(
 /// A NURBS face's wires as closed loops of their edges' pcurves on the face.
 pub(super) struct PcurveLoops {
     /// Each wire's pcurves in the wire's order, each with whether the wire
-    /// runs it from its start to its end.
-    pub(super) loops: Vec<Vec<(brepkit_topology::pcurve::PCurve, bool)>>,
+    /// runs it from its start to its end, and its edge.
+    pub(super) loops: Vec<Vec<(brepkit_topology::pcurve::PCurve, bool, EdgeId)>>,
     /// The box `[u0, u1, v0, v1]` of the pcurves.
     pub(super) bounds: [f64; 4],
     /// The widest gap between the ends of two pcurves that meet in a wire.
@@ -355,7 +363,7 @@ pub(super) fn pcurve_loops(
             last = Some(to);
             lo = [lo[0].min(low.x()), lo[1].min(low.y())];
             hi = [hi[0].max(high.x()), hi[1].max(high.y())];
-            pcurves.push((pcurve.clone(), oe.is_forward()));
+            pcurves.push((pcurve.clone(), oe.is_forward(), oe.edge()));
         }
         if let (Some(start), Some(end)) = (first, last) {
             gap = gap.max((start - end).length());
@@ -443,14 +451,22 @@ fn pcurve_box(
         .then_some((low, high))
 }
 
-/// The box of the control points of `surface` cut to the parameters
-/// `[u0, u1, v0, v1]`, taken within its domain: each cut is a knot inserted
-/// to the degree, and the control points kept are those whose basis
-/// functions are not zero somewhere inside the range. Where a knot cannot
-/// be inserted, the uncut net's control points of the spans the range
-/// meets, which hold it too. `None` for a range that holds no area of the
-/// domain.
-fn cut_net_box(surface: &NurbsSurface, [u0, u1, v0, v1]: [f64; 4]) -> Option<Aabb3> {
+/// The box of [`cut_net_points`].
+fn cut_net_box(surface: &NurbsSurface, range: [f64; 4]) -> Option<Aabb3> {
+    Aabb3::try_from_points(cut_net_points(surface, range)?)
+}
+
+/// The control points of `surface` cut to the parameters `[u0, u1, v0,
+/// v1]`, taken within its domain, whose convex hull holds the surface over
+/// the range where each weight is positive: each cut is a knot inserted to
+/// the degree, and the control points kept are those whose basis functions
+/// are not zero somewhere inside the range. Where a knot cannot be
+/// inserted, the uncut net's control points of the spans the range meets,
+/// which hold it too. `None` for a range that holds no area of the domain.
+pub(super) fn cut_net_points(
+    surface: &NurbsSurface,
+    [u0, u1, v0, v1]: [f64; 4],
+) -> Option<Vec<Point3>> {
     use brepkit_math::nurbs::knot_ops::{surface_knot_insert_u, surface_knot_insert_v};
     let ((u_min, u_max), (v_min, v_max)) = (surface.domain_u(), surface.domain_v());
     let (u0, u1, v0, v1) = (u0.max(u_min), u1.min(u_max), v0.max(v_min), v1.min(v_max));
@@ -479,10 +495,11 @@ fn cut_net_box(surface: &NurbsSurface, [u0, u1, v0, v1]: [f64; 4]) -> Option<Aab
     let columns = net.first().map_or(0, Vec::len);
     let rows = kept(cut.knots_u(), cut.degree_u(), net.len(), (u0, u1));
     let cols = kept(cut.knots_v(), cut.degree_v(), columns, (v0, v1));
-    Aabb3::try_from_points(
-        rows.iter()
-            .flat_map(|&i| cols.iter().map(move |&j| net[i][j])),
-    )
+    let points: Vec<Point3> = rows
+        .iter()
+        .flat_map(|&i| cols.iter().map(move |&j| net[i][j]))
+        .collect();
+    (!points.is_empty()).then_some(points)
 }
 
 /// Find a vertex near the given point among all pave block vertices.

@@ -7,6 +7,7 @@ use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::tolerance::Tolerance;
 use brepkit_math::vec::{Point2, Point3};
 use brepkit_topology::Topology;
+use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::FaceId;
 
 use crate::error::AlgoError;
@@ -22,6 +23,14 @@ const MOST_PIECES: usize = 1 << 12;
 /// The longest arc of a circle or an ellipse that one piece takes, in
 /// radians.
 const ARC_STEP: f64 = std::f64::consts::FRAC_PI_4;
+
+/// How many times the pieces of a face's pcurves are halved, at most, to
+/// bound how far their images stand from the face's edges.
+const IMAGE_HALVINGS: usize = 256;
+
+/// A pcurve run over its parameters from the first to the second, and the
+/// place in a trim's list of the edge whose pcurve it is.
+type Run<'a> = (&'a Curve2D, (f64, f64), usize);
 
 /// A box in a surface's parameters.
 #[derive(Clone, Copy)]
@@ -53,6 +62,7 @@ impl Box2 {
 }
 
 /// What holds a piece of a wire between its two ends.
+#[derive(Clone)]
 enum Hull {
     /// The straight segment between the ends.
     Segment,
@@ -71,10 +81,15 @@ enum Hull {
 
 /// A piece of a wire from `a` to `b`. Two pieces that meet share the one
 /// computed point there, so the pieces of a wire run round a closed curve.
+#[derive(Clone)]
 struct Piece {
     a: Point2,
     b: Point2,
     hull: Hull,
+    /// The edges the piece runs by, by their place in the trim's list: one
+    /// edge twice for a piece of its pcurve, or the two edges a segment
+    /// joins the pcurves of.
+    owner: [usize; 2],
 }
 
 impl Piece {
@@ -106,11 +121,13 @@ impl Piece {
                 );
                 (
                     Self {
+                        owner: self.owner,
                         a: self.a,
                         b: m,
                         hull: Hull::Segment,
                     },
                     Self {
+                        owner: self.owner,
                         a: m,
                         b: self.b,
                         hull: Hull::Segment,
@@ -122,6 +139,7 @@ impl Piece {
                 let m = curve.evaluate(tm);
                 (
                     Self {
+                        owner: self.owner,
                         a: self.a,
                         b: m,
                         hull: Hull::Conic {
@@ -131,6 +149,7 @@ impl Piece {
                         },
                     },
                     Self {
+                        owner: self.owner,
                         a: m,
                         b: self.b,
                         hull: Hull::Conic {
@@ -162,11 +181,13 @@ impl Piece {
                 let m = Point2::new(q[0] / q[2], q[1] / q[2]);
                 (
                     Self {
+                        owner: self.owner,
                         a: self.a,
                         b: m,
                         hull: Hull::Bezier(left),
                     },
                     Self {
+                        owner: self.owner,
                         a: m,
                         b: self.b,
                         hull: Hull::Bezier(right),
@@ -191,12 +212,34 @@ impl Piece {
 /// its piece's own curve and the rounded points the pieces run through, so
 /// the loops of the rounded points wind round the point as the face's wires
 /// do, wherever the point lies outside the boxes.
+///
+/// The loops are the pcurves' images on the surface, which stand off the
+/// face's edges by as much as the pcurves stray from them: a pcurve need
+/// meet its edge only at its ends. How far each image can stand from its
+/// edge is bounded from the surface's control points over the boxes of the
+/// pcurve's pieces ([`Self::image_reaches`]), and a point outside the loops
+/// is off the face only farther than that from every edge.
 pub(super) struct NurbsFaceTrim {
     surface: NurbsSurface,
     pieces: Vec<Piece>,
     /// How far a computed point of a piece, a control point of a half or the
     /// end of a run can stand from where it lies exactly.
     slack: f64,
+    /// The face's edges, by the place the pieces' owners name.
+    edges: Vec<TrimEdge>,
+    /// How far the image of each edge's pcurve can stand from the edge, read
+    /// the first time a point is read outside the loops; `None` where it
+    /// cannot be bounded.
+    image_reaches: std::cell::OnceCell<Option<Vec<f64>>>,
+}
+
+/// An edge of a face read by its trim.
+struct TrimEdge {
+    curve: EdgeCurve,
+    start: Point3,
+    end: Point3,
+    /// How near the edge a point counts as on it ([`super::phase_ef::edge_reach`]).
+    reach: f64,
 }
 
 impl NurbsFaceTrim {
@@ -220,39 +263,54 @@ impl NurbsFaceTrim {
         let Some(loops) = super::helpers::pcurve_loops(topo, face_id, surface, tol, reach)? else {
             return Ok(None);
         };
-        let runs: Vec<Vec<(&Curve2D, (f64, f64))>> = loops
-            .loops
-            .iter()
-            .map(|wire| {
-                wire.iter()
-                    .map(|(pcurve, forward)| {
-                        let run = if *forward {
-                            (pcurve.t_start(), pcurve.t_end())
-                        } else {
-                            (pcurve.t_end(), pcurve.t_start())
-                        };
-                        (pcurve.curve(), run)
-                    })
-                    .collect()
-            })
-            .collect();
-        Ok(Self::of_runs(surface, &runs))
+        let mut edges = Vec::new();
+        let mut runs: Vec<Vec<Run<'_>>> = Vec::new();
+        for wire in &loops.loops {
+            let mut run = Vec::with_capacity(wire.len());
+            for (pcurve, forward, eid) in wire {
+                let edge = topo.edge(*eid)?;
+                let (sv, ev) = (topo.vertex(edge.start())?, topo.vertex(edge.end())?);
+                edges.push(TrimEdge {
+                    curve: edge.curve().clone(),
+                    start: sv.point(),
+                    end: ev.point(),
+                    reach: super::phase_ef::edge_reach(edge, sv, ev, tol),
+                });
+                let along = if *forward {
+                    (pcurve.t_start(), pcurve.t_end())
+                } else {
+                    (pcurve.t_end(), pcurve.t_start())
+                };
+                run.push((pcurve.curve(), along, edges.len() - 1));
+            }
+            runs.push(run);
+        }
+        Ok(Self::of_runs(surface, &runs, edges))
     }
 
     /// The trim on `surface` of loops each of which runs along its curves
-    /// over their parameters, in order. `None` where a B-spline's piece
-    /// cannot be read, or the loops hold no piece.
-    fn of_runs(surface: &NurbsSurface, loops: &[Vec<(&Curve2D, (f64, f64))>]) -> Option<Self> {
+    /// over their parameters, in order, each curve the pcurve of the edge
+    /// in `edges` that it names. `None` where a B-spline's piece cannot be
+    /// read, or the loops hold no piece.
+    fn of_runs(
+        surface: &NurbsSurface,
+        loops: &[Vec<Run<'_>>],
+        edges: Vec<TrimEdge>,
+    ) -> Option<Self> {
         let mut pieces: Vec<Piece> = Vec::new();
         let (mut size, mut degree) = (0.0_f64, 2_usize);
         for wire in loops {
             let first = pieces.len();
-            for &(curve, run) in wire {
-                let found = pcurve_pieces(curve, run, &mut size, &mut degree)?;
+            for &(curve, run, edge) in wire {
+                let mut found = pcurve_pieces(curve, run, &mut size, &mut degree)?;
+                for piece in &mut found {
+                    piece.owner = [edge; 2];
+                }
                 if let (Some(last), Some(next)) =
                     (pieces.get(first..).and_then(<[_]>::last), found.first())
                 {
                     pieces.push(Piece {
+                        owner: [last.owner[1], edge],
                         a: last.b,
                         b: next.a,
                         hull: Hull::Segment,
@@ -263,6 +321,7 @@ impl NurbsFaceTrim {
             if let (Some(start), Some(end)) = (pieces.get(first), pieces.last()) {
                 let (a, b) = (end.b, start.a);
                 pieces.push(Piece {
+                    owner: [end.owner[1], start.owner[0]],
                     a,
                     b,
                     hull: Hull::Segment,
@@ -282,16 +341,22 @@ impl NurbsFaceTrim {
             surface: surface.clone(),
             pieces,
             slack: roundings * f64::EPSILON * size.max(f64::MIN_POSITIVE),
+            edges,
+            image_reaches: std::cell::OnceCell::new(),
         })
     }
 
     /// Whether `p`, a point within `near` of the face's surface, lies on the
-    /// face: its parameters, where the surface's point there lies within
-    /// `near` of it, read against the loops. `None` where no such parameters
-    /// are found, or the parameters lie in the box of a piece of a loop
-    /// halved as far as it goes. A surface that runs through one point twice
-    /// away from its sides gives that point two places in its parameters,
-    /// and the reading takes the one the projection finds.
+    /// face: `Some(true)` where its parameters, where the surface's point
+    /// there lies within `near` of it, lie inside the loops; `Some(false)`
+    /// where they lie outside them and `p` lies farther from every edge than
+    /// the edge's reach, how far its pcurve's image can stand from it, and
+    /// how far `p` lies from the surface. `None` where no such parameters
+    /// are found, they lie in the box of a piece of a loop halved as far as
+    /// it goes, an image's reach cannot be bounded, or `p` lies within those
+    /// of an edge. A surface that runs through one point twice away from its
+    /// sides gives that point two places in its parameters, and the reading
+    /// takes the one the projection finds.
     pub(super) fn holds(&self, p: Point3, near: f64, tol: Tolerance) -> Option<bool> {
         let foot =
             brepkit_math::nurbs::projection::project_point_to_surface(&self.surface, p, tol.linear)
@@ -300,7 +365,164 @@ impl NurbsFaceTrim {
         if off.is_nan() || off > near {
             return None;
         }
-        self.holds_parameters(Point2::new(foot.u, foot.v))
+        if self.holds_parameters(Point2::new(foot.u, foot.v))? {
+            return Some(true);
+        }
+        let images = self
+            .image_reaches
+            .get_or_init(|| self.image_reaches(tol))
+            .as_ref()?;
+        for (edge, image) in self.edges.iter().zip(images) {
+            let reach = edge.reach + image + off;
+            if super::phase_ef::near_the_edge(&edge.curve, (edge.start, edge.end), p, reach, tol)? {
+                return None;
+            }
+        }
+        Some(false)
+    }
+
+    /// How far the image on the surface of each edge's pcurve can stand
+    /// from the edge, and the segments that join the pcurves from either
+    /// edge they join. Over the box of a piece of a pcurve, the surface lies
+    /// in the hull of its control points cut to the box
+    /// ([`super::helpers::cut_net_points`]), and the distance to a segment
+    /// is convex, so it is no more than its most at those points: to a line
+    /// edge itself, and to the chord of a circle or an ellipse between the
+    /// places nearest the piece's ends, within the edge's range, which the
+    /// arc between them stands off by no more than its second derivative's
+    /// bound times the span squared over eight. Each bound is grown by the
+    /// rounding of the cut and of the distances. The piece with the widest
+    /// bound is halved until each is within half the tolerance, or
+    /// [`IMAGE_HALVINGS`] halvings are spent. `None` where an edge is a
+    /// B-spline, or a piece's box holds no area of the surface's domain.
+    fn image_reaches(&self, tol: Tolerance) -> Option<Vec<f64>> {
+        let bound = |piece: &Piece| -> Option<f64> {
+            let [a, b] = piece.owner;
+            let first = self.image_bound(piece, self.edges.get(a)?)?;
+            if a == b {
+                return Some(first);
+            }
+            Some(first.min(self.image_bound(piece, self.edges.get(b)?)?))
+        };
+        let mut bounded: Vec<(f64, Piece)> = self
+            .pieces
+            .iter()
+            .map(|piece| Some((bound(piece)?, piece.clone())))
+            .collect::<Option<_>>()?;
+        for _ in 0..IMAGE_HALVINGS {
+            let Some((widest, &(most, _))) = bounded
+                .iter()
+                .enumerate()
+                .max_by(|x, y| x.1.0.total_cmp(&y.1.0))
+            else {
+                break;
+            };
+            if most <= 0.5 * tol.linear {
+                break;
+            }
+            let (_, piece) = bounded.swap_remove(widest);
+            let (left, right) = piece.halves();
+            bounded.push((bound(&left)?, left));
+            bounded.push((bound(&right)?, right));
+        }
+        let mut reaches = vec![0.0_f64; self.edges.len()];
+        for (most, piece) in &bounded {
+            for &e in &piece.owner {
+                reaches[e] = reaches[e].max(*most);
+            }
+        }
+        Some(reaches)
+    }
+
+    /// A bound on how far a point of the surface over the box of `piece`
+    /// can stand from `edge` ([`Self::image_reaches`]).
+    fn image_bound(&self, piece: &Piece, edge: &TrimEdge) -> Option<f64> {
+        use std::f64::consts::TAU;
+        let b = piece.bounds(self.slack);
+        // A piece along `u` or `v` has a box of no width but its slack.
+        let wider = |x: f64| 4.0 * f64::EPSILON * (1.0 + x.abs());
+        let range = [
+            b.lo[0] - wider(b.lo[0]),
+            b.hi[0] + wider(b.hi[0]),
+            b.lo[1] - wider(b.lo[1]),
+            b.hi[1] + wider(b.hi[1]),
+        ];
+        let points = super::helpers::cut_net_points(&self.surface, range)?;
+        let size = |q: Point3| q.x().abs() + q.y().abs() + q.z().abs();
+        let farthest = |a: Point3, z: Point3| {
+            points
+                .iter()
+                .map(|&q| super::phase_ef::point_to_segment(q, a, z))
+                .fold(0.0_f64, f64::max)
+        };
+        let ends = [piece.a, piece.b].map(|q| self.surface.evaluate(q.x(), q.y()));
+        let (far, scale) = match &edge.curve {
+            EdgeCurve::Line => (
+                farthest(edge.start, edge.end),
+                size(edge.start).max(size(edge.end)),
+            ),
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                let (bend, scale) = match &edge.curve {
+                    EdgeCurve::Circle(c) => (
+                        super::phase_ef::conic_reach(
+                            c.radius(),
+                            c.radius(),
+                            c.u_axis(),
+                            c.v_axis(),
+                        ),
+                        size(c.center()) + c.radius(),
+                    ),
+                    EdgeCurve::Ellipse(e) => (
+                        super::phase_ef::conic_reach(
+                            e.semi_major(),
+                            e.semi_minor(),
+                            e.u_axis(),
+                            e.v_axis(),
+                        ),
+                        size(e.center()) + e.semi_major().max(e.semi_minor()),
+                    ),
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return None,
+                };
+                let at = |t: f64| match &edge.curve {
+                    EdgeCurve::Circle(c) => c.evaluate(t),
+                    EdgeCurve::Ellipse(e) => e.evaluate(t),
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => edge.start,
+                };
+                let place = |q: Point3| match &edge.curve {
+                    EdgeCurve::Circle(c) => c.project(q),
+                    EdgeCurve::Ellipse(e) => e.project(q),
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => 0.0,
+                };
+                let (t0, t1) = edge.curve.domain_with_endpoints(edge.start, edge.end);
+                let (lo, hi) = (t0.min(t1), t0.max(t1));
+                let whole = hi - lo >= TAU * (1.0 - 1e-12);
+                // A place within the arc: on a whole turn any place, else
+                // the place round from the arc's start, or the nearer end.
+                let within = |t: f64| {
+                    if whole {
+                        return t;
+                    }
+                    let t = lo + (t - lo).rem_euclid(TAU);
+                    if t <= hi {
+                        t
+                    } else if t - hi <= lo + TAU - t {
+                        hi
+                    } else {
+                        lo
+                    }
+                };
+                let (s0, mut s1) = (within(place(ends[0])), within(place(ends[1])));
+                if whole {
+                    let turn = s1 - s0;
+                    s1 = s0 + (turn - (turn / TAU).round() * TAU);
+                }
+                let span = s1 - s0;
+                (farthest(at(s0), at(s1)) + bend * span * span / 8.0, scale)
+            }
+            EdgeCurve::NurbsCurve(_) => return None,
+        };
+        let largest = points.iter().map(|&q| size(q)).fold(scale, f64::max);
+        Some(far + super::helpers::net_rounding(&self.surface) + 64.0 * f64::EPSILON * largest)
     }
 
     /// Whether the parameters `q` lie inside the loops, or `None` where they
@@ -354,6 +576,7 @@ fn pcurve_pieces(
         Curve2D::Line(line) => {
             *size = size.max(largest(line.origin()) + run.0.abs().max(run.1.abs()));
             Some(vec![Piece {
+                owner: [0; 2],
                 a: curve.evaluate(run.0),
                 b: curve.evaluate(run.1),
                 hull: Hull::Segment,
@@ -390,6 +613,7 @@ fn pcurve_pieces(
                 points
                     .windows(2)
                     .map(|w| Piece {
+                        owner: [0; 2],
                         a: w[0].1,
                         b: w[1].1,
                         hull: Hull::Conic {
@@ -454,6 +678,7 @@ fn pcurve_pieces(
                 );
                 let b = Point2::new(last[0] / last[2], last[1] / last[2]);
                 pieces.push(Piece {
+                    owner: [0; 2],
                     a,
                     b,
                     hull: Hull::Bezier(net),
@@ -571,12 +796,12 @@ mod tests {
         }
         let tau = std::f64::consts::TAU;
         for (round_run, oval_run) in [((0.0, 1.0), (0.0, tau)), ((1.0, 0.0), (tau, 0.0))] {
-            let loops: Vec<Vec<(&Curve2D, (f64, f64))>> = vec![
-                sides.iter().map(|side| (side, (0.0, 1.0))).collect(),
-                vec![(&round, round_run)],
-                vec![(&oval, oval_run)],
+            let loops: Vec<Vec<Run<'_>>> = vec![
+                sides.iter().map(|side| (side, (0.0, 1.0), 0)).collect(),
+                vec![(&round, round_run, 0)],
+                vec![(&oval, oval_run, 0)],
             ];
-            let trim = NurbsFaceTrim::of_runs(&sheet(), &loops).unwrap();
+            let trim = NurbsFaceTrim::of_runs(&sheet(), &loops, Vec::new()).unwrap();
             let misread: Vec<(Point2, Option<bool>)> = points
                 .iter()
                 .filter(|q| {
@@ -604,10 +829,10 @@ mod tests {
         let circle = Curve2D::Circle(Circle2D::new(Point2::new(0.5, 0.5), 0.25).unwrap());
         let quarter = std::f64::consts::FRAC_PI_2;
         let loops = vec![vec![
-            (&circle, (0.0, quarter)),
-            (&circle, (quarter, std::f64::consts::TAU)),
+            (&circle, (0.0, quarter), 0),
+            (&circle, (quarter, std::f64::consts::TAU), 0),
         ]];
-        let trim = NurbsFaceTrim::of_runs(&sheet(), &loops).unwrap();
+        let trim = NurbsFaceTrim::of_runs(&sheet(), &loops, Vec::new()).unwrap();
         assert_eq!(trim.holds_parameters(Point2::new(0.5, 0.5)), Some(true));
         assert_eq!(
             trim.holds_parameters(Point2::new(0.75 + 1e-9, 0.5)),

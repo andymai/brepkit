@@ -370,7 +370,7 @@ fn edge_box(
 }
 
 /// Distance from `p` to the segment `a`-`b`.
-fn point_to_segment(p: Point3, a: Point3, b: Point3) -> f64 {
+pub(super) fn point_to_segment(p: Point3, a: Point3, b: Point3) -> f64 {
     let ab = b - a;
     let len_sq = ab.length_squared();
     if len_sq <= 0.0 {
@@ -833,7 +833,7 @@ fn check_edge_face_pairs(
                     })
                     .as_ref()
             {
-                crossings.retain(|&(_, p)| nurbs_face_holds(topo, fid, trim, p, tol));
+                crossings.retain(|&(_, p)| nurbs_face_holds(trim, p, tol));
             }
 
             // A line or conic that runs within the tolerance of a quadric
@@ -1105,21 +1105,11 @@ fn face_holds(
     }
 }
 
-/// Whether `p`, a crossing of a NURBS face's surface, counts on the face,
-/// read by its `trim`: inside the face's wires, or where the trim cannot
-/// place it. Outside them, it counts only within the tolerance of an edge
-/// of the face, where it is that edge's contact.
-fn nurbs_face_holds(
-    topo: &Topology,
-    fid: FaceId,
-    trim: &super::nurbs_trim::NurbsFaceTrim,
-    p: Point3,
-    tol: Tolerance,
-) -> bool {
-    match trim.holds(p, trim_reach(p, tol), tol) {
-        Some(true) | None => true,
-        Some(false) => near_an_edge(topo, fid, p, tol).unwrap_or(true),
-    }
+/// Whether `p`, a crossing of a NURBS face's surface, counts on the face:
+/// everywhere but where its `trim` proves it off the face
+/// ([`super::nurbs_trim::NurbsFaceTrim::holds`]).
+fn nurbs_face_holds(trim: &super::nurbs_trim::NurbsFaceTrim, p: Point3, tol: Tolerance) -> bool {
+    trim.holds(p, trim_reach(p, tol), tol) != Some(false)
 }
 
 /// Whether `p` lies within the tolerance of an edge of face `fid`, or of
@@ -1133,48 +1123,69 @@ fn nurbs_face_holds(
 /// so lies within that much more. `None` where a lookup fails, or an
 /// ellipse's range cannot be read.
 fn near_an_edge(topo: &Topology, fid: FaceId, p: Point3, tol: Tolerance) -> Option<bool> {
-    use std::f64::consts::TAU;
     for eid in brepkit_topology::explorer::face_edges(topo, fid).ok()? {
         let edge = topo.edge(eid).ok()?;
         let (sv, ev) = (
             topo.vertex(edge.start()).ok()?,
             topo.vertex(edge.end()).ok()?,
         );
-        let (start, end) = (sv.point(), ev.point());
-        let size = |q: Point3| q.x().abs() + q.y().abs() + q.z().abs();
-        let rounding = 64.0 * f64::EPSILON * size(p).max(size(start)).max(size(end));
-        let reach = tol
-            .linear
-            .max(
-                edge.tolerance()
-                    .map_or(0.0, |t| t.min(crate::ds::shape_store::MAX_WIDEN)),
-            )
-            .max(sv.tolerance())
-            .max(ev.tolerance())
-            + rounding;
-        let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
-        let (lo, hi) = (t0.min(t1), t0.max(t1));
-        let ends = (p - start).length().min((p - end).length());
-        let foot = match edge.curve() {
-            EdgeCurve::Line => Some(point_to_segment(p, start, end)),
-            EdgeCurve::Circle(c) => {
-                let t = c.project(p);
-                let t = lo + (t - lo).rem_euclid(TAU);
-                (t <= hi).then(|| (c.evaluate(t) - p).length())
-            }
-            EdgeCurve::Ellipse(e) => Some(ellipse_arc_least(e, p, (lo, hi), tol.linear)?),
-            EdgeCurve::NurbsCurve(n) => {
-                brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-12)
-                    .ok()
-                    .filter(|hit| (lo..=hi).contains(&hit.parameter))
-                    .map(|hit| hit.distance)
-            }
-        };
-        if foot.map_or(ends, |d| d.min(ends)) <= reach {
+        let reach = edge_reach(edge, sv, ev, tol);
+        if near_the_edge(edge.curve(), (sv.point(), ev.point()), p, reach, tol)? {
             return Some(true);
         }
     }
     Some(false)
+}
+
+/// How near an edge a point counts as on it: the tolerance, or the edge's
+/// own tolerance or its vertices' where those are wider.
+pub(super) fn edge_reach(
+    edge: &brepkit_topology::edge::Edge,
+    start: &Vertex,
+    end: &Vertex,
+    tol: Tolerance,
+) -> f64 {
+    tol.linear
+        .max(
+            edge.tolerance()
+                .map_or(0.0, |t| t.min(crate::ds::shape_store::MAX_WIDEN)),
+        )
+        .max(start.tolerance())
+        .max(end.tolerance())
+}
+
+/// Whether `p` lies within `reach` of the edge on `curve` from `start` to
+/// `end`, read as [`near_an_edge`] reads each edge, with the rounding of
+/// the coordinates' size. `None` where an ellipse's range cannot be read.
+pub(super) fn near_the_edge(
+    curve: &EdgeCurve,
+    (start, end): (Point3, Point3),
+    p: Point3,
+    reach: f64,
+    tol: Tolerance,
+) -> Option<bool> {
+    use std::f64::consts::TAU;
+    let size = |q: Point3| q.x().abs() + q.y().abs() + q.z().abs();
+    let rounding = 64.0 * f64::EPSILON * size(p).max(size(start)).max(size(end));
+    let (t0, t1) = curve.domain_with_endpoints(start, end);
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    let ends = (p - start).length().min((p - end).length());
+    let foot = match curve {
+        EdgeCurve::Line => Some(point_to_segment(p, start, end)),
+        EdgeCurve::Circle(c) => {
+            let t = c.project(p);
+            let t = lo + (t - lo).rem_euclid(TAU);
+            (t <= hi).then(|| (c.evaluate(t) - p).length())
+        }
+        EdgeCurve::Ellipse(e) => Some(ellipse_arc_least(e, p, (lo, hi), tol.linear)?),
+        EdgeCurve::NurbsCurve(n) => {
+            brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-12)
+                .ok()
+                .filter(|hit| (lo..=hi).contains(&hit.parameter))
+                .map(|hit| hit.distance)
+        }
+    };
+    Some(foot.map_or(ends, |d| d.min(ends)) <= reach + rounding)
 }
 
 /// The least distance from `p` to the arc of `ellipse` over the parameters
@@ -1782,7 +1793,7 @@ fn piece_boxes(
 /// second derivative of a conic on axes `u` and `v` that need not be unit or
 /// square: its square is no more than the larger of `(a |u|)²` and
 /// `(b |v|)²` plus `|a b u . v|`.
-fn conic_reach(a: f64, b: f64, u: Vec3, v: Vec3) -> f64 {
+pub(super) fn conic_reach(a: f64, b: f64, u: Vec3, v: Vec3) -> f64 {
     // The axes are scaled before they are multiplied: a large radius on
     // short axes is an ordinary conic, but the product of the two lengths
     // can overflow on its own.
@@ -7299,11 +7310,73 @@ mod tests {
         }
     }
 
-    /// The sheet of [`bumped_sheet`] placed by `centre` and `turn`, with its
-    /// face bounded by the square `[0.1, 0.9]²` and a round hole of radius
-    /// 0.1 about `(0.75, 0.75)`, where the sheet is flat: lines and a
-    /// circle, each with its pcurve on the face. The sheet's `x` and `y`
-    /// are its parameters.
+    /// A flat sheet over `[0, 1]²` with `x = u` and `y = v`, and its face
+    /// bounded by the square `[0.1, 0.9]²`: four lines whose pcurves stand
+    /// `shift` along `u` from them, within the reach a pcurve's ends may
+    /// stand from its edge's vertices.
+    fn sheet_with_shifted_pcurves(topo: &mut Topology, shift: f64) -> FaceId {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::Point2;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::pcurve::PCurve;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let rows = [0.0, 1.0]
+            .iter()
+            .map(|&x| [0.0, 1.0].iter().map(|&y| Point3::new(x, y, 0.0)).collect())
+            .collect();
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let sheet =
+            NurbsSurface::new(1, 1, knots.clone(), knots, rows, vec![vec![1.0; 2]; 2]).unwrap();
+        let corners = [(0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9)];
+        let v = corners.map(|(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)));
+        let mut sides = Vec::new();
+        let mut pcurves = Vec::new();
+        for k in 0..4 {
+            let (a, b) = (corners[k], corners[(k + 1) % 4]);
+            let e = topo.add_edge(Edge::new(v[k], v[(k + 1) % 4], EdgeCurve::Line));
+            sides.push(OrientedEdge::new(e, true));
+            let (from, to) = (Point2::new(a.0 + shift, a.1), Point2::new(b.0 + shift, b.1));
+            let line = Line2D::new(from, to - from).unwrap();
+            pcurves.push((
+                e,
+                PCurve::new(Curve2D::Line(line), 0.0, (to - from).length()),
+            ));
+        }
+        let wire = topo.add_wire(Wire::new(sides, true).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(sheet)));
+        for (e, pcurve) in pcurves {
+            topo.pcurves_mut().set(e, face, pcurve);
+        }
+        face
+    }
+
+    /// A face whose pcurves stand 5e-7 along `u` from its edges, within the
+    /// reach its pcurves' ends are read to: a line through the face 2.5e-7
+    /// inside its edge at `x = 0.1`, which lies outside the pcurves' loop,
+    /// crosses the face once; one 1e-4 outside the edge, none.
+    #[test]
+    fn a_crossing_between_an_edge_and_its_shifted_pcurve_is_kept() {
+        let mut topo = Topology::new();
+        let face = sheet_with_shifted_pcurves(&mut topo, 5e-7);
+        for (x, want) in [(0.100_000_25, 1), (0.1 - 1e-4, 0), (0.5, 1)] {
+            let found = ef_vertices(
+                &mut topo,
+                face,
+                EdgeCurve::Line,
+                Point3::new(x, 0.5, 0.31),
+                Some(Point3::new(x, 0.5, -0.27)),
+            );
+            assert_eq!(found.len(), want, "x {x}: {found:?}");
+        }
+    }
+
+    /// The sheet of [`bumped_sheet`] placed by `centre` and `turn`, whose
+    /// bump spans `[0.2, 0.8]²`, with its face bounded by the square
+    /// `[0.1, 0.9]²` and a round hole of radius 0.04 about `(0.85, 0.5)`,
+    /// where the sheet is flat: lines and a circle, each with its pcurve on
+    /// the face. The sheet's `x` and `y` are its parameters.
     fn holed_sheet(topo: &mut Topology, centre: Point3, turn: brepkit_math::mat::Mat4) -> FaceId {
         use brepkit_math::curves::Circle3D;
         use brepkit_math::curves2d::{Circle2D, Curve2D, Line2D};
@@ -7344,15 +7417,15 @@ mod tests {
             ));
         }
         let rim = Circle3D::new_with_ref(
-            place(0.75, 0.75, 0.0),
+            place(0.85, 0.5, 0.0),
             turned(turn, Vec3::new(0.0, 0.0, 1.0)),
-            0.1,
+            0.04,
             turned(turn, Vec3::new(1.0, 0.0, 0.0)),
         )
         .unwrap();
         let start = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
         let hole_edge = topo.add_edge(Edge::new(start, start, EdgeCurve::Circle(rim)));
-        let round = Circle2D::new(Point2::new(0.75, 0.75), 0.1).unwrap();
+        let round = Circle2D::new(Point2::new(0.85, 0.5), 0.04).unwrap();
         pcurves.push((
             hole_edge,
             PCurve::new(Curve2D::Circle(round), 0.0, std::f64::consts::TAU),
@@ -7368,12 +7441,13 @@ mod tests {
     }
 
     /// Lines along the normal of a sheet with a round hole, in four poses,
-    /// two of them a million from the origin: through the hole's middle, a
-    /// line finds no crossing, though the sheet runs on under the hole
-    /// inside the face's box; through the face, flat or on its bump, one.
-    /// Lines `gap` from the hole's wire and from the outer wire, for gaps of
-    /// two to nine tolerances, cross the face only on its side of the wire,
-    /// each at its point on the sheet.
+    /// two of them a million from the origin: through the hole, a line finds
+    /// no crossing, though the sheet runs on under the hole inside the
+    /// face's box; through the face, flat or on its bump, one. Lines `gap`
+    /// from the outer wire, for gaps of three to nine tolerances, and 2e-3
+    /// from the hole's wire, past how far its pcurve's image is proved to
+    /// stand from it, cross the face only on its side of the wire, each at
+    /// its point on the sheet.
     #[test]
     fn a_line_through_a_hole_in_a_nurbs_face_does_not_cross_it() {
         use brepkit_math::mat::Mat4;
@@ -7394,20 +7468,22 @@ mod tests {
             ),
         ];
         let mut lines: Vec<((f64, f64), usize)> = vec![
-            ((0.75, 0.75), 0),
-            ((0.68, 0.71), 0),
-            ((0.3, 0.8), 1),
+            ((0.85, 0.5), 0),
+            ((0.83, 0.52), 0),
+            ((0.81 + 2e-3, 0.5), 0),
+            ((0.81 - 2e-3, 0.5), 1),
+            ((0.85, 0.46 + 2e-3), 0),
+            ((0.85, 0.46 - 2e-3), 1),
+            ((0.3, 0.85), 1),
             ((0.75, 0.25), 1),
             ((0.4, 0.4), 1),
         ];
-        for gap in [2e-7, 5e-7, 9e-7] {
+        for gap in [3e-7, 5e-7, 9e-7] {
             lines.extend([
-                ((0.85 + gap, 0.75), 1),
-                ((0.85 - gap, 0.75), 0),
-                ((0.75, 0.65 - gap), 1),
-                ((0.75, 0.65 + gap), 0),
-                ((0.9 - gap, 0.5), 1),
-                ((0.9 + gap, 0.5), 0),
+                ((0.9 - gap, 0.3), 1),
+                ((0.9 + gap, 0.3), 0),
+                ((0.5, 0.9 - gap), 1),
+                ((0.5, 0.9 + gap), 0),
                 ((0.3, 0.1 + gap), 1),
                 ((0.3, 0.1 - gap), 0),
             ]);
