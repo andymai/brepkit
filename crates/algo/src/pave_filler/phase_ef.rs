@@ -738,7 +738,7 @@ fn check_edge_face_pairs(
                     })
                     .as_ref()
             {
-                let found = if matches!(curve, EdgeCurve::Line) {
+                let (found, exact) = if matches!(curve, EdgeCurve::Line) {
                     // A chord standing in for a rim crosses the surface off
                     // the faces it bounds.
                     let on_faces = topo.edge(eid).is_ok_and(|e| {
@@ -746,45 +746,35 @@ fn check_edge_face_pairs(
                             .is_none_or(|t| t <= crate::ds::shape_store::MAX_WIDEN)
                     });
                     if !on_faces {
-                        Vec::new()
+                        (Vec::new(), false)
                     } else if let Some(roots) =
-                        analytic_side_roots(&curve, start_pos, end_pos, t0, t1, surface, tol)
+                        analytic_side_roots(&curve, start_pos, end_pos, t0, t1, surface, tol)?
                     {
                         // On a cylinder, read about the line's point nearest
                         // the axis: the roots of the expanded quadratic of a
                         // long line lie far off the wall.
-                        roots.into_iter().map(SideRoot::at).collect()
+                        (roots.into_iter().map(SideRoot::at).collect(), true)
                     } else {
-                        line_crossings(start_pos, end_pos, t0, t1, surface)
+                        (line_crossings(start_pos, end_pos, t0, t1, surface), false)
                     }
                 } else {
-                    find_side_flips(&curve, start_pos, end_pos, t0, t1, surface, tol)
-                        .into_iter()
-                        .map(SideRoot::at)
-                        .collect()
+                    let (roots, exact) =
+                        side_flips(&curve, start_pos, end_pos, t0, t1, surface, tol)?;
+                    (roots.into_iter().map(SideRoot::at).collect(), exact)
                 };
-                // The sample scan may already hold this root; two roots a
-                // sample step apart are still two crossings.
                 // A rim meeting the face only on one of the face's own wires
                 // (a knuckle neck's rim in the plane of a lid knuckle's end)
                 // is the coplanar-rim configuration the splitters handle from
                 // the faces' boundaries; such a flip adds no crossing.
                 let rim = matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_));
-                for (t, p) in found {
-                    let held = if rim {
+                let held = |p: Point3| {
+                    if rim {
                         trim.holds_clear(p, 10.0 * tol.linear)
                     } else {
                         trim.holds(p, 10.0 * tol.linear)
-                    };
-                    if held
-                        && !crossings
-                            .iter()
-                            .any(|&(_, cp)| (p - cp).length() < tol.linear * 100.0)
-                    {
-                        crossings.push((t, p));
                     }
-                }
-                crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
+                };
+                merge_roots(&mut crossings, found, exact, held, tol);
             }
             // An edge crossing a ball or a ring between two samples (a
             // ring's rim through a ball across it, a rod's seam line out
@@ -814,24 +804,16 @@ fn check_edge_face_pairs(
             };
             if let Some(trim) = round {
                 let rim = !matches!(curve, EdgeCurve::NurbsCurve(_));
-                for (t, p) in find_side_flips(&curve, start_pos, end_pos, t0, t1, surface, tol)
-                    .into_iter()
-                    .map(SideRoot::at)
-                {
-                    let held = if rim {
+                let (found, exact) = side_flips(&curve, start_pos, end_pos, t0, t1, surface, tol)?;
+                let held = |p: Point3| {
+                    if rim {
                         trim.holds_clear(p, 10.0 * tol.linear)
                     } else {
                         trim.holds(p, 10.0 * tol.linear)
-                    };
-                    if held
-                        && !crossings
-                            .iter()
-                            .any(|&(_, cp)| (p - cp).length() < tol.linear * 100.0)
-                    {
-                        crossings.push((t, p));
                     }
-                }
-                crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
+                };
+                let found = found.into_iter().map(SideRoot::at).collect();
+                merge_roots(&mut crossings, found, exact, held, tol);
             }
 
             // A line or conic that runs within the tolerance of a quadric
@@ -1074,6 +1056,36 @@ fn check_edge_face_pairs(
     }
 
     Ok(())
+}
+
+/// Adds to the sample scan's `crossings` the roots `found` on the surface
+/// that the face holds (`held`), in order along the curve. Roots read
+/// exactly stand for each crossing of the scan within a hundred tolerances
+/// of them, the same root read less closely, and are all kept however near
+/// each other they lie: a thin tube's two walls lie its diameter apart.
+/// Roots read at samples are kept only away from every crossing held so
+/// far, as two flips a sample step apart are still two crossings.
+fn merge_roots(
+    crossings: &mut Vec<(f64, Point3)>,
+    found: Vec<(f64, Point3)>,
+    exact: bool,
+    held: impl Fn(Point3) -> bool,
+    tol: Tolerance,
+) {
+    let near = 100.0 * tol.linear;
+    let found = found.into_iter().filter(|&(_, p)| held(p));
+    if exact {
+        let found: Vec<(f64, Point3)> = found.collect();
+        crossings.retain(|&(_, cp)| found.iter().all(|&(_, p)| (p - cp).length() >= near));
+        crossings.extend(found);
+    } else {
+        for (t, p) in found {
+            if crossings.iter().all(|&(_, cp)| (p - cp).length() >= near) {
+                crossings.push((t, p));
+            }
+        }
+    }
+    crossings.sort_by(|a, b| a.0.total_cmp(&b.0));
 }
 
 /// Find edge-plane crossings using algebraic ray-plane intersection.
@@ -2650,6 +2662,11 @@ trait SideFunction {
     /// A bound on the rounding in the curve's point from the points and
     /// vectors it is made from.
     fn slack(&self) -> f64;
+
+    /// The point's distance from the surface at `t`, signed as the function
+    /// is, read straight from the point: it carries only the rounding of
+    /// the point itself, where the function's terms can cancel.
+    fn side(&self, t: f64) -> f64;
 }
 
 impl SideFunction for SideForm {
@@ -2697,6 +2714,10 @@ impl SideFunction for SideForm {
 
     fn slack(&self) -> f64 {
         self.slack
+    }
+
+    fn side(&self, t: f64) -> f64 {
+        self.frame(t).0.length() - self.radius
     }
 }
 
@@ -2941,12 +2962,21 @@ impl SideFunction for RingForm {
     fn slack(&self) -> f64 {
         self.slack
     }
+
+    fn side(&self, t: f64) -> f64 {
+        let q = self.frame(t).0[0];
+        (q[0].hypot(q[1]) - self.major).hypot(q[2]) - self.minor
+    }
 }
 
 /// Where a line, a circle or an ellipse meets a cylinder, a ball or a ring
 /// between parameters `t0` and `t1`, found by [`side_roots`] on its
 /// [`SideForm`] or [`RingForm`]. `None` for any other curve or surface, or
 /// where [`side_roots`] cannot read the curve.
+///
+/// # Errors
+///
+/// As [`side_roots`].
 fn analytic_side_roots(
     curve: &EdgeCurve,
     start_pos: Point3,
@@ -2955,14 +2985,18 @@ fn analytic_side_roots(
     t1: f64,
     surface: &FaceSurface,
     tol: Tolerance,
-) -> Option<Vec<SideRoot>> {
+) -> Result<Option<Vec<SideRoot>>, AlgoError> {
     let floor = 1e-3 * tol.linear;
     let ends = (start_pos, end_pos);
     if let FaceSurface::Torus(ring) = surface {
-        let form = RingForm::new(curve, start_pos, end_pos, ring, floor)?;
+        let Some(form) = RingForm::new(curve, start_pos, end_pos, ring, floor) else {
+            return Ok(None);
+        };
         side_roots(&form, curve, ends, (t0, t1), surface, tol)
     } else {
-        let form = SideForm::new(curve, start_pos, end_pos, surface, floor)?;
+        let Some(form) = SideForm::new(curve, start_pos, end_pos, surface, floor) else {
+            return Ok(None);
+        };
         side_roots(&form, curve, ends, (t0, t1), surface, tol)
     }
 }
@@ -2971,21 +3005,29 @@ fn analytic_side_roots(
 /// between its parameters `range`, found on `form`, its side of the
 /// surface: each piece of the range is halved until Taylor's bounds about
 /// its middle, with the rounding, show that the form keeps clear of zero
-/// along it, or that its slope does, so that it holds at most one root,
-/// bisected where its ends lie on two sides for sure down to two
-/// neighbouring values, of which the one whose point lies nearer the
-/// surface is kept (a crossing of a line that lands on a vertex lands there
-/// exactly). Below the parameter step that moves the curve by the
-/// tolerance, or where an end's side is not known, a piece holds a place
-/// where the curve may meet the surface.
+/// along it, or that its slope does, so that it holds at most one root.
+/// Below the parameter step that moves the curve by the tolerance, or where
+/// an end's side is not known, a piece holds a place where the curve may
+/// meet the surface.
 ///
 /// Such places with no stretch on one side for sure between them, or
-/// nearer each other than four steps, are one contact: a
-/// crossing where the curve lies on two sides of it, read where it crosses
-/// for sure when it does so once, else at the middle; a touch where it lies
-/// on one side, read where the form turns. `None` for a curve whose
+/// nearer each other than four steps, are one contact: a crossing where
+/// the curve lies on two sides of it, a touch where it lies on one. A
+/// crossing lies between two parameters whose sides the form proves, and
+/// is bisected there down to two neighbouring values on the curve's own
+/// distance from the surface ([`SideFunction::side`]), whose terms do not
+/// cancel as the form's can on a thin ring. Of the two, the one whose point
+/// lies nearer the surface is kept (a crossing of a line that lands on a
+/// vertex lands there exactly). A touch is read where the form turns, or
+/// failing that where the distance comes least, and is kept where its point
+/// lies within the tolerance of the surface. `None` for a curve whose
 /// rounding is not well below the tolerance, or a curve so near the surface
 /// along its length that its pieces cannot be read.
+///
+/// # Errors
+///
+/// Returns [`AlgoError::IntersectionFailed`] for a crossing the form proves
+/// whose point, so bisected, still lies past the tolerance of the surface.
 #[allow(clippy::too_many_lines)]
 fn side_roots(
     form: &impl SideFunction,
@@ -2994,7 +3036,7 @@ fn side_roots(
     (t0, t1): (f64, f64),
     surface: &FaceSurface,
     tol: Tolerance,
-) -> Option<Vec<SideRoot>> {
+) -> Result<Option<Vec<SideRoot>>, AlgoError> {
     // Pieces a curve within the tolerance of the surface along much of its
     // length would leave unread.
     const MOST_PIECES: usize = 1 << 14;
@@ -3006,17 +3048,17 @@ fn side_roots(
         Root(f64, bool),
     }
     if form.slack() > 0.1 * tol.linear {
-        return None;
+        return Ok(None);
     }
     let speed = match curve {
         EdgeCurve::Line => (end_pos - start_pos).length(),
         EdgeCurve::Circle(c) => c.radius(),
         EdgeCurve::Ellipse(el) => el.semi_major(),
-        EdgeCurve::NurbsCurve(_) => return None,
+        EdgeCurve::NurbsCurve(_) => return Ok(None),
     };
     let (lo, hi) = (t0.min(t1), t0.max(t1));
     if hi - lo <= 0.0 || speed <= 0.0 || !speed.is_finite() {
-        return None;
+        return Ok(None);
     }
     let shortest = tol.linear / speed;
     let point_at = |t: f64| curve.evaluate_with_endpoints(t, start_pos, end_pos);
@@ -3050,15 +3092,46 @@ fn side_roots(
         if off(b) < off(a) { b } else { a }
     };
     let above = |t: f64| form.value(t).0 > 0.0;
+    let outside = |t: f64| form.side(t) > 0.0;
     let rising = |t: f64| form.derivatives(t).0[0] > 0.0;
-    // The side for sure beyond `t`, stepping away from it along `way`.
-    let beyond = |t: f64, way: f64| {
+    // A crossing between `a`, on the side `from` for sure, and `b`, on the
+    // other: bisected on the curve's distance where its signs agree with
+    // the form's at both ends, as they do unless rounding swamps it, else
+    // on the form.
+    let cross = |a: f64, b: f64, from: bool| {
+        let fine = outside(a) == from && outside(b) != from;
+        halve(a, b, if fine { &outside } else { &above })
+    };
+    // The first parameter past `t` along `way` whose side is sure, and that
+    // side.
+    let beyond_at = |t: f64, way: f64| {
         let mut step = shortest;
         (0..64).find_map(|_| {
-            let side = sure(way.madd(step, t));
+            let at = way.madd(step, t);
             step *= 2.0;
-            side
+            sure(at).map(|side| (at, side))
         })
+    };
+    let beyond = |t: f64, way: f64| beyond_at(t, way).map(|(_, side)| side);
+    // Where the curve's distance from the surface comes least between `a`
+    // and `b`, by golden-section search.
+    let least = |mut a: f64, mut b: f64| {
+        let g = 0.5 * (5.0_f64.sqrt() - 1.0);
+        let off = |t: f64| form.side(t).abs();
+        let (mut c, mut d) = (g.madd(a - b, b), g.madd(b - a, a));
+        let (mut fc, mut fd) = (off(c), off(d));
+        for _ in 0..100 {
+            if fc < fd {
+                (b, d, fd) = (d, c, fc);
+                c = g.madd(a - b, b);
+                fc = off(c);
+            } else {
+                (a, c, fc) = (c, d, fd);
+                d = g.madd(b - a, a);
+                fd = off(d);
+            }
+        }
+        f64::midpoint(a, b)
     };
     let mut marks: Vec<Mark> = Vec::new();
     // The pieces are read first half first, so the marks come in order.
@@ -3068,7 +3141,7 @@ fn side_roots(
     while let Some((a, b)) = pieces.pop() {
         read += 1;
         if read > MOST_PIECES {
-            return None;
+            return Ok(None);
         }
         let (h, m) = (b - a, f64::midpoint(a, b));
         let (f, unsure) = form.value(m);
@@ -3096,7 +3169,7 @@ fn side_roots(
             marks.extend(side_a.map(Mark::Side));
             match (side_a, side_b) {
                 (Some(x), Some(y)) if x != y => {
-                    marks.push(Mark::Root(halve(a, b, &above).map_or(m, nearer), true));
+                    marks.push(Mark::Root(cross(a, b, x).map_or(m, nearer), true));
                 }
                 (Some(_), Some(_)) if one_way => {}
                 (Some(_), None) => marks.push(Mark::Root(b, false)),
@@ -3144,30 +3217,46 @@ fn side_roots(
         }
         let to = after.or_else(|| beyond(last, 1.0));
         let (Some(from), Some(to)) = (from, to) else {
-            return None;
+            return Ok(None);
         };
         let crossing = from != to;
-        let t = if crossing {
-            if crossed == 1 {
+        let within = |t: f64| distance_to_surface(point_at(t), surface) < tol.linear;
+        if crossing {
+            // Several places, or one where no end's side was sure: the
+            // crossing lies between the sure sides either side of them.
+            let t = if crossed == 1 {
                 at
             } else {
-                f64::midpoint(first, last)
+                match (beyond_at(first, -1.0), beyond_at(last, 1.0)) {
+                    (Some((a, x)), Some((b, y))) if x == from && y == to => {
+                        cross(a, b, from).map_or_else(|| f64::midpoint(first, last), nearer)
+                    }
+                    _ => f64::midpoint(first, last),
+                }
+            };
+            if !within(t) {
+                return Err(AlgoError::IntersectionFailed(format!(
+                    "a crossing of a {} with a {} at t = {t} lies past the tolerance of the surface",
+                    curve.type_tag(),
+                    surface.type_tag()
+                )));
             }
+            roots.push(SideRoot::Crossing(t, point_at(t)));
         } else {
-            halve(first - shortest, last + shortest, &rising)
+            let t = halve(first - shortest, last + shortest, &rising)
                 .map_or_else(|| f64::midpoint(first, last), nearer)
-                .clamp(lo, hi)
-        };
-        let p = point_at(t);
-        if distance_to_surface(p, surface) < tol.linear {
-            roots.push(if crossing {
-                SideRoot::Crossing(t, p)
+                .clamp(lo, hi);
+            let t = if within(t) {
+                t
             } else {
-                SideRoot::Touch(t, p)
-            });
+                least((first - shortest).max(lo), (last + shortest).min(hi))
+            };
+            if within(t) {
+                roots.push(SideRoot::Touch(t, point_at(t)));
+            }
         }
     }
-    Some(roots)
+    Ok(Some(roots))
 }
 
 /// Where a curve meets a surface: each crossing, and each touch where it
@@ -3180,6 +3269,11 @@ fn side_roots(
 /// lands off it and is dropped), and a sample on the surface exactly is a
 /// crossing where the nearest samples clear of the surface either side lie
 /// on two sides, and a touch where they lie on one.
+///
+/// # Errors
+///
+/// As [`analytic_side_roots`].
+#[cfg(test)]
 fn find_side_flips(
     curve: &EdgeCurve,
     start_pos: Point3,
@@ -3188,15 +3282,28 @@ fn find_side_flips(
     t1: f64,
     surface: &FaceSurface,
     tol: Tolerance,
-) -> Vec<SideRoot> {
+) -> Result<Vec<SideRoot>, AlgoError> {
+    side_flips(curve, start_pos, end_pos, t0, t1, surface, tol).map(|(roots, _)| roots)
+}
+
+/// [`find_side_flips`], and whether they were read exactly.
+fn side_flips(
+    curve: &EdgeCurve,
+    start_pos: Point3,
+    end_pos: Point3,
+    t0: f64,
+    t1: f64,
+    surface: &FaceSurface,
+    tol: Tolerance,
+) -> Result<(Vec<SideRoot>, bool), AlgoError> {
     let side = |t: f64| -> Option<f64> {
         let pt = curve.evaluate_with_endpoints(t, start_pos, end_pos);
         let (u, v) = surface.project_point(pt)?;
         let on = surface.evaluate(u, v)?;
         Some((pt - on).dot(surface.normal(u, v)))
     };
-    if let Some(roots) = analytic_side_roots(curve, start_pos, end_pos, t0, t1, surface, tol) {
-        return roots;
+    if let Some(roots) = analytic_side_roots(curve, start_pos, end_pos, t0, t1, surface, tol)? {
+        return Ok((roots, true));
     }
     let samples: Vec<(f64, Option<f64>)> = (0..=N_SAMPLES)
         .map(|i| {
@@ -3265,7 +3372,7 @@ fn find_side_flips(
         }
         prev = Some((t, s));
     }
-    out
+    Ok((out, false))
 }
 
 /// Find crossings by sampling a signed distance function and detecting sign changes.
@@ -4874,6 +4981,7 @@ mod tests {
             let curve = EdgeCurve::Circle(circle);
             let found: Vec<_> =
                 find_side_flips(&curve, start, start, 0.0, std::f64::consts::TAU, &wall, tol)
+                    .unwrap()
                     .into_iter()
                     .map(SideRoot::at)
                     .collect();
@@ -4906,7 +5014,8 @@ mod tests {
             1.0,
             &ball,
             tol,
-        );
+        )
+        .unwrap();
         assert_eq!(found.len(), 2, "{found:?}");
         for (root, want) in found.iter().zip([1.0 / 256.0, 1.0 / 128.0]) {
             assert!(matches!(root, SideRoot::Crossing(..)), "{root:?}");
@@ -4922,7 +5031,8 @@ mod tests {
             1.0,
             &ball,
             tol,
-        );
+        )
+        .unwrap();
         assert_eq!(touched.len(), 1, "{touched:?}");
         assert!(matches!(touched[0], SideRoot::Touch(..)), "{touched:?}");
         let (t, p) = touched[0].at();
@@ -4955,7 +5065,8 @@ mod tests {
                 1.0,
                 &surface,
                 tol,
-            );
+            )
+            .unwrap();
             assert_eq!(found.len(), 2, "{} {found:?}", surface.type_tag());
             for (root, x) in found.iter().zip([-1.0, 1.0]) {
                 assert!(matches!(root, SideRoot::Crossing(..)), "{root:?}");
@@ -4976,7 +5087,8 @@ mod tests {
             1.0,
             &ball,
             tol,
-        );
+        )
+        .unwrap();
         assert_eq!(touched.len(), 1, "{touched:?}");
         assert!(matches!(touched[0], SideRoot::Touch(..)), "{touched:?}");
         let (t, p) = touched[0].at();
@@ -5012,7 +5124,7 @@ mod tests {
                 curve.evaluate_with_endpoints(0.0, origin, origin),
                 curve.evaluate_with_endpoints(1.0, origin, origin),
             );
-            find_side_flips(curve, start, end, 0.0, 1.0, surface, tol)
+            find_side_flips(curve, start, end, 0.0, 1.0, surface, tol).unwrap()
         };
         let ball = FaceSurface::Sphere(SphericalSurface::new(origin, 1.0).unwrap());
         let along_x = spline(vec![
@@ -5090,7 +5202,7 @@ mod tests {
                 CylindricalSurface::new(origin, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap(),
             ),
         ] {
-            let found = find_side_flips(&curve, start, start, t0, t1, &surface, tol);
+            let found = find_side_flips(&curve, start, start, t0, t1, &surface, tol).unwrap();
             assert_eq!(found.len(), 4, "{} {found:?}", surface.type_tag());
             let mut ts = Vec::new();
             for root in &found {
@@ -5692,6 +5804,16 @@ mod tests {
         centre: Point3,
         turn: brepkit_math::mat::Mat4,
     ) -> (FaceId, brepkit_math::surfaces::ToroidalSurface) {
+        whole_ring_of(topo, centre, turn, (2.0, 0.5))
+    }
+
+    /// [`whole_ring`] of radii `big` and `small`.
+    fn whole_ring_of(
+        topo: &mut Topology,
+        centre: Point3,
+        turn: brepkit_math::mat::Mat4,
+        (big, small): (f64, f64),
+    ) -> (FaceId, brepkit_math::surfaces::ToroidalSurface) {
         use brepkit_math::surfaces::ToroidalSurface;
         use brepkit_math::vec::Vec3;
         use brepkit_topology::edge::Edge;
@@ -5699,8 +5821,8 @@ mod tests {
         use brepkit_topology::wire::{OrientedEdge, Wire};
         let ring = ToroidalSurface::with_axis_and_ref_dir(
             centre,
-            2.0,
-            0.5,
+            big,
+            small,
             turned(turn, Vec3::new(0.0, 0.0, 1.0)),
             turned(turn, Vec3::new(1.0, 0.0, 0.0)),
         )
@@ -5913,7 +6035,7 @@ mod tests {
         let ring =
             FaceSurface::Torus(ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 2.0, 0.5).unwrap());
         let read = |curve: &EdgeCurve, start: Point3, end: Point3, (t0, t1): (f64, f64)| {
-            let roots = analytic_side_roots(curve, start, end, t0, t1, &ring, tol);
+            let roots = analytic_side_roots(curve, start, end, t0, t1, &ring, tol).unwrap();
             assert!(roots.is_some(), "{start:?} to {end:?} does not read");
             let roots = roots.unwrap();
             for root in &roots {
@@ -6416,5 +6538,122 @@ mod tests {
                 spline.evaluate_with_endpoints(0.75f64.madd(f64::from(k) / 8.0, 0.25), start, end);
             assert!(held.iter().any(|b| b.contains_point(p)), "{p:?}");
         }
+    }
+
+    /// Thin rings of major radius 1 and tube radius 1e-3, 1e-4 and 1e-6, in
+    /// three poses. Each crossing of four edges, with points worked out in
+    /// closed form, gets a vertex within 1e-7 of it, and no other vertex is
+    /// made:
+    ///
+    /// - a line along `x` through the tube at `(-1, 0, 0)`, at `x = -1 ± r`;
+    /// - a line along `y` at `x = -1` and height `r / 2`, which runs inside
+    ///   the tube for a while and crosses its wall at a shallow angle, at
+    ///   `y = ±√(s (2 + s))` for `s = √(r² - r² / 4)`;
+    /// - a line in the plane `z = 0` through `(-1, 0, 0)` at 0.01 of a
+    ///   radian to `y`, at its roots on the circles of radius `1 ± r`;
+    /// - the unit circle about the axis tilted by 0.01 about `x`, through
+    ///   the tube at a shallow angle four times, where
+    ///   `sin² t = x (2 - x) / sin² 0.01` for `x = r² / 2`.
+    #[test]
+    fn edges_crossing_thin_rings_at_shallow_angles_find_each_crossing() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::vec::Vec3;
+        let poses = [
+            (Point3::new(0.0, 0.0, 0.0), Mat4::identity()),
+            (
+                Point3::new(0.4, -1.3, 2.2),
+                Mat4::rotation_z(0.7) * Mat4::rotation_x(1.1) * Mat4::rotation_y(0.3),
+            ),
+            (
+                Point3::new(-3.0, 0.5, 0.0),
+                Mat4::rotation_x(std::f64::consts::PI),
+            ),
+        ];
+        let mut missed = Vec::new();
+        for small in [1e-3, 1e-4, 1e-6] {
+            let local: Vec<(&str, Vec<Point3>, (Point3, Point3))> = {
+                let mut cases = Vec::new();
+                cases.push((
+                    "through",
+                    vec![
+                        Point3::new(-1.0 - small, 0.0, 0.0),
+                        Point3::new(-1.0 + small, 0.0, 0.0),
+                    ],
+                    (Point3::new(-1.5, 0.0, 0.0), Point3::new(-0.57, 0.0, 0.0)),
+                ));
+                let h = 0.5 * small;
+                let s = small.madd(small, -h * h).sqrt();
+                let y = (s * (2.0 + s)).sqrt();
+                cases.push((
+                    "along",
+                    vec![Point3::new(-1.0, -y, h), Point3::new(-1.0, y, h)],
+                    (Point3::new(-1.0, -0.37, h), Point3::new(-1.0, 0.41, h)),
+                ));
+                let (sin, cos) = 0.01_f64.sin_cos();
+                let mut roots = Vec::new();
+                for (lean, rim) in [(1.0, 2.0 + small), (-1.0, 2.0 - small)] {
+                    let gap = lean * small * rim;
+                    let disc = sin.madd(sin, gap);
+                    if disc > 0.0 {
+                        let far = sin + disc.sqrt();
+                        roots.extend([-gap / far, far]);
+                    }
+                }
+                cases.push((
+                    "oblique",
+                    roots
+                        .iter()
+                        .map(|&t| Point3::new(sin.madd(t, -1.0), cos * t, 0.0))
+                        .collect(),
+                    (
+                        Point3::new(sin.madd(-0.3, -1.0), -0.3 * cos, 0.0),
+                        Point3::new(sin.madd(0.33, -1.0), 0.33 * cos, 0.0),
+                    ),
+                ));
+                let x = 0.5 * small * small;
+                let a = (x * (2.0 - x)).sqrt() / sin;
+                let a = a.asin();
+                cases.push((
+                    "tilted circle",
+                    [a, -a, std::f64::consts::PI - a, std::f64::consts::PI + a]
+                        .iter()
+                        .map(|&t| Point3::new(t.cos(), t.sin() * cos, t.sin() * sin))
+                        .collect(),
+                    (Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, -sin, cos)),
+                ));
+                cases
+            };
+            for (centre, turn) in poses {
+                let at = |p: Point3| centre + turned(turn, Vec3::new(p.x(), p.y(), p.z()));
+                let mut topo = Topology::new();
+                let (face, _) = whole_ring_of(&mut topo, centre, turn, (1.0, small));
+                for (what, want, (a, b)) in &local {
+                    let found = if *what == "tilted circle" {
+                        let circle = Circle3D::new_with_ref(
+                            at(*a),
+                            turned(turn, Vec3::new(b.x(), b.y(), b.z())),
+                            1.0,
+                            turned(turn, Vec3::new(1.0, 0.0, 0.0)),
+                        )
+                        .unwrap();
+                        let start = circle.evaluate(0.3);
+                        ef_vertices(&mut topo, face, EdgeCurve::Circle(circle), start, None)
+                    } else {
+                        ef_vertices(&mut topo, face, EdgeCurve::Line, at(*a), Some(at(*b)))
+                    };
+                    let want: Vec<Point3> = want.iter().map(|&p| at(p)).collect();
+                    let held = want
+                        .iter()
+                        .all(|&w| found.iter().any(|&f| (f - w).length() < 1e-7));
+                    if found.len() != want.len() || !held {
+                        missed.push(format!(
+                            "r {small}, {what} at {centre:?}: found {found:?}, want {want:?}"
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(missed.is_empty(), "{} misses: {missed:#?}", missed.len());
     }
 }
