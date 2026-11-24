@@ -8204,8 +8204,9 @@ fn on_section_arc(
 /// Whether the span `(t0, t1)` of spline `n` keeps farther than `weld` from
 /// the circle about `center` of radius `r`: each piece's control points all
 /// lie within `r - weld` of the centre, or beyond `r + weld` along the line
-/// from the centre to their mean. A piece neither proves is halved, ten
-/// times at most.
+/// from the centre to their mean. The pieces start as the knot spans the
+/// range covers, each a Bezier piece of its own; a piece neither test proves
+/// is halved, ten times at most.
 fn nurbs_apart_from_circle(
     n: &brepkit_math::nurbs::curve::NurbsCurve,
     (t0, t1): (f64, f64),
@@ -8213,7 +8214,17 @@ fn nurbs_apart_from_circle(
     r: f64,
     weld: f64,
 ) -> bool {
-    let mut pending = vec![(t0.min(t1), t0.max(t1), 0_u32)];
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    let mut pending: Vec<(f64, f64, u32)> = n
+        .knots()
+        .windows(2)
+        .map(|w| (w[0].max(lo), w[1].min(hi)))
+        .filter(|(a, b)| a < b)
+        .map(|(a, b)| (a, b, 0))
+        .collect();
+    if pending.is_empty() {
+        return false;
+    }
     while let Some((a, b, depth)) = pending.pop() {
         let Ok(homogeneous) = brepkit_math::nurbs::decompose::curve_bezier_between(n, a, b) else {
             return false;
@@ -18875,6 +18886,45 @@ mod tests {
                 let pieces =
                     plate_split_with_circles(pose, &[], &[((5.0, 4.0), SQRT_2)], &[section]);
                 let label = format!("control at height {top}, pose {i}");
+                match expected {
+                    Some(areas) => {
+                        assert_areas(&piece_areas(&pieces, pose.normal()), &areas, &label);
+                    }
+                    None => assert!(pieces.is_empty(), "{label}: split into {}", pieces.len()),
+                }
+            }
+        }
+    }
+
+    /// A whole circle about (5, 4) of radius root 2 and a quadratic spline in
+    /// two knot spans. Below the circle, over (3, 1) and (7, 1.5), the spline
+    /// keeps well off it in both spans and the circle stays a cap; through
+    /// (3, 1) and (5, 4), its second span runs into the circle and the split
+    /// is refused.
+    #[test]
+    fn a_whole_circle_and_a_spline_of_two_spans_are_read_span_by_span() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use std::f64::consts::{PI, SQRT_2};
+        let below = [(1.0, 1.0), (3.0, 1.0), (7.0, 1.5), (9.0, 1.0)];
+        let through = [(1.0, 1.0), (3.0, 1.0), (5.0, 4.0), (9.0, 4.0)];
+        for (i, pose) in plate_poses().iter().enumerate() {
+            for (poles, expected) in [(below, Some([2.0 * PI, 100.0 - 2.0 * PI])), (through, None)]
+            {
+                let points: Vec<Point3> = poles.iter().map(|&p| pose.at(p)).collect();
+                let spline = NurbsCurve::new(
+                    2,
+                    vec![0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0],
+                    points.clone(),
+                    vec![1.0; 4],
+                )
+                .unwrap();
+                let section = SectionEdge {
+                    curve_3d: EdgeCurve::NurbsCurve(spline),
+                    ..line_section(points[0], points[3])
+                };
+                let pieces =
+                    plate_split_with_circles(pose, &[], &[((5.0, 4.0), SQRT_2)], &[section]);
+                let label = format!("poles {poles:?}, pose {i}");
                 match expected {
                     Some(areas) => {
                         assert_areas(&piece_areas(&pieces, pose.normal()), &areas, &label);
