@@ -199,10 +199,12 @@ pub fn compute_boundary_pcurve_on_surface(
     pcurve_through_uv_samples(uv_pts, &pts_3d, start, end, surface, straight)
 }
 
-/// A circle or ellipse arc in a plane's frame, exactly: the frame maps the
-/// conic `c + cos t a + sin t b` affinely, so its image is the conic through
-/// the projected centre and axes, built as rational quadratic pieces of at
-/// most a quarter turn, from the traversal's start to its end on [0, 1].
+/// A circle or ellipse arc in a plane's frame: the frame maps the conic
+/// `c + cos t a + sin t b` affinely, so its image is the conic through the
+/// projected centre and axes, built as rational quadratic pieces of at most
+/// a quarter turn, from the traversal's start to its end on [0, 1]. The
+/// span comes from the stored ends, read against the conic where they lie,
+/// so its bound in [`plane_conic_span`] takes no reserve.
 ///
 /// A fit through a fixed number of samples drifts at the ends of a long
 /// arc (7e-3 rad off the tangent of a hole's rim piece running most of the
@@ -216,26 +218,52 @@ fn plane_conic_arc(
     frame: &PlaneFrame,
 ) -> Option<Curve2D> {
     let (t0, t1) = curve_3d.domain_with_endpoints(stored_start, stored_end);
-    plane_conic_span(curve_3d, if forward { (t0, t1) } else { (t1, t0) }, frame)
+    plane_conic_span(
+        curve_3d,
+        if forward { (t0, t1) } else { (t1, t0) },
+        frame,
+        0.0,
+    )
 }
 
 /// [`plane_conic_arc`] over the span of the conic's own parameter from `ta`
-/// to `tb`.
+/// to `tb`, where its bound holds.
+///
+/// The axes go into the frame as vectors, so their rounding goes with their
+/// sizes, not with where the conic lies. The image then lies within
+/// `reserve + 64 ε size` of the conic's shadow on the frame's plane, `size`
+/// the centre's distance from the frame's origin plus the lengths of the two
+/// axes: the frame's axes are square to each other within a few ε, and the
+/// projections, the angles, the weights and the control points round within
+/// that. `reserve` is what the caller's reading of the span and of the
+/// conic adds. `None` where the bound passes the linear tolerance.
 fn plane_conic_span(
     curve_3d: &EdgeCurve,
     (ta, tb): (f64, f64),
     frame: &PlaneFrame,
+    reserve: f64,
 ) -> Option<Curve2D> {
-    let (centre, at): (Point3, &dyn Fn(f64) -> Point3) = match curve_3d {
-        EdgeCurve::Circle(c) => (c.center(), &|t| c.evaluate(t)),
-        EdgeCurve::Ellipse(e) => (e.center(), &|t| e.evaluate(t)),
+    let (centre, (big_a, big_b)) = match curve_3d {
+        EdgeCurve::Circle(c) => (
+            c.center(),
+            (c.u_axis() * c.radius(), c.v_axis() * c.radius()),
+        ),
+        EdgeCurve::Ellipse(e) => (
+            e.center(),
+            (e.u_axis() * e.semi_major(), e.v_axis() * e.semi_minor()),
+        ),
         EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return None,
     };
+    let flat = |w: Vec3| Vec2::new(w.dot(frame.u_axis()), w.dot(frame.v_axis()));
     let c = frame.project(centre);
-    let a = frame.project(at(0.0)) - c;
-    let b = frame.project(at(std::f64::consts::FRAC_PI_2)) - c;
+    let (a, b) = (flat(big_a), flat(big_b));
     let sweep = tb - ta;
     if !sweep.is_finite() || sweep.abs() < 1e-12 {
+        return None;
+    }
+    let size = (centre - frame.origin()).length() + big_a.length() + big_b.length();
+    let bound = (64.0 * f64::EPSILON).madd(size, reserve);
+    if bound.is_nan() || bound > brepkit_math::tolerance::Tolerance::new().linear {
         return None;
     }
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -791,9 +819,10 @@ const PROVED_PCURVE_MAX_PIECES: usize = 4096;
 
 /// A pcurve for a line, circle or ellipse edge through the samples
 /// `pts_3d`, whose image is proved within the linear tolerance of the edge
-/// at every point, or `None`. On a plane it is the conic's exact image in
-/// the frame ([`plane_conic_span`]); on a cylinder, cone, ball or ring it is
-/// a [`proved_hermite_pcurve`].
+/// at every point, or `None`. On a plane it is the conic's image in the
+/// frame ([`plane_conic_span`]), within the tolerance of the edge's shadow
+/// on the plane; on a cylinder, cone, ball or ring it is a
+/// [`proved_hermite_pcurve`].
 fn proved_conic_pcurve(
     curve: &EdgeCurve,
     pts_3d: &[Point3],
@@ -810,8 +839,10 @@ fn proved_conic_pcurve(
         return None;
     }
     if let Some(f) = frame {
+        // The span comes from the samples, each rounded where it lies.
         let (theta0, sweep) = conic_sweep(curve, pts_3d)?;
-        return plane_conic_span(curve, (theta0, theta0 + sweep), f);
+        let reserve = off_form + sample_rounding(pts_3d);
+        return plane_conic_span(curve, (theta0, theta0 + sweep), f, reserve);
     }
     proved_hermite_pcurve(curve, pts_3d, surface, off_form)
 }
@@ -3010,9 +3041,159 @@ mod tests {
         }
     }
 
+    /// How far the image of a plane pcurve strays from `edge` over its
+    /// parameters from `t0` to `t1`, at its most, read from the frame's
+    /// origin: 201 points of the pcurve, each against an 801-point search
+    /// and a golden section.
+    fn plane_stray(
+        pcurve: &Curve2D,
+        frame: &PlaneFrame,
+        edge: impl Fn(f64) -> Vec3,
+        (t0, t1): (f64, f64),
+    ) -> f64 {
+        let Curve2D::Nurbs(n) = pcurve else {
+            return f64::NAN;
+        };
+        let (lo, hi) = n.domain();
+        let step = (t1 - t0) / 800.0;
+        (0..=200)
+            .map(|k| {
+                let q = pcurve.evaluate((hi - lo).madd(f64::from(k) / 200.0, lo));
+                let p = frame.u_axis() * q.x() + frame.v_axis() * q.y();
+                let gap = |t: f64| (edge(t) - p).length();
+                let nearest = (0..=800)
+                    .map(|j| step.madd(f64::from(j), t0))
+                    .min_by(|&x, &y| gap(x).total_cmp(&gap(y)))
+                    .unwrap();
+                let (mut a, mut b) = (nearest - step, nearest + step);
+                for _ in 0..200 {
+                    let (m1, m2) = ((b - a).madd(0.381_966, a), (a - b).madd(0.381_966, b));
+                    if gap(m1) < gap(m2) {
+                        b = m2;
+                    } else {
+                        a = m1;
+                    }
+                }
+                gap(f64::midpoint(a, b)).min(gap(nearest))
+            })
+            .fold(0.0, max_or_nan)
+    }
+
+    /// A plane through `centre` with normal `n`, and on it a circle of
+    /// radius `r` and an ellipse of semi-axes `1.7 r` and `r`, each with its
+    /// axis vectors.
+    fn plane_conics(
+        n: Vec3,
+        centre: Point3,
+        r: f64,
+    ) -> (FaceSurface, Vec<(&'static str, EdgeCurve, Vec3, Vec3)>) {
+        use brepkit_math::curves::{Circle3D, Ellipse3D};
+        let seed = Vec3::new(0.6, -0.2, 0.7);
+        let e1 = (seed - n * n.dot(seed)).normalize().unwrap();
+        let e2 = n.cross(e1);
+        let surface = FaceSurface::Plane {
+            normal: n,
+            d: n.dot(centre - Point3::new(0.0, 0.0, 0.0)),
+        };
+        let conics = vec![
+            (
+                "circle",
+                EdgeCurve::Circle(Circle3D::with_axes(centre, e1.cross(e2), r, e1, e2).unwrap()),
+                e1 * r,
+                e2 * r,
+            ),
+            (
+                "ellipse",
+                EdgeCurve::Ellipse(
+                    Ellipse3D::with_axes(centre, e1.cross(e2), 1.7 * r, r, e1, e2).unwrap(),
+                ),
+                e1 * (1.7 * r),
+                e2 * r,
+            ),
+        ];
+        (surface, conics)
+    }
+
+    /// The plane normals of [`a_conic_on_a_plane_far_from_the_origin_is_proved_or_refused`].
+    fn plane_normals() -> [Vec3; 3] {
+        [
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 2.0, 3.0).normalize().unwrap(),
+            Vec3::new(-0.3, 0.9, -0.1).normalize().unwrap(),
+        ]
+    }
+
+    /// A circle and an ellipse of size 1e4 and 1e-6 on a plane, on three
+    /// plane normals, an arc of each from stored ends with the frame from a
+    /// third point of the conic. Moved 1e8 from the origin, the pcurve from
+    /// the samples and the boundary pcurve from the stored ends are proved,
+    /// and each lies within the tolerance of the stored arc between its
+    /// ends, read from the frame's origin. Moved 1e10, where one rounding
+    /// of a sample's coordinates passes the tolerance, the pcurve from the
+    /// samples is refused; the boundary pcurve, read from the stored ends
+    /// alone, stays proved within the tolerance of the shadow on the frame's
+    /// plane of its own arc, from its start round to its end (the frame's
+    /// origin and the ends round 1e-6 off the conic).
+    #[test]
+    fn a_conic_on_a_plane_far_from_the_origin_is_proved_or_refused() {
+        for (k, n) in plane_normals().into_iter().enumerate() {
+            for far in [1e8, 1e10] {
+                for r in [1e4, 1e-6] {
+                    let centre = Point3::new(far, -0.7 * far, 0.4 * far);
+                    let (surface, conics) = plane_conics(n, centre, r);
+                    for (what, curve, big_a, big_b) in conics {
+                        let at = |t: f64| match &curve {
+                            EdgeCurve::Circle(c) => c.evaluate(t),
+                            EdgeCurve::Ellipse(e) => e.evaluate(t),
+                            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => unreachable!(),
+                        };
+                        let read = |p: Point3| match &curve {
+                            EdgeCurve::Circle(c) => c.project(p),
+                            EdgeCurve::Ellipse(e) => e.project(p),
+                            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => unreachable!(),
+                        };
+                        let (a, b) = (at(0.4), at(1.7));
+                        let wire = [at(3.4), a, b];
+                        let frame = PlaneFrame::from_plane_face(n, &wire);
+                        let ta = read(a);
+                        let span = (ta, ta + shorter_arc_delta(read(b) - ta));
+                        let native = curve.domain_with_endpoints(a, b);
+                        let o = frame.origin();
+                        let edge = |t: f64| (centre - o) + big_a * t.cos() + big_b * t.sin();
+                        let normal = frame.u_axis().cross(frame.v_axis());
+                        let shadow = |t: f64| {
+                            let w = edge(t);
+                            w - normal * normal.dot(w)
+                        };
+                        let name = format!("{what} r {r:e} normal {k} moved {far:e}");
+                        let (samples, _) = sample_edge_via_frame(&curve, a, b, &frame);
+                        let proved = proved_conic_pcurve(&curve, &samples, &surface, Some(&frame));
+                        let boundary = plane_conic_arc(&curve, a, b, true, &frame)
+                            .unwrap_or_else(|| unreachable!("{name}: no boundary pcurve"));
+                        if far > 1e9 {
+                            assert!(proved.is_none(), "{name}: proved past one rounding");
+                            let off = plane_stray(&boundary, &frame, shadow, native);
+                            assert!(off <= 1e-7, "{name}: the boundary pcurve strays {off:e}");
+                            continue;
+                        }
+                        let proved =
+                            proved.unwrap_or_else(|| unreachable!("{name}: no proved pcurve"));
+                        for (way, pcurve, span) in
+                            [("samples", proved, span), ("boundary", boundary, native)]
+                        {
+                            let off = plane_stray(&pcurve, &frame, edge, span);
+                            assert!(off <= 1e-7, "{name} {way}: the pcurve strays {off:e}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// A quarter turn on a ball, a rod and a ring of size 1e4 moved 1e10
-    /// from the origin, where the proof refuses, gets its pcurve from the
-    /// fit, and the perf counters count it as unproved.
+    /// from the origin, and an arc of a circle and of an ellipse on a plane
+    /// moved as far, where the proof refuses, gets its pcurve from the fit,
+    /// and the perf counters count it as unproved.
     #[cfg(feature = "perf-counters")]
     #[test]
     fn a_pcurve_with_no_proof_is_counted() {
@@ -3029,6 +3210,22 @@ mod tests {
             let _ = compute_pcurve_on_surface(&curve, a, b, &surface, &[], None);
             let after = crate::perf::snapshot().unproved_pcurves;
             assert!(after > before, "{what}: the fit is not counted");
+        }
+        for n in plane_normals() {
+            let (surface, conics) = plane_conics(n, Point3::new(1e10, -7e9, 4e9), 1e4);
+            for (what, curve, _, _) in conics {
+                let at = |t: f64| match &curve {
+                    EdgeCurve::Circle(c) => c.evaluate(t),
+                    EdgeCurve::Ellipse(e) => e.evaluate(t),
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => unreachable!(),
+                };
+                let (a, b) = (at(0.4), at(1.7));
+                let wire = [at(3.4), a, b];
+                let before = crate::perf::snapshot().unproved_pcurves;
+                let _ = compute_pcurve_on_surface(&curve, a, b, &surface, &wire, None);
+                let after = crate::perf::snapshot().unproved_pcurves;
+                assert!(after > before, "plane {what}: the fit is not counted");
+            }
         }
     }
 
