@@ -3835,7 +3835,8 @@ struct ArrInput {
 /// their geometric midpoints (see the call site in
 /// [`split_plane_face_by_arrangement`]). Only section arcs with a colliding
 /// unordered chord-endpoint pair AND distinct midpoints are split; boundary
-/// edges and identical duplicates are left untouched.
+/// edges and identical duplicates are left untouched. A line between the
+/// same two ends collides with an arc too: its chord is the arc's chord.
 fn split_coendpoint_section_arc_inputs(inputs: &mut Vec<ArrInput>, frame: &PlaneFrame, tol: f64) {
     use std::collections::HashMap;
     type Q2 = (i64, i64);
@@ -3864,18 +3865,22 @@ fn split_coendpoint_section_arc_inputs(inputs: &mut Vec<ArrInput>, frame: &Plane
     };
     let mut pair_mids: HashMap<(Q2, Q2), Vec<Q2>> = HashMap::new();
     for inp in inputs.iter() {
-        if !(inp.is_section && inp.is_arc) {
-            continue;
-        }
-        let Some(mid) = arc_mid(&inp.edge) else {
+        let mid_uv = if matches!(inp.edge.curve_3d, EdgeCurve::Line) {
+            Point2::new(
+                f64::midpoint(inp.a.x(), inp.b.x()),
+                f64::midpoint(inp.a.y(), inp.b.y()),
+            )
+        } else if inp.is_section
+            && inp.is_arc
+            && let Some(mid) = arc_mid(&inp.edge)
+        {
+            frame.project(mid)
+        } else {
             continue;
         };
         let (a, b) = (q2(inp.a), q2(inp.b));
         let key = if a <= b { (a, b) } else { (b, a) };
-        pair_mids
-            .entry(key)
-            .or_default()
-            .push(q2(frame.project(mid)));
+        pair_mids.entry(key).or_default().push(q2(mid_uv));
     }
     let colliding: std::collections::HashSet<(Q2, Q2)> = pair_mids
         .into_iter()
@@ -16879,5 +16884,355 @@ mod tests {
         let split = split_with_an_arc_and_a_lone_circle(lone);
         assert_eq!(split.len(), 3);
         assert_eq!(split.iter().map(|p| p.inner_wires.len()).sum::<usize>(), 1);
+    }
+
+    /// A section on the 10 by 10 plate, in the plate's own coordinates.
+    #[derive(Clone, Copy, PartialEq)]
+    enum PlateCut {
+        Line((f64, f64), (f64, f64)),
+        /// The shorter arc about a centre, counter-clockwise from one point
+        /// to the next.
+        Arc((f64, f64), f64, (f64, f64), (f64, f64)),
+    }
+
+    /// The plate's frame in a pose: its origin and the images of its x and
+    /// y axes. A mirrored pose also lists the plate's corners the other way
+    /// round, so its face normal runs against its arcs' axes.
+    struct PlatePose {
+        origin: Point3,
+        x: Vec3,
+        y: Vec3,
+        mirrored: bool,
+    }
+
+    impl PlatePose {
+        fn at(&self, (x, y): (f64, f64)) -> Point3 {
+            self.origin + self.x * x + self.y * y
+        }
+
+        fn normal(&self) -> Vec3 {
+            self.x.cross(self.y)
+        }
+    }
+
+    fn turned(v: Vec3, axis: Vec3, angle: f64) -> Vec3 {
+        let a = axis.normalize().unwrap();
+        v * angle.cos() + a.cross(v) * angle.sin() + a * (a.dot(v) * (1.0 - angle.cos()))
+    }
+
+    /// Upright; turned and moved; and mirrored in its plane, turned and moved.
+    fn plate_poses() -> [PlatePose; 3] {
+        let (ex, ey) = (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
+        let a = Vec3::new(1.0, 2.0, 2.0);
+        let b = Vec3::new(-2.0, 1.0, 2.0);
+        [
+            PlatePose {
+                origin: Point3::new(0.0, 0.0, 0.0),
+                x: ex,
+                y: ey,
+                mirrored: false,
+            },
+            PlatePose {
+                origin: Point3::new(3.0, -7.0, 11.0),
+                x: turned(ex, a, 0.9),
+                y: turned(ey, a, 0.9),
+                mirrored: false,
+            },
+            PlatePose {
+                origin: Point3::new(-5.0, 2.0, 4.0),
+                x: turned(ex, b, 2.1),
+                y: -turned(ey, b, 2.1),
+                mirrored: true,
+            },
+        ]
+    }
+
+    /// Twice the signed area a wire of lines and circle arcs bounds about
+    /// `normal`, in closed form, and NaN for a wire with any other curve. An
+    /// arc runs counter-clockwise about its circle's normal from its stored
+    /// start to its stored end, as the face builder lays it: from `start_3d`
+    /// when forward, from `end_3d` when not.
+    fn twice_wire_area(wire: &[OrientedPCurveEdge], normal: Vec3) -> f64 {
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        wire.iter()
+            .map(|e| {
+                let (p, q) = (e.start_3d - origin, e.end_3d - origin);
+                match &e.curve_3d {
+                    EdgeCurve::Line => p.cross(q).dot(normal),
+                    EdgeCurve::Circle(c) => {
+                        let (a, b) = if e.forward {
+                            (e.start_3d, e.end_3d)
+                        } else {
+                            (e.end_3d, e.start_3d)
+                        };
+                        let sweep = if (a - b).length() < 1e-12 {
+                            std::f64::consts::TAU
+                        } else {
+                            (c.project(b) - c.project(a)).rem_euclid(std::f64::consts::TAU)
+                        };
+                        let turn = if e.forward { sweep } else { -sweep };
+                        let r = c.radius();
+                        (c.center() - origin).cross(q - p).dot(normal)
+                            + r * r * turn * c.normal().dot(normal)
+                    }
+                    EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => f64::NAN,
+                }
+            })
+            .sum()
+    }
+
+    /// The 10 by 10 plate in `pose`, with square holes (each its lower left
+    /// corner and side), and `cuts` as its sections.
+    fn plate_with_cuts(
+        pose: &PlatePose,
+        cuts: &[PlateCut],
+        holes: &[((f64, f64), f64)],
+    ) -> (Topology, FaceId, Vec<SectionEdge>) {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_topology::builder::{make_planar_face, make_polygon_wire};
+
+        let mut topo = Topology::new();
+        let mut corners: Vec<Point3> = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+            .iter()
+            .map(|&p| pose.at(p))
+            .collect();
+        if pose.mirrored {
+            corners.reverse();
+        }
+        let face = make_planar_face(&mut topo, &corners, 1e-7).unwrap();
+        for &((x, y), side) in holes {
+            let mut square: Vec<Point3> =
+                [(x, y), (x, y + side), (x + side, y + side), (x + side, y)]
+                    .iter()
+                    .map(|&p| pose.at(p))
+                    .collect();
+            if pose.mirrored {
+                square.reverse();
+            }
+            let hole = make_polygon_wire(&mut topo, &square, 1e-7).unwrap();
+            topo.face_mut(face).unwrap().inner_wires_mut().push(hole);
+        }
+        let sections = cuts
+            .iter()
+            .map(|cut| {
+                let (curve_3d, start, end) = match *cut {
+                    PlateCut::Line(a, b) => (EdgeCurve::Line, pose.at(a), pose.at(b)),
+                    PlateCut::Arc(c, r, a, b) => {
+                        let circle =
+                            Circle3D::with_axes(pose.at(c), pose.normal(), r, pose.x, pose.y)
+                                .unwrap();
+                        (EdgeCurve::Circle(circle), pose.at(a), pose.at(b))
+                    }
+                };
+                SectionEdge {
+                    curve_3d,
+                    start,
+                    end,
+                    ..line_section(start, end)
+                }
+            })
+            .collect();
+        (topo, face, sections)
+    }
+
+    /// Each piece's area, its outer wire's less its holes', sorted. Each
+    /// wire must close edge to edge.
+    fn piece_areas(pieces: &[SplitSubFace], normal: Vec3) -> Vec<f64> {
+        let mut areas: Vec<f64> = pieces
+            .iter()
+            .map(|piece| {
+                for wire in std::iter::once(&piece.outer_wire).chain(&piece.inner_wires) {
+                    for (k, e) in wire.iter().enumerate() {
+                        let next = &wire[(k + 1) % wire.len()];
+                        assert!(
+                            (e.end_3d - next.start_3d).length() < 1e-9,
+                            "a wire breaks at {:?}",
+                            e.end_3d
+                        );
+                    }
+                }
+                let holes: f64 = piece
+                    .inner_wires
+                    .iter()
+                    .map(|w| twice_wire_area(w, normal).abs())
+                    .sum();
+                0.5 * (twice_wire_area(&piece.outer_wire, normal).abs() - holes)
+            })
+            .collect();
+        areas.sort_by(f64::total_cmp);
+        areas
+    }
+
+    fn assert_areas(areas: &[f64], expected: &[f64], label: &str) {
+        let mut expected = expected.to_vec();
+        expected.sort_by(f64::total_cmp);
+        assert!(
+            areas.len() == expected.len()
+                && areas
+                    .iter()
+                    .zip(&expected)
+                    .all(|(a, e)| (a - e).abs() < 1e-9),
+            "{label}: pieces of area {areas:?}, expected {expected:?}"
+        );
+    }
+
+    /// The arc about (5, 4) of radius root 2 from (6, 5) to (4, 5), the arc
+    /// about (5, 6) bulging the other way, and the line between their ends.
+    fn arcs_and_chord() -> (PlateCut, PlateCut, PlateCut) {
+        use std::f64::consts::SQRT_2;
+        (
+            PlateCut::Arc((5.0, 4.0), SQRT_2, (6.0, 5.0), (4.0, 5.0)),
+            PlateCut::Arc((5.0, 6.0), SQRT_2, (4.0, 5.0), (6.0, 5.0)),
+            PlateCut::Line((4.0, 5.0), (6.0, 5.0)),
+        )
+    }
+
+    /// The plate's arrangement reads an arc and the line between its ends as
+    /// two edges, in either order, so the segment between them is a region:
+    /// on a line across the plate with the arc on either side, with an arc on
+    /// each side, and with the rest of the arc's circle in two arcs; and with
+    /// two lines from the chord's ends to the rim.
+    #[test]
+    fn the_arrangement_keeps_an_arc_apart_from_its_chord() {
+        use std::f64::consts::{FRAC_PI_2, PI, SQRT_2};
+        let segment = FRAC_PI_2 - 1.0;
+        let disc_below = 2.0 * PI - segment;
+        let (up, down, chord) = arcs_and_chord();
+        let left = PlateCut::Line((0.0, 5.0), (4.0, 5.0));
+        let right = PlateCut::Line((6.0, 5.0), (10.0, 5.0));
+        let to_apex = PlateCut::Line((6.0, 5.0), (5.0, 10.0));
+        let from_apex = PlateCut::Line((5.0, 10.0), (4.0, 5.0));
+        let bottom = (5.0, 4.0 - SQRT_2);
+        let rest_a = PlateCut::Arc((5.0, 4.0), SQRT_2, (4.0, 5.0), bottom);
+        let rest_b = PlateCut::Arc((5.0, 4.0), SQRT_2, bottom, (6.0, 5.0));
+        let cases = [
+            (
+                vec![up, chord, right, left],
+                vec![segment, 50.0 - segment, 50.0],
+            ),
+            (
+                vec![down, chord, right, left],
+                vec![segment, 50.0 - segment, 50.0],
+            ),
+            (
+                vec![up, chord, to_apex, from_apex],
+                vec![segment, 5.0 - segment, 95.0],
+            ),
+            (
+                vec![up, down, chord, right, left],
+                vec![segment, segment, 50.0 - segment, 50.0 - segment],
+            ),
+            (
+                vec![up, rest_a, rest_b, chord, right, left],
+                vec![segment, disc_below, 50.0 - segment, 50.0 - disc_below],
+            ),
+        ];
+        for (k, (cuts, expected)) in cases.iter().enumerate() {
+            for (i, pose) in plate_poses().iter().enumerate() {
+                for chord_first in [false, true] {
+                    let mut cuts = cuts.clone();
+                    if chord_first {
+                        let at = cuts.iter().position(|c| *c == chord).unwrap();
+                        let line = cuts.remove(at);
+                        cuts.insert(0, line);
+                    }
+                    let (topo, face_id, sections) = plate_with_cuts(pose, &cuts, &[]);
+                    let face = topo.face(face_id).unwrap();
+                    let surface = face.surface().clone();
+                    let wire_pts = collect_wire_points(&topo, face.outer_wire());
+                    let frame =
+                        PlaneFrame::from_plane_face(extract_plane_normal(&surface), &wire_pts);
+                    let boundary = boundary_edges_to_pcurve(
+                        &topo,
+                        face.outer_wire(),
+                        &surface,
+                        &wire_pts,
+                        Some(&frame),
+                    );
+                    let pieces = split_plane_face_by_arrangement(
+                        &surface,
+                        &boundary,
+                        &sections,
+                        Rank::A,
+                        false,
+                        face_id,
+                        &frame,
+                        1e-7,
+                        None,
+                    )
+                    .unwrap();
+                    assert_areas(
+                        &piece_areas(&pieces, pose.normal()),
+                        expected,
+                        &format!("case {k}, pose {i}, chord first {chord_first}"),
+                    );
+                }
+            }
+        }
+    }
+
+    /// An arc and its chord whose ends meet the rest of the cut, which runs to
+    /// the plate's rim, split the plate with the segment between them as a
+    /// piece of its own: a line across the plate through the chord, with the
+    /// arc on either side, and two lines from the chord's ends to the rim.
+    #[test]
+    fn an_arc_and_its_chord_meeting_the_rim_split_off_their_segment() {
+        use std::f64::consts::FRAC_PI_2;
+        let segment = FRAC_PI_2 - 1.0;
+        let (up, down, chord) = arcs_and_chord();
+        let left = PlateCut::Line((0.0, 5.0), (4.0, 5.0));
+        let right = PlateCut::Line((6.0, 5.0), (10.0, 5.0));
+        let to_apex = PlateCut::Line((6.0, 5.0), (5.0, 10.0));
+        let from_apex = PlateCut::Line((5.0, 10.0), (4.0, 5.0));
+        // Each case's pieces, without and with a unit square hole at (1, 1).
+        let cases = [
+            (
+                vec![up, chord, right, left],
+                [segment, 50.0 - segment, 50.0],
+                [segment, 50.0 - segment, 49.0],
+            ),
+            (
+                vec![down, chord, right, left],
+                [segment, 50.0 - segment, 50.0],
+                [segment, 49.0 - segment, 50.0],
+            ),
+            (
+                vec![up, chord, to_apex, from_apex],
+                [segment, 5.0 - segment, 95.0],
+                [segment, 5.0 - segment, 94.0],
+            ),
+        ];
+        for (k, (cuts, whole, holed)) in cases.iter().enumerate() {
+            for (holes, expected) in [(vec![], whole), (vec![((1.0, 1.0), 1.0)], holed)] {
+                for (i, pose) in plate_poses().iter().enumerate() {
+                    for chord_first in [false, true] {
+                        let mut cuts = cuts.clone();
+                        if chord_first {
+                            let at = cuts.iter().position(|c| *c == chord).unwrap();
+                            let line = cuts.remove(at);
+                            cuts.insert(0, line);
+                        }
+                        let (topo, face, sections) = plate_with_cuts(pose, &cuts, &holes);
+                        let pieces = split_face_2d(
+                            &topo,
+                            face,
+                            &sections,
+                            Rank::A,
+                            &brepkit_math::tolerance::Tolerance::new(),
+                            None,
+                            None,
+                            &std::collections::HashMap::new(),
+                            &std::collections::BTreeSet::new(),
+                            None,
+                        );
+                        let label = format!(
+                            "case {k}, holes {}, pose {i}, chord first {chord_first}",
+                            holes.len()
+                        );
+                        assert_areas(&piece_areas(&pieces, pose.normal()), expected, &label);
+                    }
+                }
+            }
+        }
     }
 }
