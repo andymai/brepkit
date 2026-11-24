@@ -4294,6 +4294,38 @@ fn trim_closed_curve_to_inboth_arc(
     }
 }
 
+/// The parameter of the point of a closed curve nearest `p`, searched about
+/// the nearest of the samples `ts` (which run from one end of the curve's
+/// range to the other). The first and last samples are one point at the
+/// seam, so a point next to it is searched for after the start and before
+/// the end, and the nearer of the two is kept.
+fn parameter_nearest(point_at: &dyn Fn(f64) -> Point3, ts: &[f64], p: Point3) -> Option<f64> {
+    let last = ts.len().checked_sub(1).filter(|&n| n > 0)?;
+    let off = |t: f64| (point_at(t) - p).length();
+    let nearest = (0..=last).min_by(|&i, &j| off(ts[i]).total_cmp(&off(ts[j])))?;
+    let search = |mut a: f64, mut b: f64| {
+        for _ in 0..60 {
+            let m1 = a + (b - a) / 3.0;
+            let m2 = b - (b - a) / 3.0;
+            if off(m1) < off(m2) {
+                b = m2;
+            } else {
+                a = m1;
+            }
+        }
+        f64::midpoint(a, b)
+    };
+    if nearest == 0 || nearest == last {
+        let (after, before) = (search(ts[0], ts[1]), search(ts[last - 1], ts[last]));
+        return Some(if off(before) < off(after) {
+            before
+        } else {
+            after
+        });
+    }
+    Some(search(ts[nearest - 1], ts[nearest + 1]))
+}
+
 /// A closed marched section cut at the pair's boundary crossings that lie
 /// on it, with each piece kept whose middle lies on both faces. The section
 /// leaves a face only across the face's outline, where the outline meets
@@ -4323,25 +4355,9 @@ fn split_closed_section_at_crossings(
     let ts: Vec<f64> = (0..=SAMPLES)
         .map(|i| span.madd(i as f64 / SAMPLES as f64, lo))
         .collect();
-    let pts: Vec<Point3> = ts.iter().map(|&t| point_at(t)).collect();
     let mut cuts: Vec<(f64, Point3)> = Vec::new();
     for &p in crossings {
-        let nearest = (0..=SAMPLES)
-            .min_by(|&i, &j| (pts[i] - p).length().total_cmp(&(pts[j] - p).length()))?;
-        let (mut a, mut b) = (
-            ts[nearest.saturating_sub(1)],
-            ts[(nearest + 1).min(SAMPLES)],
-        );
-        for _ in 0..60 {
-            let m1 = a + (b - a) / 3.0;
-            let m2 = b - (b - a) / 3.0;
-            if (point_at(m1) - p).length() < (point_at(m2) - p).length() {
-                b = m2;
-            } else {
-                a = m1;
-            }
-        }
-        let s = f64::midpoint(a, b);
+        let s = parameter_nearest(&point_at, &ts, p)?;
         if (point_at(s) - p).length() > 100.0 * tol.linear
             || cuts
                 .iter()
@@ -11329,6 +11345,46 @@ fn piece_side(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+
+    /// On a closed rational unit circle sampled 512 times from 0 to 1, the
+    /// points at 0.99999 and at 0.00001 are both nearest the sample at the
+    /// seam. Each is found on its own side of the seam, to within rounding.
+    #[test]
+    fn a_point_beside_a_closed_curves_seam_is_found_on_its_side() {
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        let corners = [
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (0.0, 1.0),
+            (-1.0, 1.0),
+            (-1.0, 0.0),
+            (-1.0, -1.0),
+            (0.0, -1.0),
+            (1.0, -1.0),
+            (1.0, 0.0),
+        ];
+        let circle = brepkit_math::nurbs::curve::NurbsCurve::new(
+            2,
+            vec![
+                0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+            ],
+            corners
+                .iter()
+                .map(|&(x, y)| Point3::new(x, y, 0.0))
+                .collect(),
+            vec![1.0, s, 1.0, s, 1.0, s, 1.0, s, 1.0],
+        )
+        .unwrap();
+        let point_at = |t: f64| circle.evaluate(t);
+        #[allow(clippy::cast_precision_loss)]
+        let ts: Vec<f64> = (0..=512).map(|i| i as f64 / 512.0).collect();
+        for t in [0.99999, 0.00001] {
+            let p = point_at(t);
+            let found = parameter_nearest(&point_at, &ts, p).unwrap();
+            assert!((found - t).abs() < 1e-9, "{found} against {t}");
+            assert!((point_at(found) - p).length() < 1e-12, "{found}");
+        }
+    }
 
     /// An arc of a long thin ellipse across the tip of its major axis is
     /// slow at its middle and fast at its ends: over 8e-7 radians about the
