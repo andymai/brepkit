@@ -431,6 +431,25 @@ fn try_link(
     if !curves_compatible(section_curve, boundary_curve, tol) {
         return false;
     }
+    // On one circle, two blocks with the same ends cover one arc or the two
+    // arcs between those ends.
+    let boundary_span = boundary_pb.parameter_range();
+    let Some(section_span) = arena
+        .pave_blocks
+        .get(section_pb_id)
+        .map(PaveBlock::parameter_range)
+    else {
+        return false;
+    };
+    if !super::force_interf_ee::one_arc(
+        section_curve,
+        section_span,
+        boundary_curve,
+        boundary_span,
+        tol,
+    ) {
+        return false;
+    }
 
     if let Some(&cb_id) = arena.pb_to_cb.get(&boundary_pb_id) {
         if let Some(cb) = arena.common_blocks.get_mut(cb_id) {

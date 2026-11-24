@@ -14039,7 +14039,7 @@ fn spans_apart((a0, ad): (f64, f64), (b0, bd): (f64, f64)) -> f64 {
 /// into an arc of `p`. That arc's ends lie within the span gap
 /// ([`spans_apart`]) of `p`'s arc's ends along `p`, so the two arcs of `p`
 /// lie within `r_p` times that gap of each other.
-fn circle_arcs_apart(
+pub fn circle_arcs_apart(
     p: &brepkit_math::curves::Circle3D,
     pa: (f64, f64),
     q: &brepkit_math::curves::Circle3D,
@@ -14076,7 +14076,7 @@ fn circle_arcs_apart(
 /// `p`'s point at `t`. The arc of `p` over the matching span then lies within
 /// `a_p` times the span gap ([`spans_apart`]) of `p`'s own arc. The least
 /// bound over the four sign pairs stands.
-fn ellipse_arcs_apart(
+pub fn ellipse_arcs_apart(
     p: &brepkit_math::curves::Ellipse3D,
     pa: (f64, f64),
     q: &brepkit_math::curves::Ellipse3D,

@@ -18,8 +18,8 @@ use crate::error::AlgoError;
 ///
 /// Two leaf PaveBlocks from different original edges overlap if:
 /// 1. Their start/end vertex positions are within tolerance
-/// 2. Their edge curves have compatible geometry (same line direction,
-///    same circle, etc.)
+/// 2. They cover one span of one curve (one line, or one arc of one
+///    circle: an arc and the rest of its circle share their ends)
 ///
 /// # Errors
 ///
@@ -142,10 +142,20 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
 
                         let curve_i = topo.edge(edge_i)?.curve();
                         let curve_j = topo.edge(edge_j)?.curve();
-                        let compatible = match curves_compatible(curve_i, curve_j, tol) {
-                            Some(compatible) => compatible,
-                            None => block_lies_on_block(topo, arena, pb_i, pb_j, tol)?,
+                        let span = |pb: PaveBlockId| {
+                            arena
+                                .pave_blocks
+                                .get(pb)
+                                .map(crate::ds::PaveBlock::parameter_range)
                         };
+                        let (Some(span_i), Some(span_j)) = (span(pb_i), span(pb_j)) else {
+                            continue;
+                        };
+                        let compatible =
+                            match curves_compatible(curve_i, span_i, curve_j, span_j, tol) {
+                                Some(compatible) => compatible,
+                                None => block_lies_on_block(topo, arena, pb_i, pb_j, tol)?,
+                            };
                         if !compatible {
                             continue;
                         }
@@ -195,10 +205,22 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
     Ok(())
 }
 
-/// Whether two edge curves of one type are the same curve, from their
-/// parameters. `None` for a pair that has no such test: the blocks then
-/// decide, in [`block_lies_on_block`].
-fn curves_compatible(a: &EdgeCurve, b: &EdgeCurve, tol: Tolerance) -> Option<bool> {
+/// Whether two blocks, over `span_a` of edge curve `a` and `span_b` of `b`
+/// (each from its start's parameter to its end's), whose ends meet, are one
+/// curve over one span, from the curves' parameters and the spans. `None`
+/// for a pair that has no such test: the blocks then decide, in
+/// [`block_lies_on_block`].
+///
+/// Two blocks on one circle or ellipse with the same ends cover either one
+/// arc or the two arcs between those ends, so they are one only where
+/// [`one_arc`] says so.
+fn curves_compatible(
+    a: &EdgeCurve,
+    span_a: (f64, f64),
+    b: &EdgeCurve,
+    span_b: (f64, f64),
+    tol: Tolerance,
+) -> Option<bool> {
     // Exhaustive match — no wildcards per CLAUDE.md convention.
     // Adding a new EdgeCurve variant will require updating this match.
     match (a, b) {
@@ -206,13 +228,15 @@ fn curves_compatible(a: &EdgeCurve, b: &EdgeCurve, tol: Tolerance) -> Option<boo
         (EdgeCurve::Circle(ca), EdgeCurve::Circle(cb)) => Some(
             (ca.radius() - cb.radius()).abs() < tol.linear
                 && (ca.center() - cb.center()).length() < tol.linear
-                && ca.normal().dot(cb.normal()).abs() > 1.0 - tol.angular,
+                && ca.normal().dot(cb.normal()).abs() > 1.0 - tol.angular
+                && one_arc(a, span_a, b, span_b, tol),
         ),
         (EdgeCurve::Ellipse(ea), EdgeCurve::Ellipse(eb)) => Some(
             (ea.semi_major() - eb.semi_major()).abs() < tol.linear
                 && (ea.semi_minor() - eb.semi_minor()).abs() < tol.linear
                 && (ea.center() - eb.center()).length() < tol.linear
-                && ea.normal().dot(eb.normal()).abs() > 1.0 - tol.angular,
+                && ea.normal().dot(eb.normal()).abs() > 1.0 - tol.angular
+                && one_arc(a, span_a, b, span_b, tol),
         ),
         // A B-spline can be the same curve as another B-spline with other
         // poles, or as a line, a circle or an ellipse.
@@ -236,6 +260,61 @@ fn curves_compatible(a: &EdgeCurve, b: &EdgeCurve, tol: Tolerance) -> Option<boo
             | EdgeCurve::NurbsCurve(_),
         ) => None,
     }
+}
+
+/// How far apart, in linear tolerances, [`arcs_apart`] may hold two blocks
+/// that are one arc. Their ends meet within one tolerance, and the gates of
+/// [`curves_compatible`] hold the curves' centres and sizes within one each,
+/// so the bound reads under the ends' tolerance and twice the curves' offset.
+const ARC_BAND: f64 = 6.0;
+
+/// Whether the block over `span_a` of edge curve `a` and the block over
+/// `span_b` of `b`, on circles or ellipses taken for one curve, are one arc:
+/// where [`arcs_apart`] holds them within [`ARC_BAND`] tolerances along their
+/// whole length. Blocks on other curves pass.
+pub(super) fn one_arc(
+    a: &EdgeCurve,
+    span_a: (f64, f64),
+    b: &EdgeCurve,
+    span_b: (f64, f64),
+    tol: Tolerance,
+) -> bool {
+    let conic = |c: &EdgeCurve| matches!(c, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_));
+    !(conic(a) && conic(b))
+        || arcs_apart(a, span_a, b, span_b).is_some_and(|d| d <= ARC_BAND * tol.linear)
+}
+
+/// A bound on how far apart the arc of circle or ellipse `a` over `span_a`
+/// and the arc of `b` over `span_b` lie along their whole length, each read
+/// on its form with unit, square axes, that form's gap added. Two whole
+/// turns are each the whole curve, so `a`'s is read from its point nearest
+/// the start of `b`'s. `None` for other curves, or where no bound holds.
+fn arcs_apart(a: &EdgeCurve, span_a: (f64, f64), b: &EdgeCurve, span_b: (f64, f64)) -> Option<f64> {
+    use crate::builder::face_splitter::{circle_arcs_apart, ellipse_arcs_apart};
+    use crate::builder::pcurve_compute::{unit_conic, unit_conic_arc_gap};
+    let (unit_a, gap_a) = unit_conic(a)?;
+    let (unit_b, gap_b) = unit_conic(b)?;
+    let sweep = |(t0, t1): (f64, f64)| (t0, t1 - t0);
+    let whole = |(t0, t1): (f64, f64)| (t1 - t0).abs() >= std::f64::consts::TAU - 1e-9;
+    let (a0, a_sweep) = sweep(span_a);
+    let from = |nearest: f64| {
+        if whole(span_a) && whole(span_b) {
+            (nearest, a_sweep)
+        } else {
+            (a0, a_sweep)
+        }
+    };
+    let bound = if let (EdgeCurve::Circle(p), EdgeCurve::Circle(q)) = (&*unit_a, &*unit_b) {
+        let nearest = p.project(q.evaluate(span_b.0));
+        circle_arcs_apart(p, from(nearest), q, sweep(span_b))
+    } else if let (EdgeCurve::Ellipse(p), EdgeCurve::Ellipse(q)) = (&*unit_a, &*unit_b) {
+        let nearest = p.project(q.evaluate(span_b.0));
+        ellipse_arcs_apart(p, from(nearest), q, sweep(span_b))
+    } else {
+        return None;
+    };
+    let bound = bound + unit_conic_arc_gap(gap_a) + unit_conic_arc_gap(gap_b);
+    (!bound.is_nan()).then_some(bound)
 }
 
 /// Whether the parts of their edges' curves that two blocks cover are one
@@ -488,6 +567,126 @@ mod tests {
                 EdgeCurve::NurbsCurve(quarter.clone()),
             );
             assert_eq!(common_blocks(&topo, &mut arena), common);
+        }
+    }
+
+    /// The frames the arcs below lie in: upright, turned about a slant axis
+    /// and moved, and that turn mirrored in the plane `x = 0`. Each is its
+    /// origin and two square unit axes.
+    fn frames() -> [(&'static str, Point3, Vec3, Vec3); 3] {
+        let axis = Vec3::new(1.0, 2.0, 3.0).normalize().unwrap();
+        let (sin, cos) = 0.7f64.sin_cos();
+        let turn = |e: Vec3| e * cos + axis.cross(e) * sin + axis * (axis.dot(e) * (1.0 - cos));
+        let mirror = |e: Vec3| Vec3::new(-e.x(), e.y(), e.z());
+        let (u, v) = (
+            turn(Vec3::new(1.0, 0.0, 0.0)),
+            turn(Vec3::new(0.0, 1.0, 0.0)),
+        );
+        let o = Point3::new(3.0, -2.0, 5.0);
+        [
+            (
+                "upright",
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ),
+            ("turned", o, u, v),
+            (
+                "mirrored",
+                Point3::new(-o.x(), o.y(), o.z()),
+                mirror(u),
+                mirror(v),
+            ),
+        ]
+    }
+
+    /// Two whole edges between one pair of points on one circle of radius 2,
+    /// in each frame: the arc of a sixth of a turn and the rest of the
+    /// circle, stored from the arc's end or from its start about the reversed
+    /// normal, and the two halves of the circle, are two curves. The arc and
+    /// its copy, stored either way round, are one.
+    #[test]
+    fn an_arc_and_the_rest_of_its_circle_are_not_common() {
+        use std::f64::consts::PI;
+        for (frame, o, u, v) in frames() {
+            let normal = u.cross(v);
+            let centre = o + u * 5.0 + v * 5.0;
+            let up = Circle3D::with_axes(centre, normal, 2.0, u, v).unwrap();
+            let down = Circle3D::with_axes(centre, -normal, 2.0, u, -v).unwrap();
+            let at = |t: f64| up.evaluate(t);
+            let (p, q, opposite) = (at(0.2), at(0.2 + PI / 3.0), at(0.2 + PI));
+            let cases = [
+                ("the rest from the arc's end", (p, q, &up), (q, p, &up), 0),
+                (
+                    "the rest about the reversed normal",
+                    (p, q, &up),
+                    (p, q, &down),
+                    0,
+                ),
+                ("the two halves", (p, opposite, &up), (opposite, p, &up), 0),
+                ("a copy", (p, q, &up), (p, q, &up), 1),
+                (
+                    "a copy about the reversed normal",
+                    (p, q, &up),
+                    (q, p, &down),
+                    1,
+                ),
+            ];
+            for (what, first, second, common) in cases {
+                let mut topo = Topology::new();
+                let mut arena = GfaArena::new();
+                for (from, to, circle) in [first, second] {
+                    whole_edge(
+                        &mut topo,
+                        &mut arena,
+                        from,
+                        to,
+                        EdgeCurve::Circle(circle.clone()),
+                    );
+                }
+                assert_eq!(common_blocks(&topo, &mut arena), common, "{frame}: {what}");
+            }
+        }
+    }
+
+    /// An ellipse of semi-axes 3 and 1 in each frame, and the same ellipse
+    /// turned a quarter in its plane: they cross at `(s, s)` and `(-s, s)`,
+    /// `s = 3 / sqrt(10)`, and between those points the first runs through
+    /// `(0, 1)` and the second through `(0, 3)`. Each arc and the first's
+    /// rest are two curves; the first's arc and its copy are one.
+    #[test]
+    fn arcs_of_two_ellipses_or_of_one_ellipse_and_its_rest_are_not_common() {
+        use brepkit_math::curves::Ellipse3D;
+        for (frame, o, u, v) in frames() {
+            let normal = u.cross(v);
+            let first = Ellipse3D::with_axes(o, normal, 3.0, 1.0, u, v).unwrap();
+            let turned = Ellipse3D::with_axes(o, normal, 3.0, 1.0, v, -u).unwrap();
+            let s = 3.0 / 10.0f64.sqrt();
+            let (p, q) = (o + (u + v) * s, o + (v - u) * s);
+            for e in [&first, &turned] {
+                for x in [p, q] {
+                    assert!((e.evaluate(e.project(x)) - x).length() < 1e-12);
+                }
+            }
+            let cases = [
+                ("the turned ellipse", (p, q, &first), (p, q, &turned), 0),
+                ("the rest", (p, q, &first), (q, p, &first), 0),
+                ("a copy", (p, q, &first), (p, q, &first), 1),
+            ];
+            for (what, a, b, common) in cases {
+                let mut topo = Topology::new();
+                let mut arena = GfaArena::new();
+                for (from, to, ellipse) in [a, b] {
+                    whole_edge(
+                        &mut topo,
+                        &mut arena,
+                        from,
+                        to,
+                        EdgeCurve::Ellipse(ellipse.clone()),
+                    );
+                }
+                assert_eq!(common_blocks(&topo, &mut arena), common, "{frame}: {what}");
+            }
         }
     }
 }
