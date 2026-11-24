@@ -15,8 +15,8 @@ use crate::error::AlgoError;
 /// How many times a piece of a side is halved at most.
 const MOST_DEPTH: u32 = 24;
 
-/// How many pairs of pieces one pair of sides may take up, as found and as
-/// halved.
+/// How many pairs one pair of sides may read: pairs of runs of pieces, of
+/// pieces, and of their halves.
 const MOST_PAIRS: usize = 1 << 14;
 
 /// The angle, in radians, by which the rounding of a direction's
@@ -68,8 +68,8 @@ pub fn face_reach(topo: &Topology, face: &Face, tol: Tolerance) -> Result<f64, A
 /// The control points are rounded blends of the surface's, whose sizes the
 /// weights scale by their ratio, and each halving blends them again: each
 /// lies within [`MOST_DEPTH`] such roundings of its exact place. Pieces
-/// whose boxes need more halvings to part, two sides that take up more than
-/// [`MOST_PAIRS`] pairs of pieces, two pieces away from a shared corner
+/// whose boxes need more halvings to part, two sides that read more than
+/// [`MOST_PAIRS`] pairs, two pieces away from a shared corner
 /// whose ends come within `reach` and the rounding, or a weight that is not
 /// a positive normal float, read as not apart.
 pub fn sides_are_apart(surface: &NurbsSurface, reach: f64) -> bool {
@@ -237,36 +237,46 @@ fn apart(a: &[Net], b: &[Net], shared: bool, margin: f64, slack: f64) -> bool {
     apart_counted(a, b, shared, margin, slack).0
 }
 
-/// [`apart`], and how many pairs of pieces it took up. Each pair of pieces
-/// whose boxes come within `margin`, as found and as halved, takes one of
-/// [`MOST_PAIRS`]; past them the sides read as not apart. A pair borrows
-/// the sides' own pieces until it halves them.
+/// [`apart`], and how many pairs it read. Each side's pieces are held in a
+/// [`BoxTree`], and pairs of its nodes are read from the two roots down: a
+/// pair whose boxes keep farther than `margin` apart is dropped, else the
+/// node with the larger box is split, until both are single pieces, which
+/// are then halved as their own pairs. Each pair read takes one of
+/// [`MOST_PAIRS`]; past them the sides read as not apart. A pair of pieces
+/// borrows the sides' own pieces until it halves them.
 fn apart_counted(a: &[Net], b: &[Net], shared: bool, margin: f64, slack: f64) -> (bool, usize) {
     use std::borrow::Cow;
     type Pair<'a> = (Cow<'a, [[f64; 4]]>, Cow<'a, [[f64; 4]]>, bool, u32);
-    if let (Some(x), Some(y)) = (whole_box(a), whole_box(b))
-        && gap(x, y) > margin
-    {
-        return (true, 0);
-    }
-    let boxes_b: Vec<Aabb3> = b.iter().map(|n| net_box(n)).collect();
+    let (Some((ta, root_a)), Some((tb, root_b))) = (BoxTree::of(a), BoxTree::of(b)) else {
+        return (false, 0);
+    };
     let mut work: Vec<Pair<'_>> = Vec::new();
     let mut taken = 0_usize;
-    for (i, x) in a.iter().enumerate() {
-        let bx = net_box(x);
-        for (j, y) in b.iter().enumerate() {
-            if gap(bx, boxes_b[j]) <= margin {
-                if taken == MOST_PAIRS {
-                    return (false, taken);
-                }
-                taken += 1;
+    let mut nodes = vec![(root_a, root_b)];
+    while let Some((x, y)) = nodes.pop() {
+        if taken == MOST_PAIRS {
+            return (false, taken);
+        }
+        taken += 1;
+        let (nx, ny) = (&ta.nodes[x], &tb.nodes[y]);
+        if gap(nx.held, ny.held) > margin {
+            continue;
+        }
+        let larger = (nx.held.max - nx.held.min).length() >= (ny.held.max - ny.held.min).length();
+        match (nx.halves, ny.halves) {
+            (None, None) => {
+                let (i, j) = (nx.first, ny.first);
                 work.push((
-                    Cow::Borrowed(x.as_slice()),
-                    Cow::Borrowed(y.as_slice()),
+                    Cow::Borrowed(a[i].as_slice()),
+                    Cow::Borrowed(b[j].as_slice()),
                     shared && i == 0 && j == 0,
                     0,
                 ));
             }
+            (Some((l, r)), None) => nodes.extend([(l, y), (r, y)]),
+            (None, Some((l, r))) => nodes.extend([(x, l), (x, r)]),
+            (Some((l, r)), Some(_)) if larger => nodes.extend([(l, y), (r, y)]),
+            (Some(_), Some((l, r))) => nodes.extend([(x, l), (x, r)]),
         }
     }
     while let Some((x, y, corner, depth)) = work.pop() {
@@ -301,6 +311,54 @@ fn apart_counted(a: &[Net], b: &[Net], shared: bool, margin: f64, slack: f64) ->
         }
     }
     (true, taken)
+}
+
+/// The boxes of a run of Bezier pieces, halved down to single pieces: each
+/// node holds the box of its pieces' boxes, and its two halves where it
+/// holds more than one piece.
+struct BoxTree {
+    nodes: Vec<BoxNode>,
+}
+
+/// A node of a [`BoxTree`].
+struct BoxNode {
+    /// The first piece the node holds.
+    first: usize,
+    held: Aabb3,
+    halves: Option<(usize, usize)>,
+}
+
+impl BoxTree {
+    /// The tree of `pieces`, and its root. `None` for no piece.
+    fn of(pieces: &[Net]) -> Option<(Self, usize)> {
+        let boxes: Vec<Aabb3> = pieces.iter().map(|n| net_box(n)).collect();
+        if boxes.is_empty() {
+            return None;
+        }
+        let mut tree = Self {
+            nodes: Vec::with_capacity(2 * boxes.len()),
+        };
+        let root = tree.grow(&boxes, 0, boxes.len());
+        Some((tree, root))
+    }
+
+    /// Adds the node of pieces `lo` to `hi`, after its halves, and returns
+    /// its place.
+    fn grow(&mut self, boxes: &[Aabb3], lo: usize, hi: usize) -> usize {
+        let (held, halves) = if hi - lo == 1 {
+            (boxes[lo], None)
+        } else {
+            let mid = lo + (hi - lo) / 2;
+            let (l, r) = (self.grow(boxes, lo, mid), self.grow(boxes, mid, hi));
+            (self.nodes[l].held.union(self.nodes[r].held), Some((l, r)))
+        };
+        self.nodes.push(BoxNode {
+            first: lo,
+            held,
+            halves,
+        });
+        self.nodes.len() - 1
+    }
 }
 
 /// `piece` halved where `cut`, else whole.
@@ -624,6 +682,53 @@ pub mod tests {
             vec![vec![1.0; spans + 1]; 3],
         )
         .unwrap()
+    }
+
+    /// A bilinear strip of `spans` knot spans along `v` whose sides at
+    /// `u = 0` and `u = 1` run along the diagonals `(t, t, 0)` and
+    /// `(t, t + 0.1, 0)` for `t` from 0 to 1: the sides' boxes overlap, but
+    /// no piece of one comes near a piece of the other.
+    pub fn diagonal_strip(spans: usize) -> NurbsSurface {
+        #[allow(clippy::cast_precision_loss)]
+        let side = |y: f64| -> Vec<Point3> {
+            (0..=spans)
+                .map(|k| {
+                    let t = k as f64 / spans as f64;
+                    Point3::new(t, t + y, 0.0)
+                })
+                .collect()
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let knots: Vec<f64> = std::iter::once(0.0)
+            .chain((0..=spans).map(|k| k as f64 / spans as f64))
+            .chain(std::iter::once(1.0))
+            .collect();
+        NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            knots,
+            vec![side(0.0), side(0.1)],
+            vec![vec![1.0; spans + 1]; 2],
+        )
+        .unwrap()
+    }
+
+    /// Two diagonal sides of a thousand pieces each, whose boxes overlap but
+    /// whose pieces keep 0.07 apart, read as apart after a few hundred pairs
+    /// of boxes (149), not the million of each piece against each other.
+    #[test]
+    fn sides_whose_boxes_overlap_but_whose_pieces_part_read_few_pairs() {
+        let strip = diagonal_strip(1000);
+        let ((u0, u1), _) = (strip.domain_u(), strip.domain_v());
+        let (near, far) = (
+            side(&strip, true, u0).unwrap(),
+            side(&strip, true, u1).unwrap(),
+        );
+        assert_eq!(near.len(), 1000);
+        let (read, taken) = apart_counted(&near, &far, false, 1e-6, 1e-13);
+        assert!(read && taken <= 1000, "{read} after {taken} pairs");
+        assert!(sides_are_apart(&strip, 1e-6));
     }
 
     /// Two sides of a thousand pieces each, every piece of one within the
