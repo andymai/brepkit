@@ -5002,19 +5002,104 @@ mod tests {
         }
     }
 
+    /// A hole in a ring about `z`, the window from ring angle `u.0` to `u.1`
+    /// and tube angle `v.0` to `v.1`: two arcs about the axis and two round
+    /// the tube, run clockwise about the ring's outward normal. Each arc is
+    /// read along its span to lie on the ring and in the window.
+    fn ring_window(
+        topo: &mut Topology,
+        ring: &brepkit_math::surfaces::ToroidalSurface,
+        (u0, u1): (f64, f64),
+        (v0, v1): (f64, f64),
+    ) -> brepkit_topology::wire::WireId {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let (big, small) = (ring.major_radius(), ring.minor_radius());
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        // About the axis at tube angle `v`, its angle the ring angle.
+        let along = |v: f64| {
+            let (sin, cos) = v.sin_cos();
+            Circle3D::new_with_ref(
+                Point3::new(0.0, 0.0, small * sin),
+                z,
+                small.madd(cos, big),
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap()
+        };
+        // Round the tube at ring angle `u`, its angle the tube angle.
+        let round = |u: f64| {
+            let (sin, cos) = u.sin_cos();
+            Circle3D::new_with_ref(
+                Point3::new(big * cos, big * sin, 0.0),
+                Vec3::new(sin, -cos, 0.0),
+                small,
+                Vec3::new(cos, sin, 0.0),
+            )
+            .unwrap()
+        };
+        let corner = |topo: &mut Topology, u: f64, v: f64| {
+            topo.add_vertex(Vertex::new(ring.evaluate(u, v), 1e-7))
+        };
+        let (a, b, c, d) = (
+            corner(topo, u0, v0),
+            corner(topo, u1, v0),
+            corner(topo, u1, v1),
+            corner(topo, u0, v1),
+        );
+        let left = topo.add_edge(Edge::new(a, d, EdgeCurve::Circle(round(u0))));
+        let top = topo.add_edge(Edge::new(d, c, EdgeCurve::Circle(along(v1))));
+        let right = topo.add_edge(Edge::new(b, c, EdgeCurve::Circle(round(u1))));
+        let bottom = topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(along(v0))));
+        for e in [left, top, right, bottom] {
+            let edge = topo.edge(e).unwrap();
+            let (p, q) = (
+                topo.vertex(edge.start()).unwrap().point(),
+                topo.vertex(edge.end()).unwrap().point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(p, q);
+            for k in 0..=16_u32 {
+                let x = edge.curve().evaluate_with_endpoints(
+                    (t1 - t0).madd(f64::from(k) / 16.0, t0),
+                    p,
+                    q,
+                );
+                let off = (x.x().hypot(x.y()) - big).hypot(x.z()) - small;
+                assert!(off.abs() < 1e-12, "{x:?} lies {off} off the ring");
+                let (u, v) = (x.y().atan2(x.x()), x.z().atan2(x.x().hypot(x.y()) - big));
+                assert!(
+                    u > u0 - 1e-9 && u < u1 + 1e-9 && v > v0 - 1e-9 && v < v1 + 1e-9,
+                    "{x:?} at ({u}, {v}) is out of the window"
+                );
+            }
+        }
+        topo.add_wire(
+            Wire::new(
+                vec![
+                    OrientedEdge::new(left, true),
+                    OrientedEdge::new(top, true),
+                    OrientedEdge::new(right, false),
+                    OrientedEdge::new(bottom, false),
+                ],
+                true,
+            )
+            .unwrap(),
+        )
+    }
+
     /// A whole ring, its one face bounded by its seams collapsed to a point,
     /// and the ring less a small window on top of its tube: the box phase EF
     /// holds each face in holds every point of the ring.
     #[test]
     fn a_ring_bounded_by_small_loops_is_boxed_whole() {
-        use brepkit_math::curves::Circle3D;
         use brepkit_math::surfaces::ToroidalSurface;
-        use brepkit_math::vec::Vec3;
         use brepkit_topology::edge::Edge;
         use brepkit_topology::face::Face;
         use brepkit_topology::wire::{OrientedEdge, Wire};
         let ring = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 2.0, 0.5).unwrap();
-        for windowed in [false, true] {
+        for windowed in [true, false] {
             let mut topo = Topology::new();
             let v = topo.add_vertex(Vertex::new(Point3::new(2.5, 0.0, 0.0), 1e-7));
             let a = topo.add_edge(Edge::new(v, v, EdgeCurve::Line));
@@ -5032,11 +5117,7 @@ mod tests {
                 .unwrap(),
             );
             let holes = if windowed {
-                let rim = Circle3D::new(Point3::new(2.0, 0.0, 0.5), Vec3::new(0.0, 0.0, 1.0), 0.1)
-                    .unwrap();
-                let v = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
-                let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(rim)));
-                vec![topo.add_wire(Wire::new(vec![OrientedEdge::new(e, false)], true).unwrap())]
+                vec![ring_window(&mut topo, &ring, (0.3, 0.6), (1.2, 1.9))]
             } else {
                 Vec::new()
             };
