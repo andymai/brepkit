@@ -56,7 +56,8 @@ impl NurbsCurve {
     /// # Errors
     ///
     /// Returns [`MathError::InvalidKnotVector`] if the knot vector length is
-    /// not equal to `control_points.len() + degree + 1`.
+    /// not equal to `control_points.len() + degree + 1`, or that count passes
+    /// the largest `usize`.
     ///
     /// Returns [`MathError::InvalidWeights`] if the weights vector length does
     /// not match the number of control points.
@@ -67,7 +68,10 @@ impl NurbsCurve {
         weights: Vec<f64>,
     ) -> Result<Self, MathError> {
         let n = control_points.len();
-        let expected_knots = n + degree + 1;
+        let expected_knots = basis::knot_count(n, degree).ok_or(MathError::InvalidKnotVector {
+            expected: usize::MAX,
+            got: knots.len(),
+        })?;
         if knots.len() != expected_knots {
             return Err(MathError::InvalidKnotVector {
                 expected: expected_knots,
@@ -355,6 +359,23 @@ use super::basis::binomial;
 #[allow(clippy::expect_used, clippy::cast_lossless, clippy::suboptimal_flops)]
 mod tests {
     use super::*;
+
+    /// A degree from outside data can be any number, and the count of knots
+    /// it asks for, the points and the degree and one more, can pass the
+    /// largest `usize`: the constructor refuses it with an error, and does
+    /// not overflow.
+    #[test]
+    fn a_degree_whose_knot_count_overflows_is_refused() {
+        let points = vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)];
+        let wide = usize::try_from(u32::MAX).expect("a u32 fits a usize here");
+        for degree in [usize::MAX, usize::MAX - 1, usize::MAX - 2, wide] {
+            let found = NurbsCurve::new(degree, vec![0.0; 4], points.clone(), vec![1.0; 2]);
+            assert!(
+                matches!(found, Err(MathError::InvalidKnotVector { .. })),
+                "{degree}: {found:?}"
+            );
+        }
+    }
 
     /// [`NurbsCurve::new`] accepts curves whose counts agree but whose
     /// values no evaluation can walk. Those are told from well formed ones.

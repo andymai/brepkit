@@ -790,3 +790,50 @@ fn rational_cone_lies_on_the_cone() {
         }
     }
 }
+
+/// Each constructor refuses a radius or angle that is not finite and in
+/// range. A test of `value <= 0.0` alone lets NaN through, since every
+/// comparison with NaN is false.
+#[test]
+fn constructors_refuse_sizes_that_are_not_finite_and_in_range() {
+    let (o, z, x) = (
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        Vec3::new(1.0, 0.0, 0.0),
+    );
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
+        assert!(CylindricalSurface::new(o, z, bad).is_err(), "{bad}");
+        assert!(
+            CylindricalSurface::with_ref_dir(o, z, bad, x).is_err(),
+            "{bad}"
+        );
+        assert!(SphericalSurface::new(o, bad).is_err(), "{bad}");
+        assert!(SphericalSurface::with_axis(o, bad, z).is_err(), "{bad}");
+        assert!(
+            SphericalSurface::with_axis_and_ref_dir(o, bad, z, x).is_err(),
+            "{bad}"
+        );
+        for (major, minor) in [(bad, 1.0), (3.0, bad)] {
+            assert!(
+                ToroidalSurface::new(o, major, minor).is_err(),
+                "{major} {minor}"
+            );
+            assert!(
+                ToroidalSurface::with_axis(o, major, minor, z).is_err(),
+                "{major} {minor}"
+            );
+            assert!(
+                ToroidalSurface::with_axis_and_ref_dir(o, major, minor, z, x).is_err(),
+                "{major} {minor}"
+            );
+        }
+    }
+    for bad in [f64::NAN, f64::INFINITY, 0.0, FRAC_PI_2, 2.0] {
+        assert!(ConicalSurface::new(o, z, bad).is_err(), "{bad}");
+        assert!(ConicalSurface::with_ref_dir(o, z, bad, x).is_err(), "{bad}");
+    }
+    assert!(CylindricalSurface::new(o, z, 2.0).is_ok());
+    assert!(ConicalSurface::new(o, z, 0.5).is_ok());
+    assert!(SphericalSurface::new(o, 2.0).is_ok());
+    assert!(ToroidalSurface::new(o, 3.0, 1.0).is_ok());
+}

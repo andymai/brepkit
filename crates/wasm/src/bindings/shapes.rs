@@ -15,7 +15,7 @@ use crate::error::{WasmError, validate_finite, validate_positive};
 use crate::handles::{
     edge_id_to_u32, face_id_to_u32, solid_id_to_u32, vertex_id_to_u32, wire_id_to_u32,
 };
-use crate::helpers::{TOL, parse_points};
+use crate::helpers::{TOL, parse_points, spline_degree, well_formed_curve, well_formed_nurbs};
 use crate::kernel::BrepKernel;
 
 #[wasm_bindgen]
@@ -459,6 +459,10 @@ impl BrepKernel {
             .map_err(|e| WasmError::InvalidInput {
             reason: format!("invalid circle: {e}"),
         })?;
+        let curve = well_formed_curve(EdgeCurve::Circle(circle), "makeCircleArc3d circle")?;
+        validate_finite(end_x, "end_x")?;
+        validate_finite(end_y, "end_y")?;
+        validate_finite(end_z, "end_z")?;
 
         let v_start = self.topo_mut().add_vertex(Vertex::new(start_pt, TOL));
         let v_end = if (start_pt - end_pt).length() < TOL * 100.0 {
@@ -466,9 +470,7 @@ impl BrepKernel {
         } else {
             self.topo_mut().add_vertex(Vertex::new(end_pt, TOL))
         };
-        let eid = self
-            .topo_mut()
-            .add_edge(Edge::new(v_start, v_end, EdgeCurve::Circle(circle)));
+        let eid = self.topo_mut().add_edge(Edge::new(v_start, v_end, curve));
         Ok(edge_id_to_u32(eid))
     }
 
@@ -569,35 +571,14 @@ impl BrepKernel {
         control_points: Vec<f64>,
         weights: Vec<f64>,
     ) -> Result<u32, JsError> {
-        if !control_points.len().is_multiple_of(3) {
-            return Err(WasmError::InvalidInput {
-                reason: format!(
-                    "control_points length must be a multiple of 3, got {}",
-                    control_points.len()
-                ),
-            }
-            .into());
-        }
-        let cp: Vec<Point3> = control_points
-            .chunks_exact(3)
-            .map(|c| Point3::new(c[0], c[1], c[2]))
-            .collect();
-        let curve = NurbsCurve::new(degree as usize, knots, cp, weights)?;
-
-        let start_pt = Point3::new(start_x, start_y, start_z);
-        let end_pt = Point3::new(end_x, end_y, end_z);
-        let v_start = self.topo_mut().add_vertex(Vertex::new(start_pt, TOL));
-        // When start ≈ end (closed curve), reuse the same vertex so
-        // downstream code correctly identifies the edge as closed.
-        let v_end = if (start_pt - end_pt).length() < TOL * 100.0 {
-            v_start
-        } else {
-            self.topo_mut().add_vertex(Vertex::new(end_pt, TOL))
-        };
-        let eid = self
-            .topo_mut()
-            .add_edge(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(curve)));
-        Ok(edge_id_to_u32(eid))
+        Ok(self.make_nurbs_edge_impl(
+            [start_x, start_y, start_z],
+            [end_x, end_y, end_z],
+            degree,
+            knots,
+            &control_points,
+            weights,
+        )?)
     }
 
     /// Create a circular arc edge defined by start point, tangent direction
@@ -899,6 +880,57 @@ impl BrepKernel {
             TOL,
         )?;
         Ok(face_id_to_u32(fid))
+    }
+}
+
+impl BrepKernel {
+    /// Inner implementation for `make_nurbs_edge`: `control_points` holds x,
+    /// y and z for each point.
+    pub(crate) fn make_nurbs_edge_impl(
+        &mut self,
+        start: [f64; 3],
+        end: [f64; 3],
+        degree: u32,
+        knots: Vec<f64>,
+        control_points: &[f64],
+        weights: Vec<f64>,
+    ) -> Result<u32, WasmError> {
+        for (v, name) in start.iter().zip(["startX", "startY", "startZ"]) {
+            validate_finite(*v, name)?;
+        }
+        for (v, name) in end.iter().zip(["endX", "endY", "endZ"]) {
+            validate_finite(*v, name)?;
+        }
+        if !control_points.len().is_multiple_of(3) {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "control_points length must be a multiple of 3, got {}",
+                    control_points.len()
+                ),
+            });
+        }
+        let cp: Vec<Point3> = control_points
+            .chunks_exact(3)
+            .map(|c| Point3::new(c[0], c[1], c[2]))
+            .collect();
+        let degree = spline_degree(degree.into(), cp.len(), "makeNurbsEdge curve")?;
+        let curve = NurbsCurve::new(degree, knots, cp, weights)?;
+        let curve = well_formed_nurbs(curve, "makeNurbsEdge curve")?;
+
+        let start_pt = Point3::new(start[0], start[1], start[2]);
+        let end_pt = Point3::new(end[0], end[1], end[2]);
+        let v_start = self.topo_mut().add_vertex(Vertex::new(start_pt, TOL));
+        // When start ≈ end (closed curve), reuse the same vertex so
+        // downstream code correctly identifies the edge as closed.
+        let v_end = if (start_pt - end_pt).length() < TOL * 100.0 {
+            v_start
+        } else {
+            self.topo_mut().add_vertex(Vertex::new(end_pt, TOL))
+        };
+        let eid = self
+            .topo_mut()
+            .add_edge(Edge::new(v_start, v_end, EdgeCurve::NurbsCurve(curve)));
+        Ok(edge_id_to_u32(eid))
     }
 }
 

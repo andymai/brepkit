@@ -20,7 +20,8 @@ use crate::handles::{
 use brepkit_geometry::extrema::point_to_nurbs_surface;
 
 use crate::helpers::{
-    classify_to_string, handles_in, loft_with_points, panic_message, parse_points, try_fillet,
+    classify_to_string, handles_in, loft_with_points, panic_message, parse_points, spline_degree,
+    try_fillet, well_formed_nurbs,
 };
 use crate::kernel::BrepKernel;
 
@@ -541,65 +542,13 @@ impl BrepKernel {
         path_control_points: Vec<f64>,
         path_weights: Vec<f64>,
     ) -> Result<u32, JsError> {
-        // Validate coordinate array length.
-        if !path_control_points.len().is_multiple_of(3) {
-            return Err(WasmError::InvalidInput {
-                reason: format!(
-                    "path_control_points length must be a multiple of 3, got {}",
-                    path_control_points.len()
-                ),
-            }
-            .into());
-        }
-        let num_pts = path_control_points.len() / 3;
-
-        if path_weights.len() != num_pts {
-            return Err(WasmError::InvalidInput {
-                reason: format!(
-                    "path_weights length ({}) must match number of control points ({num_pts})",
-                    path_weights.len()
-                ),
-            }
-            .into());
-        }
-
-        // Validate all values are finite.
-        if let Some(pos) = path_knots.iter().position(|v| !v.is_finite()) {
-            return Err(WasmError::InvalidInput {
-                reason: format!("path_knots[{pos}] is not finite"),
-            }
-            .into());
-        }
-        if let Some(pos) = path_control_points.iter().position(|v| !v.is_finite()) {
-            return Err(WasmError::InvalidInput {
-                reason: format!("path_control_points[{pos}] is not finite"),
-            }
-            .into());
-        }
-        if let Some(pos) = path_weights.iter().position(|v| !v.is_finite()) {
-            return Err(WasmError::InvalidInput {
-                reason: format!("path_weights[{pos}] is not finite"),
-            }
-            .into());
-        }
-
-        let face_id = self.resolve_face(face)?;
-
-        let control_points: Vec<Point3> = path_control_points
-            .chunks_exact(3)
-            .map(|c| Point3::new(c[0], c[1], c[2]))
-            .collect();
-
-        let path_curve = NurbsCurve::new(
-            path_degree as usize,
+        Ok(self.sweep_face_impl(
+            face,
+            path_degree,
             path_knots,
-            control_points,
+            path_control_points,
             path_weights,
-        )?;
-
-        let solid_id = sweep(self.topo_mut(), face_id, &path_curve)?;
-
-        Ok(solid_id_to_u32(solid_id))
+        )?)
     }
 
     /// Sweep through multiple section profiles along a spine, lofting the
@@ -627,75 +576,15 @@ impl BrepKernel {
         spine_weights: Vec<f64>,
         ruled: bool,
     ) -> Result<u32, JsError> {
-        if face_handles.len() != params.len() {
-            return Err(WasmError::InvalidInput {
-                reason: format!(
-                    "face_handles ({}) and params ({}) must have equal length",
-                    face_handles.len(),
-                    params.len()
-                ),
-            }
-            .into());
-        }
-        if !spine_control_points.len().is_multiple_of(3) {
-            return Err(WasmError::InvalidInput {
-                reason: format!(
-                    "spine_control_points length must be a multiple of 3, got {}",
-                    spine_control_points.len()
-                ),
-            }
-            .into());
-        }
-        let num_pts = spine_control_points.len() / 3;
-        if spine_weights.len() != num_pts {
-            return Err(WasmError::InvalidInput {
-                reason: format!(
-                    "spine_weights length ({}) must match control point count ({num_pts})",
-                    spine_weights.len()
-                ),
-            }
-            .into());
-        }
-        for p in &params {
-            validate_finite(*p, "param")?;
-        }
-        for (name, arr) in [
-            ("spine_knots", &spine_knots),
-            ("spine_control_points", &spine_control_points),
-            ("spine_weights", &spine_weights),
-        ] {
-            if let Some(pos) = arr.iter().position(|v| !v.is_finite()) {
-                return Err(WasmError::InvalidInput {
-                    reason: format!("{name}[{pos}] is not finite"),
-                }
-                .into());
-            }
-        }
-
-        let control_points: Vec<Point3> = spine_control_points
-            .chunks_exact(3)
-            .map(|c| Point3::new(c[0], c[1], c[2]))
-            .collect();
-        let spine = NurbsCurve::new(
-            spine_degree as usize,
+        Ok(self.multi_section_sweep_impl(
+            face_handles,
+            params,
+            spine_degree,
             spine_knots,
-            control_points,
+            spine_control_points,
             spine_weights,
-        )?;
-
-        let sections: Vec<(brepkit_topology::face::FaceId, f64)> = face_handles
-            .iter()
-            .zip(params.iter())
-            .map(|(&h, &p)| self.resolve_face(h).map(|f| (f, p)))
-            .collect::<Result<_, _>>()?;
-
-        let solid_id = brepkit_operations::sweep::multi_section_sweep(
-            self.topo_mut(),
-            &spine,
-            &sections,
             ruled,
-        )?;
-        Ok(solid_id_to_u32(solid_id))
+        )?)
     }
 
     /// Sweep a face along a path with smooth NURBS side surfaces.
@@ -719,45 +608,13 @@ impl BrepKernel {
         path_control_points: Vec<f64>,
         path_weights: Vec<f64>,
     ) -> Result<u32, JsError> {
-        if !path_control_points.len().is_multiple_of(3) {
-            return Err(WasmError::InvalidInput {
-                reason: format!(
-                    "path_control_points length must be a multiple of 3, got {}",
-                    path_control_points.len()
-                ),
-            }
-            .into());
-        }
-
-        let face_id = self.resolve_face(face)?;
-        let n_cp = path_control_points.len() / 3;
-        let control_points: Vec<Point3> = (0..n_cp)
-            .map(|i| {
-                Point3::new(
-                    path_control_points[i * 3],
-                    path_control_points[i * 3 + 1],
-                    path_control_points[i * 3 + 2],
-                )
-            })
-            .collect();
-
-        let weights = if path_weights.is_empty() {
-            vec![1.0; n_cp]
-        } else {
-            path_weights
-        };
-
-        #[allow(clippy::cast_possible_truncation)]
-        let path_curve = brepkit_math::nurbs::curve::NurbsCurve::new(
-            path_degree as usize,
+        Ok(self.sweep_smooth_face_impl(
+            face,
+            path_degree,
             path_knots,
-            control_points,
-            weights,
-        )?;
-
-        let solid_id =
-            brepkit_operations::sweep::sweep_smooth(self.topo_mut(), face_id, &path_curve)?;
-        Ok(solid_id_to_u32(solid_id))
+            path_control_points,
+            path_weights,
+        )?)
     }
 
     // ── Offset Face ──────────────────────────────────────────────
@@ -987,31 +844,13 @@ impl BrepKernel {
         path_control_points: Vec<f64>,
         path_weights: Vec<f64>,
     ) -> Result<u32, JsError> {
-        if !path_control_points.len().is_multiple_of(3) {
-            return Err(WasmError::InvalidInput {
-                reason: format!(
-                    "path_control_points length must be a multiple of 3, got {}",
-                    path_control_points.len()
-                ),
-            }
-            .into());
-        }
-
-        let face_id = self.resolve_face(face)?;
-        let control_points: Vec<Point3> = path_control_points
-            .chunks_exact(3)
-            .map(|c| Point3::new(c[0], c[1], c[2]))
-            .collect();
-
-        let path_curve = NurbsCurve::new(
-            path_degree as usize,
+        Ok(self.pipe_solid_impl(
+            face,
+            path_degree,
             path_knots,
-            control_points,
+            path_control_points,
             path_weights,
-        )?;
-
-        let solid_id = brepkit_operations::pipe::pipe(self.topo_mut(), face_id, &path_curve, None)?;
-        Ok(solid_id_to_u32(solid_id))
+        )?)
     }
 
     // ── Sweep Along Edges ─────────────────────────────────────────
@@ -1293,71 +1132,17 @@ impl BrepKernel {
         aux_control_points: Vec<f64>,
         aux_weights: Vec<f64>,
     ) -> Result<u32, JsError> {
-        let build = |degree: u32,
-                     knots: Vec<f64>,
-                     cps: Vec<f64>,
-                     weights: Vec<f64>,
-                     label: &str|
-         -> Result<NurbsCurve, JsError> {
-            if degree < 1 {
-                return Err(WasmError::InvalidInput {
-                    reason: format!("{label}_degree must be at least 1"),
-                }
-                .into());
-            }
-            if !cps.len().is_multiple_of(3) {
-                return Err(WasmError::InvalidInput {
-                    reason: format!("{label}_control_points length must be a multiple of 3"),
-                }
-                .into());
-            }
-            if weights.len() != cps.len() / 3 {
-                return Err(WasmError::InvalidInput {
-                    reason: format!("{label}_weights length must match control point count"),
-                }
-                .into());
-            }
-            for (name, arr) in [
-                ("knots", &knots),
-                ("control_points", &cps),
-                ("weights", &weights),
-            ] {
-                if let Some(pos) = arr.iter().position(|v| !v.is_finite()) {
-                    return Err(WasmError::InvalidInput {
-                        reason: format!("{label}_{name}[{pos}] is not finite"),
-                    }
-                    .into());
-                }
-            }
-            let control_points: Vec<Point3> = cps
-                .chunks_exact(3)
-                .map(|c| Point3::new(c[0], c[1], c[2]))
-                .collect();
-            Ok(NurbsCurve::new(
-                degree as usize,
-                knots,
-                control_points,
-                weights,
-            )?)
-        };
-
-        let spine = build(
+        Ok(self.guided_sweep_impl(
+            face,
             spine_degree,
             spine_knots,
             spine_control_points,
             spine_weights,
-            "spine",
-        )?;
-        let aux = build(
             aux_degree,
             aux_knots,
             aux_control_points,
             aux_weights,
-            "aux",
-        )?;
-        let face_id = self.resolve_face(face)?;
-        let solid = brepkit_operations::sweep::sweep_guided(self.topo_mut(), face_id, &spine, aux)?;
-        Ok(solid_id_to_u32(solid))
+        )?)
     }
 
     /// Convex Minkowski sum of two solids (`A ⊕ B`).
@@ -2076,6 +1861,313 @@ impl BrepKernel {
 }
 
 impl BrepKernel {
+    /// Inner implementation for `sweep_face`.
+    #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+    pub(crate) fn sweep_face_impl(
+        &mut self,
+        face: u32,
+        path_degree: u32,
+        path_knots: Vec<f64>,
+        path_control_points: Vec<f64>,
+        path_weights: Vec<f64>,
+    ) -> Result<u32, WasmError> {
+        // Validate coordinate array length.
+        if !path_control_points.len().is_multiple_of(3) {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "path_control_points length must be a multiple of 3, got {}",
+                    path_control_points.len()
+                ),
+            });
+        }
+        let num_pts = path_control_points.len() / 3;
+
+        if path_weights.len() != num_pts {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "path_weights length ({}) must match number of control points ({num_pts})",
+                    path_weights.len()
+                ),
+            });
+        }
+
+        // Validate all values are finite.
+        if let Some(pos) = path_knots.iter().position(|v| !v.is_finite()) {
+            return Err(WasmError::InvalidInput {
+                reason: format!("path_knots[{pos}] is not finite"),
+            });
+        }
+        if let Some(pos) = path_control_points.iter().position(|v| !v.is_finite()) {
+            return Err(WasmError::InvalidInput {
+                reason: format!("path_control_points[{pos}] is not finite"),
+            });
+        }
+        if let Some(pos) = path_weights.iter().position(|v| !v.is_finite()) {
+            return Err(WasmError::InvalidInput {
+                reason: format!("path_weights[{pos}] is not finite"),
+            });
+        }
+
+        let face_id = self.resolve_face(face)?;
+
+        let control_points: Vec<Point3> = path_control_points
+            .chunks_exact(3)
+            .map(|c| Point3::new(c[0], c[1], c[2]))
+            .collect();
+
+        let degree = spline_degree(path_degree.into(), control_points.len(), "sweep path")?;
+        let path_curve = well_formed_nurbs(
+            NurbsCurve::new(degree, path_knots, control_points, path_weights)?,
+            "sweep path",
+        )?;
+
+        let solid_id = sweep(self.topo_mut(), face_id, &path_curve)?;
+
+        Ok(solid_id_to_u32(solid_id))
+    }
+
+    /// Inner implementation for `multi_section_sweep`.
+    #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+    pub(crate) fn multi_section_sweep_impl(
+        &mut self,
+        face_handles: Vec<u32>,
+        params: Vec<f64>,
+        spine_degree: u32,
+        spine_knots: Vec<f64>,
+        spine_control_points: Vec<f64>,
+        spine_weights: Vec<f64>,
+        ruled: bool,
+    ) -> Result<u32, WasmError> {
+        if face_handles.len() != params.len() {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "face_handles ({}) and params ({}) must have equal length",
+                    face_handles.len(),
+                    params.len()
+                ),
+            });
+        }
+        if !spine_control_points.len().is_multiple_of(3) {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "spine_control_points length must be a multiple of 3, got {}",
+                    spine_control_points.len()
+                ),
+            });
+        }
+        let num_pts = spine_control_points.len() / 3;
+        if spine_weights.len() != num_pts {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "spine_weights length ({}) must match control point count ({num_pts})",
+                    spine_weights.len()
+                ),
+            });
+        }
+        for p in &params {
+            validate_finite(*p, "param")?;
+        }
+        for (name, arr) in [
+            ("spine_knots", &spine_knots),
+            ("spine_control_points", &spine_control_points),
+            ("spine_weights", &spine_weights),
+        ] {
+            if let Some(pos) = arr.iter().position(|v| !v.is_finite()) {
+                return Err(WasmError::InvalidInput {
+                    reason: format!("{name}[{pos}] is not finite"),
+                });
+            }
+        }
+
+        let control_points: Vec<Point3> = spine_control_points
+            .chunks_exact(3)
+            .map(|c| Point3::new(c[0], c[1], c[2]))
+            .collect();
+        let degree = spline_degree(
+            spine_degree.into(),
+            control_points.len(),
+            "multiSectionSweep spine",
+        )?;
+        let spine = well_formed_nurbs(
+            NurbsCurve::new(degree, spine_knots, control_points, spine_weights)?,
+            "multiSectionSweep spine",
+        )?;
+
+        let sections: Vec<(brepkit_topology::face::FaceId, f64)> = face_handles
+            .iter()
+            .zip(params.iter())
+            .map(|(&h, &p)| self.resolve_face(h).map(|f| (f, p)))
+            .collect::<Result<_, _>>()?;
+
+        let solid_id = brepkit_operations::sweep::multi_section_sweep(
+            self.topo_mut(),
+            &spine,
+            &sections,
+            ruled,
+        )?;
+        Ok(solid_id_to_u32(solid_id))
+    }
+
+    /// Inner implementation for `sweep_smooth_face`.
+    #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+    pub(crate) fn sweep_smooth_face_impl(
+        &mut self,
+        face: u32,
+        path_degree: u32,
+        path_knots: Vec<f64>,
+        path_control_points: Vec<f64>,
+        path_weights: Vec<f64>,
+    ) -> Result<u32, WasmError> {
+        if !path_control_points.len().is_multiple_of(3) {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "path_control_points length must be a multiple of 3, got {}",
+                    path_control_points.len()
+                ),
+            });
+        }
+
+        let face_id = self.resolve_face(face)?;
+        let n_cp = path_control_points.len() / 3;
+        let control_points: Vec<Point3> = (0..n_cp)
+            .map(|i| {
+                Point3::new(
+                    path_control_points[i * 3],
+                    path_control_points[i * 3 + 1],
+                    path_control_points[i * 3 + 2],
+                )
+            })
+            .collect();
+
+        let weights = if path_weights.is_empty() {
+            vec![1.0; n_cp]
+        } else {
+            path_weights
+        };
+
+        let degree = spline_degree(path_degree.into(), control_points.len(), "sweepSmooth path")?;
+        let path_curve = well_formed_nurbs(
+            NurbsCurve::new(degree, path_knots, control_points, weights)?,
+            "sweepSmooth path",
+        )?;
+
+        let solid_id =
+            brepkit_operations::sweep::sweep_smooth(self.topo_mut(), face_id, &path_curve)?;
+        Ok(solid_id_to_u32(solid_id))
+    }
+
+    /// Inner implementation for `pipe_solid`.
+    #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+    pub(crate) fn pipe_solid_impl(
+        &mut self,
+        face: u32,
+        path_degree: u32,
+        path_knots: Vec<f64>,
+        path_control_points: Vec<f64>,
+        path_weights: Vec<f64>,
+    ) -> Result<u32, WasmError> {
+        if !path_control_points.len().is_multiple_of(3) {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "path_control_points length must be a multiple of 3, got {}",
+                    path_control_points.len()
+                ),
+            });
+        }
+
+        let face_id = self.resolve_face(face)?;
+        let control_points: Vec<Point3> = path_control_points
+            .chunks_exact(3)
+            .map(|c| Point3::new(c[0], c[1], c[2]))
+            .collect();
+
+        let degree = spline_degree(path_degree.into(), control_points.len(), "pipe path")?;
+        let path_curve = well_formed_nurbs(
+            NurbsCurve::new(degree, path_knots, control_points, path_weights)?,
+            "pipe path",
+        )?;
+
+        let solid_id = brepkit_operations::pipe::pipe(self.topo_mut(), face_id, &path_curve, None)?;
+        Ok(solid_id_to_u32(solid_id))
+    }
+
+    /// Inner implementation for `guided_sweep`.
+    #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+    pub(crate) fn guided_sweep_impl(
+        &mut self,
+        face: u32,
+        spine_degree: u32,
+        spine_knots: Vec<f64>,
+        spine_control_points: Vec<f64>,
+        spine_weights: Vec<f64>,
+        aux_degree: u32,
+        aux_knots: Vec<f64>,
+        aux_control_points: Vec<f64>,
+        aux_weights: Vec<f64>,
+    ) -> Result<u32, WasmError> {
+        let build = |degree: u32,
+                     knots: Vec<f64>,
+                     cps: Vec<f64>,
+                     weights: Vec<f64>,
+                     label: &str|
+         -> Result<NurbsCurve, WasmError> {
+            if degree < 1 {
+                return Err(WasmError::InvalidInput {
+                    reason: format!("{label}_degree must be at least 1"),
+                });
+            }
+            if !cps.len().is_multiple_of(3) {
+                return Err(WasmError::InvalidInput {
+                    reason: format!("{label}_control_points length must be a multiple of 3"),
+                });
+            }
+            if weights.len() != cps.len() / 3 {
+                return Err(WasmError::InvalidInput {
+                    reason: format!("{label}_weights length must match control point count"),
+                });
+            }
+            for (name, arr) in [
+                ("knots", &knots),
+                ("control_points", &cps),
+                ("weights", &weights),
+            ] {
+                if let Some(pos) = arr.iter().position(|v| !v.is_finite()) {
+                    return Err(WasmError::InvalidInput {
+                        reason: format!("{label}_{name}[{pos}] is not finite"),
+                    });
+                }
+            }
+            let control_points: Vec<Point3> = cps
+                .chunks_exact(3)
+                .map(|c| Point3::new(c[0], c[1], c[2]))
+                .collect();
+            let what = format!("guidedSweep {label}");
+            let degree = spline_degree(degree.into(), control_points.len(), &what)?;
+            well_formed_nurbs(
+                NurbsCurve::new(degree, knots, control_points, weights)?,
+                &what,
+            )
+        };
+
+        let spine = build(
+            spine_degree,
+            spine_knots,
+            spine_control_points,
+            spine_weights,
+            "spine",
+        )?;
+        let aux = build(
+            aux_degree,
+            aux_knots,
+            aux_control_points,
+            aux_weights,
+            "aux",
+        )?;
+        let face_id = self.resolve_face(face)?;
+        let solid = brepkit_operations::sweep::sweep_guided(self.topo_mut(), face_id, &spine, aux)?;
+        Ok(solid_id_to_u32(solid))
+    }
+
     /// The loft `loftWithOptions` and its batch op describe in `opts`: a solid
     /// handle, or a shell handle with `solid: false`.
     pub(crate) fn loft_from_options(

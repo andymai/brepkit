@@ -228,6 +228,7 @@ pub(super) fn tessellate_with_uvs_floor(
     curvature_floor: bool,
 ) -> Result<TriangleMeshUV, crate::OperationsError> {
     super::check_deflection(deflection)?;
+    super::check_reach(topo, face)?;
     let face_data = topo.face(face)?;
     let is_reversed = face_data.is_reversed();
 

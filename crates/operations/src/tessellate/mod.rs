@@ -105,6 +105,140 @@ pub(super) enum AnalyticKind {
     VMaxPole,
 }
 
+/// How far out a mesh point may lie, in each coordinate. The mesher welds
+/// points on integer grids as fine as [`MERGE_GRID`]. A point this far out
+/// lies 1e18 cells out, and a cell index, its neighbours and their
+/// differences still fit in an `i64`, whose largest value is 9.2e18. Past
+/// it, a cell index overflows.
+const MESH_REACH: f64 = 1e11;
+
+/// The largest magnitude among `values`, or infinity if one is NaN.
+fn largest(values: impl IntoIterator<Item = f64>) -> f64 {
+    values.into_iter().fold(0.0, |most: f64, value| {
+        let size = value.abs();
+        if size <= most {
+            most
+        } else if size.is_nan() {
+            f64::INFINITY
+        } else {
+            size
+        }
+    })
+}
+
+/// The largest coordinate magnitude of each of `points`.
+fn points_reach<'a>(points: impl IntoIterator<Item = &'a Point3>) -> f64 {
+    largest(points.into_iter().flat_map(|p| [p.x(), p.y(), p.z()]))
+}
+
+/// A bound on the coordinate magnitudes of the points of `curve`. A NURBS
+/// curve lies in the hull of its control points.
+fn curve_reach(curve: &brepkit_topology::edge::EdgeCurve) -> f64 {
+    use brepkit_topology::edge::EdgeCurve;
+    let corners = |b: brepkit_math::aabb::Aabb3| points_reach(&[b.min, b.max]);
+    match curve {
+        EdgeCurve::Line => 0.0,
+        EdgeCurve::Circle(c) => corners(c.aabb()),
+        EdgeCurve::Ellipse(e) => corners(e.aabb()),
+        EdgeCurve::NurbsCurve(n) => points_reach(n.control_points()),
+    }
+}
+
+/// A bound on `|dir · (p - from)|` over the points `p` of `curve`, beyond
+/// its ends, for a unit `dir`. A NURBS curve lies in the hull of its
+/// control points.
+fn curve_extent_along(curve: &brepkit_topology::edge::EdgeCurve, from: Point3, dir: Vec3) -> f64 {
+    use brepkit_topology::edge::EdgeCurve;
+    match curve {
+        EdgeCurve::Line => 0.0,
+        EdgeCurve::Circle(c) => {
+            let swing = c.radius() * dir.dot(c.u_axis()).hypot(dir.dot(c.v_axis()));
+            dir.dot(c.center() - from).abs() + swing
+        }
+        EdgeCurve::Ellipse(e) => {
+            let swing =
+                (e.semi_major() * dir.dot(e.u_axis())).hypot(e.semi_minor() * dir.dot(e.v_axis()));
+            dir.dot(e.center() - from).abs() + swing
+        }
+        EdgeCurve::NurbsCurve(n) => largest(n.control_points().iter().map(|&q| dir.dot(q - from))),
+    }
+}
+
+/// Refuses a face whose mesh points could lie past [`MESH_REACH`].
+///
+/// The bound holds the face's vertices and edge curves, and the points the
+/// mesher reads from the surface's parameters. A sphere's or torus's points
+/// lie within its radii of its centre at any parameters. A NURBS surface's
+/// points lie in its control hull, since a projection onto it stays in its
+/// domain. A cylinder's and a cone's mesher reads the height along the axis
+/// at which each wire point projects: a cone reads it over the sine of its
+/// half angle, as a distance along a generator, or below a sine of 1e-15 the
+/// distance from the axis over the cosine, as `ConicalSurface::project_point`
+/// does. The wires need not lie on the surface, so a cone of small angle can
+/// read a short wire as a generator far longer than the wire.
+pub(super) fn check_reach(topo: &Topology, face: FaceId) -> Result<(), crate::OperationsError> {
+    use brepkit_topology::face::FaceSurface;
+    let face_data = topo.face(face)?;
+    let mut edges = Vec::new();
+    for wire in
+        std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
+    {
+        for oe in topo.wire(wire)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            let ends = [
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            ];
+            edges.push((edge.curve(), ends));
+        }
+    }
+    let boundary = largest(
+        edges
+            .iter()
+            .flat_map(|(curve, ends)| [points_reach(ends), curve_reach(curve)]),
+    );
+    // The largest `|dir · (p - from)|` over the wires' points `p`.
+    let along = |from: Point3, dir: Vec3| {
+        largest(edges.iter().flat_map(|(curve, ends)| {
+            [
+                dir.dot(ends[0] - from),
+                dir.dot(ends[1] - from),
+                curve_extent_along(curve, from, dir),
+            ]
+        }))
+    };
+    let surface_reach = match face_data.surface() {
+        FaceSurface::Plane { .. } => 0.0,
+        FaceSurface::Cylinder(c) => {
+            points_reach(&[c.origin()]) + c.radius() + along(c.origin(), c.axis())
+        }
+        FaceSurface::Cone(c) => {
+            let (sin_a, cos_a) = c.half_angle().sin_cos();
+            let run = if sin_a.abs() > 1e-15 {
+                along(c.apex(), c.axis()) / sin_a.abs()
+            } else {
+                3.0_f64.sqrt() * (boundary + points_reach(&[c.apex()])) / cos_a.abs()
+            };
+            points_reach(&[c.apex()]) + run
+        }
+        FaceSurface::Sphere(s) => points_reach(&[s.center()]) + s.radius(),
+        FaceSurface::Torus(t) => points_reach(&[t.center()]) + t.major_radius() + t.minor_radius(),
+        FaceSurface::Nurbs(n) => points_reach(n.control_points().iter().flatten()),
+    };
+    let reach = largest([boundary, surface_reach]);
+    if reach <= MESH_REACH {
+        Ok(())
+    } else {
+        Err(crate::OperationsError::InvalidInput {
+            reason: format!(
+                "face {} reaches {reach:e} from the origin, too far out to mesh: \
+                 the mesher's integer grids hold points to {MESH_REACH:e}",
+                face.index()
+            ),
+        })
+    }
+}
+
 /// A deflection the meshers can refine down to: a zero or negative one
 /// subdivides without end.
 pub(super) fn check_deflection(deflection: f64) -> Result<(), crate::OperationsError> {

@@ -151,7 +151,8 @@ impl NurbsSurface {
     /// rows have inconsistent lengths.
     ///
     /// Returns [`MathError::InvalidKnotVector`] if either knot vector has the
-    /// wrong length for the given degree and control point count.
+    /// wrong length for the given degree and control point count, or that
+    /// length passes the largest `usize`.
     ///
     /// Returns [`MathError::InvalidWeights`] if the weights grid dimensions
     /// do not match the control point grid.
@@ -178,7 +179,11 @@ impl NurbsSurface {
         }
 
         // Validate knot vectors.
-        let expected_knots_u = n_rows + degree_u + 1;
+        let expected_knots_u =
+            basis::knot_count(n_rows, degree_u).ok_or(MathError::InvalidKnotVector {
+                expected: usize::MAX,
+                got: knots_u.len(),
+            })?;
         if knots_u.len() != expected_knots_u {
             return Err(MathError::InvalidKnotVector {
                 expected: expected_knots_u,
@@ -186,7 +191,11 @@ impl NurbsSurface {
             });
         }
 
-        let expected_knots_v = n_cols + degree_v + 1;
+        let expected_knots_v =
+            basis::knot_count(n_cols, degree_v).ok_or(MathError::InvalidKnotVector {
+                expected: usize::MAX,
+                got: knots_v.len(),
+            })?;
         if knots_v.len() != expected_knots_v {
             return Err(MathError::InvalidKnotVector {
                 expected: expected_knots_v,
@@ -1109,6 +1118,29 @@ use super::basis::binomial;
 mod tests {
     use super::*;
     use crate::madd::Madd;
+
+    /// A degree from outside data can be any number, and the count of knots
+    /// it asks for in either direction can pass the largest `usize`: the
+    /// constructor refuses it with an error, and does not overflow.
+    #[test]
+    fn a_degree_whose_knot_count_overflows_is_refused() {
+        let row = vec![Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0)];
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        for (degree_u, degree_v) in [(usize::MAX, 1), (1, usize::MAX), (usize::MAX - 1, 1)] {
+            let found = NurbsSurface::new(
+                degree_u,
+                degree_v,
+                knots.clone(),
+                knots.clone(),
+                vec![row.clone(), row.clone()],
+                vec![vec![1.0; 2]; 2],
+            );
+            assert!(
+                matches!(found, Err(MathError::InvalidKnotVector { .. })),
+                "{degree_u} {degree_v}"
+            );
+        }
+    }
 
     /// [`NurbsSurface::new`] accepts surfaces whose counts agree but whose
     /// values no evaluation can walk. Those are told from well formed ones,

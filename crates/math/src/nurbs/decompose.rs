@@ -491,6 +491,25 @@ fn insert_along_rows(
     Ok(())
 }
 
+/// The highest degree a degree elevation may reach.
+///
+/// Real curves rarely pass degree 10. Up to 25, each binomial coefficient the
+/// elevation computes, and each product on the way to one, stays below 2^32,
+/// so the coefficients are exact on a 32-bit target too.
+pub const MAX_ELEVATED_DEGREE: usize = 25;
+
+/// The most control points, or knots, a degree elevation may build: 2^20.
+///
+/// The new curve holds the new degree plus one points for each Bezier piece
+/// of the old one, so this allows some 40,000 pieces at the highest degree.
+pub const ELEVATED_NET_LIMIT: usize = 1 << 20;
+
+/// A count as a float, for an error that reports it.
+#[allow(clippy::cast_precision_loss)]
+const fn count_value(n: usize) -> f64 {
+    n as f64
+}
+
 /// Elevate the degree of a NURBS curve by `t` (A5.9).
 ///
 /// The resulting curve has degree `p + t` and represents the same geometry.
@@ -498,23 +517,51 @@ fn insert_along_rows(
 /// # Errors
 ///
 /// Returns [`MathError::PoleAtInfinity`] if an elevated control point is at
-/// infinity, as weights of mixed sign can blend to, or another error if the
-/// resulting curve cannot be constructed.
+/// infinity, as weights of mixed sign can blend to,
+/// [`MathError::ParameterOutOfRange`] if the elevated degree passes
+/// [`MAX_ELEVATED_DEGREE`] or the new control points or knots would pass
+/// [`ELEVATED_NET_LIMIT`], before anything is allocated for them, or another
+/// error if the resulting curve cannot be constructed.
 pub fn curve_degree_elevate(curve: &NurbsCurve, t: usize) -> Result<NurbsCurve, MathError> {
     if t == 0 {
         return Ok(curve.clone());
     }
 
     let p = curve.degree();
-    let new_p = p + t;
+    let new_p = p
+        .checked_add(t)
+        .filter(|&d| d <= MAX_ELEVATED_DEGREE)
+        .ok_or_else(|| MathError::ParameterOutOfRange {
+            value: count_value(p.saturating_add(t)),
+            min: 0.0,
+            max: count_value(MAX_ELEVATED_DEGREE),
+        })?;
+    // Each Bezier piece lies over a knot span of positive length, and gives
+    // the new degree plus one points; the knots run one piece further.
+    let pieces = curve
+        .knots()
+        .windows(2)
+        .filter(|w| w[0] < w[1])
+        .count()
+        .max(1);
+    let width = new_p + 1;
+    let largest = pieces
+        .checked_add(1)
+        .and_then(|n| n.checked_mul(width))
+        .filter(|&n| n <= ELEVATED_NET_LIMIT)
+        .ok_or_else(|| MathError::ParameterOutOfRange {
+            value: count_value(pieces.saturating_add(1).saturating_mul(width)),
+            min: 0.0,
+            max: count_value(ELEVATED_NET_LIMIT),
+        })?;
 
     let segments = curve_to_bezier_segments(curve)?;
     let n_segs = segments.len();
 
     let bezalfs = compute_bezalfs(p, t);
 
-    let mut all_cps: Vec<[f64; 4]> = Vec::new();
-    let mut all_knots: Vec<f64> = Vec::new();
+    let mut all_cps: Vec<[f64; 4]> = Vec::with_capacity(largest);
+    let mut all_knots: Vec<f64> = Vec::with_capacity(largest);
 
     // Whether each piece ends where the next starts, read off the knot's
     // repeats: the curve is continuous at a knot repeated at most its degree
@@ -860,6 +907,90 @@ mod tests {
                 p2.y()
             );
         }
+    }
+
+    /// An elevation from outside data can be any number. One whose degree
+    /// passes the largest `usize` is refused with an error, and the sum does
+    /// not overflow.
+    #[test]
+    fn a_degree_elevation_past_the_largest_usize_is_refused() {
+        let found = curve_degree_elevate(&cubic_bezier(), usize::MAX);
+        assert!(
+            matches!(found, Err(MathError::ParameterOutOfRange { .. })),
+            "{found:?}"
+        );
+    }
+
+    /// Boundary elevations of a cubic, each refused with an error before
+    /// anything is allocated for it: by the largest `u32`; to a degree that
+    /// is exactly the largest `usize`, whose coefficient table's row count
+    /// overflows; to degree 73, whose binomial coefficients overflow a 64-bit
+    /// `usize`; to degree 31, whose binomial products overflow a 32-bit one;
+    /// and one past [`MAX_ELEVATED_DEGREE`]. The bound itself is reached.
+    #[test]
+    fn a_degree_elevation_at_the_boundaries_is_refused() {
+        let cubic = cubic_bezier();
+        let wide = usize::try_from(u32::MAX).expect("a u32 fits a usize here");
+        for t in [wide, usize::MAX - 3, 70, 28, MAX_ELEVATED_DEGREE - 2] {
+            let found = curve_degree_elevate(&cubic, t);
+            assert!(
+                matches!(found, Err(MathError::ParameterOutOfRange { .. })),
+                "{t}: {found:?}"
+            );
+        }
+        let top = curve_degree_elevate(&cubic, MAX_ELEVATED_DEGREE - 3).expect("valid");
+        assert_eq!(top.degree(), MAX_ELEVATED_DEGREE);
+        for i in 0..=10 {
+            let u = f64::from(i) / 10.0;
+            assert!((top.evaluate(u) - cubic.evaluate(u)).length() < 1e-9, "{u}");
+        }
+    }
+
+    /// Each product the binomial coefficients of an elevation to
+    /// [`MAX_ELEVATED_DEGREE`] take on the way stays within the largest
+    /// `u32`, the largest `usize` of a 32-bit target. At degree 31 one does
+    /// not.
+    #[test]
+    fn the_elevation_coefficients_fit_a_32_bit_usize() {
+        let largest_product = |n: u64| {
+            (0..=n)
+                .flat_map(|k| {
+                    let k = k.min(n - k);
+                    (0..k).scan(1_u64, move |c, i| {
+                        let product = *c * (n - i);
+                        *c = product / (i + 1);
+                        Some(product)
+                    })
+                })
+                .max()
+                .unwrap_or(1)
+        };
+        let top = u64::try_from(MAX_ELEVATED_DEGREE).expect("small");
+        assert!(u32::try_from(largest_product(top)).is_ok());
+        assert!(u32::try_from(largest_product(31)).is_err());
+    }
+
+    /// A polyline of 60,000 spans elevated to [`MAX_ELEVATED_DEGREE`] would
+    /// need some 1.6 million control points, past [`ELEVATED_NET_LIMIT`]: it
+    /// is refused before they are allocated. Elevated by one, it is built.
+    #[test]
+    fn a_degree_elevation_past_the_net_limit_is_refused() {
+        let n = 60_001;
+        let points: Vec<Point3> = (0..n)
+            .map(|i| Point3::new(f64::from(i), f64::from(i % 2), 0.0))
+            .collect();
+        let mut knots = vec![0.0];
+        knots.extend((0..n).map(f64::from));
+        knots.push(f64::from(n - 1));
+        let polyline = NurbsCurve::new(1, knots, points, vec![1.0; 60_001]).expect("valid");
+        let found = curve_degree_elevate(&polyline, MAX_ELEVATED_DEGREE - 1);
+        assert!(
+            matches!(found, Err(MathError::ParameterOutOfRange { .. })),
+            "{:?}",
+            found.map(|c| c.control_points().len())
+        );
+        let raised = curve_degree_elevate(&polyline, 1).expect("valid");
+        assert_eq!(raised.degree(), 2);
     }
 
     #[test]
