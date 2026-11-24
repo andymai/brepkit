@@ -318,7 +318,10 @@ fn build_face_containment(
     }
 
     let held = match &surface {
-        FaceSurface::Nurbs(n) => Some(super::helpers::nurbs_face_box(topo, fid, n, tol)?),
+        FaceSurface::Nurbs(n) => {
+            let reach = face_tolerance(topo, fid, tol)?;
+            Some(super::helpers::nurbs_face_box(topo, fid, n, tol, reach)?)
+        }
         _ => super::helpers::analytic_face_box(topo, fid, tol)?,
     };
     Ok(FaceContainment {
@@ -6655,5 +6658,183 @@ mod tests {
             }
         }
         assert!(missed.is_empty(), "{} misses: {missed:#?}", missed.len());
+    }
+
+    /// A biquadratic B-spline sheet on the knots `0, 1, ..., 10` in each
+    /// parameter, which are not clamped: its domain is `[2, 8]²` and its
+    /// first and last control points lie off it. Its control points stand
+    /// at their knots' Greville points, `i + 1.5`, so `x = u` and `y = v`,
+    /// all at height 0 but the one at `(5.5, 5.5)`, at height 8. The face
+    /// is the square `[2.5, 7.5]²`, where the sheet is flat, bounded by four
+    /// lines, each with its pcurve on the face where `pcurves` is set.
+    fn unclamped_sheet(
+        topo: &mut Topology,
+        pcurves: bool,
+    ) -> (FaceId, brepkit_math::nurbs::surface::NurbsSurface) {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::Point2;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::pcurve::PCurve;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let at: Vec<f64> = (0..8).map(|i| f64::from(i) + 1.5).collect();
+        let rows: Vec<Vec<Point3>> = (0..8)
+            .map(|i| {
+                (0..8)
+                    .map(|j| Point3::new(at[i], at[j], if (i, j) == (4, 4) { 8.0 } else { 0.0 }))
+                    .collect()
+            })
+            .collect();
+        let knots: Vec<f64> = (0..=10).map(f64::from).collect();
+        let surface =
+            NurbsSurface::new(2, 2, knots.clone(), knots, rows, vec![vec![1.0; 8]; 8]).unwrap();
+        let corners = [(2.5, 2.5), (7.5, 2.5), (7.5, 7.5), (2.5, 7.5)];
+        let v = corners.map(|(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)));
+        let mut sides = Vec::new();
+        let mut lines = Vec::new();
+        for k in 0..4 {
+            let (a, b) = (corners[k], corners[(k + 1) % 4]);
+            let e = topo.add_edge(Edge::new(v[k], v[(k + 1) % 4], EdgeCurve::Line));
+            sides.push(OrientedEdge::new(e, true));
+            let (from, to) = (Point2::new(a.0, a.1), Point2::new(b.0, b.1));
+            let line = Line2D::new(from, to - from).unwrap();
+            lines.push((
+                e,
+                PCurve::new(Curve2D::Line(line), 0.0, (to - from).length()),
+            ));
+        }
+        let wire = topo.add_wire(Wire::new(sides, true).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface.clone())));
+        if pcurves {
+            for (e, pcurve) in lines {
+                topo.pcurves_mut().set(e, face, pcurve);
+            }
+        }
+        (face, surface)
+    }
+
+    /// On a sheet whose knots are not clamped, the face's box holds every
+    /// point of the face, and within its pcurves' square reaches no further
+    /// than its tolerance past it along `x` and `y`. A line at height 3,
+    /// far above the face's flat boundary, crosses the bump at `x = 5` and
+    /// `x = 6`, with pcurves or without.
+    #[test]
+    fn a_sheet_on_knots_that_are_not_clamped_is_boxed_whole() {
+        let tol = Tolerance::new();
+        for pcurves in [true, false] {
+            let mut topo = Topology::new();
+            let (face, surface) = unclamped_sheet(&mut topo, pcurves);
+            let held = build_face_containment(&topo, face, tol).unwrap().bbox;
+            for i in 0..=50_u32 {
+                for j in 0..=50_u32 {
+                    let (u, v) = (
+                        0.1f64.madd(f64::from(i), 2.5),
+                        0.1f64.madd(f64::from(j), 2.5),
+                    );
+                    let p = surface.evaluate(u, v);
+                    assert!(held.contains_point(p), "({u}, {v}) at {p:?} off {held:?}");
+                }
+            }
+            if pcurves {
+                let reach = 1e-5;
+                assert!(
+                    held.min.x() > 2.5 - reach
+                        && held.max.x() < 7.5 + reach
+                        && held.min.y() > 2.5 - reach
+                        && held.max.y() < 7.5 + reach,
+                    "{held:?}"
+                );
+            }
+            let (start, end) = (Point3::new(1.0, 5.5, 3.0), Point3::new(9.0, 5.5, 3.0));
+            let found = ef_vertices(&mut topo, face, EdgeCurve::Line, start, Some(end));
+            assert_eq!(found.len(), 2, "pcurves {pcurves}: {found:?}");
+            for (p, x) in found.iter().zip([5.0, 6.0]) {
+                assert!((*p - Point3::new(x, 5.5, 3.0)).length() < 1e-7, "{p:?}");
+            }
+        }
+    }
+
+    /// A tube about `z` from height 0 to 4 whose rows round it are a
+    /// quadratic B-spline on the knots `0, 1, ..., 12`, not clamped, whose
+    /// control points run round an octagon and repeat its first two: the
+    /// tube closes on itself along `u`, over its domain `[2, 10]`, though its
+    /// first and last rows differ. Its face is the tube less a small patch,
+    /// bounded by one loop whose pcurve is the circle of radius 0.2 about
+    /// `(6, 0.5)`, run so the face is the rest of the tube. Its box holds the
+    /// whole tube, and a line across the tube at height 3.5, far from the
+    /// loop, crosses it twice.
+    #[test]
+    fn a_closed_tube_less_a_small_patch_is_boxed_whole() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::curves2d::{Circle2D, Curve2D};
+        use brepkit_math::nurbs::projection::project_point_to_surface;
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::{Point2, Vec3};
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::pcurve::PCurve;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let ring: Vec<(f64, f64)> = (0..10)
+            .map(|k| {
+                let a = std::f64::consts::FRAC_PI_4 * f64::from(k % 8);
+                (a.cos(), a.sin())
+            })
+            .collect();
+        let rows: Vec<Vec<Point3>> = ring
+            .iter()
+            .map(|&(x, y)| vec![Point3::new(x, y, 0.0), Point3::new(x, y, 4.0)])
+            .collect();
+        let tube = NurbsSurface::new(
+            2,
+            1,
+            (0..=12).map(f64::from).collect(),
+            vec![0.0, 0.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 2]; 10],
+        )
+        .unwrap();
+        assert!(!tube.is_periodic_u() && !tube.is_periodic_v());
+        let seam = (tube.evaluate(2.0, 0.5) - tube.evaluate(10.0, 0.5)).length();
+        assert!(seam < 1e-12, "the tube is open by {seam}");
+        let mut topo = Topology::new();
+        let loop_uv = Circle2D::new(Point2::new(6.0, 0.5), 0.2).unwrap();
+        let start = loop_uv.evaluate(0.0);
+        let corner = tube.evaluate(start.x(), start.y());
+        let v = topo.add_vertex(Vertex::new(corner, 1e-7));
+        let round = Circle3D::new_with_ref(
+            corner - Vec3::new(0.0, 0.0, 0.01),
+            Vec3::new(1.0, 0.0, 0.0),
+            0.01,
+            Vec3::new(0.0, 0.0, 1.0),
+        )
+        .unwrap();
+        let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(round)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, false)], true).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(tube.clone())));
+        topo.pcurves_mut().set(
+            e,
+            face,
+            PCurve::new(Curve2D::Circle(loop_uv), 0.0, std::f64::consts::TAU),
+        );
+        let held = build_face_containment(&topo, face, Tolerance::new())
+            .unwrap()
+            .bbox;
+        let off_box = (0..=40_u32)
+            .flat_map(|i| (0..=8_u32).map(move |j| (i, j)))
+            .map(|(i, j)| tube.evaluate(0.2f64.madd(f64::from(i), 2.0), f64::from(j) / 8.0))
+            .filter(|&p| !held.contains_point(p))
+            .count();
+        let (start, end) = (Point3::new(-3.0, 0.1, 3.5), Point3::new(3.0, 0.1, 3.5));
+        let found = ef_vertices(&mut topo, face, EdgeCurve::Line, start, Some(end));
+        assert!(
+            off_box == 0 && found.len() == 2,
+            "{off_box} points off {held:?}, crossings {found:?}"
+        );
+        for p in &found {
+            let off = project_point_to_surface(&tube, *p, 1e-12).unwrap().distance;
+            assert!(off < 1e-7, "{p:?} lies {off} off the tube");
+            assert!(point_to_segment(*p, start, end) < 1e-7, "{p:?}");
+        }
     }
 }

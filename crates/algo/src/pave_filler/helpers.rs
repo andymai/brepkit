@@ -7,7 +7,7 @@ use brepkit_math::aabb::Aabb3;
 use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::tolerance::Tolerance;
-use brepkit_math::vec::Point3;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::face::FaceId;
@@ -160,8 +160,10 @@ pub(super) fn analytic_face_box(
 /// pcurves bound ([`pcurve_parameters`]), or of the whole surface's control
 /// points where they bound none. Each point of a knot span blends the
 /// control points the span holds, with weights that are positive and sum to
-/// one, so it lies in their box. The box is grown by a bound on the rounding
-/// of the knot insertion and of the surface's evaluation.
+/// one, so it lies in their box, whether or not the knots are clamped. The
+/// box is grown by a bound on the rounding of the knot insertion and of the
+/// surface's evaluation. `reach` is how far the face's own edges and
+/// vertices may stand off the surface.
 ///
 /// # Errors
 ///
@@ -173,6 +175,7 @@ pub(super) fn nurbs_face_box(
     face_id: FaceId,
     surface: &NurbsSurface,
     tol: Tolerance,
+    reach: f64,
 ) -> Result<Aabb3, AlgoError> {
     if !surface
         .weights()
@@ -185,7 +188,7 @@ pub(super) fn nurbs_face_box(
              points do not bound it"
         )));
     }
-    let held = pcurve_parameters(topo, face_id, surface, tol)?
+    let held = pcurve_parameters(topo, face_id, surface, tol, reach)?
         .and_then(|range| cut_net_box(surface, range))
         .unwrap_or_else(|| surface.aabb());
     let size = held
@@ -205,23 +208,26 @@ pub(super) fn nurbs_face_box(
 
 /// The box `[u0, u1, v0, v1]` in a NURBS surface's parameters of a face's
 /// pcurves, which holds the parameters of every point of the face. On a
-/// surface that does not close on itself, the face is the part of it that
-/// its wires enclose, and each wire's pcurves run round a closed loop in
-/// the parameters, which encloses only points of its own box. The box is
-/// grown by the widest gap between the ends of two pcurves that meet.
+/// surface whose sides are free ([`sides_are_free`]), a face reaches a side
+/// only along edges of its own, so it is the part of the surface that its
+/// wires enclose, and each wire's pcurves run round a closed loop in the
+/// parameters, which encloses only points of its own box. The box is grown
+/// by the widest gap between the ends of two pcurves that meet.
 ///
-/// `None` where the surface closes on itself along a parameter, an edge of
-/// a wire has no pcurve on the face or one that cannot be boxed, the ends of
-/// a pcurve do not lie on its edge's vertices, or two pcurves that meet in a
-/// wire leave a gap of more than a millionth of the parameters' spans.
+/// `None` where a side of the surface is not proved free within `reach`, an
+/// edge of a wire has no pcurve on the face or one that cannot be boxed,
+/// the ends of a pcurve do not lie on its edge's vertices, or two pcurves
+/// that meet in a wire leave a gap of more than a millionth of the
+/// parameters' spans.
 fn pcurve_parameters(
     topo: &Topology,
     face_id: FaceId,
     surface: &NurbsSurface,
     tol: Tolerance,
+    reach: f64,
 ) -> Result<Option<[f64; 4]>, AlgoError> {
     use brepkit_math::vec::Point2;
-    if surface.is_periodic_u() || surface.is_periodic_v() {
+    if !sides_are_free(surface, reach) {
         return Ok(None);
     }
     let ((u_min, u_max), (v_min, v_max)) = (surface.domain_u(), surface.domain_v());
@@ -271,6 +277,51 @@ fn pcurve_parameters(
         return Ok(None);
     }
     Ok(Some([lo[0] - gap, hi[0] + gap, lo[1] - gap, hi[1] + gap]))
+}
+
+/// Whether each side of a B-spline surface's domain keeps farther than
+/// `reach` from the side across from it, along `u` and along `v`: the
+/// surface then neither closes on itself, to within `reach`, nor shrinks to
+/// a point along a side, as each side runs from one of the other two sides
+/// to the other. A side is the curve whose control points blend the
+/// surface's rows (or columns) by their basis functions at the domain's
+/// end, which holds whether or not the knots are clamped, and its points
+/// lie in their box. A surface that closes on itself with its first and
+/// last control points apart, as one on knots that are not clamped does,
+/// is caught too.
+fn sides_are_free(surface: &NurbsSurface, reach: f64) -> bool {
+    let net = surface.control_points();
+    let weights = surface.weights();
+    let (rows, columns) = (net.len(), net.first().map_or(0, Vec::len));
+    // The control points of the side at `at` along `u`, or along `v`.
+    let side = |along_u: bool, at: f64| -> Option<Aabb3> {
+        let (knots, p, count, across) = if along_u {
+            (surface.knots_u(), surface.degree_u(), rows, columns)
+        } else {
+            (surface.knots_v(), surface.degree_v(), columns, rows)
+        };
+        let span = brepkit_math::nurbs::basis::find_span(count, p, at, knots);
+        let basis = brepkit_math::nurbs::basis::basis_funs(span, at, p, knots);
+        let first = span.checked_sub(p)?;
+        let points = (0..across).map(|j| {
+            let (mut sum, mut total) = (Vec3::new(0.0, 0.0, 0.0), 0.0);
+            for (k, &b) in basis.iter().enumerate() {
+                let (i, j) = if along_u {
+                    (first + k, j)
+                } else {
+                    (j, first + k)
+                };
+                let w = b * weights[i][j];
+                sum += Vec3::new(net[i][j].x(), net[i][j].y(), net[i][j].z()) * w;
+                total += w;
+            }
+            (total > 0.0).then(|| Point3::new(sum.x() / total, sum.y() / total, sum.z() / total))
+        });
+        Aabb3::try_from_points(points.collect::<Option<Vec<_>>>()?)
+    };
+    let apart = |a: Option<Aabb3>, b: Option<Aabb3>| matches!((a, b), (Some(a), Some(b)) if !a.expanded(reach).intersects(b));
+    let ((u_min, u_max), (v_min, v_max)) = (surface.domain_u(), surface.domain_v());
+    apart(side(true, u_min), side(true, u_max)) && apart(side(false, v_min), side(false, v_max))
 }
 
 /// A box in the parameters that holds a pcurve over its interval: the
