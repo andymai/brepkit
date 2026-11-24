@@ -144,15 +144,42 @@ fn curve_reach(curve: &brepkit_topology::edge::EdgeCurve) -> f64 {
     }
 }
 
-/// Refuses a face whose mesh points could lie past [`MESH_REACH`]. The
-/// bound takes the face's vertices and edge curves, and the surface: a
-/// mesher reads a point of a cylinder or cone at the height a boundary point
-/// projects to, which lies within the boundary's reach and the surface's
-/// origin, plus its radius.
+/// A bound on `|dir · (p - from)|` over the points `p` of `curve`, beyond
+/// its ends, for a unit `dir`. A NURBS curve lies in the hull of its
+/// control points.
+fn curve_extent_along(curve: &brepkit_topology::edge::EdgeCurve, from: Point3, dir: Vec3) -> f64 {
+    use brepkit_topology::edge::EdgeCurve;
+    match curve {
+        EdgeCurve::Line => 0.0,
+        EdgeCurve::Circle(c) => {
+            let swing = c.radius() * dir.dot(c.u_axis()).hypot(dir.dot(c.v_axis()));
+            dir.dot(c.center() - from).abs() + swing
+        }
+        EdgeCurve::Ellipse(e) => {
+            let swing =
+                (e.semi_major() * dir.dot(e.u_axis())).hypot(e.semi_minor() * dir.dot(e.v_axis()));
+            dir.dot(e.center() - from).abs() + swing
+        }
+        EdgeCurve::NurbsCurve(n) => largest(n.control_points().iter().map(|&q| dir.dot(q - from))),
+    }
+}
+
+/// Refuses a face whose mesh points could lie past [`MESH_REACH`].
+///
+/// The bound holds the face's vertices and edge curves, and the points the
+/// mesher reads from the surface's parameters. A sphere's or torus's points
+/// lie within its radii of its centre at any parameters. A NURBS surface's
+/// points lie in its control hull, since a projection onto it stays in its
+/// domain. A cylinder's and a cone's mesher reads the height along the axis
+/// at which each wire point projects: a cone reads it over the sine of its
+/// half angle, as a distance along a generator, or below a sine of 1e-15 the
+/// distance from the axis over the cosine, as `ConicalSurface::project_point`
+/// does. The wires need not lie on the surface, so a cone of small angle can
+/// read a short wire as a generator far longer than the wire.
 pub(super) fn check_reach(topo: &Topology, face: FaceId) -> Result<(), crate::OperationsError> {
     use brepkit_topology::face::FaceSurface;
     let face_data = topo.face(face)?;
-    let mut boundary = 0.0_f64;
+    let mut edges = Vec::new();
     for wire in
         std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
     {
@@ -162,22 +189,43 @@ pub(super) fn check_reach(topo: &Topology, face: FaceId) -> Result<(), crate::Op
                 topo.vertex(edge.start())?.point(),
                 topo.vertex(edge.end())?.point(),
             ];
-            boundary = largest([boundary, points_reach(&ends), curve_reach(edge.curve())]);
+            edges.push((edge.curve(), ends));
         }
     }
-    let reach = match face_data.surface() {
-        FaceSurface::Plane { .. } => boundary,
-        FaceSurface::Cylinder(c) => 2.0 * (boundary + points_reach(&[c.origin()]) + c.radius()),
-        FaceSurface::Cone(c) => 2.0 * (boundary + points_reach(&[c.apex()])),
-        FaceSurface::Sphere(s) => largest([boundary, points_reach(&[s.center()]) + s.radius()]),
-        FaceSurface::Torus(t) => largest([
-            boundary,
-            points_reach(&[t.center()]) + t.major_radius() + t.minor_radius(),
-        ]),
-        FaceSurface::Nurbs(n) => {
-            largest([boundary, points_reach(n.control_points().iter().flatten())])
-        }
+    let boundary = largest(
+        edges
+            .iter()
+            .flat_map(|(curve, ends)| [points_reach(ends), curve_reach(curve)]),
+    );
+    // The largest `|dir · (p - from)|` over the wires' points `p`.
+    let along = |from: Point3, dir: Vec3| {
+        largest(edges.iter().flat_map(|(curve, ends)| {
+            [
+                dir.dot(ends[0] - from),
+                dir.dot(ends[1] - from),
+                curve_extent_along(curve, from, dir),
+            ]
+        }))
     };
+    let surface_reach = match face_data.surface() {
+        FaceSurface::Plane { .. } => 0.0,
+        FaceSurface::Cylinder(c) => {
+            points_reach(&[c.origin()]) + c.radius() + along(c.origin(), c.axis())
+        }
+        FaceSurface::Cone(c) => {
+            let (sin_a, cos_a) = c.half_angle().sin_cos();
+            let run = if sin_a.abs() > 1e-15 {
+                along(c.apex(), c.axis()) / sin_a.abs()
+            } else {
+                3.0_f64.sqrt() * (boundary + points_reach(&[c.apex()])) / cos_a.abs()
+            };
+            points_reach(&[c.apex()]) + run
+        }
+        FaceSurface::Sphere(s) => points_reach(&[s.center()]) + s.radius(),
+        FaceSurface::Torus(t) => points_reach(&[t.center()]) + t.major_radius() + t.minor_radius(),
+        FaceSurface::Nurbs(n) => points_reach(n.control_points().iter().flatten()),
+    };
+    let reach = largest([boundary, surface_reach]);
     if reach <= MESH_REACH {
         Ok(())
     } else {
