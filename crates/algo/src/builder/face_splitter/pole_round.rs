@@ -10,14 +10,20 @@
 
 use brepkit_math::madd::Madd;
 use brepkit_math::surfaces::SphericalSurface;
-use brepkit_math::vec::{Point2, Point3, Vec3};
+use brepkit_math::vec::{Point2, Point3, Vec2, Vec3};
 use brepkit_topology::edge::EdgeCurve;
 
-use super::super::classify_2d::point_in_polygon_2d;
+use super::super::classify_2d::{
+    boundary_eps, distance_to_polygon_boundary, point_in_polygon_2d, sample_interior_point_where,
+};
 use super::super::split_types::OrientedPCurveEdge;
 
 /// Samples per curved edge.
 const SAMPLES: u32 = 64;
+
+/// The chord below which an edge's ends are one point and it runs its
+/// whole curve, as [`EdgeCurve::domain_with_endpoints`] reads it.
+const CLOSED: f64 = 1e-9;
 
 /// The plane about a ball's held pole: the azimuthal equal-area map, which
 /// keeps areas (the whole ball maps onto a disc of radius 2, area `4 pi`).
@@ -117,7 +123,7 @@ fn walk_edge(e: &OrientedPCurveEdge, out: &mut Vec<Point3>) {
         return;
     }
     let fraction = |k: u32| f64::from(k) / f64::from(SAMPLES);
-    let closed = (e.start_3d - e.end_3d).length() < 1e-10;
+    let closed = (e.start_3d - e.end_3d).length() < CLOSED;
     match &e.curve_3d {
         EdgeCurve::Circle(c) if closed => {
             let (a0, turn) = (c.project(e.start_3d), if e.forward { TAU } else { -TAU });
@@ -137,14 +143,59 @@ fn walk_edge(e: &OrientedPCurveEdge, out: &mut Vec<Point3>) {
             let mut samples: Vec<Point3> = (1..SAMPLES)
                 .map(|k| curve.evaluate_with_endpoints((t1 - t0).madd(fraction(k), t0), s3, e3))
                 .collect();
+            // A closed curve (a spline loop) runs its whole domain, from its
+            // vertex back to it either way: the walk's sense picks the way.
             // A marched curve's domain can run from either end.
-            let at_t0 = curve.evaluate_with_endpoints(t0, s3, e3);
-            if (at_t0 - e.start_3d).length() > (at_t0 - e.end_3d).length() {
+            let backward = if closed {
+                !e.forward
+            } else {
+                let at_t0 = curve.evaluate_with_endpoints(t0, s3, e3);
+                (at_t0 - e.start_3d).length() > (at_t0 - e.end_3d).length()
+            };
+            if backward {
                 samples.reverse();
             }
             out.extend(samples);
         }
     }
+}
+
+/// A point of the region inside `outline` and outside each of `holes`,
+/// clear of all of them: the polygon's own interior point where it serves,
+/// else one stepped off the middle of a side of the outline or a hole, a
+/// quarter of the side's length or a twentieth, a hundredth or a thousandth
+/// (a region thinner than its sides are long).
+fn region_point(outline: &[Point2], holes: &[Vec<Point2>]) -> Option<Point2> {
+    let walls = || std::iter::once(outline).chain(holes.iter().map(Vec::as_slice));
+    let holds = |p: Point2| {
+        point_in_polygon_2d(p, outline)
+            && !holes.iter().any(|h| point_in_polygon_2d(p, h))
+            && walls().all(|w| distance_to_polygon_boundary(p, w) > boundary_eps(w))
+    };
+    if let Some(p) = sample_interior_point_where(outline, holds) {
+        return Some(p);
+    }
+    for wall in walls() {
+        for (k, &a) in wall.iter().enumerate() {
+            let b = wall[(k + 1) % wall.len()];
+            let side = b - a;
+            let length = side.length();
+            if length <= 0.0 {
+                continue;
+            }
+            let middle = Point2::new(0.5 * (a.x() + b.x()), 0.5 * (a.y() + b.y()));
+            let normal = Vec2::new(-side.y(), side.x()) * (1.0 / length);
+            for share in [0.25, 0.05, 0.01, 1e-3] {
+                for way in [1.0, -1.0] {
+                    let p = middle + normal * (way * share * length);
+                    if holds(p) {
+                        return Some(p);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// The 3D point half way along `e`'s curve.
@@ -189,7 +240,7 @@ pub(super) type Piece = (Vec<OrientedPCurveEdge>, Vec<Vec<OrientedPCurveEdge>>);
 ///
 /// `None` when a loop does not map, bounds no area, runs an edge both ways
 /// or passes a vertex twice (two regions toured as one, touching there), a
-/// hole finds no outline, or the areas do not balance.
+/// hole finds no outline, the areas do not balance, or two pieces overlap.
 pub(super) fn pieces(
     view: &PoleView,
     boundary: &[OrientedPCurveEdge],
@@ -234,7 +285,8 @@ pub(super) fn pieces(
             .zip(poly.iter().cycle().skip(1))
             .map(|(a, b)| (*b - *a).length())
             .sum();
-        if area.abs() <= perimeter * tol {
+        // The plane's lengths are the ball's over its radius.
+        if area.abs() <= perimeter * tol / view.radius {
             return None;
         }
         if area > 0.0 {
@@ -264,5 +316,290 @@ pub(super) fn pieces(
             .map(|(i, _)| i)?;
         pieces[owner].1.push(hole);
     }
+    // Loops that use each half once and balance the area can still overlap:
+    // two section loops that cross, read as their union and their lens with
+    // both whole loops as holes. A piece's region (its outline less its
+    // holes) holds a point of its own that no other piece's region holds.
+    let regions: Vec<(&[Point2], Vec<Vec<Point2>>)> = outers
+        .iter()
+        .zip(&pieces)
+        .map(|((_, poly, _), (_, piece_holes))| {
+            let holes = piece_holes
+                .iter()
+                .map(|h| view.loop_polygon(h))
+                .collect::<Option<Vec<_>>>()?;
+            Some((poly.as_slice(), holes))
+        })
+        .collect::<Option<_>>()?;
+    let holds = |(outline, holes): &(&[Point2], Vec<Vec<Point2>>), p: Point2| {
+        point_in_polygon_2d(p, outline) && !holes.iter().any(|h| point_in_polygon_2d(p, h))
+    };
+    for (i, (outline, holes)) in regions.iter().enumerate() {
+        let own = region_point(outline, holes)?;
+        if regions
+            .iter()
+            .enumerate()
+            .any(|(j, other)| j != i && holds(other, own))
+        {
+            return None;
+        }
+    }
     Some(pieces)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use brepkit_math::nurbs::curve::NurbsCurve;
+
+    use super::*;
+
+    fn edge(curve: &EdgeCurve, from: Point3, to: Point3, forward: bool) -> OrientedPCurveEdge {
+        let origin = Point2::new(0.0, 0.0);
+        OrientedPCurveEdge {
+            curve_3d: curve.clone(),
+            pcurve: Curve2D::Line(Line2D::new(origin, Vec2::new(1.0, 0.0)).unwrap()),
+            start_uv: origin,
+            end_uv: origin,
+            start_3d: from,
+            end_3d: to,
+            forward,
+            source_edge_idx: None,
+            pave_block_id: None,
+        }
+    }
+
+    fn twin(e: &OrientedPCurveEdge) -> OrientedPCurveEdge {
+        OrientedPCurveEdge {
+            start_3d: e.end_3d,
+            end_3d: e.start_3d,
+            forward: !e.forward,
+            ..e.clone()
+        }
+    }
+
+    fn reversed(lp: &[OrientedPCurveEdge]) -> Vec<OrientedPCurveEdge> {
+        lp.iter().rev().map(twin).collect()
+    }
+
+    /// A small circle of the ball of radius `r` about the unit direction
+    /// `d`, `rho` radians round.
+    fn small_circle(r: f64, d: Vec3, rho: f64) -> Circle3D {
+        let c = Point3::new(0.0, 0.0, 0.0) + d * (r * rho.cos());
+        Circle3D::new(c, d, r * rho.sin()).unwrap()
+    }
+
+    /// A ball of radius `r` less the cap above `z = 0.95 r`, seen about its
+    /// south pole, and its outline: one closed circle.
+    fn capped_ball(r: f64) -> (PoleView, OrientedPCurveEdge) {
+        let ball = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), r).unwrap();
+        let rim = small_circle(r, Vec3::new(0.0, 0.0, 1.0), 0.95_f64.acos());
+        let at = rim.evaluate(0.0);
+        (
+            PoleView::new(&ball, false),
+            edge(&EdgeCurve::Circle(rim), at, at, true),
+        )
+    }
+
+    /// `lp` walked so that it winds as the outline does where `outline`,
+    /// against it otherwise.
+    fn oriented(
+        view: &PoleView,
+        boundary: &OrientedPCurveEdge,
+        lp: Vec<OrientedPCurveEdge>,
+        outline: bool,
+    ) -> Vec<OrientedPCurveEdge> {
+        let face = view.loop_area(std::slice::from_ref(boundary));
+        if (view.loop_area(&lp) * face > 0.0) == outline {
+            lp
+        } else {
+            reversed(&lp)
+        }
+    }
+
+    /// Two small circles about the south pole of a ball of radius `r`,
+    /// `rho` radians round, their middles `apart` radians apart, so that
+    /// they cross twice. Their four arcs: the first circle's outside the
+    /// second's disc, its inside, then the second circle's outside and
+    /// inside. Each arc is walked from the crossing with `y > 0` and carries
+    /// its index as its section.
+    fn crossing_arcs(r: f64, rho: f64, apart: f64) -> [OrientedPCurveEdge; 4] {
+        let (s, c) = (0.5 * apart).sin_cos();
+        let d1 = Vec3::new(s, 0.0, -c);
+        let d2 = Vec3::new(-s, 0.0, -c);
+        let z = -rho.cos() / c;
+        let y = (1.0 - z * z).sqrt();
+        let (p, q) = (
+            Point3::new(0.0, y * r, z * r),
+            Point3::new(0.0, -y * r, z * r),
+        );
+        let arcs = |d: Vec3, other: Vec3| {
+            let curve = EdgeCurve::Circle(small_circle(r, d, rho));
+            // The arc that runs the circle's way from `p` to `q`, and the
+            // one from `q` to `p`.
+            let one = edge(&curve, p, q, true);
+            let other_way = edge(&curve, q, p, true);
+            let inside = |e: &OrientedPCurveEdge| {
+                (edge_middle(e) - Point3::new(0.0, 0.0, 0.0)).dot(other) > r * rho.cos()
+            };
+            let (outer, inner) = if inside(&one) {
+                (twin(&other_way), one)
+            } else {
+                (one, twin(&other_way))
+            };
+            [outer, inner]
+        };
+        let [o1, i1] = arcs(d1, d2);
+        let [o2, i2] = arcs(d2, d1);
+        let mut out = [o1, i1, o2, i2];
+        for (k, e) in out.iter_mut().enumerate() {
+            e.source_edge_idx = Some(k);
+        }
+        out
+    }
+
+    fn halves(arcs: &[OrientedPCurveEdge]) -> Vec<OrientedPCurveEdge> {
+        arcs.iter().flat_map(|e| [e.clone(), twin(e)]).collect()
+    }
+
+    /// Arcs `a` from the crossing with `y > 0` and `b` back to it.
+    fn round(a: &OrientedPCurveEdge, b: &OrientedPCurveEdge) -> Vec<OrientedPCurveEdge> {
+        vec![a.clone(), twin(b)]
+    }
+
+    #[test]
+    fn crossing_loops_read_as_their_union_and_lens_are_refused() {
+        let (view, rim) = capped_ball(1.0);
+        let arcs = crossing_arcs(1.0, 0.2, 0.3);
+        let [o1, i1, o2, i2] = &arcs;
+        let sections = halves(&arcs);
+        let at = |lp, outline| oriented(&view, &rim, lp, outline);
+        // Each whole circle as a hole, starting on its arc outside the
+        // other disc, so both go to the face.
+        let hole = |outer: &OrientedPCurveEdge, inner: &OrientedPCurveEdge| {
+            let mut lp = at(round(outer, inner), false);
+            if lp[0].source_edge_idx != outer.source_edge_idx {
+                lp.rotate_left(1);
+            }
+            lp
+        };
+        let overlapping = vec![
+            vec![rim.clone()],
+            at(round(o1, o2), true),
+            at(round(i1, i2), true),
+            hole(o1, i1),
+            hole(o2, i2),
+        ];
+        assert!(
+            pieces(
+                &view,
+                std::slice::from_ref(&rim),
+                &sections,
+                overlapping,
+                1e-7
+            )
+            .is_none()
+        );
+
+        let partition = vec![
+            vec![rim.clone()],
+            at(round(o1, o2), false),
+            at(round(o1, i2), true),
+            at(round(o2, i1), true),
+            at(round(i1, i2), true),
+        ];
+        let split = pieces(
+            &view,
+            std::slice::from_ref(&rim),
+            &sections,
+            partition,
+            1e-7,
+        )
+        .unwrap();
+        assert_eq!(split.len(), 4);
+        assert_eq!(split.iter().map(|p| p.1.len()).sum::<usize>(), 1);
+    }
+
+    /// A closed spline circle about the south pole of the unit ball, `rho`
+    /// radians round: a rational quadratic in nine points.
+    fn spline_loop(rho: f64) -> OrientedPCurveEdge {
+        let circle = small_circle(1.0, Vec3::new(0.0, 0.0, -1.0), rho);
+        let (c, r) = (circle.center(), circle.radius());
+        let (u, v) = (circle.u_axis(), circle.v_axis());
+        let w = std::f64::consts::FRAC_1_SQRT_2;
+        let corners = [
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (0.0, 1.0),
+            (-1.0, 1.0),
+            (-1.0, 0.0),
+            (-1.0, -1.0),
+            (0.0, -1.0),
+            (1.0, -1.0),
+            (1.0, 0.0),
+        ];
+        let points = corners.map(|(a, b)| c + u * (r * a) + v * (r * b)).to_vec();
+        let weights = vec![1.0, w, 1.0, w, 1.0, w, 1.0, w, 1.0];
+        let knots = vec![
+            0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+        ];
+        let curve = NurbsCurve::new(2, knots, points, weights).unwrap();
+        let at = c + u * r;
+        let mut e = edge(&EdgeCurve::NurbsCurve(curve), at, at, true);
+        e.source_edge_idx = Some(0);
+        e
+    }
+
+    #[test]
+    fn a_closed_spline_walked_both_ways_cancels() {
+        let (view, rim) = capped_ball(1.0);
+        let one_way = spline_loop(0.3);
+        let other_way = twin(&one_way);
+        let area = view.loop_area(std::slice::from_ref(&one_way));
+        assert!(area.abs() > 0.1, "{area}");
+        let sum = area + view.loop_area(std::slice::from_ref(&other_way));
+        assert!(sum.abs() < 1e-12 * area.abs(), "{sum}");
+
+        // The face less the disc round the pole, and the disc.
+        let sections = vec![one_way.clone(), other_way];
+        let loops = vec![
+            vec![rim.clone()],
+            oriented(&view, &rim, vec![one_way.clone()], false),
+            oriented(&view, &rim, vec![one_way], true),
+        ];
+        let split = pieces(&view, std::slice::from_ref(&rim), &sections, loops, 1e-7).unwrap();
+        assert_eq!(split.len(), 2);
+    }
+
+    #[test]
+    fn a_lens_a_thousandth_wide_on_a_ball_ten_thousand_round_is_a_piece() {
+        // On a ball of radius 1e4 the lens is 1e-3 wide, far over the 1e-7
+        // tolerance, though its plane image is 1e-7 wide.
+        let r = 1e4;
+        let rho = 0.05;
+        let (view, rim) = capped_ball(r);
+        let arcs = crossing_arcs(r, rho, 2.0 * rho - 1e-7);
+        let [o1, i1, o2, i2] = &arcs;
+        let sections = halves(&arcs);
+        let at = |lp, outline| oriented(&view, &rim, lp, outline);
+        let partition = vec![
+            vec![rim.clone()],
+            at(round(o1, o2), false),
+            at(round(o1, i2), true),
+            at(round(o2, i1), true),
+            at(round(i1, i2), true),
+        ];
+        let split = pieces(
+            &view,
+            std::slice::from_ref(&rim),
+            &sections,
+            partition,
+            1e-7,
+        )
+        .unwrap();
+        assert_eq!(split.len(), 4);
+    }
 }
