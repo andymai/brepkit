@@ -18248,6 +18248,78 @@ mod tests {
         }
     }
 
+    /// An arc and its chord inside the plate, clear of its rim, split it with
+    /// the segment between them as a piece of its own: with two lines from the
+    /// chord's ends to (5, 8), with the arc on either side of the chord, with
+    /// an arc on each side, and with the rest of the arc's circle in two arcs;
+    /// in either order, and on a plate with a hole.
+    #[test]
+    fn an_arc_and_its_chord_inside_the_plate_split_off_their_segment() {
+        use std::f64::consts::{FRAC_PI_2, PI, SQRT_2};
+        let segment = FRAC_PI_2 - 1.0;
+        let disc = 2.0 * PI;
+        let (up, down, chord) = arcs_and_chord();
+        let l1 = PlateCut::Line((6.0, 5.0), (5.0, 8.0));
+        let l2 = PlateCut::Line((5.0, 8.0), (4.0, 5.0));
+        let bottom = (5.0, 4.0 - SQRT_2);
+        let rest_a = PlateCut::Arc((5.0, 4.0), SQRT_2, (4.0, 5.0), bottom);
+        let rest_b = PlateCut::Arc((5.0, 4.0), SQRT_2, bottom, (6.0, 5.0));
+        // Each case's pieces; the last holds the plate's rim, and with a unit
+        // square hole at (1, 1) it loses 1.
+        let cases = [
+            (vec![up, chord, l1, l2], vec![segment, 3.0 - segment, 97.0]),
+            (
+                vec![down, chord, l1, l2],
+                vec![segment, 3.0, 97.0 - segment],
+            ),
+            (vec![up, chord], vec![segment, 100.0 - segment]),
+            (
+                vec![up, down, chord],
+                vec![segment, segment, 100.0 - 2.0 * segment],
+            ),
+            (
+                vec![up, rest_a, rest_b, chord],
+                vec![segment, disc - segment, 100.0 - disc],
+            ),
+        ];
+        for (k, (cuts, whole)) in cases.iter().enumerate() {
+            let mut holed = whole.clone();
+            if let Some(rim) = holed.last_mut() {
+                *rim -= 1.0;
+            }
+            for (holes, expected) in [(vec![], whole), (vec![((1.0, 1.0), 1.0)], &holed)] {
+                for (i, pose) in plate_poses().iter().enumerate() {
+                    for chord_first in [false, true] {
+                        let mut cuts = cuts.clone();
+                        if chord_first {
+                            let at = cuts.iter().position(|c| *c == chord).unwrap();
+                            let line = cuts.remove(at);
+                            cuts.insert(0, line);
+                        }
+                        let (topo, face, sections) = plate_with_cuts(pose, &cuts, &holes);
+                        let pieces = split_face_2d(
+                            &topo,
+                            face,
+                            &sections,
+                            Rank::A,
+                            &brepkit_math::tolerance::Tolerance::new(),
+                            None,
+                            None,
+                            &std::collections::HashMap::new(),
+                            &std::collections::BTreeSet::new(),
+                            None,
+                        );
+                        let label = format!(
+                            "case {k}, holes {}, pose {i}, chord first {chord_first}",
+                            holes.len()
+                        );
+                        assert_areas(&piece_areas(&pieces, pose.normal()), expected, &label);
+                    }
+                }
+            }
+        }
+    }
+
     /// An arc and its chord whose ends meet the rest of the cut, which runs to
     /// the plate's rim, split the plate with the segment between them as a
     /// piece of its own: a line across the plate through the chord, with the
