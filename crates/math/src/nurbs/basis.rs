@@ -42,43 +42,41 @@ pub fn find_span(n: usize, degree: usize, u: f64, knots: &[f64]) -> usize {
     mid
 }
 
-/// The shortest a span of positive length inside a spline's domain may be,
-/// as a share of the domain's length.
+/// The largest magnitude a knot may have: a quarter of the largest float.
 ///
-/// The basis functions divide by the span a parameter lies in, and their
-/// derivatives grow as its reciprocal. The shortest span in any fixture or
-/// test file is 1.5e-5 of its domain.
-pub const KNOT_SPAN_FLOOR: f64 = 1e-12;
+/// The basis functions subtract a knot from a parameter of the domain, and
+/// a reversal or a midpoint adds two knots and takes a third away. Within
+/// this limit none of these overflows.
+pub const KNOT_LIMIT: f64 = f64::MAX / 4.0;
 
 /// Whether [`find_span`] and the basis functions can walk `knots` for a
 /// spline of `degree` over `points` control points, and give finite values
 /// over the whole domain, `knots[degree]` to `knots[points]`.
 ///
 /// There are more points than degrees, and one knot for each point and the
-/// degree and one more. Every knot is finite. The knots the basis functions
-/// read, all but the first and the last, do not fall: falling knots can
-/// turn the domain round or divide by zero. The first and the last span of
-/// the domain have positive length, because the span search takes them at
-/// the domain's ends with no test of their length.
+/// degree and one more. No knot's magnitude passes [`KNOT_LIMIT`]. The
+/// knots the basis functions read, all but the first and the last, do not
+/// fall: falling knots can turn the domain round or divide by zero. The
+/// first and the last span of the domain have positive length, because the
+/// span search takes them at the domain's ends with no test of their length.
 ///
-/// Each span of positive length inside the domain has a finite reciprocal
-/// and is at least [`KNOT_SPAN_FLOOR`] of the domain's length: every divisor
-/// in the basis functions holds the span its parameter lies in. Spans of no
-/// length (repeated knots) are not divisors, and spans outside the domain
-/// are only read added to one inside it.
+/// Each span of positive length inside the domain has a finite reciprocal.
+/// Every divisor in the basis functions holds the span its parameter lies
+/// in, and the values it divides are at most 1. Spans of no length
+/// (repeated knots) are not divisors, and spans outside the domain are only
+/// read added to one inside it. A span may be as short as rounding leaves
+/// it: the fits of boolean sections hold spans of 5e-15 of their domain.
 #[must_use]
 pub fn knots_are_sound(degree: usize, points: usize, knots: &[f64]) -> bool {
     let sound_spans = || {
-        let domain = &knots[degree..=points];
-        let length = domain[domain.len() - 1] - domain[0];
-        domain.windows(2).all(|pair| {
+        knots[degree..=points].windows(2).all(|pair| {
             let span = pair[1] - pair[0];
-            span <= 0.0 || (span.recip().is_finite() && span >= KNOT_SPAN_FLOOR * length)
+            span <= 0.0 || span.recip().is_finite()
         })
     };
     points > degree
         && knots.len() == points + degree + 1
-        && knots.iter().all(|k| k.is_finite())
+        && knots.iter().all(|k| k.abs() <= KNOT_LIMIT)
         && knots[1..knots.len() - 1]
             .windows(2)
             .all(|pair| pair[0] <= pair[1])

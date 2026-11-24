@@ -3089,7 +3089,7 @@ mod tests {
             step.replace(&point, "-inf"),
             step.replace(&weight, "1E-310"),
             step.replace(&weight, "1E308"),
-            step.replace(&knot, "1E-300"),
+            step.replace(&knot, "1E-310"),
             step.replace(&weight, "0."),
             step.replace(&weight, "-1."),
         ];

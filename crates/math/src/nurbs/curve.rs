@@ -414,10 +414,12 @@ mod tests {
         }
     }
 
-    /// A knot span whose reciprocal overflows, and weights whose product
-    /// with the coordinates overflows, give a point that is not finite,
-    /// though every number is finite and the counts agree. Such curves are
-    /// not well formed. A span a trillionth of the domain is too short.
+    /// A knot span whose reciprocal overflows, knots so far apart that the
+    /// domain's length overflows, and weights whose product with the
+    /// coordinates overflows give a point that is not finite, though every
+    /// number is finite and the counts agree. Such curves are not well
+    /// formed. A span as short as rounding leaves it evaluates, as the fits
+    /// of boolean sections hold: one of 5e-15 of its domain, at its start.
     #[test]
     fn curves_whose_evaluation_overflows_are_not_well_formed() {
         let two = |knots: Vec<f64>, x: f64, weight: f64| {
@@ -430,20 +432,32 @@ mod tests {
             .expect("counts agree")
         };
         let tiny = two(vec![0.0, 0.0, 1e-310, 1e-310], 2.0, 1.0);
+        let wide = two(vec![-1e308, -1e308, 1e308, 1e308], 2.0, 1.0);
         let heavy = two(vec![0.0, 0.0, 1.0, 1.0], 2.0, 1e308);
-        for bad in [&tiny, &heavy] {
-            let p = bad.evaluate(0.0);
+        for (bad, u) in [(&tiny, 0.0), (&wide, -1e308), (&heavy, 0.0)] {
+            let p = bad.evaluate(u);
             assert!(!(p.x().is_finite() && p.y().is_finite()), "{bad:?}");
             assert!(!bad.is_well_formed(), "{bad:?}");
         }
-        let short = NurbsCurve::new(
-            1,
-            vec![0.0, 0.0, 1e-13, 1.0, 1.0],
-            vec![Point3::new(0.0, 0.0, 0.0); 3],
-            vec![1.0; 3],
+        let start = 0.499_999_999_999_995_1;
+        let mut knots = vec![start; 4];
+        knots.extend([0.500_000_000_000_000_1, 0.6, 0.7, start + 0.25]);
+        knots.extend([start + 0.25; 3]);
+        let rounded = NurbsCurve::new(
+            3,
+            knots,
+            (0..7)
+                .map(|k| Point3::new(f64::from(k), 1.0, 0.0))
+                .collect(),
+            vec![1.0; 7],
         )
         .expect("counts agree");
-        assert!(!short.is_well_formed());
+        assert!(rounded.is_well_formed());
+        let (d0, d1) = rounded.domain();
+        for k in 0..=20 {
+            let p = rounded.evaluate((d1 - d0).madd(f64::from(k) / 20.0, d0));
+            assert!(p.x().is_finite() && p.y().is_finite());
+        }
         assert!(two(vec![0.0, 0.0, 1e-300, 1e-300], 2.0, 1.0).is_well_formed());
         assert!(two(vec![0.0, 0.0, 1.0, 1.0], 1e3, 1e290).is_well_formed());
     }
