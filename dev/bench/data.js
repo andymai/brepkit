@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795527833182,
+  "lastUpdate": 1795536918814,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -77597,6 +77597,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26615943,
             "range": "± 328336",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "ced51c1373683f88cbb9f30cc4603b6f1151dc22",
+          "message": "fix(algo): split a ball face that holds a pole of every chart about the pole it holds (#2798)\n\n## Summary\n\nOn main, a ball face that holds a pole of every chart axis cannot be\nsplit. Its section loops and outline each run a whole turn of u. So they\nbound no area in the chart, and every loop reads as a hole. The face \"is\ncut by sections but split into nothing\" (#2793). This blocks:\n\n- a box through the pole of a ball less a cap, which refuses in all 9\ncases;\n- `fuse_n` of two rods and a ball, which fails in 196 of 256 poses\n(#2520);\n- the fuse of a ball and a slab across its equator, then a box, which\nrefuses in all 6 cases (#2762).\n\nWith this change, the box through the pole is exact in all 9 cases and\nin a turned variant. `fuse_n` of the rods and ball is exact in 251 of\n256 poses. The ball-and-slab-first order is exact in 6 of 6. No pose\ngives a wrong solid, and no case that main made exact is lost. The pose\nsweep and the truth audit give the same output as main.\n\nFixes #2793. For #2520 and #2762, some cases are still refused.\n\n## The change\n\n- **Loops read about the held pole.** The new\n`face_splitter/pole_round.rs` reads a face's loops in the azimuthal\nequal-area plane about the pole it holds. There each loop winds as the\noutline or as a hole, and each hole goes to the smallest piece round it.\n- Loops stand only where they use every outline piece and every section\nhalf once, and pass no vertex twice. They must also balance the face's\narea exactly on shared samples. Otherwise the face trace's loops are\ntried.\n- **A chart with one pole off the face.** No chart may keep both poles\noff the face. Then `pole_off_ball_axis` picks an axis with one pole\nproved off the face by its `SphereFaceTrim`. The other pole must lie\nclear of the wires and sections.\n- This chart is tried first when the face's own chart holds both poles,\nand as a retry when the face's own paths leave it whole.\n- A split in that chart stands only where it was read about the pole, or\nby the internal-loops path. Otherwise main's result stands.\n- **A section end a turn from the outline's copy.** A section could end\na whole turn from the outline's copy of its end. The snap then left it\nabout 1e-7 off in v. The walk then dropped it as pendant. The snap now\ncompares the copies a whole number of turns apart.\n- **Pieces proved to tile the face.** Each section half is matched by\nidentity. Each hole lies inside its owner and outside its sibling holes,\nby a test at the middle of each of its edges. Arrangement edges cross\nonly at vertices, so that middle decides the whole edge. A middle too\nnear the read polygon refuses, and the face trace reads the face.\n- **Proved bounds, not samples.** Each side of a loop's polygon carries\na proved bound on how far its curve strays. The bound is the Bezier or\nconic hull, carried into the plane by a Taylor bound. A loop's way round\ncomes from its area's sign, proved by those bounds. A loop counts as\nflat only where its flatness is proved.\n- **Closed sections and the inventory.** On this path, a section that\ncloses on itself survives the pruning. Its extent is proved, and a half\nand its twin read alike. The read checks its pieces against every\nsection half the face received before any pruning.\n- **One registry per try.** Each try at splitting a face writes section\nbreaks to its own copy of the registry. Only the kept try's copy is put\nin place.\n- **Crossing loops on a ball face.** On main, the shortcut for loops\ninside a face chains two crossing small circles into two whole discs.\nThe discs overlap on their lens. On a ball face, the shortcut now runs\nonly where each section end meets one other end. Else the face goes to\nthe pole reader or the general split.\n- **Phase FF's arcs on a ball face.** The arc filter on a closed circle\ncut each ball face by its outline's half space. That dropped arcs of a\nface larger than a hemisphere. A face with a `SphereFaceTrim` is now\nread by the trim alone.\n\n## Tests\n\n- `box_through_the_pole_of_a_capped_ball.rs` runs a box through the\nsouth pole of a ball less its north cap, and a turned variant whose own\nchart holds both poles. Each runs cut, fuse and intersect in 3 poses:\nvalid, closed and manifold, within 1e-6 of a closed-form cap plus\nquadrature, with point probes. All 9 refuse on main.\n- `a_ball_and_a_slab_across_its_equator_then_a_box_fuse_one_at_a_time`\nruns 3 slabs in 3 poses, in both orders that fuse the ball and slab\nfirst, against an inclusion-exclusion oracle.\n- `two_small_circles_that_cross_on_a_ball_face_split_it_in_four` splits\na ball face in 4 pieces, where main gives 3 overlapping pieces.\n`two_rods_whose_circles_cross_on_a_capped_ball_fuse_at_once` is exact in\n3 poses, and invalid on main.\n- Unit tests refuse overlapping pieces, a hole outside its owner, nested\nholes and a hole that shares an edge with its owner. They read closed\nsplines both ways and a thin crescent on a ball of radius 1e4.\n- Unit tests also cover these cases:\n- a spline lobe the samples step over, and a loop whose samples wind the\nwrong way;\n- a lone closed section beside crossing circles, and a squeezed spline\ncircle;\n  - an arc and its twin near a full turn.\n- `two_rods_and_a_ball_fuse_at_once` runs `fuse_n`, and\n`two_rods_fuse_onto_a_ball_with_its_faces_unified` the pairwise fuses\nwith faces unified. Every case of both fails on main.\n- Over the 256 poses of #2520, exact and failed counts:\n\n| Mode | main | this branch |\n|---|---|---|\n| `fuse_n` | 60 / 196 | 251 / 5 |\n| `fuse_n`, mirrored | 60 / 196 | 252 / 4 |\n| pairwise, faces unified | 12 / 244 | 246 / 10 |\n| pairwise, faces unified, mirrored | 30 / 226 | 247 / 9 |\n| pairwise and `fuse_all` | 256 / 0 | 256 / 0 |\n\n- brepkit-algo (591) passes, and so do all brepkit-operations and\nbrepkit-io tests (3294, 26 skipped). Over random sweep seeds 1 to 3, 5\ncases go from an error to good, and none gets worse.\n\n## Still open\n\n- Rods exactly opposite: the second cap lies on the first cap's rim, so\nits sections run along the outline. The pairwise fuse refuses, and\n`fuse_n` at one roll fails in assembly. Two other poses refuse, as\nlisted in the roadmap row.\n- #2762: `fuse_n` of the ball, box and slab is valid in 4 of 6 cases, as\non main. The case with the slab off centre gives an invalid solid.\n- These still fail: a capped ball and two crossing boxes (#2809), a rod\ninto a ball capped at its equator (#2810), and tilted rods (#2811).\n- The older chart path finds no interior point for the outer piece of\nthe turned-cap variant. The new chart avoids that path here, but the\nfault remains.",
+          "timestamp": "2026-11-24T16:10:57Z",
+          "tree_id": "fe16fa4c74709ee4247e14f3ad1eff5a81081d60",
+          "url": "https://github.com/andymai/brepkit/commit/ced51c1373683f88cbb9f30cc4603b6f1151dc22"
+        },
+        "date": 1795536908417,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1187788,
+            "range": "± 28533",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1252443,
+            "range": "± 4507",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13522,
+            "range": "± 63",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 710446,
+            "range": "± 3622",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27254760,
+            "range": "± 96826",
             "unit": "ns/iter"
           }
         ]
