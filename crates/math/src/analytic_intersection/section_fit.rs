@@ -91,6 +91,13 @@ pub(super) trait Carrier {
     /// nappe or a torus's tube on `p`'s side of the axis or the far one, as
     /// 1 or -1; 0 for a surface of one sheet.
     fn sheet(&self, p: Point3) -> i8;
+
+    /// An upper bound of the norm of the second derivative of
+    /// [`Self::distance`] at every point within `radius` of `p`; `None`
+    /// where that ball may hold a point where it has none: on an axis, at a
+    /// centre, on a cone's apex plane, or where a torus's distance changes
+    /// tube.
+    fn curvature_within(&self, p: Point3, radius: f64) -> Option<f64>;
 }
 
 /// The degree-6 Bernstein coefficients of the product of two cubics.
@@ -383,6 +390,48 @@ impl Carrier for AnalyticSurface<'_> {
                 } else {
                     1
                 }
+            }
+        }
+    }
+
+    // A distance from an axis `rho` has the second derivative `1 / rho` across
+    // the axis and the point's direction from it, and none elsewhere; a
+    // distance from a centre the same. A cone's distance is `sin` times its
+    // distance from the axis, less a term linear in the point on one side
+    // of its apex plane. A torus's distance from a point of its centre
+    // circle, `q` in the meridian plane, has `1 / q` across `q` in that plane
+    // and at most `1 / rho` round the axis. Each distance moves by at most
+    // `radius` over the ball, and the bound rounds up.
+    fn curvature_within(&self, p: Point3, radius: f64) -> Option<f64> {
+        let up = 1.0 + 1e-12;
+        let inverse = |least: f64| (least > 0.0).then(|| up / least);
+        match self {
+            Self::Cylinder(c) => {
+                let w = p - c.origin();
+                inverse((w - c.axis() * c.axis().dot(w)).length() - radius)
+            }
+            Self::Sphere(s) => inverse((p - s.center()).length() - radius),
+            Self::Cone(c) => {
+                let w = p - c.apex();
+                let h = c.axis().dot(w);
+                let rho = (w - c.axis() * h).length();
+                if h.abs() <= radius * up {
+                    return None;
+                }
+                inverse(rho - radius).map(|k| c.half_angle().sin() * k)
+            }
+            Self::Torus(t) => {
+                let w = p - t.center();
+                let h = t.z_axis().dot(w);
+                let rho = (w - t.z_axis() * h).length();
+                let (big, small) = (t.major_radius(), t.minor_radius());
+                let (near, far) = ((rho - big).hypot(h), (rho + big).hypot(h));
+                let (dn, df) = ((near - small).abs(), (far - small).abs());
+                if (dn - df).abs() <= 2.0 * radius * up {
+                    return None;
+                }
+                let q = if df < dn { far } else { near };
+                Some(inverse(q - radius)?.max(inverse(rho - radius)?))
             }
         }
     }
