@@ -1102,7 +1102,9 @@ fn face_holds(
 /// point its projection finds on the whole curve where that lies in the
 /// edge's range, else to the edge's ends; to an ellipse, to the nearest of
 /// the places in the edge's range where the distance comes least and the
-/// edge's ends ([`ellipse_arc_least`]). `None` where a lookup fails, or an
+/// edge's ends ([`ellipse_arc_least`]). Each distance is read with the
+/// rounding of the coordinates' size, as [`trim_reach`] reads a wire, and
+/// so lies within that much more. `None` where a lookup fails, or an
 /// ellipse's range cannot be read.
 fn near_an_edge(topo: &Topology, fid: FaceId, p: Point3, tol: Tolerance) -> Option<bool> {
     use std::f64::consts::TAU;
@@ -1113,6 +1115,8 @@ fn near_an_edge(topo: &Topology, fid: FaceId, p: Point3, tol: Tolerance) -> Opti
             topo.vertex(edge.end()).ok()?,
         );
         let (start, end) = (sv.point(), ev.point());
+        let size = |q: Point3| q.x().abs() + q.y().abs() + q.z().abs();
+        let rounding = 64.0 * f64::EPSILON * size(p).max(size(start)).max(size(end));
         let reach = tol
             .linear
             .max(
@@ -1120,7 +1124,8 @@ fn near_an_edge(topo: &Topology, fid: FaceId, p: Point3, tol: Tolerance) -> Opti
                     .map_or(0.0, |t| t.min(crate::ds::shape_store::MAX_WIDEN)),
             )
             .max(sv.tolerance())
-            .max(ev.tolerance());
+            .max(ev.tolerance())
+            + rounding;
         let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
         let (lo, hi) = (t0.min(t1), t0.max(t1));
         let ends = (p - start).length().min((p - end).length());
@@ -8947,5 +8952,81 @@ mod tests {
             "{} misread: {misread:#?}",
             misread.len()
         );
+    }
+
+    /// A plane face in a turned pose, at the origin and 1e6, 1e8 and 1e10
+    /// from it, bounded by half a circle of radius 2, or half an ellipse of
+    /// semi-axes 2 and 1, and the chord across. Points on the arc and the
+    /// chord, as their own evaluators give them, lie near an edge of the
+    /// face: their distances carry the rounding of their coordinates' size.
+    #[test]
+    fn points_on_a_wire_far_from_the_origin_lie_near_it() {
+        use brepkit_math::curves::{Circle3D, Ellipse3D};
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let tol = Tolerance::new();
+        let turn = Mat4::rotation_z(0.7) * Mat4::rotation_x(1.1) * Mat4::rotation_y(0.3);
+        let mut misread = Vec::new();
+        for off in [0.0, 1e6, 1e8, 1e10] {
+            let shift = Vec3::new(1.3 * off, -2.1 * off, 0.57 * off);
+            let at = |x: f64, y: f64| {
+                let q = turn.mul_point(Point3::new(x, y, 0.0));
+                Point3::new(q.x() + shift.x(), q.y() + shift.y(), q.z() + shift.z())
+            };
+            let normal = turned(turn, Vec3::new(0.0, 0.0, 1.0));
+            let across = turned(turn, Vec3::new(1.0, 0.0, 0.0));
+            let centre = at(0.0, 0.0);
+            for what in ["circle", "ellipse"] {
+                let curve = if what == "circle" {
+                    EdgeCurve::Circle(Circle3D::new_with_ref(centre, normal, 2.0, across).unwrap())
+                } else {
+                    EdgeCurve::Ellipse(
+                        Ellipse3D::new_with_ref(centre, normal, 2.0, 1.0, across).unwrap(),
+                    )
+                };
+                let mut topo = Topology::new();
+                let a = topo.add_vertex(Vertex::new(
+                    curve.evaluate_with_endpoints(0.0, centre, centre),
+                    1e-7,
+                ));
+                let b = topo.add_vertex(Vertex::new(
+                    curve.evaluate_with_endpoints(std::f64::consts::PI, centre, centre),
+                    1e-7,
+                ));
+                let arc = topo.add_edge(Edge::new(a, b, curve.clone()));
+                let chord = topo.add_edge(Edge::new(b, a, EdgeCurve::Line));
+                let wire = topo.add_wire(
+                    Wire::new(
+                        vec![OrientedEdge::new(arc, true), OrientedEdge::new(chord, true)],
+                        true,
+                    )
+                    .unwrap(),
+                );
+                let d = normal.dot(Vec3::new(centre.x(), centre.y(), centre.z()));
+                let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Plane { normal, d }));
+                let (pa, pb) = (
+                    topo.vertex(a).unwrap().point(),
+                    topo.vertex(b).unwrap().point(),
+                );
+                let mut misses = Vec::new();
+                for k in 1..40_u32 {
+                    let t = std::f64::consts::PI * f64::from(k) / 40.0;
+                    let on_arc = curve.evaluate_with_endpoints(t, pa, pb);
+                    let on_chord = pa + (pb - pa) * (f64::from(k) / 40.0);
+                    for (which, p) in [("arc", on_arc), ("chord", on_chord)] {
+                        if near_an_edge(&topo, face, p, tol) != Some(true) {
+                            misses.push((which, k));
+                        }
+                    }
+                }
+                if !misses.is_empty() {
+                    misread.push(format!("{what} at {off:e}: {misses:?}"));
+                }
+            }
+        }
+        assert!(misread.is_empty(), "{misread:#?}");
     }
 }
