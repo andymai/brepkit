@@ -273,10 +273,11 @@ fn pcurve_parameters(
     Ok(Some([lo[0] - gap, hi[0] + gap, lo[1] - gap, hi[1] + gap]))
 }
 
-/// A box in the parameters that holds a pcurve: its ends for a line, and
-/// the whole curve for a circle, an ellipse or a B-spline, whose control
-/// points hold it where its weights are positive normal floats. `None`
-/// otherwise.
+/// A box in the parameters that holds a pcurve over its interval: the
+/// interval's ends for a line, the whole curve for a circle or an ellipse,
+/// and a B-spline's control points, which hold it where its weights are
+/// positive normal floats and the interval lies within its knots. Past
+/// them its end pieces run on out of that box. `None` otherwise.
 fn pcurve_box(
     pcurve: &brepkit_topology::pcurve::PCurve,
 ) -> Option<(brepkit_math::vec::Point2, brepkit_math::vec::Point2)> {
@@ -302,7 +303,12 @@ fn pcurve_box(
         Curve2D::Circle(c) => return Some(around(c.center(), c.radius())),
         Curve2D::Ellipse(e) => return Some(around(e.center(), e.semi_major())),
         Curve2D::Nurbs(n) => {
-            if !n.weights().iter().all(|&w| w > 0.0 && w.is_normal()) {
+            let (first, last) = n.domain();
+            let (t0, t1) = (pcurve.t_start(), pcurve.t_end());
+            if t0.min(t1) < first
+                || t0.max(t1) > last
+                || !n.weights().iter().all(|&w| w > 0.0 && w.is_normal())
+            {
                 return None;
             }
             n.control_points().to_vec()

@@ -1445,7 +1445,9 @@ fn survey_pairs(
 /// over eight); a
 /// B-spline's the boxes of the nets of the Bezier pieces the range runs
 /// over, each piece within the hull of its net. `None` where a weight is not
-/// positive, the pieces cannot be read, or a box is not finite.
+/// positive, the range reaches past the B-spline's knots (where its end
+/// pieces run on out of their hulls), the pieces cannot be read, or a box
+/// is not finite.
 pub fn curve_piece_boxes(
     curve: &EdgeCurve,
     start_pos: Point3,
@@ -1514,7 +1516,8 @@ fn piece_boxes(
             // A weight below the least normal float can carry the curve out
             // of its control box, as one that is not positive can.
             let unbounded = |w: &f64| *w <= 0.0 || !w.is_normal();
-            if n.weights().iter().any(unbounded) {
+            let (first, last) = n.domain();
+            if lo < first || hi > last || n.weights().iter().any(unbounded) {
                 return None;
             }
             let segments = brepkit_math::nurbs::decompose::curve_to_bezier_segments(n).ok()?;
@@ -6305,5 +6308,113 @@ mod tests {
             "{:?} against {hit:?}",
             found[0]
         );
+    }
+
+    /// A flat B-spline sheet over `[0, 1]²` with `x = u` and `y = v`, and
+    /// its face bounded by the diamond through `(0.5, 0.1)`, `(0.9, 0.5)`,
+    /// `(0.5, 0.9)` and `(0.1, 0.5)`. Each side's pcurve is a line of degree
+    /// one: from end to end over its knots `[0, 1]`, or, where `beyond` is
+    /// set, through the points 0.4 and 0.6 of the way along it and read
+    /// over `[-2, 3]`, past its knots, where it runs on to the side's ends.
+    fn diamond_sheet(topo: &mut Topology, beyond: bool) -> FaceId {
+        use brepkit_math::curves2d::{Curve2D, NurbsCurve2D};
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::Point2;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::pcurve::PCurve;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let rows = [0.0, 1.0]
+            .iter()
+            .map(|&x| [0.0, 1.0].iter().map(|&y| Point3::new(x, y, 0.0)).collect())
+            .collect();
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let sheet = NurbsSurface::new(
+            1,
+            1,
+            knots.clone(),
+            knots.clone(),
+            rows,
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        let corners = [(0.5, 0.1), (0.9, 0.5), (0.5, 0.9), (0.1, 0.5)];
+        let v = corners.map(|(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)));
+        let mut sides = Vec::new();
+        let mut pcurves = Vec::new();
+        for k in 0..4 {
+            let (a, b) = (corners[k], corners[(k + 1) % 4]);
+            let e = topo.add_edge(Edge::new(v[k], v[(k + 1) % 4], EdgeCurve::Line));
+            sides.push(OrientedEdge::new(e, true));
+            let at = |f: f64| Point2::new((b.0 - a.0).madd(f, a.0), (b.1 - a.1).madd(f, a.1));
+            let (points, range) = if beyond {
+                (vec![at(0.4), at(0.6)], (-2.0, 3.0))
+            } else {
+                (vec![at(0.0), at(1.0)], (0.0, 1.0))
+            };
+            let line = NurbsCurve2D::new(1, knots.clone(), points, vec![1.0; 2]).unwrap();
+            pcurves.push((e, PCurve::new(Curve2D::Nurbs(line), range.0, range.1)));
+        }
+        let wire = topo.add_wire(Wire::new(sides, true).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(sheet)));
+        for (e, pcurve) in pcurves {
+            topo.pcurves_mut().set(e, face, pcurve);
+        }
+        face
+    }
+
+    /// The diamond's box holds its corner at `(0.1, 0.5)`, and a line down
+    /// through `(0.15, 0.5)` crosses the face, whether its pcurves are read
+    /// over their knots or past them. Past them a pcurve leaves the box of
+    /// its control points, which then bounds nothing.
+    #[test]
+    fn a_pcurve_read_past_its_knots_does_not_shrink_a_nurbs_faces_box() {
+        for beyond in [false, true] {
+            let mut topo = Topology::new();
+            let face = diamond_sheet(&mut topo, beyond);
+            let held = build_face_containment(&topo, face, Tolerance::new())
+                .unwrap()
+                .bbox;
+            let corner = Point3::new(0.1, 0.5, 0.0);
+            let found = ef_vertices(
+                &mut topo,
+                face,
+                EdgeCurve::Line,
+                Point3::new(0.15, 0.5, 1.0),
+                Some(Point3::new(0.15, 0.5, -1.0)),
+            );
+            assert!(
+                held.contains_point(corner) && found.len() == 1,
+                "beyond {beyond}: {held:?}, crossings {found:?}"
+            );
+        }
+    }
+
+    /// A spline of degree one along `x` from `(0.4, 0, 0)` to `(0.6, 0, 0)`
+    /// over its knots `[0, 1]`, read over `[-2, 3]`, runs from `x = 0` to
+    /// `x = 1`, past the box of its control points: its pieces' boxes are
+    /// not read past its knots, and within them they hold it.
+    #[test]
+    fn a_splines_piece_boxes_are_not_read_past_its_knots() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let spline = EdgeCurve::NurbsCurve(
+            NurbsCurve::new(
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![Point3::new(0.4, 0.0, 0.0), Point3::new(0.6, 0.0, 0.0)],
+                vec![1.0; 2],
+            )
+            .unwrap(),
+        );
+        let (start, end) = (Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 0.0, 0.0));
+        assert!(curve_piece_boxes(&spline, start, end, -2.0, 3.0).is_none());
+        assert!(curve_piece_boxes(&spline, start, end, 3.0, -2.0).is_none());
+        assert!(curve_piece_boxes(&spline, start, end, 0.0, 1.2).is_none());
+        let held = curve_piece_boxes(&spline, start, end, 0.25, 1.0).unwrap();
+        for k in 0..=8_u32 {
+            let p =
+                spline.evaluate_with_endpoints(0.75f64.madd(f64::from(k) / 8.0, 0.25), start, end);
+            assert!(held.iter().any(|b| b.contains_point(p)), "{p:?}");
+        }
     }
 }
