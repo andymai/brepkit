@@ -21,6 +21,61 @@ use crate::shapes::JsMesh;
 /// Default tolerance for vertices created by the kernel.
 pub const TOL: f64 = 1e-7;
 
+// ── Curves and surfaces from caller data ──────────────────────────
+
+/// The refusal of a curve or surface built from caller data that no
+/// evaluation can walk. `NurbsCurve::new` and `NurbsSurface::new` check only
+/// counts: knots that fall, a degree past the control points, or weights that
+/// are not positive normal floats panic, hang or give a wrong solid when the
+/// curve is evaluated.
+fn not_evaluable(what: &str) -> WasmError {
+    WasmError::InvalidInput {
+        reason: format!(
+            "{what} has a size, frame, degree, knots, weights or points \
+             it cannot be evaluated with"
+        ),
+    }
+}
+
+/// `curve`, if it gives a finite point at each parameter of its domain on
+/// the shape its type names.
+pub fn well_formed_curve(
+    curve: brepkit_topology::edge::EdgeCurve,
+    what: &str,
+) -> Result<brepkit_topology::edge::EdgeCurve, WasmError> {
+    if curve.is_well_formed() {
+        Ok(curve)
+    } else {
+        Err(not_evaluable(what))
+    }
+}
+
+/// `curve`, if it can be evaluated without reading past its arrays and gives
+/// a finite point at each parameter of its domain.
+pub fn well_formed_nurbs(
+    curve: brepkit_math::nurbs::curve::NurbsCurve,
+    what: &str,
+) -> Result<brepkit_math::nurbs::curve::NurbsCurve, WasmError> {
+    if curve.is_well_formed() {
+        Ok(curve)
+    } else {
+        Err(not_evaluable(what))
+    }
+}
+
+/// `surface`, if it can be evaluated without reading past its arrays and
+/// gives a finite point at each parameter pair of its domain.
+pub fn well_formed_nurbs_surface(
+    surface: brepkit_math::nurbs::surface::NurbsSurface,
+    what: &str,
+) -> Result<brepkit_math::nurbs::surface::NurbsSurface, WasmError> {
+    if surface.is_well_formed() {
+        Ok(surface)
+    } else {
+        Err(not_evaluable(what))
+    }
+}
+
 // ── Parsing helpers ───────────────────────────────────────────────
 
 /// Parse flat `[x,y,z, ...]` coordinates into `Vec<Point3>`.

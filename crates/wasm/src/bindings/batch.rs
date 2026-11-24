@@ -23,6 +23,7 @@ use crate::handles::{
 };
 use crate::helpers::{
     TOL, classify_to_string, get_f64, get_u32, handles_in, panic_message, try_fillet,
+    well_formed_nurbs, well_formed_nurbs_surface,
 };
 use crate::kernel::BrepKernel;
 
@@ -286,30 +287,49 @@ impl BrepKernel {
         Ok((v_min, v_max))
     }
 
-    /// Create an edge from a `NurbsCurve`, using its endpoints.
+    /// Create an edge from a `NurbsCurve`, using its endpoints. The curve is
+    /// fitted to, or computed from, the caller's numbers, and one no
+    /// evaluation can walk is refused.
     pub(crate) fn nurbs_curve_to_edge(
         &mut self,
         points: &[Point3],
         curve: NurbsCurve,
-    ) -> brepkit_topology::edge::EdgeId {
+    ) -> Result<brepkit_topology::edge::EdgeId, WasmError> {
+        let curve = well_formed_nurbs(curve, "the fitted curve")?;
         let start = points[0];
         let end = points[points.len() - 1];
-        brepkit_topology::builder::make_nurbs_edge(self.topo_mut(), start, end, curve, TOL)
+        Ok(brepkit_topology::builder::make_nurbs_edge(
+            self.topo_mut(),
+            start,
+            end,
+            curve,
+            TOL,
+        ))
     }
 
-    /// Create an edge from a `NurbsCurve`, evaluating its endpoints.
+    /// Create an edge from a `NurbsCurve`, evaluating its endpoints. The
+    /// curve is computed from the caller's numbers, and one no evaluation can
+    /// walk is refused.
     pub(crate) fn nurbs_curve_to_edge_from_curve(
         &mut self,
-        curve: &NurbsCurve,
-    ) -> brepkit_topology::edge::EdgeId {
-        brepkit_topology::builder::make_nurbs_edge_from_curve(self.topo_mut(), curve, TOL)
+        curve: NurbsCurve,
+    ) -> Result<brepkit_topology::edge::EdgeId, WasmError> {
+        let curve = well_formed_nurbs(curve, "the curve")?;
+        Ok(brepkit_topology::builder::make_nurbs_edge_from_curve(
+            self.topo_mut(),
+            &curve,
+            TOL,
+        ))
     }
 
     /// Create a face from a `NurbsSurface` with a rectangular domain wire.
+    /// The surface is fitted to, or computed from, the caller's numbers, and
+    /// one no evaluation can walk is refused.
     pub(crate) fn nurbs_surface_to_face(
         &mut self,
         surface: NurbsSurface,
-    ) -> Result<brepkit_topology::face::FaceId, JsError> {
+    ) -> Result<brepkit_topology::face::FaceId, WasmError> {
+        let surface = well_formed_nurbs_surface(surface, "the surface")?;
         Ok(brepkit_topology::builder::make_nurbs_face(
             self.topo_mut(),
             surface,
@@ -1613,6 +1633,41 @@ impl BrepKernel {
                 let ez = get_f64(args, "endZ")?;
                 let eid = self
                     .make_tangent_arc_3d_impl(sx, sy, sz, tx, ty, tz, ex, ey, ez)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(eid))
+            }
+            "makeNurbsEdge" => {
+                let numbers = |key: &str| -> Result<Vec<f64>, String> {
+                    args[key]
+                        .as_array()
+                        .ok_or_else(|| format!("missing or invalid '{key}'"))?
+                        .iter()
+                        .enumerate()
+                        .map(|(i, v)| {
+                            v.as_f64()
+                                .ok_or_else(|| format!("{key}[{i}] is not a number"))
+                        })
+                        .collect()
+                };
+                let start = [
+                    get_f64(args, "startX")?,
+                    get_f64(args, "startY")?,
+                    get_f64(args, "startZ")?,
+                ];
+                let end = [
+                    get_f64(args, "endX")?,
+                    get_f64(args, "endY")?,
+                    get_f64(args, "endZ")?,
+                ];
+                let eid = self
+                    .make_nurbs_edge_impl(
+                        start,
+                        end,
+                        get_u32(args, "degree")?,
+                        numbers("knots")?,
+                        &numbers("controlPoints")?,
+                        numbers("weights")?,
+                    )
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(eid))
             }

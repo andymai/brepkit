@@ -32,7 +32,7 @@ use wasm_bindgen::prelude::*;
 
 use crate::error::{WasmError, validate_finite};
 use crate::handles::{edge_id_to_u32, solid_id_to_u32};
-use crate::helpers::TOL;
+use crate::helpers::{TOL, well_formed_curve, well_formed_nurbs};
 use crate::state::{Checkpoint, SketchState};
 
 /// The B-Rep modeling kernel.
@@ -159,6 +159,7 @@ impl BrepKernel {
                 reason: format!("invalid circle: {e}"),
             }
         })?;
+        let curve = well_formed_curve(EdgeCurve::Circle(circle), "makeTangentArc3d circle")?;
 
         let v_start = self.topo_mut().add_vertex(Vertex::new(start, TOL));
         let v_end = if (start - end).length() < TOL * 100.0 {
@@ -166,9 +167,7 @@ impl BrepKernel {
         } else {
             self.topo_mut().add_vertex(Vertex::new(end, TOL))
         };
-        let eid = self
-            .topo_mut()
-            .add_edge(Edge::new(v_start, v_end, EdgeCurve::Circle(circle)));
+        let eid = self.topo_mut().add_edge(Edge::new(v_start, v_end, curve));
         Ok(edge_id_to_u32(eid))
     }
 
@@ -276,6 +275,10 @@ impl BrepKernel {
                     .map_err(|e| WasmError::InvalidInput {
                         reason: format!("invalid Circle3D: {e}"),
                     })?;
+                let curve = well_formed_curve(
+                    EdgeCurve::Circle(circle.clone()),
+                    "liftCurve2dToPlane circle",
+                )?;
 
                 let start_3d = circle.evaluate(t_start);
                 let end_3d = circle.evaluate(t_end);
@@ -287,9 +290,7 @@ impl BrepKernel {
                 } else {
                     self.topo_mut().add_vertex(Vertex::new(end_3d, TOL))
                 };
-                let eid =
-                    self.topo_mut()
-                        .add_edge(Edge::new(v_start, v_end, EdgeCurve::Circle(circle)));
+                let eid = self.topo_mut().add_edge(Edge::new(v_start, v_end, curve));
                 Ok(edge_id_to_u32(eid))
             }
             2 => {
@@ -314,6 +315,10 @@ impl BrepKernel {
                         .map_err(|e| WasmError::InvalidInput {
                             reason: format!("invalid Ellipse3D: {e}"),
                         })?;
+                let curve = well_formed_curve(
+                    EdgeCurve::Ellipse(ellipse.clone()),
+                    "liftCurve2dToPlane ellipse",
+                )?;
 
                 let start_3d = ellipse.evaluate(t_start);
                 let end_3d = ellipse.evaluate(t_end);
@@ -325,11 +330,7 @@ impl BrepKernel {
                 } else {
                     self.topo_mut().add_vertex(Vertex::new(end_3d, TOL))
                 };
-                let eid = self.topo_mut().add_edge(Edge::new(
-                    v_start,
-                    v_end,
-                    EdgeCurve::Ellipse(ellipse),
-                ));
+                let eid = self.topo_mut().add_edge(Edge::new(v_start, v_end, curve));
                 Ok(edge_id_to_u32(eid))
             }
             3 => {
@@ -380,6 +381,7 @@ impl BrepKernel {
                 let weights = curve_params[weights_start..weights_start + n_cp].to_vec();
 
                 let curve = NurbsCurve::new(degree, knots, control_points_3d, weights)?;
+                let curve = well_formed_nurbs(curve, "liftCurve2dToPlane NURBS curve")?;
                 let start_3d = curve.evaluate(t_start);
                 let end_3d = curve.evaluate(t_end);
 
@@ -709,6 +711,7 @@ impl BrepKernel {
                     EdgeCurve::Line
                 }
             };
+            let curve = well_formed_curve(curve, &format!("edge {id}"))?;
 
             let eid = self
                 .topo_mut()
@@ -1058,6 +1061,14 @@ impl BrepKernel {
                 }
             }
 
+            if !surface.is_well_formed() {
+                return Err(WasmError::InvalidInput {
+                    reason: format!(
+                        "a {surface_type} face has a size, frame, degree, knots, weights \
+                         or points it cannot be evaluated with"
+                    ),
+                });
+            }
             let mut face = Face::new(wire_id, inner_wire_ids, surface);
             if reversed {
                 face.set_reversed(true);
@@ -1787,5 +1798,320 @@ mod from_brep_tests {
                 "{bad}: {found:?}"
             );
         }
+    }
+
+    /// A circle, an ellipse or a plane in a BREP document comes from the
+    /// caller too. One whose frame is not of unit axes at right angles, an
+    /// ellipse with its smaller axis first, or a plane whose normal is not a
+    /// unit vector is refused, not built. The documents they were made from
+    /// read.
+    #[test]
+    fn an_analytic_curve_or_plane_no_evaluation_can_walk_is_refused() {
+        let with_first_edge = |curve: Value| {
+            let mut document = square();
+            document["edges"][0] = curve;
+            document.to_string()
+        };
+        let circle = |x_axis: Value| {
+            with_first_edge(json!({
+                "id": 0, "startVertex": 0, "endVertex": 1, "curveType": "circle",
+                "curveParams": {
+                    "center": [0.5, 0.0, 0.0], "axis": [0.0, 0.0, 1.0],
+                    "radius": 0.5, "xAxis": x_axis,
+                },
+            }))
+        };
+        let ellipse = |major: f64, minor: f64| {
+            with_first_edge(json!({
+                "id": 0, "startVertex": 0, "endVertex": 1, "curveType": "ellipse",
+                "curveParams": {
+                    "center": [0.5, 0.0, 0.0], "axis": [0.0, 0.0, 1.0],
+                    "majorRadius": major, "minorRadius": minor,
+                    "majorAxis": [1.0, 0.0, 0.0],
+                },
+            }))
+        };
+        let plane = |normal: Value| {
+            let mut document = square();
+            document["faces"][0]["surfaceType"] = json!("plane");
+            document["faces"][0]["surfaceParams"] = json!({"normal": normal, "d": 0.0});
+            document.to_string()
+        };
+        for good in [
+            circle(json!([-1.0, 0.0, 0.0])),
+            ellipse(0.5, 0.25),
+            plane(json!([0.0, 0.0, 1.0])),
+        ] {
+            assert!(BrepKernel::new().from_brep_impl(&good).is_ok(), "{good}");
+        }
+        for bad in [
+            circle(json!([1.0, 0.1, 0.0])),
+            circle(json!([0.0, 0.0, 1.0])),
+            ellipse(0.25, 0.5),
+            plane(json!([0.0, 0.0, 2.0])),
+        ] {
+            let found = BrepKernel::new().from_brep_impl(&bad);
+            assert!(
+                matches!(&found, Err(WasmError::InvalidInput { reason }) if reason.contains("cannot be evaluated")),
+                "{bad}: {found:?}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod js_curve_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::error::WasmError;
+
+    /// A quadratic B-spline over four points, its knots from 0 to 1: its
+    /// degree, knots, flat x, y, z coordinates, and weights.
+    type Spline = (u32, Vec<f64>, Vec<f64>, Vec<f64>);
+
+    fn quadratic() -> Spline {
+        (
+            2,
+            vec![0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 2.0, 1.0, 0.0, 3.0, 0.0, 0.0],
+            vec![1.0; 4],
+        )
+    }
+
+    /// Each kind of curve no evaluation can walk that a JSON number can hold,
+    /// made from [`quadratic`], with the counts its constructor checks kept.
+    fn malformed() -> Vec<(&'static str, Spline)> {
+        let edit = |change: &dyn Fn(&mut Spline)| {
+            let mut spline = quadratic();
+            change(&mut spline);
+            spline
+        };
+        vec![
+            (
+                "a degree past its points",
+                edit(&|s| {
+                    s.0 = 4;
+                    s.1 = vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+                }),
+            ),
+            (
+                "falling knots",
+                edit(&|s| s.1 = vec![0.0, 0.0, 0.0, 0.75, 0.25, 1.0, 1.0]),
+            ),
+            (
+                "a span too short to divide by",
+                edit(&|s| s.1 = vec![0.0, 0.0, 0.0, 1e-310, 2e-310, 2e-310, 2e-310]),
+            ),
+            ("a zero weight", edit(&|s| s.3[1] = 0.0)),
+            ("a negative weight", edit(&|s| s.3[1] = -1.0)),
+            ("a subnormal weight", edit(&|s| s.3[1] = 1e-310)),
+            (
+                "weights times points that overflow",
+                edit(&|s| s.3 = vec![1e308; 4]),
+            ),
+        ]
+    }
+
+    fn refused<T: std::fmt::Debug>(what: &str, found: &Result<T, WasmError>) {
+        assert!(
+            matches!(found, Err(WasmError::InvalidInput { reason }) if reason.contains("cannot be evaluated")),
+            "{what}: {found:?}"
+        );
+    }
+
+    /// One batch result: the edge handle, or the error text.
+    fn batch_one(kernel: &mut BrepKernel, op: &str, args: &Value) -> Value {
+        let ops = json!([{ "op": op, "args": args }]).to_string();
+        let parsed: Value = serde_json::from_str(&kernel.execute_batch(&ops)).unwrap();
+        parsed[0].clone()
+    }
+
+    /// `makeNurbsEdge` builds a curve from the caller's arrays, and
+    /// `NurbsCurve::new` checks only their counts: each kind of curve no
+    /// evaluation can walk is refused through the batch. The curve it was
+    /// made from is built.
+    #[test]
+    fn make_nurbs_edge_refuses_each_malformed_curve_through_the_batch() {
+        let args = |(degree, knots, points, weights): Spline| {
+            json!({
+                "startX": 0.0, "startY": 0.0, "startZ": 0.0,
+                "endX": 3.0, "endY": 0.0, "endZ": 0.0,
+                "degree": degree, "knots": knots, "controlPoints": points, "weights": weights,
+            })
+        };
+        let mut k = BrepKernel::new();
+        let good = batch_one(&mut k, "makeNurbsEdge", &args(quadratic()));
+        assert!(good["ok"].is_number(), "{good}");
+        for (what, spline) in malformed() {
+            let found = batch_one(&mut k, "makeNurbsEdge", &args(spline));
+            let error = found["error"].as_str().unwrap_or_default();
+            assert!(error.contains("cannot be evaluated"), "{what}: {found}");
+        }
+    }
+
+    /// `liftCurve2dToPlane` lifts a curve from the caller's numbers: each
+    /// kind of B-spline no evaluation can walk is refused through the batch,
+    /// and so is an ellipse with its smaller axis first. The curves they
+    /// were made from are built.
+    #[test]
+    fn lift_curve2d_to_plane_refuses_each_malformed_curve_through_the_batch() {
+        let args = |curve_type: u32, params: Vec<f64>| {
+            json!({
+                "curveType": curve_type, "curveParams": params,
+                "originX": 0.0, "originY": 0.0, "originZ": 0.0,
+                "xAxisX": 1.0, "xAxisY": 0.0, "xAxisZ": 0.0,
+                "normalX": 0.0, "normalY": 0.0, "normalZ": 1.0,
+                "tStart": 0.0, "tEnd": 1.0,
+            })
+        };
+        // The same spline in the plane: degree, count, knots, x and y of each
+        // point, weights.
+        let flat = |(degree, knots, points, weights): Spline| {
+            let count = u32::try_from(points.len() / 3).unwrap();
+            let mut params = vec![f64::from(degree), f64::from(count)];
+            params.extend(knots);
+            params.extend(points.chunks_exact(3).flat_map(|p| [p[0], p[1]]));
+            params.extend(weights);
+            params
+        };
+        let mut k = BrepKernel::new();
+        for good in [
+            args(3, flat(quadratic())),
+            args(2, vec![0.0, 0.0, 2.0, 1.0, 0.0]),
+        ] {
+            let found = batch_one(&mut k, "liftCurve2dToPlane", &good);
+            assert!(found["ok"].is_number(), "{good}: {found}");
+        }
+        let mut bad: Vec<(&str, Value)> = malformed()
+            .into_iter()
+            .map(|(what, spline)| (what, args(3, flat(spline))))
+            .collect();
+        bad.push((
+            "an ellipse with its smaller axis first",
+            args(2, vec![0.0, 0.0, 1.0, 2.0, 0.0]),
+        ));
+        for (what, bad) in bad {
+            let found = batch_one(&mut k, "liftCurve2dToPlane", &bad);
+            let error = found["error"].as_str().unwrap_or_default();
+            assert!(error.contains("cannot be evaluated"), "{what}: {found}");
+        }
+    }
+
+    /// A JSON number cannot be NaN or infinite, and an array from JS can:
+    /// `makeNurbsEdge` refuses a knot, a point or a weight that is not
+    /// finite.
+    #[test]
+    fn make_nurbs_edge_refuses_numbers_that_are_not_finite() {
+        let mut k = BrepKernel::new();
+        let mut edge = |(degree, knots, points, weights): Spline| {
+            k.make_nurbs_edge_impl([0.0; 3], [3.0, 0.0, 0.0], degree, knots, &points, weights)
+        };
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut spline = quadratic();
+            spline.1[3] = bad;
+            refused("knot", &edge(spline));
+            let mut spline = quadratic();
+            spline.2[4] = bad;
+            refused("point", &edge(spline));
+            let mut spline = quadratic();
+            spline.3[2] = bad;
+            refused("weight", &edge(spline));
+        }
+        assert!(edge(quadratic()).is_ok());
+    }
+
+    /// `sweep`, `multiSectionSweep`, `sweepSmooth`, `pipe` and `guidedSweep`
+    /// each build their path from the caller's arrays: each refuses a path
+    /// no evaluation can walk, before it sweeps.
+    #[test]
+    fn each_sweep_binding_refuses_a_path_no_evaluation_can_walk() {
+        let mut k = BrepKernel::new();
+        let face = k.make_rectangle(1.0, 1.0).unwrap();
+        let (good_degree, good_knots, good_points, good_weights) = quadratic();
+        for (what, (degree, knots, points, weights)) in malformed() {
+            let found =
+                k.sweep_face_impl(face, degree, knots.clone(), points.clone(), weights.clone());
+            refused(&format!("sweep, {what}"), &found);
+            let found = k.multi_section_sweep_impl(
+                vec![face, face],
+                vec![0.0, 1.0],
+                degree,
+                knots.clone(),
+                points.clone(),
+                weights.clone(),
+                true,
+            );
+            refused(&format!("multiSectionSweep, {what}"), &found);
+            let found = k.sweep_smooth_face_impl(
+                face,
+                degree,
+                knots.clone(),
+                points.clone(),
+                weights.clone(),
+            );
+            refused(&format!("sweepSmooth, {what}"), &found);
+            let found =
+                k.pipe_solid_impl(face, degree, knots.clone(), points.clone(), weights.clone());
+            refused(&format!("pipe, {what}"), &found);
+            let found = k.guided_sweep_impl(
+                face,
+                degree,
+                knots.clone(),
+                points.clone(),
+                weights.clone(),
+                good_degree,
+                good_knots.clone(),
+                good_points.clone(),
+                good_weights.clone(),
+            );
+            refused(&format!("guidedSweep spine, {what}"), &found);
+            let found = k.guided_sweep_impl(
+                face,
+                good_degree,
+                good_knots.clone(),
+                good_points.clone(),
+                good_weights.clone(),
+                degree,
+                knots,
+                points,
+                weights,
+            );
+            refused(&format!("guidedSweep aux, {what}"), &found);
+        }
+    }
+
+    /// A curve or surface that fitting or a knot operation computed from the
+    /// caller's numbers is checked before it becomes an edge or a face.
+    #[test]
+    fn a_computed_curve_or_surface_no_evaluation_can_walk_is_refused() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        let (degree, knots, points, mut weights) = quadratic();
+        weights[1] = 0.0;
+        let points: Vec<Point3> = points
+            .chunks_exact(3)
+            .map(|p| Point3::new(p[0], p[1], p[2]))
+            .collect();
+        let curve = NurbsCurve::new(degree as usize, knots, points.clone(), weights).unwrap();
+        let mut k = BrepKernel::new();
+        refused(
+            "fitted curve",
+            &k.nurbs_curve_to_edge(&points, curve.clone()),
+        );
+        refused("computed curve", &k.nurbs_curve_to_edge_from_curve(curve));
+        let row = |y: f64| vec![Point3::new(0.0, y, 0.0), Point3::new(1.0, y, 0.0)];
+        let surface = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![row(0.0), row(1.0)],
+            vec![vec![1.0, 0.0], vec![1.0, 1.0]],
+        )
+        .unwrap();
+        refused("surface", &k.nurbs_surface_to_face(surface));
     }
 }

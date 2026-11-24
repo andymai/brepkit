@@ -203,7 +203,7 @@ impl BrepKernel {
 
         let deg = std::cmp::min(degree as usize, points.len() - 1);
         let curve = brepkit_math::nurbs::fitting::interpolate(&points, deg)?;
-        Ok(edge_id_to_u32(self.nurbs_curve_to_edge(&points, curve)))
+        Ok(edge_id_to_u32(self.nurbs_curve_to_edge(&points, curve)?))
     }
 
     /// Approximate a curve through points (least-squares).
@@ -227,7 +227,7 @@ impl BrepKernel {
         let deg = std::cmp::min(degree as usize, points.len() - 1);
         let curve =
             brepkit_math::nurbs::fitting::approximate(&points, deg, num_control_points as usize)?;
-        Ok(edge_id_to_u32(self.nurbs_curve_to_edge(&points, curve)))
+        Ok(edge_id_to_u32(self.nurbs_curve_to_edge(&points, curve)?))
     }
 
     /// Approximate a curve through points using LSPIA (progressive iteration).
@@ -258,7 +258,7 @@ impl BrepKernel {
             tolerance,
             max_iterations as usize,
         )?;
-        Ok(edge_id_to_u32(self.nurbs_curve_to_edge(&points, curve)))
+        Ok(edge_id_to_u32(self.nurbs_curve_to_edge(&points, curve)?))
     }
 
     /// Interpolate a grid of points into a NURBS surface.
@@ -323,7 +323,7 @@ impl BrepKernel {
         let refined =
             brepkit_math::nurbs::knot_ops::curve_knot_insert(&curve, knot, times as usize)?;
         Ok(edge_id_to_u32(
-            self.nurbs_curve_to_edge_from_curve(&refined),
+            self.nurbs_curve_to_edge_from_curve(refined)?,
         ))
     }
 
@@ -340,7 +340,7 @@ impl BrepKernel {
         let curve = self.extract_nurbs_curve(edge)?;
         let simplified = brepkit_math::nurbs::knot_ops::curve_knot_remove(&curve, knot, tolerance)?;
         Ok(edge_id_to_u32(
-            self.nurbs_curve_to_edge_from_curve(&simplified),
+            self.nurbs_curve_to_edge_from_curve(simplified)?,
         ))
     }
 
@@ -351,8 +351,8 @@ impl BrepKernel {
     pub fn curve_split(&mut self, edge: u32, u: f64) -> Result<Vec<u32>, JsError> {
         let curve = self.extract_nurbs_curve(edge)?;
         let (left, right) = brepkit_math::nurbs::knot_ops::curve_split(&curve, u)?;
-        let e1 = self.nurbs_curve_to_edge_from_curve(&left);
-        let e2 = self.nurbs_curve_to_edge_from_curve(&right);
+        let e1 = self.nurbs_curve_to_edge_from_curve(left)?;
+        let e2 = self.nurbs_curve_to_edge_from_curve(right)?;
         Ok(vec![edge_id_to_u32(e1), edge_id_to_u32(e2)])
     }
 
@@ -365,7 +365,7 @@ impl BrepKernel {
         let elevated =
             brepkit_math::nurbs::decompose::curve_degree_elevate(&curve, elevate_by as usize)?;
         Ok(edge_id_to_u32(
-            self.nurbs_curve_to_edge_from_curve(&elevated),
+            self.nurbs_curve_to_edge_from_curve(elevated)?,
         ))
     }
 
