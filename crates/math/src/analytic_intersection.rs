@@ -18,6 +18,7 @@ use crate::surfaces::{ConicalSurface, CylindricalSurface, SphericalSurface, Toro
 use crate::tolerance::Tolerance;
 use crate::vec::{Point3, Vec3};
 
+mod cover;
 mod section_fit;
 use section_fit::{crosses_at, fit_section, settle_on_section};
 
@@ -2485,8 +2486,10 @@ fn marched_sections_near(
     let char_size = diag_a.min(diag_b).max(0.1);
 
     let march_step = (char_size * 0.02).clamp(0.005, 0.5);
+    let meet = region;
     #[allow(clippy::cast_precision_loss)]
-    let region = region.map(|r| r.expanded(2.0 * char_size / grid_res as f64));
+    let margin = 2.0 * char_size / grid_res as f64;
+    let region = region.map(|r| r.expanded(margin));
 
     // Seeds: the middle of each cell of a grid over a patch whose distance
     // from the other surface is within the cell's reach from its middle (see
@@ -2505,6 +2508,7 @@ fn marched_sections_near(
         let n = grid_res as f64;
         let (du, dv) = ((u_range.1 - u_range.0) / n, (v_range.1 - v_range.0) / n);
         let mut found = Vec::new();
+        let mut kept = Vec::new();
         let mut held: Option<Aabb3> = None;
         for i in 0..grid_res {
             for j in 0..grid_res {
@@ -2524,12 +2528,29 @@ fn marched_sections_near(
                 }
                 let reading = section_fit::Carrier::distance(other, middle)
                     .filter(|(d, n)| d.is_finite() && n.length().is_finite());
+                // The rounding of the distance, so a cell is dropped only
+                // where it surely holds no point of the other surface.
+                let slack = || {
+                    let size = middle.x().abs().max(middle.y().abs()).max(middle.z().abs());
+                    128.0
+                        * f64::EPSILON
+                        * (section_fit::Carrier::scale(surface, middle)
+                            + section_fit::Carrier::scale(other, middle)
+                            + size)
+                };
                 let (dist, seed) = match reading {
-                    Some((d, _)) if placed && d.abs() > reach => continue,
+                    Some((d, _))
+                        if placed
+                            && d.abs() > reach
+                            && (d.abs() > 2.0 * reach || d.abs() - slack() > reach) =>
+                    {
+                        continue;
+                    }
                     Some((d, n)) => (d.abs(), middle - n * (0.5 * d)),
                     None => (f64::INFINITY, middle),
                 };
                 found.push((dist, seed));
+                kept.push((i, j));
                 let cell = if placed {
                     Aabb3 {
                         min: middle,
@@ -2545,9 +2566,10 @@ fn marched_sections_near(
                 held = Some(held.map_or(cell, |h| h.union(cell)));
             }
         }
-        (found, held)
+        (found, held, kept)
     };
-    let (mut candidates, held) = cells(&a, surf_a.as_ref(), (u_range_a, v_range_a), &b, region);
+    let (mut candidates, held, kept_a) =
+        cells(&a, surf_a.as_ref(), (u_range_a, v_range_a), &b, region);
 
     // With no seed on A, no point of the section lies on A's patch. A test
     // on the nearest cell's distance to B against three cells of the smaller
@@ -2556,9 +2578,30 @@ fn marched_sections_near(
     let Some(held) = held else {
         return Ok(vec![]);
     };
-    // Two loops in one cell of one patch can lie in two cells of the other,
-    // which lie within their reach of A's seeds' cells.
-    candidates.extend(cells(&b, surf_b.as_ref(), (u_range_b, v_range_b), &a, Some(held)).0);
+    // The seeds below come from cells' middles, and a cell's seed settles
+    // on one curve: a second loop in the same cells of both patches had
+    // none. Cut A's kept cells until each is proved to hold no point of
+    // the section, or at most one arc of it, or is too small for a fit to
+    // resolve (see [`cover::Cover`]). Each class of linked cells holds one
+    // arc of a part of the section: after the march, a marched point lies
+    // in it, or a seed from it settles on a marched curve or starts a march.
+    let mut cover = cover::Cover::new(
+        &a,
+        &b,
+        (u_range_a, v_range_a),
+        v_range_b,
+        grid_res,
+        &kept_a,
+        meet.zip(region),
+        region.map_or(march_step, |_| margin.min(march_step)),
+        Tolerance::new().linear,
+    );
+    // Where the cuts did not all settle, two loops in one cell of one patch
+    // can lie in two cells of the other, which lie within their reach of
+    // A's seeds' cells.
+    if !cover.complete() {
+        candidates.extend(cells(&b, surf_b.as_ref(), (u_range_b, v_range_b), &a, Some(held)).0);
+    }
     candidates.sort_by(|p, q| p.0.total_cmp(&q.0));
 
     // A seed is only near the intersection; settle it onto the curve before
@@ -2626,6 +2669,78 @@ fn marched_sections_near(
     // already marched. Seeds on both patches march first: one just past a
     // patch's edge marches along a curve that one inside may already have
     // marched, which its middle then lies on.
+    // March from a seed on the section and fit what the march traces,
+    // unless its middle lies on a curve already marched.
+    let trace = |seed: Point3,
+                 marched: &mut Vec<Vec<Point3>>,
+                 curves: &mut Vec<IntersectionCurve>|
+     -> Result<(), MathError> {
+        let march_result = march_analytic_intersection(
+            &a,
+            &b,
+            surf_a.as_ref(),
+            norm_a.as_ref(),
+            surf_b.as_ref(),
+            norm_b.as_ref(),
+            seed,
+            u_range_a,
+            v_range_a,
+            u_range_b,
+            v_range_b,
+            march_step,
+            is_u_periodic(&a),
+            is_u_periodic(&b),
+            region,
+        )
+        .ok_or(MathError::ConvergenceFailure {
+            iterations: MARCH_STEPS,
+        })?;
+        if march_result.len() < 2 {
+            return Ok(());
+        }
+        let middle = march_result[march_result.len() / 2];
+        if marched.iter().any(|m| on_march(&a, &b, middle, m)) {
+            return Ok(());
+        }
+        marched.push(march_result.clone());
+
+        // Two points far closer than a step only crowd the fit.
+        let crowd = 1e-3 * march_step;
+        let mut spaced: Vec<Point3> = Vec::with_capacity(march_result.len());
+        for (k, &p) in march_result.iter().enumerate() {
+            let last = k + 1 == march_result.len();
+            match spaced.last() {
+                Some(&q) if (p - q).length() < crowd => {
+                    if last && spaced.len() > 1 {
+                        spaced.pop();
+                        spaced.push(p);
+                    }
+                }
+                _ => spaced.push(p),
+            }
+        }
+        if spaced.len() < 2 {
+            return Ok(());
+        }
+        if fit_tol < 0.5 * Tolerance::new().linear {
+            return Err(MathError::ConvergenceFailure { iterations: 0 });
+        }
+        let (curve, points) = fit_section(&a, &b, &spaced, fit_tol)?;
+        let ipts: Vec<IntersectionPoint> = points
+            .iter()
+            .map(|&pt| IntersectionPoint {
+                point: pt,
+                param1: (0.0, 0.0),
+                param2: (0.0, 0.0),
+            })
+            .collect();
+        curves.push(IntersectionCurve {
+            curve,
+            points: ipts,
+        });
+        Ok(())
+    };
+
     let mut curves = Vec::new();
     let mut marched: Vec<Vec<Point3>> = Vec::new();
     let mut past_edges = Vec::new();
@@ -2649,69 +2764,54 @@ fn marched_sections_near(
         if marched.iter().any(|m| on_march(&a, &b, seed.p, m)) {
             continue;
         }
+        trace(seed.p, &mut marched, &mut curves)?;
+    }
 
-        let march_result = march_analytic_intersection(
-            &a,
-            &b,
-            surf_a.as_ref(),
-            norm_a.as_ref(),
-            surf_b.as_ref(),
-            norm_b.as_ref(),
-            seed.p,
-            u_range_a,
-            v_range_a,
-            u_range_b,
-            v_range_b,
-            march_step,
-            is_u_periodic(&a),
-            is_u_periodic(&b),
-            region,
-        )
-        .ok_or(MathError::ConvergenceFailure {
-            iterations: MARCH_STEPS,
-        })?;
-
-        if march_result.len() >= 2 {
-            let middle = march_result[march_result.len() / 2];
-            if marched.iter().any(|m| on_march(&a, &b, middle, m)) {
-                continue;
-            }
-            marched.push(march_result.clone());
-
-            // Two points far closer than a step only crowd the fit.
-            let crowd = 1e-3 * march_step;
-            let mut spaced: Vec<Point3> = Vec::with_capacity(march_result.len());
-            for (k, &p) in march_result.iter().enumerate() {
-                let last = k + 1 == march_result.len();
-                match spaced.last() {
-                    Some(&q) if (p - q).length() < crowd => {
-                        if last && spaced.len() > 1 {
-                            spaced.pop();
-                            spaced.push(p);
-                        }
-                    }
-                    _ => spaced.push(p),
-                }
-            }
-            if spaced.len() < 2 {
-                continue;
-            }
-            if fit_tol < 0.5 * Tolerance::new().linear {
-                return Err(MathError::ConvergenceFailure { iterations: 0 });
-            }
-            let (curve, points) = fit_section(&a, &b, &spaced, fit_tol)?;
-            let ipts: Vec<IntersectionPoint> = points
-                .iter()
-                .map(|&pt| IntersectionPoint {
-                    point: pt,
-                    param1: (0.0, 0.0),
-                    param2: (0.0, 0.0),
+    for m in &marched {
+        cover.mark_marched(m);
+    }
+    loop {
+        let classes = cover.classes();
+        if classes.is_empty() {
+            break;
+        }
+        for class in classes {
+            // A seed whose nearest point on a fitted curve lies, as near as
+            // that fit's bound, on the class's arc: the class is that
+            // curve's. Near a node a march from the seed itself can stall.
+            let mut seeds = cover.interiors(&class);
+            seeds.extend(cover.seeds(&class));
+            let on_fit = seeds.iter().any(|&z| {
+                curves.iter().any(|c| {
+                    crate::nurbs::projection::project_point_to_curve(&c.curve, z, 1e-12)
+                        .is_ok_and(|f| cover.holds(&class, f.point, fit_tol))
                 })
-                .collect();
-            curves.push(IntersectionCurve {
-                curve,
-                points: ipts,
             });
+            if on_fit {
+                cover.mark(&class);
+                continue;
+            }
+            let mut placed = false;
+            for p in seeds {
+                let Some(seed) = settle(p)? else {
+                    continue;
+                };
+                placed = true;
+                if !marched.iter().any(|m| on_march(&a, &b, seed.p, m)) {
+                    let before = marched.len();
+                    trace(seed.p, &mut marched, &mut curves)?;
+                    for m in &marched[before..] {
+                        cover.mark_marched(m);
+                    }
+                }
+                break;
+            }
+            // A lone cell across the region's or B's patch's edge whose
+            // seeds all lie off them is cut until its seeds lie close
+            // enough that its arc is proved off them too.
+            if placed || !cover.cut_across(&class) {
+                cover.mark(&class);
+            }
         }
     }
 
@@ -10819,6 +10919,120 @@ mod tests {
                         })
                         .fold(f64::INFINITY, f64::min);
                     assert!(near < 1e-5, "{label}: {t:?} lies {near:.1e} off");
+                }
+            }
+        }
+    }
+
+    /// A rod of radius 0.6 runs along x over the top of the ring of radii 4
+    /// and 1.5, its axis 0.007 inside the tube's top circle, its underside
+    /// 8e-6 below the tube's top. Along the rod the tube's top rises to two
+    /// crests 0.47 apart, where the rod dips into it in two loops about 0.17
+    /// long and 0.005 wide. Each loop is smaller than a cell of either patch,
+    /// and both lie in about one cell of the rod's. A cell's seed settles on
+    /// one loop: one loop was lost with no error. The cells are now cut until
+    /// each part of the section is proved to run through cells that a marched
+    /// point or a seed reaches. Both loops are traced, in three poses and
+    /// either way round, within the linear tolerance of both surfaces. Where
+    /// the two cross at an angle whose sine is `s`, a fit within the
+    /// tolerance of both can lie twice the tolerance over `s` off the
+    /// section, up to 3e-3 at the loops' ends, where `s` is 7e-5: every point
+    /// of the section lies within twice that, or 1e-5, of a curve.
+    #[test]
+    fn two_loops_in_one_cell_of_each_patch_are_both_traced() {
+        let lin = Tolerance::new().linear;
+        let turn = crate::mat::Mat4::rotation_z(0.75 * TAU / 32.0);
+        let (delta, depth) = (0.007_f64, 8e-6_f64);
+        let (y0, z0) = (4.0 - delta, 2.1 - depth);
+        for (k, pose) in three_poses().iter().enumerate() {
+            let pose = *pose * turn;
+            let o = Point3::new(0.0, 0.0, 0.0);
+            let along = |v: Vec3| pose.mul_point(o + v) - pose.mul_point(o);
+            let centre = pose.mul_point(o);
+            let up = along(Vec3::new(0.0, 0.0, 1.0));
+            let ring = ToroidalSurface::with_axis(centre, 4.0, 1.5, up).unwrap();
+            let start = pose.mul_point(Point3::new(0.0, y0, z0));
+            let dir = along(Vec3::new(1.0, 0.0, 0.0));
+            let rod = CylindricalSurface::new(start, dir, 0.6).unwrap();
+            let ring_normal = |p: Point3| {
+                let w = p - centre;
+                let across = w - up * up.dot(w);
+                let tube = centre + across * (4.0 / across.length());
+                (p - tube) * (1.0 / (p - tube).length())
+            };
+            let rod_normal = |p: Point3| {
+                let w = p - start;
+                let across = w - dir * dir.dot(w);
+                across * (1.0 / across.length())
+            };
+            let off_ring = |p: Point3| {
+                let w = p - centre;
+                let h = up.dot(w);
+                ((w - up * h).length() - 4.0).hypot(h) - 1.5
+            };
+            let off_rod = |p: Point3| {
+                let w = p - start;
+                ((w - dir * dir.dot(w)).length() - 0.6).abs()
+            };
+            // Each ruling of the rod meets the ring where a quartic along it
+            // vanishes.
+            let mut truth = Vec::new();
+            for j in -300..=300 {
+                let phi = f64::from(j) * 1e-4;
+                let from =
+                    pose.mul_point(Point3::new(0.0, y0 + 0.6 * phi.sin(), z0 - 0.6 * phi.cos()));
+                for t in intersect_line_torus(&ring, from, dir) {
+                    if t.abs() < 2.0 {
+                        truth.push(from + dir * t);
+                    }
+                }
+            }
+            assert!(truth.len() > 100, "pose {k}: {} points", truth.len());
+            for rod_first in [true, false] {
+                let label = format!("pose {k} rod first {rod_first}");
+                let along_rod = Some((-9.6875, 10.3125));
+                let result = if rod_first {
+                    marched_sections(
+                        AnalyticSurface::Cylinder(&rod),
+                        AnalyticSurface::Torus(&ring),
+                        32,
+                        along_rod,
+                        None,
+                        None,
+                    )
+                } else {
+                    marched_sections(
+                        AnalyticSurface::Torus(&ring),
+                        AnalyticSurface::Cylinder(&rod),
+                        32,
+                        None,
+                        along_rod,
+                        None,
+                    )
+                };
+                assert!(result.is_ok(), "{label}: {:?}", result.as_ref().err());
+                let curves = result.unwrap();
+                assert_eq!(curves.len(), 2, "{label}: loops");
+                for c in &curves {
+                    let worst =
+                        farthest_along(&c.curve, 4000, |p| off_ring(p).abs().max(off_rod(p)));
+                    assert!(worst <= lin, "{label}: off by {worst:.2e}");
+                }
+                for &t in &truth {
+                    let sin = ring_normal(t).cross(rod_normal(t)).length();
+                    let bound = (4.0 * lin / sin).max(1e-5);
+                    let near = curves
+                        .iter()
+                        .map(|c| {
+                            crate::nurbs::projection::project_point_to_curve(&c.curve, t, 1e-12)
+                                .unwrap()
+                                .distance
+                        })
+                        .fold(f64::INFINITY, f64::min);
+                    assert!(
+                        near <= bound,
+                        "{label}: {t:?} lies {near:.1e} off, past {bound:.1e}"
+                    );
                 }
             }
         }

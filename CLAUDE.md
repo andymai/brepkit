@@ -85,6 +85,7 @@ Quick reference — find the right file for any task:
 | Surface-surface intersection | `nurbs/intersection/` (mod, surface_marching, surface_seeding, curve_surface, plane, line, chaining, tests) |
 | Analytic-analytic intersection | `analytic_intersection.rs` |
 | Fits of a section of two analytic surfaces, bounded off both along their whole length | `analytic_intersection/section_fit.rs` |
+| Proof that the marcher's seeds reach every part of a section over a patch | `analytic_intersection/cover.rs` |
 | AABB / bounding boxes | `aabb.rs` |
 | BVH (bounding volume hierarchy) | `bvh.rs` |
 | CDT (constrained Delaunay) | `cdt/` (mod, insert, locate, constraints, adjacency, tests) |
