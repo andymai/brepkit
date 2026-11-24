@@ -7,6 +7,7 @@
 //! the straight run in UV lies on the edge in 3D.
 
 use brepkit_math::madd::Madd;
+use std::borrow::Cow;
 use std::f64::consts::TAU;
 
 use brepkit_math::curves2d::{Curve2D, Line2D, NurbsCurve2D};
@@ -830,7 +831,7 @@ fn proved_conic_pcurve(
     frame: Option<&PlaneFrame>,
 ) -> Option<Curve2D> {
     let (curve, gap) = unit_conic(curve)?;
-    let curve = &curve;
+    let curve: &EdgeCurve = &curve;
     // The pcurve follows the unit form's arc between the points nearest the
     // first and last samples, within the arc gap of the stored arc, which
     // may take at most a quarter of the tolerance.
@@ -1456,7 +1457,7 @@ fn straight_image_bound(
 ) -> Option<f64> {
     let raw = curve;
     let (curve, gap) = unit_conic(curve)?;
-    let curve = &curve;
+    let curve: &EdgeCurve = &curve;
     let n = uv_pts.len() - 1;
     if pts_3d.len() != n + 1 || n == 0 {
         return None;
@@ -1575,7 +1576,7 @@ fn image_bend_bound(surface: &FaceSurface, a: Point2, b: Point2) -> Option<f64> 
 /// a sweep over a quarter turn or a weight not above nothing.
 fn piece_stray(curve: &EdgeCurve, a: Point3, b: Point3, span: Option<(f64, f64)>) -> Option<f64> {
     let (curve, gap) = unit_conic(curve)?;
-    let curve = &curve;
+    let curve: &EdgeCurve = &curve;
     // The stored piece lies within the arc gap of the unit form's piece
     // between the points nearest `a` and `b`, which lie within the gap of
     // `a` and `b`, so its chord within the gap of theirs.
@@ -1652,14 +1653,14 @@ fn segment_distance_3d(p: Point3, a: Point3, b: Point3) -> f64 {
 /// projection reads its semi-axes against unit axes. `None` where a length
 /// or a size is not finite or not positive, or an ellipse's major semi-axis
 /// comes out shorter than its minor. A line or a B-spline comes back as it
-/// is, with no gap.
+/// is, borrowed, with no gap.
 ///
 /// At one parameter the stored point is `c + cos t A + sin t B` and the
 /// unit form's `c + cos t A' + sin t B'`, so the two lie within
 /// `|A - A'| + |B - B'|` of each other: that covers a difference in the
 /// axes' lengths and their skew. Each difference is read as it is computed,
 /// plus its rounding, and is nothing where the two are the same to the bit.
-pub(super) fn unit_conic(curve: &EdgeCurve) -> Option<(EdgeCurve, f64)> {
+pub(super) fn unit_conic(curve: &EdgeCurve) -> Option<(Cow<'_, EdgeCurve>, f64)> {
     let slack = 64.0 * f64::EPSILON;
     // The unit first axis, the second squared to it, and both lengths.
     let frame = |u: Vec3, v: Vec3| {
@@ -1694,7 +1695,7 @@ pub(super) fn unit_conic(curve: &EdgeCurve) -> Option<(EdgeCurve, f64)> {
             let unit =
                 brepkit_math::curves::Circle3D::with_axes(c.center(), u.cross(w), radius, u, w)
                     .ok()?;
-            Some((EdgeCurve::Circle(unit), gap_ok(gap)?))
+            Some((Cow::Owned(EdgeCurve::Circle(unit)), gap_ok(gap)?))
         }
         EdgeCurve::Ellipse(e) => {
             let (u, w, lu, lv) = frame(e.u_axis(), e.v_axis())?;
@@ -1714,9 +1715,9 @@ pub(super) fn unit_conic(curve: &EdgeCurve) -> Option<(EdgeCurve, f64)> {
                 w,
             )
             .ok()?;
-            Some((EdgeCurve::Ellipse(unit), gap_ok(gap)?))
+            Some((Cow::Owned(EdgeCurve::Ellipse(unit)), gap_ok(gap)?))
         }
-        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => Some((curve.clone(), 0.0)),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => Some((Cow::Borrowed(curve), 0.0)),
     }
 }
 
@@ -1734,7 +1735,8 @@ pub(super) const fn unit_conic_arc_gap(gap: f64) -> f64 {
 /// under a quarter turn apart. `None` for another curve, or when a step
 /// reads a quarter turn or more.
 fn conic_sweep(curve: &EdgeCurve, pts_3d: &[Point3]) -> Option<(f64, f64)> {
-    let curve = &unit_conic(curve)?.0;
+    let unit = unit_conic(curve)?.0;
+    let curve: &EdgeCurve = &unit;
     let project = |p: Point3| match curve {
         EdgeCurve::Circle(c) => Some(c.project(p)),
         EdgeCurve::Ellipse(e) => Some(e.project(p)),

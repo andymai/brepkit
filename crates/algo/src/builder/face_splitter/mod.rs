@@ -13517,24 +13517,24 @@ fn plane_internal_line_loops(
 /// too, a quick refusal and never a proof. Any other pair is taken for two
 /// curves.
 fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
-    use crate::builder::pcurve_compute::unit_conic;
+    use std::borrow::Cow;
     // Each bound reads a conic's sizes from its radius or semi-axes, true
-    // only on unit, square axes.
-    let unit = |s: &SectionEdge| {
-        unit_conic(&s.curve_3d).map(|(curve_3d, gap)| {
-            (
-                SectionEdge {
-                    curve_3d,
-                    ..s.clone()
-                },
-                gap,
-            )
-        })
-    };
+    // only on unit, square axes. A line or a B-spline is read as it is.
+    fn unit(s: &SectionEdge) -> Option<(Cow<'_, SectionEdge>, f64)> {
+        let (curve_3d, gap) = crate::builder::pcurve_compute::unit_conic(&s.curve_3d)?;
+        let section = match curve_3d {
+            Cow::Borrowed(_) => Cow::Borrowed(s),
+            Cow::Owned(curve_3d) => Cow::Owned(SectionEdge {
+                curve_3d,
+                ..s.clone()
+            }),
+        };
+        Some((section, gap))
+    }
     let (Some((a, gap_a)), Some((b, gap_b))) = (unit(a), unit(b)) else {
         return false;
     };
-    let (a, b) = (&a, &b);
+    let (a, b): (&SectionEdge, &SectionEdge) = (&a, &b);
     // Each stored arc lies within its arc gap of its unit form's, and the
     // two gaps may take at most a quarter of the tolerance.
     let off_forms = crate::builder::pcurve_compute::unit_conic_arc_gap(gap_a)
