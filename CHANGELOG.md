@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.11.50](https://github.com/andymai/brepkit/compare/v4.11.49...v4.11.50) (2026-11-24)
+
+
+### Bug Fixes
+
+* **algo:** find an edge's crossings of a ring face exactly, and box a NURBS face by its control points, in phase EF ([#2815](https://github.com/andymai/brepkit/issues/2815)) ([16993cf](https://github.com/andymai/brepkit/commit/16993cf34ab48cb3ce0e7e8726ff6f5d5f4dac0f))
+* **algo:** split a ball face that holds a pole of every chart about the pole it holds ([#2798](https://github.com/andymai/brepkit/issues/2798)) ([ced51c1](https://github.com/andymai/brepkit/commit/ced51c1373683f88cbb9f30cc4603b6f1151dc22))
+
 ## [4.11.49](https://github.com/andymai/brepkit/compare/v4.11.48...v4.11.49) (2026-11-24)
 
 
