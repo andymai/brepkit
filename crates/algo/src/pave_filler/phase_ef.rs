@@ -7506,11 +7506,119 @@ mod tests {
         }
     }
 
+    /// A flat sheet over `[0, 1]²` with `x = u` and `y = v`, its face bounded
+    /// by one wire of lines, each with its pcurve, through the points `at`
+    /// by their places in `path`, a line of the wire for each step. A step
+    /// back along a line already taken reuses that line's edge where
+    /// `twins`, else takes an edge of its own.
+    fn sheet_with_wire(
+        topo: &mut Topology,
+        at: &[(f64, f64)],
+        path: &[usize],
+        twins: bool,
+    ) -> FaceId {
+        use brepkit_math::curves2d::{Curve2D, Line2D};
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::Point2;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::pcurve::PCurve;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let rows = [0.0, 1.0]
+            .iter()
+            .map(|&x| [0.0, 1.0].iter().map(|&y| Point3::new(x, y, 0.0)).collect())
+            .collect();
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let sheet =
+            NurbsSurface::new(1, 1, knots.clone(), knots, rows, vec![vec![1.0; 2]; 2]).unwrap();
+        let v: Vec<_> = at
+            .iter()
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)))
+            .collect();
+        let mut made: Vec<(usize, usize, brepkit_topology::edge::EdgeId)> = Vec::new();
+        let mut steps = Vec::new();
+        for w in path.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let back = made
+                .iter()
+                .find(|&&(s, e, _)| (s, e) == (b, a))
+                .map(|&(_, _, id)| id);
+            if let Some(id) = back.filter(|_| twins) {
+                steps.push(OrientedEdge::new(id, false));
+            } else {
+                let id = topo.add_edge(Edge::new(v[a], v[b], EdgeCurve::Line));
+                made.push((a, b, id));
+                steps.push(OrientedEdge::new(id, true));
+            }
+        }
+        let wire = topo.add_wire(Wire::new(steps, true).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(sheet)));
+        for (a, b, e) in made {
+            let (from, to) = (Point2::new(at[a].0, at[a].1), Point2::new(at[b].0, at[b].1));
+            let line = Line2D::new(from, to - from).unwrap();
+            topo.pcurves_mut().set(
+                e,
+                face,
+                PCurve::new(Curve2D::Line(line), 0.0, (to - from).length()),
+            );
+        }
+        face
+    }
+
+    /// A face whose one wire runs round the square `[0.1, 0.9]²`, then in
+    /// along a bridge and round the inner square `[0.5, 0.7]²` the same way,
+    /// and back out along the bridge, by an edge of its own or by the same
+    /// edge: the inner square is wound twice, so a parity read of the wire
+    /// reads it outside. Its loop is no simple curve, so the face takes no
+    /// trim, and a line through the inner square crosses the face, as lines
+    /// through the rest of it do.
+    #[test]
+    fn a_wire_that_winds_twice_round_a_region_takes_no_trim() {
+        let at = [
+            (0.1, 0.1),
+            (0.9, 0.1),
+            (0.9, 0.9),
+            (0.1, 0.9),
+            (0.1, 0.5),
+            (0.5, 0.5),
+            (0.7, 0.5),
+            (0.7, 0.7),
+            (0.5, 0.7),
+        ];
+        let path = [0, 1, 2, 3, 4, 5, 6, 7, 8, 5, 4, 0];
+        let tol = Tolerance::new();
+        for twins in [false, true] {
+            let mut topo = Topology::new();
+            let face = sheet_with_wire(&mut topo, &at, &path, twins);
+            let FaceSurface::Nurbs(sheet) = topo.face(face).unwrap().surface().clone() else {
+                unreachable!()
+            };
+            let reach = face_tolerance(&topo, face, tol).unwrap();
+            assert!(
+                super::super::nurbs_trim::NurbsFaceTrim::new(&topo, face, &sheet, tol, reach)
+                    .unwrap()
+                    .is_none(),
+                "twins {twins}"
+            );
+            for (x, y) in [(0.6, 0.6), (0.3, 0.3), (0.8, 0.8)] {
+                let found = ef_vertices(
+                    &mut topo,
+                    face,
+                    EdgeCurve::Line,
+                    Point3::new(x, y, 0.31),
+                    Some(Point3::new(x, y, -0.27)),
+                );
+                assert_eq!(found.len(), 1, "twins {twins} at ({x}, {y}): {found:?}");
+            }
+        }
+    }
+
     /// A flat sheet over `[0, 1]²` with `x = u` and `y = v`, its face the
     /// square `[0.1, 0.9]²` whose wire runs a slit from `(0.5, 0.1)` up to
-    /// `(0.5, 0.5)` and back down it, one edge used twice: lines through the
-    /// face beside the slit, on either side, cross it once, and the trim
-    /// reads both inside; a line past the square crosses it nowhere.
+    /// `(0.5, 0.5)` and back down it, one edge used twice: its loop is no
+    /// simple curve, so the face takes no trim; lines through the face
+    /// beside the slit, on either side, cross it once, and a line past the
+    /// square, outside its box, crosses it nowhere.
     #[test]
     fn a_slit_edge_run_out_and_back_keeps_both_sides_of_it() {
         use brepkit_math::curves2d::{Curve2D, Line2D};
@@ -7576,19 +7684,17 @@ mod tests {
         }
         let tol = Tolerance::new();
         let reach = face_tolerance(&topo, face, tol).unwrap();
-        let trim = super::super::nurbs_trim::NurbsFaceTrim::new(&topo, face, &sheet, tol, reach)
-            .unwrap()
-            .unwrap();
+        assert!(
+            super::super::nurbs_trim::NurbsFaceTrim::new(&topo, face, &sheet, tol, reach)
+                .unwrap()
+                .is_none()
+        );
         for ((x, y), want) in [
             ((0.5 - 1e-3, 0.3), 1),
             ((0.5 + 1e-3, 0.3), 1),
             ((0.5, 0.7), 1),
             ((0.5, 0.05), 0),
         ] {
-            let p = Point3::new(x, y, 0.0);
-            if want == 1 {
-                assert_eq!(trim.holds(p, 1e-6, tol), Some(true), "({x}, {y})");
-            }
             let found = ef_vertices(
                 &mut topo,
                 face,

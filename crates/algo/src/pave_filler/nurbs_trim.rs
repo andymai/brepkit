@@ -115,6 +115,24 @@ impl Piece {
         held.grown(slack)
     }
 
+    /// The piece run the other way.
+    fn reversed(&self) -> Self {
+        Self {
+            owner: [self.owner[1], self.owner[0]],
+            a: self.b,
+            b: self.a,
+            hull: match &self.hull {
+                Hull::Segment => Hull::Segment,
+                Hull::Conic { curve, t, bend } => Hull::Conic {
+                    curve: curve.clone(),
+                    t: (t.1, t.0),
+                    bend: *bend,
+                },
+                Hull::Bezier(net) => Hull::Bezier(net.iter().rev().copied().collect()),
+            },
+        }
+    }
+
     /// The piece cut in two at the middle of its parameters.
     fn halves(&self) -> (Self, Self) {
         match &self.hull {
@@ -270,6 +288,17 @@ impl NurbsFaceTrim {
         let Some(loops) = super::helpers::pcurve_loops(topo, face_id, surface, tol, reach)? else {
             return Ok(None);
         };
+        // An edge run twice, out and back as along a slit, leaves its loop
+        // no simple curve.
+        let mut seen = std::collections::HashSet::new();
+        if !loops
+            .loops
+            .iter()
+            .flatten()
+            .all(|(_, _, eid)| seen.insert(*eid))
+        {
+            return Ok(None);
+        }
         let mut edges = Vec::new();
         let mut runs: Vec<Vec<Run<'_>>> = Vec::new();
         for wire in &loops.loops {
@@ -305,6 +334,7 @@ impl NurbsFaceTrim {
         edges: Vec<TrimEdge>,
     ) -> Option<Self> {
         let mut pieces: Vec<Piece> = Vec::new();
+        let mut spans: Vec<(usize, usize)> = Vec::with_capacity(loops.len());
         let (mut size, mut degree) = (0.0_f64, 2_usize);
         for wire in loops {
             let first = pieces.len();
@@ -334,6 +364,7 @@ impl NurbsFaceTrim {
                     hull: Hull::Segment,
                 });
             }
+            spans.push((first, pieces.len()));
         }
         if pieces.is_empty() || !size.is_finite() {
             return None;
@@ -345,6 +376,11 @@ impl NurbsFaceTrim {
         #[allow(clippy::cast_precision_loss)]
         let roundings = (8 * (MOST_HALVINGS as usize + 4) * (degree + 2)) as f64;
         let slack = roundings * f64::EPSILON * size.max(f64::MIN_POSITIVE);
+        let ((u0, u1), (v0, v1)) = (surface.domain_u(), surface.domain_v());
+        let joint = 2e-6 * ((u1 - u0) + (v1 - v0)) + 4.0 * slack;
+        if !loops_are_simple(&pieces, &spans, slack, joint) {
+            return None;
+        }
         let bounds = pieces
             .iter()
             .map(|piece| piece.bounds(slack))
@@ -671,6 +707,185 @@ impl NurbsFaceTrim {
     }
 }
 
+/// How many pairs of pieces one proof that a trim's loops are simple may
+/// read ([`loops_are_simple`]).
+const MOST_LOOP_PAIRS: usize = 1 << 14;
+
+/// How many times a piece is halved, at most, in that proof.
+const MOST_LOOP_DEPTH: u32 = 40;
+
+/// The angle, in radians, by which the rounding of a direction's
+/// coordinates can move the angle between two directions read by `acos`.
+const ANGLE_SLACK: f64 = 1e-7;
+
+/// Whether each of the loops (`spans`, ranges of `pieces`) is a simple
+/// curve and no two meet: no two pieces meet, but two that follow each
+/// other in a loop, at their joint. A parity read of loops that are each
+/// simple reads every point inside the outer loop and no hole as inside,
+/// whatever the holes do; a loop that runs round a region twice reads it
+/// outside.
+///
+/// A piece whose box lies within `joint` of a point is read as part of the
+/// joint of the pieces on either side of it. Two pieces that do not follow
+/// each other are apart where their boxes, grown by `slack`, keep apart,
+/// halved, the larger first, as far as needed. Two that follow each other
+/// each lie in a cone from their joint ([`cone2`]): where the cones meet
+/// only at the joint, the pieces meet only near it, within the joint's
+/// size over the angle between them; else they are halved, the halves at
+/// the joint read so again. Two ends of pieces within `2 slack` of each
+/// other away from a joint show the pieces meet. A loop of fewer than three
+/// pieces, more than [`MOST_LOOP_PAIRS`] pairs read, or a piece halved
+/// [`MOST_LOOP_DEPTH`] times reads as not simple.
+fn loops_are_simple(pieces: &[Piece], spans: &[(usize, usize)], slack: f64, joint: f64) -> bool {
+    // The pieces each loop runs through past its joints, by their places,
+    // and the place that follows each.
+    let mut proper: Vec<usize> = Vec::new();
+    let mut next: Vec<usize> = Vec::new();
+    for &(first, end) in spans {
+        let start = proper.len();
+        for k in first..end {
+            let b = pieces[k].bounds(0.0);
+            if (b.hi[0] - b.lo[0]).hypot(b.hi[1] - b.lo[1]) > joint {
+                proper.push(k);
+            }
+        }
+        let count = proper.len() - start;
+        if count < 3 {
+            return false;
+        }
+        next.extend((start..proper.len()).map(|i| start + (i - start + 1) % count));
+    }
+    let boxes: Vec<Box2> = proper.iter().map(|&k| pieces[k].bounds(slack)).collect();
+    let mut order: Vec<usize> = (0..proper.len()).collect();
+    order.sort_by(|&x, &y| boxes[x].lo[0].total_cmp(&boxes[y].lo[0]));
+    let mut read = 0_usize;
+    let mut work: Vec<(Piece, Piece, bool, u32)> = Vec::new();
+    for (place, &x) in order.iter().enumerate() {
+        for &y in &order[place + 1..] {
+            read += 1;
+            if read > MOST_LOOP_PAIRS {
+                return false;
+            }
+            if boxes[y].lo[0] > boxes[x].hi[0] {
+                break;
+            }
+            if boxes[y].lo[1] > boxes[x].hi[1] || boxes[y].hi[1] < boxes[x].lo[1] {
+                continue;
+            }
+            let (px, py) = (&pieces[proper[x]], &pieces[proper[y]]);
+            // Two pieces that follow each other, read from their joint.
+            if next[x] == y {
+                work.push((px.reversed(), py.clone(), true, 0));
+            } else if next[y] == x {
+                work.push((py.reversed(), px.clone(), true, 0));
+            } else {
+                work.push((px.clone(), py.clone(), false, 0));
+            }
+        }
+    }
+    while let Some((x, y, corner, depth)) = work.pop() {
+        read += 1;
+        if read > MOST_LOOP_PAIRS {
+            return false;
+        }
+        let (bx, by) = (x.bounds(slack), y.bounds(slack));
+        let parted = bx.lo[0] > by.hi[0]
+            || by.lo[0] > bx.hi[0]
+            || bx.lo[1] > by.hi[1]
+            || by.lo[1] > bx.hi[1];
+        if parted || (corner && cones2_apart(&x, &y, slack)) {
+            continue;
+        }
+        let meet = |p: Point2, q: Point2| (p.x() - q.x()).hypot(p.y() - q.y()) <= 2.0 * slack;
+        let ends_meet = [x.a, x.b].into_iter().any(|p| meet(p, y.a) || meet(p, y.b));
+        if (!corner && ends_meet) || depth >= MOST_LOOP_DEPTH {
+            return false;
+        }
+        let size = |b: Box2| (b.hi[0] - b.lo[0]).hypot(b.hi[1] - b.lo[1]);
+        let (cut_x, cut_y) = (
+            corner || size(bx) >= size(by),
+            corner || size(by) > size(bx),
+        );
+        let xs = if cut_x {
+            let (l, r) = x.halves();
+            vec![l, r]
+        } else {
+            vec![x]
+        };
+        let ys = if cut_y {
+            let (l, r) = y.halves();
+            vec![l, r]
+        } else {
+            vec![y]
+        };
+        for (i, xx) in xs.iter().enumerate() {
+            for (j, yy) in ys.iter().enumerate() {
+                work.push((
+                    xx.clone(),
+                    yy.clone(),
+                    corner && i == 0 && j == 0,
+                    depth + 1,
+                ));
+            }
+        }
+    }
+    true
+}
+
+/// The axis and half-angle of a cone from a piece's start that holds the
+/// piece: a segment's direction; the sector between a conic arc's tangent
+/// at its start and its chord, which holds the arc, as it turns by less
+/// than half a turn; or the directions to a Bezier piece's control points
+/// from its first, as each point of the piece blends them with weights
+/// that are not negative. Each direction is read to an angle of its
+/// rounding over its length. `None` where a direction is no longer than a
+/// few `slack`, or the half-angle reaches a right angle.
+fn cone2(piece: &Piece, slack: f64) -> Option<((f64, f64), f64)> {
+    let unit = |(x, y): (f64, f64), err: f64| -> Option<((f64, f64), f64)> {
+        let length = x.hypot(y);
+        (length > 4.0 * slack && length.is_finite())
+            .then(|| ((x / length, y / length), err + 4.0 * slack / length))
+    };
+    let chord = (piece.b.x() - piece.a.x(), piece.b.y() - piece.a.y());
+    let directions: Vec<((f64, f64), f64)> = match &piece.hull {
+        Hull::Segment => vec![unit(chord, 0.0)?],
+        Hull::Conic { curve, t, .. } => {
+            let along = curve.tangent(t.0) * (t.1 - t.0).signum();
+            vec![unit((along.x(), along.y()), 1e-9)?, unit(chord, 0.0)?]
+        }
+        Hull::Bezier(net) => {
+            let first = net.first()?;
+            let apex = (first[0] / first[2], first[1] / first[2]);
+            net[1..]
+                .iter()
+                .map(|q| unit((q[0] / q[2] - apex.0, q[1] / q[2] - apex.1), 0.0))
+                .collect::<Option<_>>()?
+        }
+    };
+    let sum = directions
+        .iter()
+        .fold((0.0, 0.0), |s, ((x, y), _)| (s.0 + x, s.1 + y));
+    let length = sum.0.hypot(sum.1);
+    if length.is_nan() || length <= 0.0 {
+        return None;
+    }
+    let axis = (sum.0 / length, sum.1 / length);
+    let half = directions
+        .iter()
+        .map(|((x, y), err)| x.madd(axis.0, y * axis.1).clamp(-1.0, 1.0).acos() + err)
+        .fold(0.0_f64, f64::max);
+    (half < std::f64::consts::FRAC_PI_2).then_some((axis, half))
+}
+
+/// Whether two pieces that start at one joint leave it in cones that meet
+/// only there ([`cone2`]).
+fn cones2_apart(a: &Piece, b: &Piece, slack: f64) -> bool {
+    let (Some((x, hx)), Some((y, hy))) = (cone2(a, slack), cone2(b, slack)) else {
+        return false;
+    };
+    x.0.madd(y.0, x.1 * y.1).clamp(-1.0, 1.0).acos() > hx + hy + ANGLE_SLACK
+}
+
 /// Whether a plane keeps every one of `points`, and so their convex hull,
 /// farther than `reach` from `p`: one square to an axis, to the points'
 /// middle from `p`, or to the point nearest `p`.
@@ -989,5 +1204,38 @@ mod tests {
             trim.holds_parameters(Point2::new(0.5, 0.75 + 1e-9)),
             Some(false)
         );
+    }
+
+    /// Loops that are no simple curves take no trim: a figure eight, whose
+    /// sides cross at its middle, and a square hole that crosses the outer
+    /// square's side. The outer square with a hole inside it takes one.
+    #[test]
+    fn loops_that_cross_take_no_trim() {
+        // Each wire's sides as lines read over their lengths.
+        let sides = |corners: &[(f64, f64)]| -> Vec<(Curve2D, f64)> {
+            (0..corners.len())
+                .map(|k| {
+                    let (p, q) = (corners[k], corners[(k + 1) % corners.len()]);
+                    let along = Vec2::new(q.0 - p.0, q.1 - p.1);
+                    let line = Line2D::new(Point2::new(p.0, p.1), along).unwrap();
+                    (Curve2D::Line(line), along.length())
+                })
+                .collect()
+        };
+        let trimmed = |wires: &[&[(f64, f64)]]| {
+            let lines: Vec<Vec<(Curve2D, f64)>> = wires.iter().map(|w| sides(w)).collect();
+            let loops: Vec<Vec<Run<'_>>> = lines
+                .iter()
+                .map(|w| w.iter().map(|(c, len)| (c, (0.0, *len), 0)).collect())
+                .collect();
+            NurbsFaceTrim::of_runs(&sheet(), &loops, Vec::new()).is_some()
+        };
+        let outer: &[(f64, f64)] = &[(0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9)];
+        let eight: &[(f64, f64)] = &[(0.1, 0.1), (0.9, 0.9), (0.9, 0.1), (0.1, 0.9)];
+        let across: &[(f64, f64)] = &[(0.8, 0.4), (0.8, 0.6), (0.95, 0.6), (0.95, 0.4)];
+        let inside: &[(f64, f64)] = &[(0.4, 0.4), (0.4, 0.6), (0.6, 0.6), (0.6, 0.4)];
+        assert!(!trimmed(&[eight]));
+        assert!(!trimmed(&[outer, across]));
+        assert!(trimmed(&[outer, inside]));
     }
 }
