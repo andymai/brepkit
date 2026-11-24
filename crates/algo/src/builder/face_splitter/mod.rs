@@ -13185,36 +13185,27 @@ fn plane_internal_line_loops(
 }
 
 /// Whether sections `a` and `b`, whose ends lie within `tol` of each other
-/// (either way round), are one curve within `tol`, by a proof. Two lines
-/// are. Two circular arcs are when their middles meet: three points fix a
-/// circle, and the middle fixes the arc. Two elliptic arcs are when three
-/// inner points meet: five points of a plane fix a conic. A B-spline is a
-/// line's segment when its control points all lie within `tol` of the
-/// segment, as the curve lies in their hull and runs from end to end, and is
-/// another B-spline when a bound on their data holds them within `tol` of
-/// each other ([`same_nurbs_data`]) and their middles meet. Any other pair
-/// is taken for two curves.
+/// (either way round), are one curve within `tol`, by a bound over their
+/// whole length. Two lines are. Two circular or elliptic arcs are where
+/// [`circle_arcs_apart`] or [`ellipse_arcs_apart`] holds them within `tol`,
+/// read the shorter way round between their ends and along the curve from
+/// each start alike. A B-spline is a line's segment when its control points
+/// all lie within `tol` of the segment, as the curve lies in their hull and
+/// runs from end to end; and is another B-spline's trim where
+/// [`nurbs_trims_apart`] holds them within `tol`. Their middles must meet
+/// too, a quick refusal and never a proof. Any other pair is taken for two
+/// curves.
 fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
-    let flipped = (a.start - b.start).length() > (a.start - b.end).length();
-    // An open arc reads two ways: the shorter way round between its ends,
-    // or along its curve from its start. An arc and the rest of its circle
-    // stored from the other end are one arc read the first way and two the
-    // second, so the trims must meet both ways.
     let along = |s: &SectionEdge, t: f64| {
         let (t0, t1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
         s.curve_3d
             .evaluate_with_endpoints((t1 - t0).madd(t, t0), s.start, s.end)
     };
-    let meet = |fractions: &[f64]| {
-        fractions.iter().all(|&t| {
-            let on_b = if flipped { 1.0 - t } else { t };
-            (evaluate_edge_at_t(&a.curve_3d, a.start, a.end, t)
-                - evaluate_edge_at_t(&b.curve_3d, b.start, b.end, on_b))
-            .length()
-                <= tol
-                && (along(a, t) - along(b, on_b)).length() <= tol
-        })
-    };
+    let middles_meet = (evaluate_edge_at_t(&a.curve_3d, a.start, a.end, 0.5)
+        - evaluate_edge_at_t(&b.curve_3d, b.start, b.end, 0.5))
+    .length()
+        <= tol
+        && (along(a, 0.5) - along(b, 0.5)).length() <= tol;
     let straight = |nurbs: &brepkit_math::nurbs::curve::NurbsCurve, line: &SectionEdge| {
         let d = line.end - line.start;
         let len2 = d.dot(d);
@@ -13225,22 +13216,221 @@ fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
                 (line.start + d * t - p).length() <= tol
             })
     };
+    // An open arc reads two ways: the shorter way round between its ends,
+    // or along its curve from its start. An arc and the rest of its circle
+    // stored from the other end are one arc read the first way and two the
+    // second, so the trims must meet both ways.
+    let readings = |s: &SectionEdge, project: &dyn Fn(Point3) -> f64| {
+        let t0 = project(s.start);
+        let shorter = (
+            t0,
+            crate::builder::pcurve_compute::shorter_arc_delta(project(s.end) - t0),
+        );
+        let (n0, n1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
+        [shorter, (n0, n1 - n0)]
+    };
+    let within = |bound: f64| !bound.is_nan() && bound <= tol;
     match (&a.curve_3d, &b.curve_3d) {
         (EdgeCurve::Line, EdgeCurve::Line) => true,
-        (EdgeCurve::Circle(_), EdgeCurve::Circle(_)) => meet(&[0.5]),
-        (EdgeCurve::Ellipse(_), EdgeCurve::Ellipse(_)) => meet(&[0.25, 0.5, 0.75]),
+        (EdgeCurve::Circle(p), EdgeCurve::Circle(q)) => {
+            middles_meet && {
+                let (ra, rb) = (
+                    readings(a, &|x| p.project(x)),
+                    readings(b, &|x| q.project(x)),
+                );
+                ra.iter()
+                    .zip(&rb)
+                    .all(|(&ia, &ib)| within(circle_arcs_apart(p, ia, q, ib)))
+            }
+        }
+        (EdgeCurve::Ellipse(p), EdgeCurve::Ellipse(q)) => {
+            middles_meet && {
+                let (ra, rb) = (
+                    readings(a, &|x| p.project(x)),
+                    readings(b, &|x| q.project(x)),
+                );
+                ra.iter()
+                    .zip(&rb)
+                    .all(|(&ia, &ib)| within(ellipse_arcs_apart(p, ia, q, ib)))
+            }
+        }
         (EdgeCurve::Line, EdgeCurve::NurbsCurve(n)) => straight(n, a),
         (EdgeCurve::NurbsCurve(n), EdgeCurve::Line) => straight(n, b),
         (EdgeCurve::NurbsCurve(m), EdgeCurve::NurbsCurve(n)) => {
-            same_nurbs_data(m, n, tol) && meet(&[0.5])
+            middles_meet
+                && within(nurbs_trims_apart(
+                    m,
+                    a.curve_3d.domain_with_endpoints(a.start, a.end),
+                    n,
+                    b.curve_3d.domain_with_endpoints(b.start, b.end),
+                ))
         }
         _ => false,
     }
 }
 
-/// Whether two B-splines are one curve within `tol`, by a proof: one degree
-/// and one knot vector to the bit, read either way along the second, and a
-/// bound on how far apart the curves stand that is within `tol`.
+/// How far apart, in its own parameter, the span from `a.0` on by `a.1`
+/// lies from the span from `b.0` on by `b.1`, read as sets: the larger gap
+/// between their ends, matched the same way or the other way round,
+/// whichever is less. A span a whole turn longer than another is a turn
+/// apart.
+fn spans_apart((a0, ad): (f64, f64), (b0, bd): (f64, f64)) -> f64 {
+    use crate::builder::pcurve_compute::{max_or_nan, shorter_arc_delta};
+    let same = shorter_arc_delta(b0 - a0);
+    let back = shorter_arc_delta(b0 + bd - a0);
+    let gap = |start: f64, end: f64| max_or_nan(start.abs(), end.abs());
+    let (same, back) = (gap(same, same + bd - ad), gap(back, back - bd - ad));
+    if same.is_nan() || back.is_nan() {
+        f64::NAN
+    } else {
+        same.min(back)
+    }
+}
+
+/// A bound on the Hausdorff distance between the arc of circle `p` from its
+/// parameter `pa.0` on by `pa.1` and the arc of circle `q` over `qa`.
+///
+/// The rotation that takes `q`'s normal (or its reverse, whichever lies
+/// nearer) onto `p`'s carries `q` onto `p`, each point moving at most
+/// `|c_p - c_q| + |r_p - r_q| + r_p sqrt(2 - 2 |n_p . n_q|)`, and turns its arc
+/// into an arc of `p`. That arc's ends lie within the span gap
+/// ([`spans_apart`]) of `p`'s arc's ends along `p`, so the two arcs of `p`
+/// lie within `r_p` times that gap of each other.
+fn circle_arcs_apart(
+    p: &brepkit_math::curves::Circle3D,
+    pa: (f64, f64),
+    q: &brepkit_math::curves::Circle3D,
+    (q0, qd): (f64, f64),
+) -> f64 {
+    let n1 = p.normal();
+    let (n2, sweep) = if n1.dot(q.normal()) < 0.0 {
+        (-q.normal(), -qd)
+    } else {
+        (q.normal(), qd)
+    };
+    let cos = n2.dot(n1);
+    let w = n2.cross(n1);
+    let turn = |e: Vec3| e * cos + w.cross(e) + w * (w.dot(e) / (1.0 + cos));
+    let tilt = 2.0f64.madd(-cos, 2.0).max(0.0).sqrt();
+    let moved =
+        (p.center() - q.center()).length() + (p.radius() - q.radius()).abs() + p.radius() * tilt;
+    let (s, c) = q0.sin_cos();
+    let start = turn(q.u_axis() * c + q.v_axis() * s);
+    let start = start.dot(p.v_axis()).atan2(start.dot(p.u_axis()));
+    p.radius().madd(spans_apart(pa, (start, sweep)), moved)
+}
+
+/// A bound on the Hausdorff distance between the arc of ellipse `p` from
+/// its parameter `pa.0` on by `pa.1` and the arc of ellipse `q` over `qa`.
+///
+/// With `q`'s axes taken with signs `su`, `sv`, its point at `t2` is
+/// `c_q + a_q cos t (su U_q) + b_q sin t (sv V_q)`, `t` its parameter on `p`
+/// (`cos t = su cos t2`, `sin t = sv sin t2`), so it stands within
+/// `|c_p - c_q| + sqrt(|a_q su U_q - a_p U_p|^2 + |b_q sv V_q - b_p V_p|^2)` of
+/// `p`'s point at `t`. The arc of `p` over the matching span then lies within
+/// `a_p` times the span gap ([`spans_apart`]) of `p`'s own arc. The least
+/// bound over the four sign pairs stands.
+fn ellipse_arcs_apart(
+    p: &brepkit_math::curves::Ellipse3D,
+    pa: (f64, f64),
+    q: &brepkit_math::curves::Ellipse3D,
+    (q0, qd): (f64, f64),
+) -> f64 {
+    let mut best = f64::INFINITY;
+    for (su, sv) in [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+        let major = q.u_axis() * (su * q.semi_major()) - p.u_axis() * p.semi_major();
+        let minor = q.v_axis() * (sv * q.semi_minor()) - p.v_axis() * p.semi_minor();
+        let moved = (p.center() - q.center()).length() + major.length().hypot(minor.length());
+        let start = (sv * q0.sin()).atan2(su * q0.cos());
+        let bound = p
+            .semi_major()
+            .madd(spans_apart(pa, (start, su * sv * qd)), moved);
+        if bound.is_nan() {
+            return f64::NAN;
+        }
+        best = best.min(bound);
+    }
+    best
+}
+
+/// A bound on the Hausdorff distance between the trim of B-spline `m` over
+/// its parameters from `ma.0` to `ma.1` and the trim of `n` over `na`.
+///
+/// Where [`nurbs_data_apart`] holds `m` within `d` of `n` at each parameter
+/// (or of `n` read backward), `m`'s trim lies within `d` of `n` over the
+/// same span (or its mirror), and that lies within `n`'s speed bound
+/// ([`nurbs_speed_bound`]) times the larger gap between the spans' ends of
+/// `n`'s own trim. NaN where no bound holds.
+fn nurbs_trims_apart(
+    m: &brepkit_math::nurbs::curve::NurbsCurve,
+    ma: (f64, f64),
+    n: &brepkit_math::nurbs::curve::NurbsCurve,
+    na: (f64, f64),
+) -> f64 {
+    use crate::builder::pcurve_compute::max_or_nan;
+    let Some(speed) = nurbs_speed_bound(n) else {
+        return f64::NAN;
+    };
+    let span = |(x, y): (f64, f64)| (x.min(y), x.max(y));
+    let gap = |a: (f64, f64), b: (f64, f64)| {
+        let (a, b) = (span(a), span(b));
+        max_or_nan((a.0 - b.0).abs(), (a.1 - b.1).abs())
+    };
+    let knots = n.knots();
+    let (lo, hi) = (knots[0], knots[knots.len() - 1]);
+    let (forward, backward) = nurbs_data_apart(m, n);
+    let mut best = f64::NAN;
+    for (data, theirs) in [(forward, na), (backward, (lo + hi - na.0, lo + hi - na.1))] {
+        let Some(d) = data else { continue };
+        let bound = speed.madd(gap(ma, theirs), d);
+        if !bound.is_nan() && (best.is_nan() || bound < best) {
+            best = bound;
+        }
+    }
+    best
+}
+
+/// A bound on the speed of B-spline `n` in its own parameter: with `A` the
+/// homogeneous curve about its first control point `P_0` and `w` its weight,
+/// `C' = (A' - w' (C - P_0)) / w`, each of `A'` and `w'` at most its largest
+/// derivative control point, `|C - P_0|` at most the control polygon's reach
+/// and `w` at least the least weight. `None` for a weight not above nothing
+/// or a bound that is not finite.
+fn nurbs_speed_bound(n: &brepkit_math::nurbs::curve::NurbsCurve) -> Option<f64> {
+    use crate::builder::pcurve_compute::max_or_nan;
+    let (p, pts, ws, knots) = (n.degree(), n.control_points(), n.weights(), n.knots());
+    if pts.is_empty() || ws.iter().any(|&w| w.is_nan() || w <= 0.0) {
+        return None;
+    }
+    // The curve keeps its shape with its weights scaled alike, and read
+    // against the largest they neither underflow nor overflow.
+    let top = ws.iter().fold(0.0_f64, |m, &w| max_or_nan(m, w));
+    let ws: Vec<f64> = ws.iter().map(|&w| w / top).collect();
+    let origin = pts[0];
+    let least = ws.iter().fold(f64::INFINITY, |m, &w| m.min(w));
+    let reach = pts
+        .iter()
+        .fold(0.0_f64, |m, &q| max_or_nan(m, (q - origin).length()));
+    #[allow(clippy::cast_precision_loss)]
+    let degree = p as f64;
+    let (mut lead, mut weight_rate) = (0.0_f64, 0.0_f64);
+    for i in 0..pts.len().saturating_sub(1) {
+        let du = knots[i + p + 1] - knots[i + 1];
+        if du <= 0.0 {
+            continue;
+        }
+        let step = (pts[i + 1] - origin) * ws[i + 1] - (pts[i] - origin) * ws[i];
+        lead = max_or_nan(lead, step.length() * degree / du);
+        weight_rate = max_or_nan(weight_rate, (ws[i + 1] - ws[i]).abs() * degree / du);
+    }
+    let speed = weight_rate.madd(reach, lead) / least;
+    speed.is_finite().then_some(speed)
+}
+
+/// Bounds on how far B-spline `n` stands from `m` at each parameter, read
+/// forward and read backward (`n` at `lo + hi - t` against `m` at `t`): each
+/// `Some` only where the degree and knot vector match to the bit that way
+/// round, and the weights are positive.
 ///
 /// On one knot vector the curves share their basis functions `N_i`, and each
 /// point is the mean of the control points under the shares `N_i w_i`. With
@@ -13248,20 +13438,19 @@ fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
 /// each share moves by at most `2d / (1 - d)` of itself. So at each
 /// parameter the second curve lies within
 /// `max |Q_i - P_i| + 2d / (1 - d) max |P_i - P_0|` of the first.
-fn same_nurbs_data(
+fn nurbs_data_apart(
     m: &brepkit_math::nurbs::curve::NurbsCurve,
     n: &brepkit_math::nurbs::curve::NurbsCurve,
-    tol: f64,
-) -> bool {
+) -> (Option<f64>, Option<f64>) {
     let (mk, nk) = (m.knots(), n.knots());
     let (mp, np) = (m.control_points(), n.control_points());
     let (mw, nw) = (m.weights(), n.weights());
     if m.degree() != n.degree() || mk.len() != nk.len() || mp.len() != np.len() || mp.is_empty() {
-        return false;
+        return (None, None);
     }
     let positive = |w: &[f64]| w.iter().all(|&x| x.is_finite() && x > 0.0);
     if !positive(mw) || !positive(nw) {
-        return false;
+        return (None, None);
     }
     let max_or_nan = crate::builder::pcurve_compute::max_or_nan;
     let most = |w: &[f64]| w.iter().copied().fold(0.0_f64, max_or_nan);
@@ -13273,25 +13462,32 @@ fn same_nurbs_data(
     // Each set of weights is read against its own largest, so the ratios
     // stay near one whatever the scale: raw products of weights can
     // underflow to 0 / 0 or overflow to inf / inf.
-    let within = |pairs: &mut dyn Iterator<Item = ((Point3, f64), (Point3, f64))>| {
+    let apart = |pairs: &mut dyn Iterator<Item = ((Point3, f64), (Point3, f64))>| {
         let (mut moved, mut ratio) = (0.0_f64, 0.0_f64);
         for ((p, wp), (q, wq)) in pairs {
             moved = max_or_nan(moved, (q - p).length());
             ratio = max_or_nan(ratio, ((wq / top_n) / (wp / top_m) - 1.0).abs());
         }
         let bound = (2.0 * ratio / (1.0 - ratio)).madd(reach, moved);
-        ratio < 0.5 && bound.is_finite() && bound <= tol
+        (ratio < 0.5 && bound.is_finite()).then_some(bound)
     };
     let ours = || mp.iter().copied().zip(mw.iter().copied());
-    let forward = mk.iter().zip(nk).all(|(x, y)| x.to_bits() == y.to_bits())
-        && within(&mut ours().zip(np.iter().copied().zip(nw.iter().copied())));
+    let forward = if mk.iter().zip(nk).all(|(x, y)| x.to_bits() == y.to_bits()) {
+        apart(&mut ours().zip(np.iter().copied().zip(nw.iter().copied())))
+    } else {
+        None
+    };
     let (lo, hi) = (nk[0], nk[nk.len() - 1]);
-    let backward = mk
+    let backward = if mk
         .iter()
         .zip(nk.iter().rev())
         .all(|(x, &y)| x.to_bits() == (lo + hi - y).to_bits())
-        && within(&mut ours().zip(np.iter().copied().zip(nw.iter().copied()).rev()));
-    forward || backward
+    {
+        apart(&mut ours().zip(np.iter().copied().zip(nw.iter().copied()).rev()))
+    } else {
+        None
+    };
+    (forward, backward)
 }
 
 /// Rescue for [`plane_internal_line_loops`]: every degree-1 endpoint lies
@@ -16702,5 +16898,155 @@ mod tests {
                 "regions of areas {areas:?}, want {want}"
             );
         }
+    }
+
+    /// The greatest distance from points of section `a`, read at 2001
+    /// points, to section `b`, read at 20001.
+    fn farthest_from(a: &SectionEdge, b: &SectionEdge) -> f64 {
+        let on_b: Vec<Point3> = (0..=20000)
+            .map(|k| evaluate_edge_at_t(&b.curve_3d, b.start, b.end, f64::from(k) / 20000.0))
+            .collect();
+        (0..=2000)
+            .map(|k| {
+                let p = evaluate_edge_at_t(&a.curve_3d, a.start, a.end, f64::from(k) / 2000.0);
+                on_b.iter()
+                    .map(|&q| (q - p).length())
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .fold(0.0, crate::builder::pcurve_compute::max_or_nan)
+    }
+
+    /// Two arcs of a sweep of pi - 0.1 from one pair of angles: one on the
+    /// unit circle, one on a circle 0.53 of the tolerance larger whose centre
+    /// moves as far toward the arc's quarter point. Their ends and middles
+    /// lie within the tolerance of each other, but at the quarter point
+    /// they stand 1.06 of it apart: they are two curves.
+    #[test]
+    fn arcs_whose_ends_and_middles_meet_but_part_between_are_two_curves() {
+        use brepkit_math::curves::Circle3D;
+        let tol = 1e-5;
+        let (from, sweep) = (0.3_f64, std::f64::consts::PI - 0.1);
+        let quarter = sweep.madd(0.25, from);
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let unit = Circle3D::new(Point3::new(5.0, 5.0, 0.0), z, 1.0).unwrap();
+        let shift = (unit.evaluate(quarter) - unit.center()) * (0.53 * tol);
+        let wider = Circle3D::new(
+            Point3::new(5.0, 5.0, 0.0) + shift,
+            z,
+            0.53f64.madd(tol, 1.0),
+        )
+        .unwrap();
+        let arc = |c: &Circle3D| SectionEdge {
+            curve_3d: EdgeCurve::Circle(c.clone()),
+            ..line_section(c.evaluate(from), c.evaluate(from + sweep))
+        };
+        let (a, b) = (arc(&unit), arc(&wider));
+        assert!((section_middle(&a) - section_middle(&b)).length() < tol);
+        assert!((a.start - b.start).length() < tol && (a.end - b.end).length() < tol);
+        let apart = farthest_from(&b, &a);
+        assert!(apart > tol, "the arcs part by {apart:e}");
+        assert!(!same_section_curve(&a, &b, tol));
+        assert!(!same_section_curve(&b, &a, tol));
+    }
+
+    /// Complementary trims of a closed spline of lines through (0, 0),
+    /// (2, 0), (2, 2), (-2, 3) and a point 4e-6 off (2, 1), over [0, 0.6] and
+    /// [0.6, 1]: their ends meet and their middles lie 4e-6 apart, but they
+    /// are two curves.
+    #[test]
+    fn complementary_trims_of_a_closed_spline_with_meeting_middles_are_two_curves() {
+        let points: Vec<Point3> = [
+            (0.0, 0.0),
+            (2.0, 0.0),
+            (2.0, 2.0),
+            (-2.0, 3.0),
+            (2.0 + 4e-6, 1.0),
+            (0.0, 0.0),
+        ]
+        .iter()
+        .map(|&(x, y)| Point3::new(x, y, 0.0))
+        .collect();
+        let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.0],
+            points,
+            vec![1.0; 6],
+        )
+        .unwrap();
+        let trim = |from: Point3, to: Point3| SectionEdge {
+            curve_3d: EdgeCurve::NurbsCurve(curve.clone()),
+            ..line_section(from, to)
+        };
+        let (a, b) = (curve.evaluate(0.0), curve.evaluate(0.6));
+        let (first, second) = (trim(a, b), trim(b, a));
+        assert!((section_middle(&first) - section_middle(&second)).length() < 1e-5);
+        assert!(farthest_from(&first, &second) > 0.5);
+        assert!(!same_section_curve(&first, &second, 1e-5));
+        assert!(!same_section_curve(&second, &first, 1e-5));
+    }
+
+    /// Sections that are one curve still merge: an arc and its copy moved
+    /// 1e-7, the same arc stored from its other end on its circle turned
+    /// over, an elliptic arc and the same arc on its ellipse with both axes
+    /// reversed, and a trim of an open cubic stored either way round.
+    #[test]
+    fn sections_that_are_one_curve_still_merge() {
+        use brepkit_math::curves::{Circle3D, Ellipse3D};
+        let tol = 1e-5;
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let centre = Point3::new(5.0, 5.0, 0.0);
+        let circle = Circle3D::new(centre, z, 2.0).unwrap();
+        let (a, b) = (circle.evaluate(0.4), circle.evaluate(1.9));
+        let arc = SectionEdge {
+            curve_3d: EdgeCurve::Circle(circle),
+            ..line_section(a, b)
+        };
+        let moved = Circle3D::new(centre + Vec3::new(1e-7, 0.0, 0.0), z, 2.0).unwrap();
+        let near = SectionEdge {
+            curve_3d: EdgeCurve::Circle(moved.clone()),
+            ..line_section(moved.evaluate(0.4), moved.evaluate(1.9))
+        };
+        let over = SectionEdge {
+            curve_3d: EdgeCurve::Circle(Circle3D::new(centre, -z, 2.0).unwrap()),
+            ..line_section(b, a)
+        };
+        assert!(same_section_curve(&arc, &near, tol));
+        assert!(same_section_curve(&arc, &over, tol));
+        assert!(same_section_curve(&over, &arc, tol));
+
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        let ellipse = Ellipse3D::new_with_ref(centre, z, 3.0, 1.5, x).unwrap();
+        let flipped = Ellipse3D::new_with_ref(centre, z, 3.0, 1.5, -x).unwrap();
+        let (a, b) = (ellipse.evaluate(0.4), ellipse.evaluate(1.9));
+        let elliptic = |e: &Ellipse3D| SectionEdge {
+            curve_3d: EdgeCurve::Ellipse(e.clone()),
+            ..line_section(a, b)
+        };
+        assert!(same_section_curve(
+            &elliptic(&ellipse),
+            &elliptic(&flipped),
+            tol
+        ));
+
+        let cubic = brepkit_math::nurbs::curve::NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 2.0, 0.0),
+                Point3::new(2.0, -1.0, 0.0),
+                Point3::new(3.0, 1.0, 0.0),
+                Point3::new(4.0, 0.0, 0.0),
+            ],
+            vec![1.0; 5],
+        )
+        .unwrap();
+        let (a, b) = (cubic.evaluate(0.2), cubic.evaluate(0.7));
+        let trim = |from: Point3, to: Point3| SectionEdge {
+            curve_3d: EdgeCurve::NurbsCurve(cubic.clone()),
+            ..line_section(from, to)
+        };
+        assert!(same_section_curve(&trim(a, b), &trim(a, b), tol));
+        assert!(same_section_curve(&trim(a, b), &trim(b, a), tol));
     }
 }
