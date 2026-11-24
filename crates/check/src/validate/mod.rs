@@ -13,14 +13,86 @@ pub(crate) mod wire;
 
 pub use checks::{CheckId, EntityRef, Severity, ValidationIssue, ValidationReport};
 pub use edge::check_edge_same_parameter;
+pub use vertex::check_vertex_on_curve;
 
 use std::collections::HashSet;
 
 use brepkit_topology::Topology;
+use brepkit_topology::face::FaceId;
 use brepkit_topology::shell::ShellId;
 use brepkit_topology::solid::SolidId;
 
 use crate::CheckError;
+
+/// An error for each curve, surface or pcurve of `faces` that is not well
+/// formed.
+///
+/// It reads each face's surface, each edge of its wires and each pcurve of
+/// such an edge on the face (see `FaceSurface::is_well_formed`,
+/// `EdgeCurve::is_well_formed` and `Curve2D::is_well_formed`). A plane has
+/// no parameters to read, and the validators measure its normal themselves,
+/// so a plane is not reported here.
+///
+/// The other checks read curves and surfaces, and one that is malformed can
+/// read past its arrays or give points that are not finite. A solid or
+/// shell that holds any is reported on these errors alone.
+///
+/// # Errors
+///
+/// Returns an error if a face, wire or edge is not in `topo`.
+pub fn check_geometry_well_formed(
+    topo: &Topology,
+    faces: &[FaceId],
+) -> Result<Vec<ValidationIssue>, CheckError> {
+    let issue = |check, entity, description: String| ValidationIssue {
+        check,
+        severity: Severity::Error,
+        entity,
+        description,
+        deviation: None,
+    };
+    let mut issues = Vec::new();
+    let mut seen = HashSet::new();
+    for &fid in faces {
+        let face = topo.face(fid)?;
+        let surface = face.surface();
+        if !surface.is_planar() && !surface.is_well_formed() {
+            issues.push(issue(
+                CheckId::FaceNoSurface,
+                EntityRef::Face(fid),
+                "the face's surface is malformed, so it is not read".into(),
+            ));
+        }
+        for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wid)?.edges() {
+                let eid = oe.edge();
+                if seen.insert(eid) && !topo.edge(eid)?.curve().is_well_formed() {
+                    issues.push(issue(
+                        CheckId::EdgeNoCurve3D,
+                        EntityRef::Edge(eid),
+                        "the edge's curve is malformed, so it is not read".into(),
+                    ));
+                }
+                if let Some(pc) = topo.pcurves().get(eid, fid)
+                    && !(pc.t_start().is_finite()
+                        && pc.t_end().is_finite()
+                        && pc.curve().is_well_formed())
+                {
+                    issues.push(issue(
+                        CheckId::EdgeSameParameter,
+                        EntityRef::Edge(eid),
+                        format!(
+                            "PCurve is malformed: its span or its curve's data cannot be \
+                             evaluated, on face {}",
+                            fid.index()
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(issues)
+}
 
 /// Options controlling which checks run.
 #[derive(Debug, Clone)]
@@ -42,7 +114,9 @@ impl Default for ValidateOptions {
 
 /// Validate a solid (full check suite).
 ///
-/// Runs solid-level checks, then shell and wire checks on each shell.
+/// Runs solid-level checks, then shell and wire checks on each shell. A
+/// solid with a malformed curve, surface or pcurve is reported on those
+/// alone (see [`check_geometry_well_formed`]).
 ///
 /// # Errors
 ///
@@ -52,8 +126,14 @@ pub fn validate_solid(
     solid_id: SolidId,
     options: &ValidateOptions,
 ) -> Result<ValidationReport, CheckError> {
-    let mut report = ValidationReport::default();
     let solid_data = topo.solid(solid_id)?;
+    let faces = brepkit_topology::explorer::solid_faces(topo, solid_id)?;
+    let mut report = ValidationReport {
+        issues: check_geometry_well_formed(topo, &faces)?,
+    };
+    if !report.issues.is_empty() {
+        return Ok(report);
+    }
 
     if !options
         .disabled_checks
@@ -101,7 +181,9 @@ pub fn validate_solid(
 
 /// Validate a single shell.
 ///
-/// Runs shell-level checks and wire checks for each face.
+/// Runs shell-level checks and wire checks for each face. A shell with a
+/// malformed curve, surface or pcurve is reported on those alone (see
+/// [`check_geometry_well_formed`]).
 ///
 /// # Errors
 ///
@@ -111,7 +193,12 @@ pub fn validate_shell(
     shell_id: ShellId,
     options: &ValidateOptions,
 ) -> Result<ValidationReport, CheckError> {
-    let mut report = ValidationReport::default();
+    let mut report = ValidationReport {
+        issues: check_geometry_well_formed(topo, topo.shell(shell_id)?.faces())?,
+    };
+    if !report.issues.is_empty() {
+        return Ok(report);
+    }
     report
         .issues
         .extend(validate_shell_checks(topo, shell_id, options)?);

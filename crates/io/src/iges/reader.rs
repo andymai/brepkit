@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use brepkit_math::nurbs::basis::weight_is_sound;
 use brepkit_math::nurbs::knot_ops::curve_split;
 use brepkit_math::nurbs::{NurbsCurve, NurbsSurface};
 use brepkit_math::vec::{Point3, Vec3};
@@ -630,7 +631,7 @@ fn read_curve(params: &mut Params) -> Result<Stretch, IoError> {
     let (low, high) = (knots[degree], knots[last + 1]);
     let slack = (high - low) * SPAN_SLACK;
     let within = |t: f64| low - slack <= t && t <= high + slack;
-    if !weights.iter().all(|&weight| weight > 0.0) || !within(from) || !within(to) {
+    if !weights.iter().all(|&weight| weight_is_sound(weight)) || !within(from) || !within(to) {
         return Err(IoError::ParseError {
             reason: "an IGES curve has a weight or span it cannot use".to_string(),
         });
@@ -639,6 +640,12 @@ fn read_curve(params: &mut Params) -> Result<Stretch, IoError> {
         NurbsCurve::new(degree, knots, points, weights).map_err(|e| IoError::ParseError {
             reason: format!("an IGES curve is malformed: {e}"),
         })?;
+    if !curve.is_well_formed() {
+        return Err(IoError::ParseError {
+            reason: "an IGES curve has knots, weights or points it cannot be evaluated with"
+                .to_string(),
+        });
+    }
     Ok(Stretch::Curve { curve, from, to })
 }
 
@@ -668,7 +675,11 @@ fn read_surface(params: &mut Params) -> Result<FaceSurface, IoError> {
             row[j] = params.real()?;
         }
     }
-    if !weights.iter().flatten().all(|&weight| weight > 0.0) {
+    if !weights
+        .iter()
+        .flatten()
+        .all(|&weight| weight_is_sound(weight))
+    {
         return Err(IoError::ParseError {
             reason: "an IGES surface has a weight it cannot use".to_string(),
         });
@@ -683,6 +694,12 @@ fn read_surface(params: &mut Params) -> Result<FaceSurface, IoError> {
         .map_err(|e| IoError::ParseError {
             reason: format!("an IGES surface is malformed: {e}"),
         })?;
+    if !surface.is_well_formed() {
+        return Err(IoError::ParseError {
+            reason: "an IGES surface has knots, weights or points it cannot be evaluated with"
+                .to_string(),
+        });
+    }
     Ok(FaceSurface::Nurbs(surface))
 }
 
@@ -943,6 +960,9 @@ mod tests {
             format!("126,1,1,0,0,0,0,0.,0.,0.,0.,1.,1.,{line},0.,0.;"),
             format!("126,1,1,0,0,0,0,0.,0.,1.,1.,0.,1.,{line},0.,1.;"),
             format!("126,1,1,0,0,0,0,0.,0.,1.,1.,1.,-1.,{line},0.,1.;"),
+            format!("126,1,1,0,0,0,0,0.,0.,1.,1.,1.,1E-310,{line},0.,1.;"),
+            format!("126,1,1,0,0,0,0,0.,0.,1E-310,1E-310,1.,1.,{line},0.,1E-310;"),
+            "126,1,1,0,0,0,0,0.,0.,1.,1.,1E308,1E308,2.,0.,0.,2.,1.,0.,0.,1.;".to_string(),
             format!("126,1,1,0,0,0,0,0.,0.,1.,1.,1.,1.,{line},-5.,1.;"),
             format!("126,1,1,0,0,0,0,0.,0.,1.,1.,1.,1.,{line},0.,9.;"),
         ] {
@@ -966,6 +986,15 @@ mod tests {
             format!("128,1,1,1,1,0,0,0,0,0,{flat},1.,0.5,0.,-1.,{weights},{corners};"),
             format!("128,1,1,1,1,0,0,0,0,0,0.,0.,0.,0.,{flat},{weights},{corners};"),
             format!("128,1,1,1,1,0,0,0,0,0,{flat},{flat},1.,0.,1.,1.,{corners};"),
+            format!("128,1,1,1,1,0,0,0,0,0,{flat},{flat},1.,1E-310,1.,1.,{corners},0.,1.,0.,1.;"),
+            format!(
+                "128,1,1,1,1,0,0,0,0,0,{flat},{flat},1E308,1E308,1E308,1E308,\
+                 2.,0.,0.,3.,0.,0.,2.,1.,0.,3.,1.,0.,0.,1.,0.,1.;"
+            ),
+            format!(
+                "128,1,1,1,1,0,0,0,0,0,0.,0.,1E-310,1E-310,{flat},{weights},{corners},\
+                 0.,1E-310,0.,1.;"
+            ),
         ] {
             assert!(!surface_is_read(&bad), "{bad}");
         }

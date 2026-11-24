@@ -1,8 +1,10 @@
 //! A ball, a box whose top lies on the ball's equator, and a slab across the
-//! equator's arc on that top, fused one solid at a time. The ball and the box
-//! fuse first: the ball's faces join into one face round its north pole,
-//! whose outline runs once round the ball, and the slab's sections end on
-//! that outline.
+//! equator's arc on that top, fused one solid at a time. Where the ball and
+//! the box fuse first, the ball's faces join into one face round its north
+//! pole, whose outline runs once round the ball, and the slab's sections end
+//! on that outline. Where the ball and the slab fuse first, the ball is one
+//! face less the slab's narrow footprint, which holds a pole of every axis:
+//! the box's sections cross it and end on that footprint.
 
 #[cfg(test)]
 mod tests {
@@ -11,7 +13,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     use brepkit_math::mat::Mat4;
+    use brepkit_math::vec::Point3;
     use brepkit_operations::boolean::{BooleanOp, BooleanOptions, boolean_with_options};
+    use brepkit_operations::classify::{PointClassification, classify_point};
     use brepkit_operations::measure::solid_volume;
     use brepkit_operations::primitives::{make_box, make_sphere};
     use brepkit_operations::tessellate::{
@@ -177,6 +181,67 @@ mod tests {
                         });
                     let why = match fused {
                         Ok(fused) => fault(&topo, fused, expected),
+                        Err(e) => Some(format!("error {e}")),
+                    };
+                    if let Some(why) = why {
+                        faults.push(format!("{slab:?} {name} {order:?}: {why}"));
+                    }
+                }
+            }
+        }
+        assert!(faults.is_empty(), "{}", faults.join("\n"));
+    }
+
+    #[test]
+    fn a_ball_and_a_slab_across_its_equator_then_a_box_fuse_one_at_a_time() {
+        let options = BooleanOptions {
+            mesh_fallback: false,
+            ..BooleanOptions::default()
+        };
+        let mut faults = Vec::new();
+        for slab in SLABS {
+            let expected = expected_volume(slab);
+            let (lo, hi) = slab;
+            let mid = |k: usize| 0.5 * (lo[k] + hi[k]);
+            // Points held by the ball, the box, and the slab past the ball;
+            // points above the ball, beside the box, and past the slab.
+            let inside = [
+                [0.0, 0.0, 0.5],
+                [0.0, -1.5, -1.0],
+                [mid(0), hi[1] - 0.05, hi[2] - 0.05],
+            ];
+            let outside = [
+                [0.0, 0.0, 1.05],
+                [0.8, -1.5, -1.0],
+                [mid(0), hi[1] + 0.05, hi[2] - 0.05],
+            ];
+            for (name, pose) in [
+                ("upright", Mat4::identity()),
+                ("turned", Mat4::rotation_z(0.37) * Mat4::rotation_x(0.21)),
+                ("mirrored", Mat4::scale(1.0, -1.0, 1.0)),
+            ] {
+                for order in [[0, 2, 1], [2, 0, 1]] {
+                    let mut topo = Topology::new();
+                    let solids = scene(&mut topo, slab, &pose);
+                    let [a, b, c] = order.map(|i| solids[i]);
+                    let fused = boolean_with_options(&mut topo, BooleanOp::Fuse, a, b, options)
+                        .and_then(|ab| {
+                            boolean_with_options(&mut topo, BooleanOp::Fuse, ab, c, options)
+                        });
+                    let why = match fused {
+                        Ok(fused) => fault(&topo, fused, expected).or_else(|| {
+                            [
+                                (inside, PointClassification::Inside),
+                                (outside, PointClassification::Outside),
+                            ]
+                            .into_iter()
+                            .flat_map(|(points, want)| points.map(|p| (p, want)))
+                            .find_map(|(p, want)| {
+                                let q = pose.mul_point(Point3::new(p[0], p[1], p[2]));
+                                let got = classify_point(&topo, fused, q, 0.001, 1e-7).unwrap();
+                                (got != want).then(|| format!("{p:?} reads {got:?}"))
+                            })
+                        }),
                         Err(e) => Some(format!("error {e}")),
                     };
                     if let Some(why) = why {

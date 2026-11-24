@@ -89,6 +89,32 @@ impl NurbsCurve {
         })
     }
 
+    /// Whether the curve can be evaluated without reading past its arrays,
+    /// and gives a finite point at each parameter of its domain. [`Self::new`]
+    /// checks only the counts, and a curve read from data with no constructor
+    /// can hold any values.
+    ///
+    /// The knots pass [`basis::knots_are_sound`] for the degree and the
+    /// number of control points, each control point has a weight that passes
+    /// [`basis::weight_is_sound`], every coordinate is finite, and the
+    /// weights and points pass [`basis::weighted_points_are_bounded`].
+    #[must_use]
+    pub fn is_well_formed(&self) -> bool {
+        basis::knots_are_sound(self.degree, self.control_points.len(), &self.knots)
+            && self.weights.len() == self.control_points.len()
+            && self.weights.iter().all(|&w| basis::weight_is_sound(w))
+            && self
+                .control_points
+                .iter()
+                .all(|q| q.x().is_finite() && q.y().is_finite() && q.z().is_finite())
+            && basis::weighted_points_are_bounded(
+                self.weights.iter().copied(),
+                self.control_points
+                    .iter()
+                    .flat_map(|q| [q.x(), q.y(), q.z()]),
+            )
+    }
+
     /// The points of knot span `k` (between `knots[k]` and `knots[k + 1]`)
     /// that `sample` gives, kept: a curve is never changed once made.
     pub(crate) fn span_samples(
@@ -329,6 +355,112 @@ use super::basis::binomial;
 #[allow(clippy::expect_used, clippy::cast_lossless, clippy::suboptimal_flops)]
 mod tests {
     use super::*;
+
+    /// [`NurbsCurve::new`] accepts curves whose counts agree but whose
+    /// values no evaluation can walk. Those are told from well formed ones.
+    /// The last knot, which no evaluation reads, may fall by rounding: solids
+    /// the kernel made hold such curves.
+    #[test]
+    fn malformed_curves_are_told_from_well_formed_ones() {
+        let curve = |degree: usize, knots: Vec<f64>, n: usize, weight: f64| {
+            let points = (0..n).map(|k| Point3::new(k as f64, 1.0, 0.0)).collect();
+            NurbsCurve::new(degree, knots, points, vec![weight; n]).expect("counts agree")
+        };
+        let unit = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        for good in [
+            cubic_bezier(),
+            curve(3, unit.clone(), 4, 2.0),
+            curve(1, vec![0.0, 0.0, 0.5, 1.0, 1.0], 3, 1.0),
+            curve(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0 + f64::EPSILON, 1.0],
+                4,
+                1.0,
+            ),
+        ] {
+            assert!(good.is_well_formed(), "{good:?}");
+        }
+        let mut off = cubic_bezier();
+        off.control_points[1] = Point3::new(f64::NAN, 0.0, 0.0);
+        let mut short = cubic_bezier();
+        short.weights.pop();
+        for bad in [
+            curve(3, vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0], 3, 1.0),
+            curve(0, vec![0.0], 0, 1.0),
+            curve(3, vec![0.0, 0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0], 4, 1.0),
+            curve(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0 + f64::EPSILON, 1.0, 1.0],
+                4,
+                1.0,
+            ),
+            curve(3, vec![0.0, 0.0, 0.0, 0.0, f64::NAN, 1.0, 1.0, 1.0], 4, 1.0),
+            curve(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, f64::INFINITY],
+                4,
+                1.0,
+            ),
+            curve(3, vec![0.0; 8], 4, 1.0),
+            curve(3, vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0], 5, 1.0),
+            curve(3, unit.clone(), 4, 0.0),
+            curve(3, unit.clone(), 4, -1.0),
+            curve(3, unit.clone(), 4, 1e-310),
+            curve(3, unit, 4, f64::INFINITY),
+            off,
+            short,
+        ] {
+            assert!(!bad.is_well_formed(), "{bad:?}");
+        }
+    }
+
+    /// A knot span whose reciprocal overflows, knots so far apart that the
+    /// domain's length overflows, and weights whose product with the
+    /// coordinates overflows give a point that is not finite, though every
+    /// number is finite and the counts agree. Such curves are not well
+    /// formed. A span as short as rounding leaves it evaluates, as the fits
+    /// of boolean sections hold: one of 5e-15 of its domain, at its start.
+    #[test]
+    fn curves_whose_evaluation_overflows_are_not_well_formed() {
+        let two = |knots: Vec<f64>, x: f64, weight: f64| {
+            NurbsCurve::new(
+                1,
+                knots,
+                vec![Point3::new(x, 0.0, 0.0), Point3::new(x, 1.0, 0.0)],
+                vec![weight; 2],
+            )
+            .expect("counts agree")
+        };
+        let tiny = two(vec![0.0, 0.0, 1e-310, 1e-310], 2.0, 1.0);
+        let wide = two(vec![-1e308, -1e308, 1e308, 1e308], 2.0, 1.0);
+        let heavy = two(vec![0.0, 0.0, 1.0, 1.0], 2.0, 1e308);
+        for (bad, u) in [(&tiny, 0.0), (&wide, -1e308), (&heavy, 0.0)] {
+            let p = bad.evaluate(u);
+            assert!(!(p.x().is_finite() && p.y().is_finite()), "{bad:?}");
+            assert!(!bad.is_well_formed(), "{bad:?}");
+        }
+        let start = 0.499_999_999_999_995_1;
+        let mut knots = vec![start; 4];
+        knots.extend([0.500_000_000_000_000_1, 0.6, 0.7, start + 0.25]);
+        knots.extend([start + 0.25; 3]);
+        let rounded = NurbsCurve::new(
+            3,
+            knots,
+            (0..7)
+                .map(|k| Point3::new(f64::from(k), 1.0, 0.0))
+                .collect(),
+            vec![1.0; 7],
+        )
+        .expect("counts agree");
+        assert!(rounded.is_well_formed());
+        let (d0, d1) = rounded.domain();
+        for k in 0..=20 {
+            let p = rounded.evaluate((d1 - d0).madd(f64::from(k) / 20.0, d0));
+            assert!(p.x().is_finite() && p.y().is_finite());
+        }
+        assert!(two(vec![0.0, 0.0, 1e-300, 1e-300], 2.0, 1.0).is_well_formed());
+        assert!(two(vec![0.0, 0.0, 1.0, 1.0], 1e3, 1e290).is_well_formed());
+    }
 
     /// A cubic Bezier curve (single span): control points form a simple shape.
     fn cubic_bezier() -> NurbsCurve {
