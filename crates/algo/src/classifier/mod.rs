@@ -10,7 +10,8 @@ mod ray_cast;
 
 pub use analytic::{AnalyticClassifier, classify_analytic, try_build_analytic_classifier};
 pub(crate) use ray_cast::{
-    LateralTrim, SpanTrim, SphereFaceTrim, largest_u_gap, partial_revolution_band, u_in_gap,
+    LateralTrim, SpanTrim, SphereFaceTrim, TorusFaceTrim, largest_u_gap, partial_revolution_band,
+    u_in_gap,
 };
 pub use ray_cast::{
     RayCastGeoms, classify_ray_cast, classify_ray_cast_cached, compute_solid_bbox,

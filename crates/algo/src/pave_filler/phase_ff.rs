@@ -6837,10 +6837,7 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
             max: Point3::new(0.0, 0.0, 0.0),
         },
     };
-    match topo.face(face_id)?.surface() {
-        FaceSurface::Nurbs(n) => super::helpers::nurbs_face_box(topo, face_id, n, bounds, tol),
-        _ => Ok(bounds),
-    }
+    Ok(bounds)
 }
 
 /// The box of a ring torus face over the ring and tube angles its outer wire
@@ -10183,9 +10180,12 @@ fn emit_split_circle_arcs(
             side.as_ref()
                 .is_none_or(|(c, axis)| (p - *c).dot(*axis) >= -side_eps)
         };
+        // A ball face's trim reads it whole; the half-space its outline
+        // gives holds the face only while the face lies within a hemisphere
+        // (a ball less a narrow slot runs past the half-space all round).
         a_ok && b_ok
-            && side_ok(&side_a)
-            && side_ok(&side_b)
+            && (ball_a.is_some() || side_ok(&side_a))
+            && (ball_b.is_some() || side_ok(&side_b))
             && in_region(&loops_a, p)
             && in_region(&loops_b, p)
             && trim_a.as_ref().is_none_or(|t| t.holds(p, side_eps))

@@ -30,8 +30,10 @@ perf-counters = []
 
 [dev-dependencies]
 brepkit-check.workspace = true
+brepkit-math = {workspace = true, features = ["serde"]}
 brepkit-topology = {workspace = true, features = ["test-utils"]}
 proptest.workspace = true
+serde_json.workspace = true
 
 [lints]
 workspace = true

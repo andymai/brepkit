@@ -7,7 +7,7 @@ use brepkit_math::aabb::Aabb3;
 use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::tolerance::Tolerance;
-use brepkit_math::vec::Point3;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::face::FaceId;
@@ -155,95 +155,342 @@ pub(super) fn analytic_face_box(
     }))
 }
 
-/// A NURBS face's box grown to where its surface rises off the boundary
-/// between its edges (a lid flat along its rim), past `bounds`, the box of
-/// its boundary. Each knot span lies in the box of the control points it
-/// blends, so the spans under the face's parameters hold the face. A face
-/// whose control points all lie in `bounds` keeps it. A boundary sample
-/// that does not project, or a surface closed on itself, takes every span;
-/// a weight that is not positive leaves `bounds`, the control points then
-/// bounding nothing.
+/// A box that holds the whole of a NURBS face: the box of the control
+/// points of its surface cut by knot insertion to the parameters its
+/// pcurves bound ([`pcurve_parameters`]), or of the whole surface's control
+/// points where they bound none. Each point of a knot span blends the
+/// control points the span holds, with weights that are positive and sum to
+/// one, so it lies in their box, whether or not the knots are clamped. The
+/// box is grown by a bound on the rounding of the knot insertion and of the
+/// surface's evaluation, as a share of the largest coordinate of the
+/// surface's control points ([`rounding_reach`]): an evaluated point sums
+/// `(p + 1)(q + 1)` products of basis functions and weighted control
+/// points, each read to a few roundings for degrees `p` and `q`, over the
+/// sum of the weighted basis functions, and each knot inserted takes `p` or
+/// `q` steps of a rounded blend. The weights are positive, so the quotient
+/// is rounded as a share of the control points' size, whatever the weights.
+/// The terms can cancel, so a face far smaller than its control points is
+/// read with their rounding: on a sheet with control points 1e12 from the
+/// origin, a face of size 5 stood 0.28 roundings of 1e12 outside its cut
+/// box. Over dense evaluation of a sheet a million and ten billion from the
+/// origin, points stood outside the cut box by up to 2 roundings of their
+/// coordinates, and outside the whole control box by 1. `reach` is how far
+/// the face's own edges and vertices may stand off the surface.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a topology lookup fails, or if a weight of the
+/// surface is not a positive normal float: its control points then bound
+/// nothing.
 pub(super) fn nurbs_face_box(
     topo: &Topology,
     face_id: FaceId,
     surface: &NurbsSurface,
-    bounds: Aabb3,
     tol: Tolerance,
+    reach: f64,
 ) -> Result<Aabb3, AlgoError> {
-    const SAMPLES: u32 = 8;
-    let whole = surface.aabb();
-    let held = bounds.expanded(tol.linear);
-    if !surface.weights().iter().flatten().all(|&w| w > 0.0)
-        || (held.contains_point(whole.min) && held.contains_point(whole.max))
+    if !surface
+        .weights()
+        .iter()
+        .flatten()
+        .all(|&w| w > 0.0 && w.is_normal())
     {
-        return Ok(bounds);
+        return Err(AlgoError::IntersectionFailed(format!(
+            "face {face_id:?} has a weight that is not a positive normal float, so its control \
+             points do not bound it"
+        )));
     }
-    if surface.is_periodic_u() || surface.is_periodic_v() {
-        return Ok(bounds.union(whole));
+    let held = pcurve_parameters(topo, face_id, surface, tol, reach)?
+        .and_then(|range| cut_net_box(surface, range))
+        .unwrap_or_else(|| surface.aabb());
+    #[allow(clippy::cast_precision_loss)]
+    let roundings = {
+        let (p, q) = (surface.degree_u(), surface.degree_v());
+        (4 * (p + 1) * (q + 1) + 16 * (p + q + 1)) as f64
+    };
+    let size = surface
+        .control_points()
+        .iter()
+        .flatten()
+        .fold(0.0_f64, |m, p| m.max(largest_coordinate(*p)));
+    Ok(held.expanded(rounding_reach(size, roundings)))
+}
+
+/// A box that holds a face of an analytic surface, `held`, grown by a bound
+/// on the rounding of the surface's evaluator. A point sums the surface's
+/// centre, origin or apex and three rounded terms along its frame, each a
+/// sine or cosine times a radius, or a height along the axis no longer than
+/// the point's reach from the centre, so it stands within sixteen roundings
+/// of the sum of those terms' sizes of where the box's corners put it. The
+/// terms can cancel, so the bound scales by their sizes, not by the box's.
+pub(super) fn analytic_rounding_box(
+    surface: &brepkit_topology::face::FaceSurface,
+    held: Aabb3,
+) -> Aabb3 {
+    use brepkit_topology::face::FaceSurface;
+    let (centre, radii) = match surface {
+        FaceSurface::Cylinder(c) => (c.origin(), c.radius()),
+        FaceSurface::Cone(c) => (c.apex(), 0.0),
+        FaceSurface::Sphere(s) => (s.center(), s.radius()),
+        FaceSurface::Torus(t) => (t.center(), t.major_radius() + t.minor_radius()),
+        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => (Point3::new(0.0, 0.0, 0.0), 0.0),
+    };
+    let frame = largest_coordinate(centre);
+    let reach = largest_coordinate(held.min).max(largest_coordinate(held.max)) + frame;
+    held.expanded(rounding_reach(2.0 * (reach + frame + radii.abs()), 16.0))
+}
+
+fn largest_coordinate(p: Point3) -> f64 {
+    p.x().abs().max(p.y().abs()).max(p.z().abs())
+}
+
+/// `roundings` roundings of `size`, the largest size of the terms that a
+/// surface's evaluator sums for a coordinate: how far a point it computes,
+/// with each term rounded no more than that many times all told, can stand
+/// past a box whose corners hold the exact point.
+fn rounding_reach(size: f64, roundings: f64) -> f64 {
+    roundings * f64::EPSILON * size.max(f64::MIN_POSITIVE)
+}
+
+/// The box `[u0, u1, v0, v1]` in a NURBS surface's parameters of a face's
+/// pcurves, which holds the parameters of every point of the face. On a
+/// surface whose sides are free ([`sides_are_free`]), a face reaches a side
+/// only along edges of its own, so it is the part of the surface that its
+/// wires enclose, and each wire's pcurves run round a closed loop in the
+/// parameters, which encloses only points of its own box. The box is grown
+/// by the widest gap between the ends of two pcurves that meet.
+///
+/// `None` where a side of the surface is not proved free within `reach`, an
+/// edge of a wire has no pcurve on the face or one that cannot be boxed,
+/// the ends of a pcurve do not lie on its edge's vertices, or two pcurves
+/// that meet in a wire leave a gap of more than a millionth of the
+/// parameters' spans.
+fn pcurve_parameters(
+    topo: &Topology,
+    face_id: FaceId,
+    surface: &NurbsSurface,
+    tol: Tolerance,
+    reach: f64,
+) -> Result<Option<[f64; 4]>, AlgoError> {
+    use brepkit_math::vec::Point2;
+    if !sides_are_free(surface, reach) {
+        return Ok(None);
     }
-    // The parameter range the boundary samples reach, widened by the largest
-    // step between neighbouring samples, which an edge can swing out across.
-    let (mut u0, mut u1, mut v0, mut v1) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
-    let (mut step_u, mut step_v) = (0.0_f64, 0.0_f64);
-    for eid in brepkit_topology::explorer::face_edges(topo, face_id)? {
-        let edge = topo.edge(eid)?;
-        let (sp, ep) = (
-            topo.vertex(edge.start())?.point(),
-            topo.vertex(edge.end())?.point(),
-        );
-        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
-        let mut last: Option<(f64, f64)> = None;
-        for i in 0..=SAMPLES {
-            let t = t0 + (t1 - t0) * f64::from(i) / f64::from(SAMPLES);
-            let p = edge.curve().evaluate_with_endpoints(t, sp, ep);
-            // Newton from the sample before, a step along the edge away; a
-            // foot off the sample sends it to a search of the whole surface.
-            let near = last.and_then(|from| {
-                brepkit_math::nurbs::projection::project_point_to_surface_from(
-                    surface, p, from, 1e-12,
-                )
-                .ok()
-                .filter(|foot| foot.distance <= crate::classifier::WARM_FOOT)
-            });
-            let Some(foot) = near.or_else(|| {
-                brepkit_math::nurbs::projection::project_point_to_surface(surface, p, tol.linear)
-                    .ok()
-            }) else {
-                return Ok(bounds.union(whole));
+    let ((u_min, u_max), (v_min, v_max)) = (surface.domain_u(), surface.domain_v());
+    let span = (u_max - u_min) + (v_max - v_min);
+    let face = topo.face(face_id)?;
+    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+    let mut gap = 0.0_f64;
+    for wid in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        let (mut first, mut last): (Option<Point2>, Option<Point2>) = (None, None);
+        for oe in topo.wire(wid)?.edges() {
+            let Some(pcurve) = topo.pcurves().get(oe.edge(), face_id) else {
+                return Ok(None);
             };
-            (u0, u1, v0, v1) = (
-                u0.min(foot.u),
-                u1.max(foot.u),
-                v0.min(foot.v),
-                v1.max(foot.v),
+            let Some((low, high)) = pcurve_box(pcurve) else {
+                return Ok(None);
+            };
+            let edge = topo.edge(oe.edge())?;
+            let (a, b) = (
+                pcurve.evaluate(pcurve.t_start()),
+                pcurve.evaluate(pcurve.t_end()),
             );
-            if let Some((u, v)) = last {
-                step_u = step_u.max((foot.u - u).abs());
-                step_v = step_v.max((foot.v - v).abs());
+            for (uv, vertex) in [(a, edge.start()), (b, edge.end())] {
+                let vertex = topo.vertex(vertex)?;
+                let reach = (10.0 * tol.linear)
+                    .max(vertex.tolerance())
+                    .max(edge.tolerance().unwrap_or(0.0));
+                let off = (surface.evaluate(uv.x(), uv.y()) - vertex.point()).length();
+                if off.is_nan() || off > reach {
+                    return Ok(None);
+                }
             }
-            last = Some((foot.u, foot.v));
+            let (from, to) = if oe.is_forward() { (a, b) } else { (b, a) };
+            if let Some(end) = last {
+                gap = gap.max((from - end).length());
+            }
+            first.get_or_insert(from);
+            last = Some(to);
+            lo = [lo[0].min(low.x()), lo[1].min(low.y())];
+            hi = [hi[0].max(high.x()), hi[1].max(high.y())];
+        }
+        if let (Some(start), Some(end)) = (first, last) {
+            gap = gap.max((start - end).length());
         }
     }
-    if u0 > u1 {
-        return Ok(bounds);
+    let closed = lo[0] <= hi[0] && lo[1] <= hi[1] && gap <= 1e-6 * span;
+    if !closed {
+        return Ok(None);
     }
-    let cps = surface.control_points();
-    let (pu, pv) = (surface.degree_u(), surface.degree_v());
-    let (nu, nv) = (cps.len(), cps[0].len());
-    let span = |n, p, x, knots: &[f64]| brepkit_math::nurbs::basis::find_span(n, p, x, knots);
-    let (iu0, iu1) = (
-        span(nu, pu, u0 - step_u, surface.knots_u()),
-        span(nu, pu, u1 + step_u, surface.knots_u()),
-    );
-    let (iv0, iv1) = (
-        span(nv, pv, v0 - step_v, surface.knots_v()),
-        span(nv, pv, v1 + step_v, surface.knots_v()),
-    );
-    Ok(bounds.union(Aabb3::from_points(
-        cps[iu0 - pu..=iu1]
-            .iter()
-            .flat_map(|row| row[iv0 - pv..=iv1].iter().copied()),
-    )))
+    Ok(Some([lo[0] - gap, hi[0] + gap, lo[1] - gap, hi[1] + gap]))
+}
+
+/// Whether each side of a B-spline surface's domain keeps farther than
+/// `reach` from the side across from it, along `u` and along `v`: the
+/// surface then neither closes on itself, to within `reach`, nor shrinks to
+/// a point along a side, as each side runs from one of the other two sides
+/// to the other. A side is the curve whose control points blend the
+/// surface's rows (or columns) by their basis functions at the domain's
+/// end, which holds whether or not the knots are clamped, and its points
+/// lie in their box. A surface that closes on itself with its first and
+/// last control points apart, as one on knots that are not clamped does,
+/// is caught too. The sides' control points are rounded blends, each
+/// within `4 (p + 3)` roundings of the net's largest coordinate for degree
+/// `p`, so two sides of a surface that closes exactly can stand that far
+/// apart twice over: far from the origin, more than the face's tolerance.
+/// They are apart only past `reach` and that rounding.
+fn sides_are_free(surface: &NurbsSurface, reach: f64) -> bool {
+    let net = surface.control_points();
+    let weights = surface.weights();
+    let (rows, columns) = (net.len(), net.first().map_or(0, Vec::len));
+    // The control points of the side at `at` along `u`, or along `v`.
+    let side = |along_u: bool, at: f64| -> Option<Aabb3> {
+        let (knots, p, count, across) = if along_u {
+            (surface.knots_u(), surface.degree_u(), rows, columns)
+        } else {
+            (surface.knots_v(), surface.degree_v(), columns, rows)
+        };
+        let span = brepkit_math::nurbs::basis::find_span(count, p, at, knots);
+        let basis = brepkit_math::nurbs::basis::basis_funs(span, at, p, knots);
+        let first = span.checked_sub(p)?;
+        let points = (0..across).map(|j| {
+            let (mut sum, mut total) = (Vec3::new(0.0, 0.0, 0.0), 0.0);
+            for (k, &b) in basis.iter().enumerate() {
+                let (i, j) = if along_u {
+                    (first + k, j)
+                } else {
+                    (j, first + k)
+                };
+                let w = b * weights[i][j];
+                sum += Vec3::new(net[i][j].x(), net[i][j].y(), net[i][j].z()) * w;
+                total += w;
+            }
+            (total > 0.0).then(|| Point3::new(sum.x() / total, sum.y() / total, sum.z() / total))
+        });
+        Aabb3::try_from_points(points.collect::<Option<Vec<_>>>()?)
+    };
+    let size = net
+        .iter()
+        .flatten()
+        .fold(0.0_f64, |m, p| m.max(largest_coordinate(*p)));
+    #[allow(clippy::cast_precision_loss)]
+    let blends = |p: usize| rounding_reach(size, 8.0 * (p + 3) as f64);
+    let apart = |a: Option<Aabb3>, b: Option<Aabb3>, p: usize| matches!((a, b), (Some(a), Some(b)) if !a.expanded(reach + blends(p)).intersects(b));
+    let ((u_min, u_max), (v_min, v_max)) = (surface.domain_u(), surface.domain_v());
+    apart(side(true, u_min), side(true, u_max), surface.degree_u())
+        && apart(side(false, v_min), side(false, v_max), surface.degree_v())
+}
+
+/// A box in the parameters that holds a pcurve over its interval: the
+/// interval's ends for a line, the whole curve for a circle or an ellipse,
+/// and a B-spline's control points, which hold it where its weights are
+/// positive normal floats and the interval lies within its knots. Past
+/// them its end pieces run on out of that box. `None` otherwise.
+///
+/// An ellipse `c + a cos t u + b sin t v` reaches `hypot(a u.x, b v.x)` from
+/// its centre along `x` and `hypot(a u.y, b v.y)` along `y`, whichever of its
+/// semi-axes is the longer: data read from a file can hold the shorter
+/// first. Each reach is grown by the rounding of the evaluator.
+fn pcurve_box(
+    pcurve: &brepkit_topology::pcurve::PCurve,
+) -> Option<(brepkit_math::vec::Point2, brepkit_math::vec::Point2)> {
+    use brepkit_math::curves2d::Curve2D;
+    use brepkit_math::vec::Point2;
+    if !(pcurve.t_start().is_finite()
+        && pcurve.t_end().is_finite()
+        && pcurve.curve().is_well_formed())
+    {
+        return None;
+    }
+    let around = |c: Point2, r: f64| {
+        (
+            Point2::new(c.x() - r, c.y() - r),
+            Point2::new(c.x() + r, c.y() + r),
+        )
+    };
+    let points: Vec<Point2> = match pcurve.curve() {
+        Curve2D::Line(_) => vec![
+            pcurve.evaluate(pcurve.t_start()),
+            pcurve.evaluate(pcurve.t_end()),
+        ],
+        Curve2D::Circle(c) => return Some(around(c.center(), c.radius())),
+        Curve2D::Ellipse(e) => {
+            let (a, b) = (e.semi_major(), e.semi_minor());
+            let (sin, cos) = e.rotation().sin_cos();
+            let c = e.center();
+            let grow = 8.0 * f64::EPSILON * (a + b + c.x().abs().max(c.y().abs()));
+            let (x, y) = ((a * cos).hypot(b * sin), (a * sin).hypot(b * cos));
+            return Some((
+                Point2::new(c.x() - x - grow, c.y() - y - grow),
+                Point2::new(c.x() + x + grow, c.y() + y + grow),
+            ));
+        }
+        Curve2D::Nurbs(n) => {
+            let (first, last) = n.domain();
+            let (t0, t1) = (pcurve.t_start(), pcurve.t_end());
+            if t0.min(t1) < first
+                || t0.max(t1) > last
+                || !n.weights().iter().all(|&w| w > 0.0 && w.is_normal())
+            {
+                return None;
+            }
+            n.control_points().to_vec()
+        }
+    };
+    let low = points
+        .iter()
+        .fold(Point2::new(f64::INFINITY, f64::INFINITY), |m, p| {
+            Point2::new(m.x().min(p.x()), m.y().min(p.y()))
+        });
+    let high = points
+        .iter()
+        .fold(Point2::new(f64::NEG_INFINITY, f64::NEG_INFINITY), |m, p| {
+            Point2::new(m.x().max(p.x()), m.y().max(p.y()))
+        });
+    (low.x().is_finite() && low.y().is_finite() && high.x().is_finite() && high.y().is_finite())
+        .then_some((low, high))
+}
+
+/// The box of the control points of `surface` cut to the parameters
+/// `[u0, u1, v0, v1]`, taken within its domain: each cut is a knot inserted
+/// to the degree, and the control points kept are those whose basis
+/// functions are not zero somewhere inside the range. Where a knot cannot
+/// be inserted, the uncut net's control points of the spans the range
+/// meets, which hold it too. `None` for a range that holds no area of the
+/// domain.
+fn cut_net_box(surface: &NurbsSurface, [u0, u1, v0, v1]: [f64; 4]) -> Option<Aabb3> {
+    use brepkit_math::nurbs::knot_ops::{surface_knot_insert_u, surface_knot_insert_v};
+    let ((u_min, u_max), (v_min, v_max)) = (surface.domain_u(), surface.domain_v());
+    let (u0, u1, v0, v1) = (u0.max(u_min), u1.min(u_max), v0.max(v_min), v1.min(v_max));
+    if !(u0 < u1 && v0 < v1) {
+        return None;
+    }
+    let mut cut = surface.clone();
+    for u in [u0, u1] {
+        if u > u_min && u < u_max {
+            cut = surface_knot_insert_u(&cut, u, cut.degree_u()).unwrap_or(cut);
+        }
+    }
+    for v in [v0, v1] {
+        if v > v_min && v < v_max {
+            cut = surface_knot_insert_v(&cut, v, cut.degree_v()).unwrap_or(cut);
+        }
+    }
+    // A basis function of degree `p` from knot `i` is not zero inside the
+    // range where its support, knots `i` to `i + p + 1`, overlaps it.
+    let kept = |knots: &[f64], p: usize, count: usize, (a, b): (f64, f64)| -> Vec<usize> {
+        (0..count)
+            .filter(|&i| knots[i] < b && knots[i + p + 1] > a)
+            .collect()
+    };
+    let net = cut.control_points();
+    let columns = net.first().map_or(0, Vec::len);
+    let rows = kept(cut.knots_u(), cut.degree_u(), net.len(), (u0, u1));
+    let cols = kept(cut.knots_v(), cut.degree_v(), columns, (v0, v1));
+    Aabb3::try_from_points(
+        rows.iter()
+            .flat_map(|&i| cols.iter().map(move |&j| net[i][j])),
+    )
 }
 
 /// Find a vertex near the given point among all pave block vertices.
