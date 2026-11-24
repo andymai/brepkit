@@ -7157,7 +7157,8 @@ fn sphere_region_axis(
 /// The least that `(p - center) . axis` takes over the points `p` of a
 /// wire's edges: exact on lines, circles and ellipses, and over the control
 /// points of a B-spline edge, whose curve lies in their hull. `None` where a
-/// B-spline edge has a weight that is not positive.
+/// B-spline edge has a weight that is not a positive normal float: one below
+/// the least normal float can carry the curve out of that hull.
 fn lowest_along_wire(
     topo: &Topology,
     wire_id: brepkit_topology::wire::WireId,
@@ -7203,7 +7204,7 @@ fn lowest_along_wire(
                 (e.semi_minor(), e.v_axis()),
             ),
             EdgeCurve::NurbsCurve(n) => {
-                if n.weights().iter().any(|&w| w <= 0.0) {
+                if n.weights().iter().any(|&w| w <= 0.0 || !w.is_normal()) {
                     return None;
                 }
                 n.control_points()
@@ -13117,6 +13118,38 @@ mod tests {
         // join at the seam where the closed curve's endpoints coincide.
         assert!((out[0].t_range.1 - d1).abs() < 1e-9);
         assert!((out[1].t_range.0 - d0).abs() < 1e-9);
+    }
+
+    /// A wire of one straight B-spline edge whose control points stand at
+    /// height 1 over a unit ball's centre: with weights of 1 its least
+    /// height is 1, and with weights below the least normal float it is not
+    /// read, as the curve can then fall out of its control points' hull.
+    #[test]
+    fn a_wire_with_subnormal_weights_has_no_least_height() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let least = |weight: f64| {
+            let mut topo = Topology::default();
+            let (a, b) = (Point3::new(-1.0, 0.0, 1.0), Point3::new(1.0, 0.0, 1.0));
+            let curve =
+                NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], vec![a, b], vec![weight; 2]).unwrap();
+            let (va, vb) = (
+                topo.add_vertex(Vertex::new(a, 1e-7)),
+                topo.add_vertex(Vertex::new(b, 1e-7)),
+            );
+            let edge = topo.add_edge(Edge::new(va, vb, EdgeCurve::NurbsCurve(curve)));
+            let wire =
+                topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], false).unwrap());
+            lowest_along_wire(
+                &topo,
+                wire,
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            )
+        };
+        assert!(least(1.0).is_some_and(|h| (h - 1.0).abs() < 1e-12));
+        assert_eq!(least(f64::from_bits(1)), None);
+        assert_eq!(least(f64::MIN_POSITIVE * 0.5), None);
     }
 
     #[test]
