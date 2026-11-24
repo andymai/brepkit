@@ -6837,10 +6837,7 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId, tol: Tolerance) -> Result
             max: Point3::new(0.0, 0.0, 0.0),
         },
     };
-    match topo.face(face_id)?.surface() {
-        FaceSurface::Nurbs(n) => super::helpers::nurbs_face_box(topo, face_id, n, bounds, tol),
-        _ => Ok(bounds),
-    }
+    Ok(bounds)
 }
 
 /// The box of a ring torus face over the ring and tube angles its outer wire
