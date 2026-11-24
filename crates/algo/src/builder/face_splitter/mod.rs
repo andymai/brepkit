@@ -10894,9 +10894,28 @@ fn split_face_2d_impl(
             }
         }
     }
-    let all_edges = super::wire_builder::remove_pendant_sections(
-        &all_edges, tol.linear, u_periodic, v_periodic,
-    );
+    // What the face received, read about a pole: each half must run once in
+    // its pieces, whatever the pruning below drops. A piece with no extent
+    // (a self-split remnant) bounds nothing.
+    let received: Option<Vec<OrientedPCurveEdge>> = pole_view.as_ref().map(|_| {
+        all_edges
+            .iter()
+            .enumerate()
+            .filter(|(i, e)| {
+                *i < n_boundary_edges
+                    || (e.start_3d - e.end_3d).length() >= tol.linear
+                    || super::wire_builder::closes_on_itself(e, tol.linear)
+            })
+            .map(|(_, e)| e.clone())
+            .collect()
+    });
+    let all_edges = if pole_view.is_some() {
+        super::wire_builder::remove_pendant_sections_but_loops(
+            &all_edges, tol.linear, u_periodic, v_periodic,
+        )
+    } else {
+        super::wire_builder::remove_pendant_sections(&all_edges, tol.linear, u_periodic, v_periodic)
+    };
 
     // Drop zero-extent section edges (a T-junction split at a section's own
     // endpoint mints them); a self-loop edge derails the angular walker into
@@ -10926,6 +10945,7 @@ fn split_face_2d_impl(
                 *i < n_b
                     || (e.start_3d - e.end_3d).length() >= tol.linear
                     || (e.start_uv - e.end_uv).length() >= ZERO_EXTENT_UV
+                    || (pole_view.is_some() && super::wire_builder::closes_on_itself(e, tol.linear))
             })
             .map(|(_, e)| e)
             .collect()
@@ -11840,6 +11860,7 @@ fn split_face_2d_impl(
         pole_round::read(
             view,
             &all_edges,
+            received.as_deref()?,
             n_boundary_edges,
             loops.clone(),
             tol.linear,
@@ -16485,9 +16506,15 @@ mod tests {
     /// `0.95`, one face bounded by the cap's rim; two small circles on it,
     /// 0.2 rad round, their middles 0.3 rad apart either side of the unit
     /// direction `m` along the unit direction `e` square to it, so that they
-    /// cross twice; split by `split_face_2d` along their arcs, laid in the
-    /// order of their circles.
-    fn split_with_crossing_circles(cap: Vec3, m: Vec3, e: Vec3) -> Vec<SplitSubFace> {
+    /// cross twice, and a whole circle 0.1 rad round the unit direction
+    /// `lone` where one is given; split by `split_face_2d` along their arcs,
+    /// laid in the order of their circles.
+    fn split_with_crossing_circles(
+        cap: Vec3,
+        m: Vec3,
+        e: Vec3,
+        lone: Option<Vec3>,
+    ) -> Vec<SplitSubFace> {
         use brepkit_math::curves::Circle3D;
         use brepkit_math::surfaces::SphericalSurface;
         use brepkit_topology::edge::Edge;
@@ -16556,6 +16583,31 @@ mod tests {
                 });
             }
         }
+        if let Some(d) = lone {
+            let curve = EdgeCurve::Circle(circle(d, 0.1));
+            let at = curve.evaluate_with_endpoints(0.0, origin, origin);
+            let pcurve = super::super::pcurve_compute::compute_pcurve_on_surface(
+                &curve,
+                at,
+                at,
+                &surface,
+                &[],
+                None,
+            );
+            sections.push(SectionEdge {
+                curve_3d: curve,
+                pcurve_a: pcurve,
+                pcurve_b: dummy_pcurve(),
+                start: at,
+                end: at,
+                start_uv_a: None,
+                end_uv_a: None,
+                start_uv_b: None,
+                end_uv_b: None,
+                target_face: None,
+                pave_block_id: None,
+            });
+        }
         let tol = brepkit_math::tolerance::Tolerance::new();
         let edge_images: std::collections::HashMap<
             brepkit_topology::edge::EdgeId,
@@ -16615,7 +16667,7 @@ mod tests {
                 unit(1.0, 1.0, 0.0),
             ),
         ] {
-            let split = split_with_crossing_circles(cap, m, e);
+            let split = split_with_crossing_circles(cap, m, e, None);
             assert_eq!(split.len(), 4, "cap {cap:?}");
             // No wire runs one small circle alone: a whole disc.
             let rim = Point3::new(0.0, 0.0, 0.0) + cap * 0.95;
@@ -16630,5 +16682,154 @@ mod tests {
             }
             assert_eq!(split.iter().map(|p| p.inner_wires.len()).sum::<usize>(), 1);
         }
+    }
+
+    /// Two small circles that cross and a whole circle apart from them
+    /// split a ball face in five: the whole circle's disc stands as a piece,
+    /// and the face keeps it as a hole.
+    #[test]
+    fn crossing_circles_and_a_lone_circle_on_a_ball_face_split_it_in_five() {
+        let unit = |x: f64, y: f64, z: f64| Vec3::new(x, y, z).normalize().unwrap();
+        for (cap, m, e, lone) in [
+            (
+                Vec3::new(0.0, 0.0, 1.0),
+                unit(1.0, 0.0, -1.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                unit(-1.0, 0.0, -1.0),
+            ),
+            (
+                Vec3::new(1.0, 0.0, 0.0),
+                unit(-0.5, 0.5, -0.7),
+                unit(1.0, 1.0, 0.0),
+                unit(-0.5, -0.5, -0.7),
+            ),
+        ] {
+            let split = split_with_crossing_circles(cap, m, e, Some(lone));
+            assert_eq!(split.len(), 5, "cap {cap:?}");
+            assert_eq!(
+                split.iter().map(|p| p.inner_wires.len()).sum::<usize>(),
+                2,
+                "cap {cap:?}"
+            );
+            let middle = Point3::new(0.0, 0.0, 0.0) + lone * 0.1_f64.cos();
+            let disc = split.iter().filter(|p| {
+                let runs = circles_run(p);
+                runs.len() == 1 && runs[0].iter().all(|c| (*c - middle).length() < 1e-9)
+            });
+            assert_eq!(disc.count(), 1, "cap {cap:?}");
+        }
+    }
+
+    /// The unit ball less the cap round `+z` beyond `0.95`, one face bounded
+    /// by the cap's rim; a circle 0.15 rad round a point of the rim, whose
+    /// arc below the rim cuts a piece off the face; and a whole circle 0.1
+    /// rad round the unit direction `lone`; split by `split_face_2d`.
+    fn split_with_an_arc_and_a_lone_circle(lone: Vec3) -> Vec<SplitSubFace> {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let circle =
+            |d: Vec3, rho: f64| Circle3D::new(origin + d * rho.cos(), d, rho.sin()).unwrap();
+        let sphere = SphericalSurface::new(origin, 1.0).unwrap();
+        let surface = FaceSurface::Sphere(sphere);
+        let mut topo = Topology::new();
+        let polar = 0.95_f64.acos();
+        let rim = circle(Vec3::new(0.0, 0.0, -1.0), std::f64::consts::PI - polar);
+        let at = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
+        let rim = topo.add_edge(Edge::new(at, at, EdgeCurve::Circle(rim)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+        let face_id = topo.add_face(Face::new(wire, vec![], surface.clone()));
+        // The arc's ends: where the circle crosses z = 0.95, by bisection.
+        let round = circle(Vec3::new(polar.sin(), 0.0, polar.cos()), 0.15);
+        let above = |t: f64| round.evaluate(t).z() > 0.95;
+        let steps: Vec<f64> = (0..=360).map(|k| f64::from(k).to_radians()).collect();
+        let crossings: Vec<f64> = steps
+            .windows(2)
+            .filter(|w| above(w[0]) != above(w[1]))
+            .map(|w| {
+                let (mut lo, mut hi) = (w[0], w[1]);
+                for _ in 0..80 {
+                    let mid = f64::midpoint(lo, hi);
+                    if above(mid) == above(lo) {
+                        lo = mid;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                f64::midpoint(lo, hi)
+            })
+            .collect();
+        assert_eq!(crossings.len(), 2);
+        let (from, to) = if above(f64::midpoint(crossings[0], crossings[1])) {
+            (crossings[1], crossings[0])
+        } else {
+            (crossings[0], crossings[1])
+        };
+        let lone = circle(lone, 0.1);
+        let (ring, p, q) = (lone.evaluate(0.0), round.evaluate(from), round.evaluate(to));
+        let mut sections = Vec::new();
+        for (curve, a, b) in [
+            (EdgeCurve::Circle(round), p, q),
+            (EdgeCurve::Circle(lone), ring, ring),
+        ] {
+            let pcurve = super::super::pcurve_compute::compute_pcurve_on_surface(
+                &curve,
+                a,
+                b,
+                &surface,
+                &[],
+                None,
+            );
+            sections.push(SectionEdge {
+                curve_3d: curve,
+                pcurve_a: pcurve,
+                pcurve_b: dummy_pcurve(),
+                start: a,
+                end: b,
+                start_uv_a: None,
+                end_uv_a: None,
+                start_uv_b: None,
+                end_uv_b: None,
+                target_face: None,
+                pave_block_id: None,
+            });
+        }
+        let tol = brepkit_math::tolerance::Tolerance::new();
+        let edge_images: std::collections::HashMap<
+            brepkit_topology::edge::EdgeId,
+            Vec<brepkit_topology::edge::EdgeId>,
+        > = std::collections::HashMap::new();
+        let info = SurfaceInfo::Parametric {
+            u_periodic: true,
+            v_periodic: false,
+        };
+        split_face_2d(
+            &topo,
+            face_id,
+            &sections,
+            Rank::A,
+            &tol,
+            None,
+            Some(&info),
+            &edge_images,
+            &std::collections::BTreeSet::new(),
+            None,
+        )
+    }
+
+    /// An arc across a ball face's rim and a whole circle apart from it split
+    /// the face in three: the piece the arc cuts off, the whole circle's
+    /// disc, and the rest of the face with the disc as its hole.
+    #[test]
+    fn an_arc_across_the_rim_and_a_lone_circle_split_a_ball_face_in_three() {
+        let lone = Vec3::new(-1.0, 0.0, -1.0).normalize().unwrap();
+        let split = split_with_an_arc_and_a_lone_circle(lone);
+        assert_eq!(split.len(), 3);
+        assert_eq!(split.iter().map(|p| p.inner_wires.len()).sum::<usize>(), 1);
     }
 }

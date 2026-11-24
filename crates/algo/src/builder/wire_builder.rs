@@ -600,9 +600,52 @@ pub fn remove_pendant_sections(
     u_periodic: bool,
     v_periodic: bool,
 ) -> Vec<OrientedPCurveEdge> {
+    peel_pendant_sections(edges, tol, u_periodic, v_periodic, false)
+}
+
+/// [`remove_pendant_sections`], but a vertex that only edges closed on
+/// themselves touch ([`closes_on_itself`]) is no free end: such an edge
+/// bounds a disc of its own (a small circle round no pole of a ball).
+pub fn remove_pendant_sections_but_loops(
+    edges: &[OrientedPCurveEdge],
+    tol: f64,
+    u_periodic: bool,
+    v_periodic: bool,
+) -> Vec<OrientedPCurveEdge> {
+    peel_pendant_sections(edges, tol, u_periodic, v_periodic, true)
+}
+
+/// Whether `e` ends where it starts, a weld (`100 tol`) apart, and its
+/// curve runs off that point: of its points a third and two thirds along
+/// its domain, one lies farther than a weld from its start.
+pub fn closes_on_itself(e: &OrientedPCurveEdge, tol: f64) -> bool {
+    let weld = 100.0 * tol;
+    if (e.start_3d - e.end_3d).length() > weld {
+        return false;
+    }
+    let (t0, t1) = e.curve_3d.domain_with_endpoints(e.start_3d, e.end_3d);
+    [1.0 / 3.0, 2.0 / 3.0].iter().any(|f| {
+        let at = e
+            .curve_3d
+            .evaluate_with_endpoints((t1 - t0).madd(*f, t0), e.start_3d, e.end_3d);
+        (at - e.start_3d).length() > weld
+    })
+}
+
+fn peel_pendant_sections(
+    edges: &[OrientedPCurveEdge],
+    tol: f64,
+    u_periodic: bool,
+    v_periodic: bool,
+    keep_loops: bool,
+) -> Vec<OrientedPCurveEdge> {
     let u_period = if u_periodic { Some(TAU) } else { None };
     let v_period = if v_periodic { Some(TAU) } else { None };
     let mut alive = vec![true; edges.len()];
+    let closed: Vec<bool> = edges
+        .iter()
+        .map(|e| keep_loops && closes_on_itself(e, tol))
+        .collect();
 
     loop {
         let mut vmap: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
@@ -629,6 +672,7 @@ pub fn remove_pendant_sections(
                 && incident
                     .iter()
                     .all(|&i| edges[i].source_edge_idx == Some(src))
+                && !incident.iter().all(|&i| closed[i])
             {
                 pendant_src = Some(pendant_src.map_or(src, |cur| cur.min(src)));
             }

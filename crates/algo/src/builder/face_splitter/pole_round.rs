@@ -656,7 +656,9 @@ pub(super) type Piece = (Vec<OrientedPCurveEdge>, Vec<Vec<OrientedPCurveEdge>>);
 /// The pieces of a ball face round the pole `view` holds, whose outline is
 /// `edges`' first `n_boundary` and whose section halves follow: read from
 /// the walk's loops `walked` ([`pieces`]), or where they do not read, from
-/// the face trace of `edges`. The walk can tour the regions about a
+/// the face trace of `edges`. The loops must run each half of `received`
+/// once: the outline, then every section half the face received before
+/// any was pruned from `edges`. The walk can tour the regions about a
 /// crossing of sections as one loop; the trace's successor is a function of
 /// the graph, and reads them apart. The trace welds its nodes in `(u, v)`
 /// by `tol`, and drops a loop as bounding no area by the same reading in
@@ -666,11 +668,12 @@ pub(super) type Piece = (Vec<OrientedPCurveEdge>, Vec<Vec<OrientedPCurveEdge>>);
 pub(super) fn read(
     view: &PoleView,
     edges: &[OrientedPCurveEdge],
+    received: &[OrientedPCurveEdge],
     n_boundary: usize,
     walked: Vec<Vec<OrientedPCurveEdge>>,
     tol: f64,
 ) -> Option<Vec<Piece>> {
-    let (boundary, sections) = edges.split_at(n_boundary);
+    let (boundary, sections) = received.split_at(n_boundary);
     pieces(view, boundary, sections, walked, tol).or_else(|| {
         let left = view.face_left_in_uv(boundary)?;
         let flat = |lp: &[OrientedPCurveEdge]| view.flat(lp, tol);
@@ -1174,7 +1177,7 @@ mod tests {
         // With no loops from the walk, `pieces` refuses, so the face trace
         // gives the pieces: the face round the crescent, and the crescent.
         assert!(pieces(&view, &edges[..1], &edges[1..], Vec::new(), 1e-7).is_none());
-        let split = read(&view, &edges, 1, Vec::new(), 1e-7).unwrap();
+        let split = read(&view, &edges, &edges, 1, Vec::new(), 1e-7).unwrap();
         assert_eq!(split.len(), 2);
         assert_eq!(split.iter().map(|p| p.1.len()).sum::<usize>(), 1);
     }
@@ -1488,5 +1491,30 @@ mod tests {
                 .all(|e| e.forward != with_face.forward)
                 && (outline[0].source_edge_idx.is_none() || outline[0].forward == with_face.forward)
         })));
+    }
+
+    #[test]
+    fn a_section_half_the_loops_leave_out_refuses_the_read() {
+        let (view, rim) = capped_ball(1.0);
+        let arcs = crossing_arcs(1.0, 0.2, 0.3);
+        let [o1, i1, o2, i2] = &arcs;
+        let lone = ring(unit(-0.3, 0.0, -1.0), 0.05, 4);
+        let at = |lp, outline| oriented(&view, &rim, lp, outline);
+        let partition = vec![
+            vec![rim.clone()],
+            at(round(o1, o2), false),
+            at(round(o1, i2), true),
+            at(round(o2, i1), true),
+            at(round(i1, i2), true),
+        ];
+        let mut sections = halves(&arcs);
+        let mut edges = vec![rim.clone()];
+        edges.extend(sections.iter().cloned());
+        assert!(read(&view, &edges, &edges, 1, partition.clone(), 1e-7).is_some());
+        // The lone circle came to the face, but no loop runs it.
+        sections.extend(halves(std::slice::from_ref(&lone)));
+        let mut received = vec![rim];
+        received.extend(sections);
+        assert!(read(&view, &edges, &received, 1, partition, 1e-7).is_none());
     }
 }
