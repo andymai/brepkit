@@ -6458,7 +6458,10 @@ fn ball_held_by_a_rod(rho: f64, y0: f64, z0: f64, x0: f64) -> f64 {
 /// past the equator at its top by `rise` in latitude, as little as 1e-4.
 /// The footprint splits where it crosses the equator, so in five poses each
 /// cut, intersect and fuse is valid, meshes closed, and holds the volume a
-/// quadrature over the rod's section gives.
+/// quadrature over the rod's section gives. A ray cast reads points in the
+/// rod above the equator just inside and just outside the ball's wall, in
+/// the ball just above the rod there, and in the ball past the rod's blind
+/// end, each as the operation keeps it.
 #[test]
 fn blind_rods_just_past_a_balls_equator_are_exact() {
     use crate::boolean::BooleanOp::{Cut, Fuse, Intersect};
@@ -6479,6 +6482,16 @@ fn blind_rods_just_past_a_balls_equator_are_exact() {
         let z0 = rise.sin() - rho;
         let held = ball_held_by_a_rod(rho, y0, z0, x0);
         let rod_volume = std::f64::consts::PI * rho * rho * (2.0 - x0);
+        // Where the ball's wall is at height `z` over the rod's axis.
+        let wall = |z: f64| (1.0 - y0 * y0 - z * z).sqrt();
+        let (low, high) = (0.5 * rise.sin(), rise.sin() + 1e-4);
+        // Each probe, and whether it lies in the ball and in the rod.
+        let probes = [
+            (Point3::new(wall(low) - 1e-3, y0, low), true, true),
+            (Point3::new(wall(low) + 1e-3, y0, low), false, true),
+            (Point3::new(wall(high) - 1e-3, y0, high), true, false),
+            (Point3::new(x0 - 0.05, y0, z0), true, false),
+        ];
         for (op, want) in [
             (Cut, ball_volume - held),
             (Intersect, held),
@@ -6506,6 +6519,27 @@ fn blind_rods_just_past_a_balls_equator_are_exact() {
                     ((volume - want) / want).abs() < 1e-7,
                     "{what}: volume {volume} against {want}"
                 );
+                for &(at, in_ball, in_rod) in &probes {
+                    let kept = match op {
+                        Cut => in_ball && !in_rod,
+                        Intersect => in_ball && in_rod,
+                        Fuse => in_ball || in_rod,
+                    };
+                    let class = crate::classify::classify_point(
+                        &topo,
+                        result,
+                        pose.mul_point(at),
+                        0.0,
+                        1e-7,
+                    )
+                    .unwrap();
+                    let want = if kept {
+                        crate::classify::PointClassification::Inside
+                    } else {
+                        crate::classify::PointClassification::Outside
+                    };
+                    assert_eq!(class, want, "{what}: {at:?}");
+                }
             }
         }
     }
