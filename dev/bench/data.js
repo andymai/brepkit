@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795504949732,
+  "lastUpdate": 1795507345612,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -77381,6 +77381,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27636057,
             "range": "± 121408",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "90c13b1328970153b08310e077ddb9a54e4b514e",
+          "message": "fix(algo): box a curved face by all of it in phase EF, and read a ball face's side only where its wire lies there (#2791)\n\n## Summary\n\nOn main:\n\n- phase EF boxes a curved face by its boundary's box, grown by half its\ndiagonal. A ball less a small cap is bounded by the cap's circle alone,\nso its box covers only the cap region. An edge that crosses the ball far\nfrom the cap is skipped, and its crossings are lost with no error\n(#2789). A whole ring's box is a single point, and a slender cone loses\nits tip;\n- phase FF reads a ball face's side from its wire's winding, then treats\nthe face as a half ball. A face larger than a hemisphere is cut wrong.\nSmall boxes through a ball less a small cap give 15 refusals and 3 wrong\nresults that pass validation. The mirrored intersect comes back empty,\nand the cut and fuse read 1.185e-3 off.\n\nWith this change, every edge in those cases finds its crossings, and all\n27 checks per box are exact. The pose sweep and the truth audit give the\nsame output as main, in the same time.\n\nFixes #2789.\n\n## The change\n\n- **A curved face's box in phase EF.** `helpers::analytic_face_box`\ngives the exact box of the face's wires. It adds each point inside the\nface where the surface's normal lies along an axis.\n- A cone adds its apex where its `LateralTrim` holds it, and a ball adds\neach of the 6 poles its `SphereFaceTrim` holds.\n- A torus takes `torus_patch_box`. A cylinder takes its wire box alone,\nbecause a ruling at an extreme leaves the face through its wires.\n- An edge's own box is now exact for lines, circles and ellipses, and\nuses the Bezier hulls for B-splines, where it was a 64-point sample.\n- **A ball face's side in phase FF.** `sphere_region_axis` keeps a\nface's side only where its outer wire lies on that side. This is exact\nfor conics and uses the control points for B-splines. Otherwise the face\ntakes the whole ball's box, and its trim decides. FF's cone box also\nadds the apex.\n\n## Tests\n\n- `edges_crossing_a_ball_less_a_small_cap_far_from_it_find_it` runs a\nline, a circle and an ellipse in 3 poses, and finds 2, 2 and 4\ncrossings, where main finds none.\n`a_line_across_a_cones_tip_far_from_its_base_finds_it` finds 2.\n`a_ring_bounded_by_small_loops_is_boxed_whole` boxes a whole ring and a\nring with a small window.\n`a_cylinder_patch_inside_a_small_loop_is_boxed_whole` pins the cylinder\ncase, which main gets right.\n- `small_boxes_through_a_ball_less_a_small_cap_are_exact` and\n`rods_across_a_ball_less_a_small_cap_are_exact` run cut, intersect and\nfuse in 3 poses. Each result is valid with a closed mesh, within 1e-7 of\na quadrature oracle, with point probes as expected. The first fails on\nmain.\n- Run times stay the same: the pose sweep takes 4.8 s, the truth audit\n1.13 s, the cube truss fuse 2.46 s. Over random sweep seeds 1 to 3, one\ncase goes from an error to good, and none gets worse.\n- brepkit-algo (595) passes, and so do all brepkit-operations and\nbrepkit-io tests (3291, 26 skipped).\n\n## Still open\n\n- Phase EF finds an edge's crossing of a torus only where a sample lands\non it, since tori have no side-flip pass. Phase FF recovers these\ncrossings in booleans.\n- A section loop round the pole of a ball face that holds a pole of\nevery chart is refused, as on main.\n- Phase EF's box of a NURBS face is still the boundary box grown by half\nits diagonal, with no proof that it holds the face.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes #2789: phase EF now boxes curved faces by their exact extent, and\nphase FF reads a ball face's side only where its wire actually lies.\nEdges crossing a ball less a small cap are no longer skipped, and small\nboxes through that face give exact cut, intersect, and fuse results\ninstead of refusals or wrong volumes. Phase FF also refuses to read a\nB-spline edge's least height when an edge weight is subnormal, since the\ncurve can then fall outside its control points' hull.\n\n**Changes**\n- Phase EF uses exact analytic boxes for faces on cones, spheres,\ntoruses, and cylinders, including interior extremal points (apex, poles,\npatch box); edge boxes are exact for lines, circles, and ellipses, and\nuse Bezier hulls for B-splines. A ball or ring face whose wire edge\ncannot be boxed takes its whole surface's box; such an edge on a\ncylinder or cone face makes it refused.\n- Phase FF only treats a ball face as a half-ball when its outer wire\nlies entirely on that side; otherwise it boxes the full sphere and lets\nthe face's trim decide. Phase FF's cone box also includes the cone's\napex.\n- `lowest_along_wire` returns no least height for a B-spline edge with a\nsubnormal weight, so the side is not misread.\n\n**Testing**\n- Added tests for ball-less-a-cap with rods and boxes in three poses, a\ncone tip, whole rings, and cylinder patches; the ring's test window now\nuses arcs that actually lie on the ring. Ball and ring faces with\nunboxable wire edges still find edges crossing far from their caps or\nwindows, and such a cylinder face is refused.\n- All existing tests pass; runtime is unchanged.\n\n<sup>Written for commit 5c39db3c8de91f67b8db916af82445af42c0ebe9.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2791?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2791?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2791&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-24T07:58:09Z",
+          "tree_id": "799f31a075b32d12ea51e74f9b6bf5a9b2e9728f",
+          "url": "https://github.com/andymai/brepkit/commit/90c13b1328970153b08310e077ddb9a54e4b514e"
+        },
+        "date": 1795507335286,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1087494,
+            "range": "± 12437",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1097473,
+            "range": "± 17853",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 11297,
+            "range": "± 221",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 640441,
+            "range": "± 7012",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22555383,
+            "range": "± 532241",
             "unit": "ns/iter"
           }
         ]
