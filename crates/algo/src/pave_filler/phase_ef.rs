@@ -1098,10 +1098,12 @@ fn face_holds(
 
 /// Whether `p` lies within the tolerance of an edge of face `fid`, or of
 /// the edge's own tolerance or its vertices' where those are wider. The
-/// distance to a line is to its segment; to a circle, an ellipse or a
-/// B-spline, to the point its projection finds on the whole curve where
-/// that lies in the edge's range, else to the edge's ends. `None` where a
-/// lookup fails.
+/// distance to a line is to its segment; to a circle or a B-spline, to the
+/// point its projection finds on the whole curve where that lies in the
+/// edge's range, else to the edge's ends; to an ellipse, to the nearest of
+/// the places in the edge's range where the distance comes least and the
+/// edge's ends ([`ellipse_arc_least`]). `None` where a lookup fails, or an
+/// ellipse's range cannot be read.
 fn near_an_edge(topo: &Topology, fid: FaceId, p: Point3, tol: Tolerance) -> Option<bool> {
     use std::f64::consts::TAU;
     for eid in brepkit_topology::explorer::face_edges(topo, fid).ok()? {
@@ -1129,11 +1131,7 @@ fn near_an_edge(topo: &Topology, fid: FaceId, p: Point3, tol: Tolerance) -> Opti
                 let t = lo + (t - lo).rem_euclid(TAU);
                 (t <= hi).then(|| (c.evaluate(t) - p).length())
             }
-            EdgeCurve::Ellipse(e) => {
-                let t = e.project(p);
-                let t = lo + (t - lo).rem_euclid(TAU);
-                (t <= hi).then(|| (e.evaluate(t) - p).length())
-            }
+            EdgeCurve::Ellipse(e) => Some(ellipse_arc_least(e, p, (lo, hi), tol.linear)?),
             EdgeCurve::NurbsCurve(n) => {
                 brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-12)
                     .ok()
@@ -1146,6 +1144,103 @@ fn near_an_edge(topo: &Topology, fid: FaceId, p: Point3, tol: Tolerance) -> Opti
         }
     }
     Some(false)
+}
+
+/// The least distance from `p` to the arc of `ellipse` over the parameters
+/// `lo` to `hi`, at the places inside the arc where the distance comes
+/// least, which lie at the roots of `(E - p) . E'`, half the slope of the
+/// squared distance. On a thin ellipse a point can have its nearest place
+/// on the whole ellipse outside the arc, and another inside it. The slope
+/// is `A sin t + B cos t + C sin 2t + D cos 2t`, for `E(t) = c + U cos t +
+/// V sin t`, `w = c - p`, `A = -w . U`, `B = w . V`, `C = (|V|² - |U|²) / 2`
+/// and `D = U . V`. Each piece of the range is halved until Taylor's bounds
+/// about its middle, with the rounding, keep the slope off zero along it,
+/// or keep its own slope off zero so that it holds at most one root, found
+/// by halving where the slope changes sign, or until it moves the arc's
+/// point by less than `step`: the distance at its middle, less how far its
+/// point moves across it, then stands for it. `None` where the range takes
+/// more pieces than that to read.
+fn ellipse_arc_least(
+    ellipse: &brepkit_math::curves::Ellipse3D,
+    p: Point3,
+    (lo, hi): (f64, f64),
+    step: f64,
+) -> Option<f64> {
+    const MOST_PIECES: usize = 1 << 12;
+    let (u, v) = (
+        ellipse.u_axis() * ellipse.semi_major(),
+        ellipse.v_axis() * ellipse.semi_minor(),
+    );
+    let w = ellipse.center() - p;
+    let (a, b) = (-w.dot(u), w.dot(v));
+    let (c, d) = (0.5 * (v.dot(v) - u.dot(u)), u.dot(v));
+    let speed = u.length() + v.length();
+    if !(speed.is_finite() && speed > 0.0 && hi > lo) {
+        return None;
+    }
+    let shortest = step / speed;
+    let size = a.abs() + b.abs();
+    let bend = 4.0f64.madd(c.abs() + d.abs(), size);
+    // The rounding in each of the slope and its own slope: of the four
+    // coefficients, each a dot product, and of the sum of their terms.
+    let err = 16.0 * f64::EPSILON * w.length().madd(speed, u.dot(u) + v.dot(v));
+    let slope = |t: f64| {
+        let (s, k) = t.sin_cos();
+        let (s2, k2) = (2.0 * s * k, k.madd(k, -s * s));
+        a.madd(s, b * k) + c.madd(s2, d * k2)
+    };
+    let turn = |t: f64| {
+        let (s, k) = t.sin_cos();
+        let (s2, k2) = (2.0 * s * k, k.madd(k, -s * s));
+        a.madd(k, -b * s) + 2.0 * c.madd(k2, -d * s2)
+    };
+    let off = |t: f64| (ellipse.evaluate(t) - p).length();
+    let mut least = f64::INFINITY;
+    let mut pieces = vec![(lo, hi)];
+    let mut read = 0;
+    while let Some((x, y)) = pieces.pop() {
+        read += 1;
+        if read > MOST_PIECES {
+            return None;
+        }
+        let (m, r) = (f64::midpoint(x, y), 0.5 * (y - x));
+        let (f, f1) = (slope(m), turn(m));
+        if f.abs() > f1.abs().madd(r, (0.5 * bend * r).madd(r, err.madd(r, err))) {
+            continue;
+        }
+        if f1.abs() > bend.madd(r, err) {
+            let (fx, fy) = (slope(x), slope(y));
+            if fx.abs() <= err {
+                least = least.min(off(x));
+            }
+            if fy.abs() <= err {
+                least = least.min(off(y));
+            }
+            if fx.abs() > err && fy.abs() > err && (fx > 0.0) != (fy > 0.0) {
+                let (mut x, mut y) = (x, y);
+                for _ in 0..64 {
+                    let h = f64::midpoint(x, y);
+                    if h <= x || h >= y {
+                        break;
+                    }
+                    if (slope(h) > 0.0) == (fx > 0.0) {
+                        x = h;
+                    } else {
+                        y = h;
+                    }
+                }
+                least = least.min(off(x).min(off(y)));
+            }
+            continue;
+        }
+        if y - x <= shortest {
+            least = least.min((off(m) - speed * r).max(0.0));
+            continue;
+        }
+        pieces.push((m, y));
+        pieces.push((x, m));
+    }
+    Some(least)
 }
 
 /// How near a face's wire a point of its surface counts as on the wire:
@@ -8533,5 +8628,50 @@ mod tests {
             }
         }
         assert!(misread.is_empty(), "{misread:#?}");
+    }
+
+    /// A plane face bounded by the lower half of an ellipse of semi-axes 1
+    /// and 1e-3, cut short `0.02` before the end of its longer axis, and
+    /// three lines back round a unit square below it, with vertices of
+    /// tolerance 1e-4. A point on the upper
+    /// half at angle `0.03` has its nearest place on the whole ellipse
+    /// there, outside the arc, and another inside it at angle `-0.03`, 6e-5
+    /// off: it lies near the arc, though 2.6e-4 from the arc's ends. Points
+    /// 2e-4 farther up, or across from the arc's middle, do not.
+    #[test]
+    fn a_point_near_a_thin_elliptic_arc_away_from_its_ends_is_near_it() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let tol = Tolerance::new();
+        let (x, z) = (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0));
+        let thin = Ellipse3D::new_with_ref(Point3::new(0.0, 0.0, 0.0), z, 1.0, 1e-3, x).unwrap();
+        let (from, to) = (std::f64::consts::PI, std::f64::consts::TAU - 0.02);
+        let mut topo = Topology::new();
+        let a = topo.add_vertex(Vertex::new(thin.evaluate(from), 1e-4));
+        let b = topo.add_vertex(Vertex::new(thin.evaluate(to), 1e-4));
+        let c = topo.add_vertex(Vertex::new(Point3::new(1.0, -1.0, 0.0), 1e-7));
+        let d = topo.add_vertex(Vertex::new(Point3::new(-1.0, -1.0, 0.0), 1e-7));
+        let arc = topo.add_edge(Edge::new(a, b, EdgeCurve::Ellipse(thin.clone())));
+        let lines = [(b, c), (c, d), (d, a)]
+            .map(|(p, q)| OrientedEdge::new(topo.add_edge(Edge::new(p, q, EdgeCurve::Line)), true));
+        let mut sides = vec![OrientedEdge::new(arc, true)];
+        sides.extend(lines);
+        let wire = topo.add_wire(Wire::new(sides, true).unwrap());
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane { normal: z, d: 0.0 },
+        ));
+        let up = Vec3::new(0.0, 1.0, 0.0);
+        let at = thin.evaluate(0.03);
+        assert_eq!(near_an_edge(&topo, face, at, tol), Some(true));
+        assert_eq!(near_an_edge(&topo, face, at + up * 2e-4, tol), Some(false));
+        assert_eq!(
+            near_an_edge(&topo, face, thin.evaluate(std::f64::consts::FRAC_PI_2), tol),
+            Some(false)
+        );
     }
 }
