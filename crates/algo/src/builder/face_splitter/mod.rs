@@ -13292,7 +13292,7 @@ fn spans_apart((a0, ad): (f64, f64), (b0, bd): (f64, f64)) -> f64 {
 ///
 /// The rotation that takes `q`'s normal (or its reverse, whichever lies
 /// nearer) onto `p`'s carries `q` onto `p`, each point moving at most
-/// `|c_p - c_q| + |r_p - r_q| + r_p sqrt(2 - 2 |n_p . n_q|)`, and turns its arc
+/// `|c_p - c_q| + |r_p - r_q| + r_p |n_p - n_q|` (`n_q` the sign used), and turns its arc
 /// into an arc of `p`. That arc's ends lie within the span gap
 /// ([`spans_apart`]) of `p`'s arc's ends along `p`, so the two arcs of `p`
 /// lie within `r_p` times that gap of each other.
@@ -13311,7 +13311,10 @@ fn circle_arcs_apart(
     let cos = n2.dot(n1);
     let w = n2.cross(n1);
     let turn = |e: Vec3| e * cos + w.cross(e) + w * (w.dot(e) / (1.0 + cos));
-    let tilt = 2.0f64.madd(-cos, 2.0).max(0.0).sqrt();
+    // `|n1 - n2|` is `2 sin(angle / 2)`, read from the components with no
+    // cancellation, where `sqrt(2 - 2 cos)` loses a small turn to rounding;
+    // a few units of rounding cover normals unit only within it.
+    let tilt = 8.0f64.madd(f64::EPSILON, (n1 - n2).length());
     let moved =
         (p.center() - q.center()).length() + (p.radius() - q.radius()).abs() + p.radius() * tilt;
     let (s, c) = q0.sin_cos();
@@ -17048,5 +17051,64 @@ mod tests {
         };
         assert!(same_section_curve(&trim(a, b), &trim(a, b), tol));
         assert!(same_section_curve(&trim(a, b), &trim(b, a), tol));
+    }
+
+    /// An arc of a circle of radius 1e4 over [3 pi / 8, 7 pi / 8], and the
+    /// same arc with its circle turned by `angle` about the line through
+    /// its centre at angle 1/8 + 0.35 of a turn in its plane.
+    fn large_arc_and_its_turned_copy(angle: f64) -> (SectionEdge, SectionEdge) {
+        use brepkit_math::curves::Circle3D;
+        use std::f64::consts::PI;
+        let centre = Point3::new(3.0, -2.0, 1.0);
+        let normal = Vec3::new(0.2, -0.3, 0.9).normalize().unwrap();
+        let circle = Circle3D::new(centre, normal, 1e4).unwrap();
+        let toward = 0.35 + PI / 8.0;
+        let axis = circle.u_axis() * toward.cos() + circle.v_axis() * toward.sin();
+        let (s, c) = angle.sin_cos();
+        let turn = |v: Vec3| v * c + axis.cross(v) * s + axis * (axis.dot(v) * (1.0 - c));
+        let turned =
+            Circle3D::new_with_ref(centre, turn(normal), 1e4, turn(circle.u_axis())).unwrap();
+        let arc = |k: &Circle3D| SectionEdge {
+            curve_3d: EdgeCurve::Circle(k.clone()),
+            ..line_section(k.evaluate(3.0 * PI / 8.0), k.evaluate(7.0 * PI / 8.0))
+        };
+        (arc(&circle), arc(&turned))
+    }
+
+    /// The most a section's points, read at 2001, stand off the whole
+    /// circle of a circular section `of`.
+    fn off_circle(s: &SectionEdge, of: &SectionEdge) -> f64 {
+        let EdgeCurve::Circle(c) = &of.curve_3d else {
+            return f64::NAN;
+        };
+        (0..=2000)
+            .map(|k| {
+                let p = evaluate_edge_at_t(&s.curve_3d, s.start, s.end, f64::from(k) / 2000.0);
+                let w = p - c.center();
+                let h = w.dot(c.normal());
+                h.hypot((w - c.normal() * h).length() - c.radius())
+            })
+            .fold(0.0, crate::builder::pcurve_compute::max_or_nan)
+    }
+
+    /// An arc of radius 1e4 and its copy turned by 1.06e-9: their ends and
+    /// middles lie within the tolerance of each other, but the copy stands
+    /// 1.06e-5 off between, so they are two curves. Turned by nothing, or by
+    /// 1e-14, the copy is the same curve.
+    #[test]
+    fn a_large_arc_and_its_slightly_turned_copy_merge_only_when_within_the_tolerance() {
+        let tol = 1e-5;
+        let (arc, copy) = large_arc_and_its_turned_copy(1.06e-9);
+        assert!((section_middle(&arc) - section_middle(&copy)).length() < tol);
+        assert!((arc.start - copy.start).length() < tol && (arc.end - copy.end).length() < tol);
+        let off = off_circle(&copy, &arc);
+        assert!(off > tol, "the turned copy stands {off:e} off");
+        assert!(!same_section_curve(&arc, &copy, tol));
+        assert!(!same_section_curve(&copy, &arc, tol));
+        for angle in [0.0, 1e-14] {
+            let (arc, copy) = large_arc_and_its_turned_copy(angle);
+            assert!(same_section_curve(&arc, &copy, tol), "turned by {angle:e}");
+            assert!(same_section_curve(&copy, &arc, tol), "turned by {angle:e}");
+        }
     }
 }
