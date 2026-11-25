@@ -9375,11 +9375,9 @@ fn split_face_2d_impl(
     // the general split. The weld is the one the shortcut chains by.
     let loops_apart = || {
         if is_plane {
-            // On a plane face, loops proved to cross or touch where neither
-            // has an end go to the general split. A pair the finder cannot
-            // settle (an arc of an ellipse whose centre lies far off, which
-            // its wave reads only to some tens of tolerances) keeps the
-            // shortcut, as the general split would refuse it.
+            // On a plane face the loops must be proved apart: two that cross
+            // or touch where neither has an end, or a pair the finder cannot
+            // settle, go to the general split.
             let spans: Vec<_> = deduped_line_loops
                 .as_deref()
                 .unwrap_or(sections)
@@ -9390,8 +9388,7 @@ fn split_face_2d_impl(
                     end: s.end,
                 })
                 .collect();
-            edge_splitting::section_meeting_points(&spans, tol.linear)
-                .map_or(true, |m| m.is_empty())
+            edge_splitting::section_meeting_points(&spans, tol.linear).is_ok_and(|m| m.is_empty())
         } else {
             !matches!(surface, FaceSurface::Sphere(_))
                 || sections_meet_in_pairs(
@@ -18871,6 +18868,35 @@ mod tests {
                 let found = meetings(&edges);
                 assert!(found.is_empty(), "{pose}: meetings {found:?}");
             }
+        }
+    }
+
+    /// Three unit circles about the plate's (3, 5), (4, 5) and (5.0000001,
+    /// 5), each cut into three arcs: the first two cross, and the first and
+    /// the last lie one tolerance apart at their nearest, which the finder
+    /// cannot settle. The loops are not proved apart, so the face is not
+    /// split into discs, in each frame.
+    #[test]
+    fn loops_that_cross_beside_a_pair_not_settled_are_refused() {
+        use brepkit_math::curves::Circle3D;
+        use std::f64::consts::PI;
+        let cuts = [0.5 * PI, 7.0 * PI / 6.0, 11.0 * PI / 6.0, 2.5 * PI];
+        let sections = |o: Point3, u: Vec3, v: Vec3| {
+            let n = u.cross(v);
+            let mut sections = Vec::new();
+            for x in [3.0, 4.0, 5.000_000_1] {
+                let c = Circle3D::with_axes(o + u * x + v * 5.0, n, 1.0, u, v).unwrap();
+                let ends: Vec<Point3> = cuts.iter().map(|&t| c.evaluate(t)).collect();
+                for w in 0..3 {
+                    let end = if w == 2 { ends[0] } else { ends[w + 1] };
+                    sections.push(curve_section(EdgeCurve::Circle(c.clone()), ends[w], end));
+                }
+            }
+            sections
+        };
+        for (pose, o, u, v) in plate_frames() {
+            let areas = framed_plate_region_areas(o, u, v, &sections(o, u, v));
+            assert!(areas.is_empty(), "{pose}: regions of areas {areas:?}");
         }
     }
 
