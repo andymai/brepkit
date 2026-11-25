@@ -18900,6 +18900,74 @@ mod tests {
         }
     }
 
+    /// An arc of the ellipse of semi-axes 2e8 along the plate's x and 2
+    /// about (100000005, 5), its centre 1e8 off, over 4 units about the
+    /// parameter `2 pi / 3`, where it passes (5, 5 + sqrt 3): flat to well
+    /// within a tolerance, its ends on the ellipse to twice the precision of
+    /// one. In each frame, with the arc and `other(o, u, v, ends)`.
+    fn flat_arc_of_an_ellipse_centred_far_off(
+        other: &dyn Fn(Point3, Vec3, Vec3, (Point3, Point3)) -> OrientedPCurveEdge,
+    ) -> Vec<(&'static str, Vec<OrientedPCurveEdge>, Point3)> {
+        use brepkit_math::curves::Ellipse3D;
+        let third = 2.0 * std::f64::consts::PI / 3.0;
+        let half = 2.0 / (2e8 * third.sin());
+        plate_frames()
+            .into_iter()
+            .map(|(pose, o, u, v)| {
+                let at = |x: f64, y: f64| o + u * x + v * y;
+                let ellipse = EdgeCurve::Ellipse(
+                    Ellipse3D::with_axes(at(5.0 + 1e8, 5.0), u.cross(v), 2e8, 2.0, u, v).unwrap(),
+                );
+                let ends = (
+                    edge_splitting::conic_point(&ellipse, third - half).unwrap(),
+                    edge_splitting::conic_point(&ellipse, third + half).unwrap(),
+                );
+                let edges = vec![
+                    meeting_edge(ellipse, ends.0, ends.1, 1),
+                    other(o, u, v, ends),
+                ];
+                (pose, edges, at(5.0, 5.0 + 3.0f64.sqrt()))
+            })
+            .collect()
+    }
+
+    /// The flat arc of [`flat_arc_of_an_ellipse_centred_far_off`] and the
+    /// line `x = 5` from `y = 6` to `7.5` across it meet where they cross,
+    /// in each frame.
+    #[test]
+    fn a_flat_arc_of_an_ellipse_centred_far_off_meets_a_line_across_it() {
+        let across = |o: Point3, u: Vec3, v: Vec3, _: (Point3, Point3)| {
+            meeting_edge(
+                EdgeCurve::Line,
+                o + u * 5.0 + v * 6.0,
+                o + u * 5.0 + v * 7.5,
+                2,
+            )
+        };
+        for (pose, edges, crossing) in flat_arc_of_an_ellipse_centred_far_off(&across) {
+            let found = meetings(&edges);
+            assert!(
+                found.len() == 1 && (found[0] - crossing).length() < 1e-6,
+                "{pose}: meetings {found:?}, want {crossing:?}"
+            );
+        }
+    }
+
+    /// The flat arc of [`flat_arc_of_an_ellipse_centred_far_off`] and the
+    /// segment along its chord two tolerances off it are apart, in each
+    /// frame.
+    #[test]
+    fn a_flat_arc_two_tolerances_from_a_line_is_apart() {
+        let beside = |_: Point3, u: Vec3, v: Vec3, (p, q): (Point3, Point3)| {
+            let off = u.cross(v).cross((q - p).normalize().unwrap()) * 2e-7;
+            meeting_edge(EdgeCurve::Line, p + off, q + off, 2)
+        };
+        for (pose, edges, _) in flat_arc_of_an_ellipse_centred_far_off(&beside) {
+            let found = meetings(&edges);
+            assert!(found.is_empty(), "{pose}: meetings {found:?}");
+        }
+    }
+
     /// An arc in the plane square to the plate along the chord from (3, 5)
     /// to (7, 5), which is its shadow on the plate, and a line square to the
     /// arc's plane from (6, 7) to the chord at (6, 5), a hair off square to
