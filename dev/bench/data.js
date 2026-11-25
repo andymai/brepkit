@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795567197372,
+  "lastUpdate": 1795570660441,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -78083,6 +78083,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27516348,
             "range": "± 630553",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "51b33a11af0828dc43014aa46c526d10358ab8dc",
+          "message": "chore(main): release 4.11.51 (#2839)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.51](https://github.com/andymai/brepkit/compare/v4.11.50...v4.11.51)\n(2026-11-25)\n\n\n### Bug Fixes\n\n* **algo,operations:** give a straight pcurve only under a 3D bound, and\nrefuse a fuse result that breaks Euler\n([#2825](https://github.com/andymai/brepkit/issues/2825))\n([9e65ab5](https://github.com/andymai/brepkit/commit/9e65ab5ee856aa85e48ea12f1e921d5cf8817c6a))\n* **algo:** cut a whole circle on a plane face where another section\nmeets it, not peel it as a cap\n([#2845](https://github.com/andymai/brepkit/issues/2845))\n([ac7dade](https://github.com/andymai/brepkit/commit/ac7dade667fae975d02d0ef1ba1dd3ef7d7cb4d5))\n* **algo:** keep an arc apart from the line between its ends in the\nplane arrangement\n([#2837](https://github.com/andymai/brepkit/issues/2837))\n([4af2de9](https://github.com/andymai/brepkit/commit/4af2de9f2635d8272c5eb6f6ef5907b401ac8e43))\n* **math,io,wasm,operations:** refuse NaN and huge sizes, check analytic\ngeometry on load and in wasm, and refuse a face too far out to mesh\n([#2834](https://github.com/andymai/brepkit/issues/2834))\n([78c85b2](https://github.com/andymai/brepkit/commit/78c85b2aa0ca1d47351d518ab34d0aab0f6e9850))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-25T01:33:52Z",
+          "tree_id": "ed396fa59df665a670910f346d1c0286414f3f53",
+          "url": "https://github.com/andymai/brepkit/commit/51b33a11af0828dc43014aa46c526d10358ab8dc"
+        },
+        "date": 1795570651509,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 891130,
+            "range": "± 17283",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 946975,
+            "range": "± 21098",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9930,
+            "range": "± 22",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 544230,
+            "range": "± 7568",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19858165,
+            "range": "± 74970",
             "unit": "ns/iter"
           }
         ]
