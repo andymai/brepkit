@@ -66,6 +66,12 @@ mod tests {
 
     /// The plate, the rod and the prism, placed by `pose`.
     fn parts(topo: &mut Topology, seam: f64, pose: &Mat4) -> [SolidId; 3] {
+        parts_with(topo, 5.4_f64.sqrt(), seam, pose)
+    }
+
+    /// The plate, the rod and a prism of semi-axes 3 along x and `minor`
+    /// along y about (4, 5), placed by `pose`.
+    fn parts_with(topo: &mut Topology, minor: f64, seam: f64, pose: &Mat4) -> [SolidId; 3] {
         let plate = make_box(topo, 10.0, 10.0, 2.0).unwrap();
         let rod = make_cylinder(topo, 2.0, 4.0).unwrap();
         transform_solid(
@@ -79,7 +85,7 @@ mod tests {
             Point3::new(4.0, 5.0, -1.0),
             up,
             3.0,
-            5.4_f64.sqrt(),
+            minor,
             Vec3::new(1.0, 0.0, 0.0),
             Vec3::new(0.0, 1.0, 0.0),
         )
@@ -177,6 +183,90 @@ mod tests {
                 // The two caps, the rod's wall between the crossings, and the
                 // prism's wall outside the rod in the pieces of its quarters.
                 assert_eq!(solid_faces(&topo, fused).unwrap().len(), 7, "{what}");
+            }
+        }
+    }
+
+    /// A rod of radius 2 about (5, 5) from z = -2 to 4, placed by `pose`
+    /// with its seam turned by `seam`.
+    fn tall_rod(topo: &mut Topology, seam: f64, pose: &Mat4) -> SolidId {
+        let rod = make_cylinder(topo, 2.0, 6.0).unwrap();
+        transform_solid(
+            topo,
+            rod,
+            &(*pose * Mat4::translation(5.0, 5.0, -2.0) * Mat4::rotation_z(seam)),
+        )
+        .unwrap();
+        rod
+    }
+
+    /// A prism of semi-axes 3 and `sqrt(3)` about (4, 5), from z = -1 to 3,
+    /// crosses a rod from z = -2 to 4 at (4, 5 -/+ sqrt(3)) and touches it at
+    /// (7, 5). With the seams on the touch, the prism's wall comes as quarter
+    /// faces that end on the crossings, where rounding hides each quarter's
+    /// side of the circle: the section there is the quarter's own boundary
+    /// edge, and it must bound the window cut in the rod's wall.
+    #[test]
+    fn a_prism_whose_quarters_end_on_the_crossings_fuses_exactly() {
+        let root3 = 3.0_f64.sqrt();
+        // The left half of the ellipse, and the circle past the chord x = 4.
+        let union = 1.5 * root3 * PI + 8.0 * PI / 3.0 + root3;
+        // The rod, and the prism outside it over its height.
+        let volume = 24.0 * PI + 4.0 * (union - 4.0 * PI);
+        for (seams, seam) in SEAMS {
+            for (name, pose) in poses() {
+                let mut topo = Topology::new();
+                let [_, _, prism] = parts_with(&mut topo, root3, seam, &pose);
+                let rod = tall_rod(&mut topo, seam, &pose);
+                let what = format!("{seams}, {name}");
+                let fused =
+                    boolean_with_options(&mut topo, BooleanOp::Fuse, rod, prism, exact()).unwrap();
+                assert_exact(
+                    &topo,
+                    fused,
+                    volume,
+                    (
+                        &[
+                            Point3::new(6.9, 5.0, 1.0),
+                            Point3::new(5.0, 6.9, 3.5),
+                            Point3::new(1.5, 5.0, 2.0),
+                            Point3::new(4.0, 5.0 + root3 - 0.05, 1.0),
+                        ],
+                        &[
+                            Point3::new(7.1, 5.0, 1.0),
+                            Point3::new(4.0, 5.0 + root3 + 0.05, 1.0),
+                            Point3::new(4.0, 5.0 - root3 - 0.05, 1.0),
+                            Point3::new(1.5, 5.0, 3.5),
+                        ],
+                    ),
+                    &pose,
+                    &what,
+                );
+                // The rod's wall holds an edge along each crossing, over the
+                // prism's height.
+                for y in [5.0 - root3, 5.0 + root3] {
+                    let (low, high) = (
+                        pose.mul_point(Point3::new(4.0, y, -1.0)),
+                        pose.mul_point(Point3::new(4.0, y, 3.0)),
+                    );
+                    let bounded = solid_faces(&topo, fused).unwrap().into_iter().any(|f| {
+                        let face = topo.face(f).unwrap();
+                        matches!(face.surface(), FaceSurface::Cylinder(_))
+                            && std::iter::once(face.outer_wire())
+                                .chain(face.inner_wires().iter().copied())
+                                .flat_map(|w| topo.wire(w).unwrap().edges().to_vec())
+                                .any(|oe| {
+                                    let edge = topo.edge(oe.edge()).unwrap();
+                                    let ends = [
+                                        topo.vertex(edge.start()).unwrap().point(),
+                                        topo.vertex(edge.end()).unwrap().point(),
+                                    ];
+                                    ends.iter().any(|p| (*p - low).length() < 1e-9)
+                                        && ends.iter().any(|p| (*p - high).length() < 1e-9)
+                                })
+                    });
+                    assert!(bounded, "{what}: no wall edge at y = {y}");
+                }
             }
         }
     }
