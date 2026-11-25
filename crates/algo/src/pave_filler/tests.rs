@@ -1997,6 +1997,93 @@ fn near_coincident_arcs_get_middles_on_their_own_curves() {
     assert_ne!(middles[0], middles[1], "the arcs share one middle");
 }
 
+/// Two kites sharing the ends (5 + root 3, 6) and (5 - root 3, 6) of their
+/// arcs, one per operand: an arc of the circle of radius 2 about (5, 5) and
+/// an arc of the ellipse about (5, 4) of semi-axes 3 along y and
+/// `3 root 3 / root 5` along x, each closed by two lines through its own
+/// apex. The arcs have the same ends and the same middle (5, 7) but part by
+/// more than 0.02 between, and no other edge joins their ends: they are two
+/// paths, so each takes a middle on its own curve. Every case runs upright,
+/// turned and mirrored.
+#[test]
+fn arcs_through_one_middle_on_two_curves_are_two_paths() {
+    use brepkit_math::curves::{Circle3D, Ellipse3D};
+    use brepkit_math::madd::Madd;
+    use brepkit_math::mat::Mat4;
+    use brepkit_math::tolerance::Tolerance;
+    use brepkit_topology::solid::SolidId;
+
+    let poses = [
+        Mat4::identity(),
+        Mat4::translation(3.0, -2.0, 1.0) * Mat4::rotation_x(0.4) * Mat4::rotation_z(0.6),
+        Mat4::translation(1.0, 0.5, -2.0) * Mat4::scale(-1.0, 1.0, 1.0),
+    ];
+    let c30 = 0.75f64.sqrt();
+    let sx = 3.0 * 3.0f64.sqrt() / 5.0f64.sqrt();
+    for (k, pose) in poses.into_iter().enumerate() {
+        let at = |x: f64, y: f64| pose.mul_point(Point3::new(x, y, 0.0));
+        let (u, v) = (at(1.0, 0.0) - at(0.0, 0.0), at(0.0, 1.0) - at(0.0, 0.0));
+        let n = u.cross(v);
+        let normal = n.normalize().unwrap();
+        let d = normal.dot(at(0.0, 0.0) - Point3::new(0.0, 0.0, 0.0));
+        let mut topo = Topology::default();
+        let p = topo.add_vertex(Vertex::new(at(2.0f64.madd(c30, 5.0), 6.0), 1e-7));
+        let q = topo.add_vertex(Vertex::new(at((-2.0f64).madd(c30, 5.0), 6.0), 1e-7));
+        let mut kite =
+            |curve: EdgeCurve, apex: Point3| -> (SolidId, brepkit_topology::edge::EdgeId) {
+                let c = topo.add_vertex(Vertex::new(apex, 1e-7));
+                let arc = topo.add_edge(Edge::new(p, q, curve));
+                let down = topo.add_edge(Edge::new(q, c, EdgeCurve::Line));
+                let up = topo.add_edge(Edge::new(c, p, EdgeCurve::Line));
+                let wire = topo.add_wire(
+                    Wire::new(
+                        vec![
+                            OrientedEdge::new(arc, true),
+                            OrientedEdge::new(down, true),
+                            OrientedEdge::new(up, true),
+                        ],
+                        true,
+                    )
+                    .unwrap(),
+                );
+                let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Plane { normal, d }));
+                let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+                (topo.add_solid(Solid::new(shell, vec![])), arc)
+            };
+        let circle = Circle3D::with_axes(at(5.0, 5.0), n, 2.0, u, v).unwrap();
+        let ellipse = Ellipse3D::with_axes(at(5.0, 4.0), n, 3.0, sx, v, -u).unwrap();
+        let (a, arc_a) = kite(EdgeCurve::Circle(circle.clone()), at(5.0, 3.0));
+        let (b, arc_b) = kite(EdgeCurve::Ellipse(ellipse.clone()), at(5.0, 2.0));
+        let tol = Tolerance::new();
+        let mut arena = GfaArena::new();
+        PaveFiller::with_tolerance(&mut topo, a, b, tol)
+            .init_pave_blocks(&mut arena)
+            .unwrap();
+        super::pave_co_endpoint_curves(&mut topo, &[a, b], tol, &mut arena).unwrap();
+        let on_curve = [
+            Box::new(move |x: Point3| (circle.evaluate(circle.project(x)) - x).length())
+                as Box<dyn Fn(Point3) -> f64>,
+            Box::new(move |x: Point3| (ellipse.evaluate(ellipse.project(x)) - x).length()),
+        ];
+        for (arc, off) in [arc_a, arc_b].into_iter().zip(on_curve) {
+            let pb = arena.edge_pave_blocks[&arc][0];
+            let paves = &arena.pave_blocks.get(pb).unwrap().extra_paves;
+            assert_eq!(
+                paves.len(),
+                1,
+                "pose {k}: arc {arc:?} paved {} times",
+                paves.len()
+            );
+            let middle = topo.vertex(paves[0].vertex).unwrap().point();
+            assert!((middle - at(5.0, 7.0)).length() < 1e-9, "pose {k}");
+            assert!(
+                off(middle) < 1e-9,
+                "pose {k}: arc {arc:?}'s middle lies off its curve"
+            );
+        }
+    }
+}
+
 /// Records a section on `curve` between two new vertices, as phase FF does.
 fn recorded_section(
     topo: &mut Topology,
