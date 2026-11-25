@@ -270,6 +270,8 @@ pub(super) fn nurbs_edge_breaks(
     for run in nurbs.knots().chunk_by(|x, y| x.to_bits() == y.to_bits()) {
         if run.len() >= nurbs.degree() && run[0] > lo && run[0] < hi && turns_at(run[0]) {
             corners.push(run[0]);
+            // The edge takes a sample at each corner and at its two ends.
+            super::check_count("a NURBS edge", corners.len() + 2, deflection)?;
         }
     }
     if t0 > t1 {
@@ -287,29 +289,31 @@ pub(super) fn nurbs_edge_breaks(
             let n = if held { 1 } else { parts(a, b) };
             if n == 1 {
                 next.push((a, b, true));
-                continue;
+            } else {
+                cut = true;
+                let mid = a + (b - a) * 0.5;
+                if mid.to_bits() == a.to_bits() || mid.to_bits() == b.to_bits() {
+                    return Err(super::endless_samples("a NURBS edge", deflection));
+                }
+                for part in 0..n {
+                    #[allow(clippy::cast_precision_loss)]
+                    let (from, to) = (
+                        if part == 0 {
+                            a
+                        } else {
+                            a + (b - a) * part as f64 / n as f64
+                        },
+                        if part + 1 == n {
+                            b
+                        } else {
+                            a + (b - a) * (part + 1) as f64 / n as f64
+                        },
+                    );
+                    next.push((from, to, false));
+                }
             }
-            cut = true;
-            let mid = a + (b - a) * 0.5;
-            if mid.to_bits() == a.to_bits() || mid.to_bits() == b.to_bits() {
-                return Err(super::endless_samples("a NURBS edge", deflection));
-            }
-            for part in 0..n {
-                #[allow(clippy::cast_precision_loss)]
-                let (from, to) = (
-                    if part == 0 {
-                        a
-                    } else {
-                        a + (b - a) * part as f64 / n as f64
-                    },
-                    if part + 1 == n {
-                        b
-                    } else {
-                        a + (b - a) * (part + 1) as f64 / n as f64
-                    },
-                );
-                next.push((from, to, false));
-            }
+            // Every span is counted as it is kept, cut or not: a straight
+            // span adds a sample as a cut part does.
             super::check_count("a NURBS edge", next.len() + 1, deflection)?;
         }
         spans = next;
@@ -819,6 +823,43 @@ mod tests {
             "{backward:?}"
         );
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    /// A degree-one zigzag is straight between its knots, so no span of it
+    /// is cut and its count is the count of its corners. One of 1,000,001
+    /// pieces would take 1,000,002 samples, past the limit for one edge, and
+    /// is refused for its corners; one of 1000 pieces keeps a break at each.
+    #[test]
+    fn a_zigzag_past_the_limit_is_refused_for_its_corners() {
+        let zigzag = |pieces: u32| {
+            let points: Vec<Point3> = (0..=pieces)
+                .map(|i| Point3::new(f64::from(i), f64::from(i % 2), 0.0))
+                .collect();
+            let mut knots = vec![0.0];
+            knots.extend((0..=pieces).map(f64::from));
+            knots.push(f64::from(pieces));
+            let weights = vec![1.0; points.len()];
+            NurbsCurve::new(1, knots, points, weights).unwrap()
+        };
+        let small = nurbs_edge_breaks(&zigzag(1000), 0.0, 1000.0, 0.01, 0.35);
+        assert_eq!(
+            small.as_ref().ok(),
+            Some(&(0..=1000).map(f64::from).collect::<Vec<f64>>()),
+            "{small:?}"
+        );
+        let big = zigzag(1_000_001);
+        let started = std::time::Instant::now();
+        let big = nurbs_edge_breaks(&big, 0.0, 1_000_001.0, 0.01, 0.35);
+        assert!(
+            matches!(big, Err(crate::OperationsError::TooManySamples { .. })),
+            "{:?}",
+            big.map(|b| b.len())
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     /// A spline that turns a corner on a middle piece that barely moves (its
