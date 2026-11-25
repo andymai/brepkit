@@ -4870,41 +4870,73 @@ fn project_angle_on_curve(curve: &brepkit_topology::edge::EdgeCurve, p: Point3) 
 /// An edge's middle and size, as `merge_duplicate_edges` compares copies.
 type EdgeMiddle = Option<(Point3, f64, u64)>;
 
-/// Whether edges `a` and `b`, which share their ends, are proved one curve
-/// within `tol` along their whole length (see
-/// [`crate::builder::face_splitter::same_section_curve`]).
-fn proved_one_curve(
+/// Whether one of edges `a` and `b`, which share their ends, is fitted and
+/// strays more than `band` off the other's exact curve (a line, circle or
+/// ellipse, read whole) at one of seven places along its own span. A fit of
+/// the exact curve keeps within its fit error of it. `false` where neither or
+/// both are fitted, or where the fitted edge's span cannot be read: its
+/// parameters then resolve to the whole parent curve, past the edge's ends.
+fn fit_strays_from_exact(
     topo: &Topology,
     a: brepkit_topology::edge::EdgeId,
     b: brepkit_topology::edge::EdgeId,
-    tol: f64,
+    band: f64,
 ) -> bool {
-    use crate::builder::split_types::SectionEdge;
-    use brepkit_math::curves2d::{Curve2D, Line2D};
-    use brepkit_math::vec::{Point2, Vec2};
-    let Ok(line) = Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)) else {
+    let read = |e: brepkit_topology::edge::EdgeId| -> Option<(EdgeCurve, Point3, Point3)> {
+        let edge = topo.edge(e).ok()?;
+        Some((
+            edge.curve().clone(),
+            topo.vertex(edge.start()).ok()?.point(),
+            topo.vertex(edge.end()).ok()?.point(),
+        ))
+    };
+    let (Some(x), Some(y)) = (read(a), read(b)) else {
         return false;
     };
-    let section = |e: brepkit_topology::edge::EdgeId| -> Option<SectionEdge> {
-        let edge = topo.edge(e).ok()?;
-        Some(SectionEdge {
-            curve_3d: edge.curve().clone(),
-            pcurve_a: Curve2D::Line(line.clone()),
-            pcurve_b: Curve2D::Line(line.clone()),
-            start: topo.vertex(edge.start()).ok()?.point(),
-            end: topo.vertex(edge.end()).ok()?.point(),
-            start_uv_a: None,
-            end_uv_a: None,
-            start_uv_b: None,
-            end_uv_b: None,
-            target_face: None,
-            pave_block_id: None,
-        })
+    let (fitted, exact) = match (&x.0, &y.0) {
+        (EdgeCurve::NurbsCurve(_), EdgeCurve::NurbsCurve(_)) => return false,
+        (EdgeCurve::NurbsCurve(_), _) => (x, y),
+        (_, EdgeCurve::NurbsCurve(_)) => (y, x),
+        _ => return false,
     };
-    match (section(a), section(b)) {
-        (Some(a), Some(b)) => crate::builder::face_splitter::same_section_curve(&a, &b, tol),
-        _ => false,
+    let (EdgeCurve::NurbsCurve(fit), from, to) = fitted else {
+        return false;
+    };
+    let (t0, t1) = EdgeCurve::NurbsCurve(fit.clone()).domain_with_endpoints(from, to);
+    let (d0, d1) = fit.domain();
+    let whole = (t1 - t0).abs() >= (d1 - d0) * (1.0 - 1e-9);
+    let ends_are_curve_ends = [fit.evaluate(d0), fit.evaluate(d1)]
+        .iter()
+        .all(|p| (*p - from).length().min((*p - to).length()) <= band);
+    if whole && !ends_are_curve_ends {
+        return false;
     }
+    let off = |p: Point3| -> f64 {
+        match &exact.0 {
+            EdgeCurve::Line => {
+                let d = exact.2 - exact.1;
+                let len2 = d.dot(d);
+                if len2 <= 0.0 {
+                    return (p - exact.1).length();
+                }
+                let w = p - exact.1;
+                (w - d * (w.dot(d) / len2)).length()
+            }
+            EdgeCurve::Circle(c) => {
+                let w = p - c.center();
+                let height = w.dot(c.normal());
+                let across = (w - c.normal() * height).length();
+                (across - c.radius()).hypot(height)
+            }
+            EdgeCurve::Ellipse(e) => (p - e.evaluate(e.project(p))).length(),
+            EdgeCurve::NurbsCurve(_) => 0.0,
+        }
+    };
+    (1..8).any(|k| {
+        let t = (t1 - t0).madd(f64::from(k) / 8.0, t0);
+        let near = off(fit.evaluate(t)) <= band;
+        !near
+    })
 }
 
 /// A fitted curve's identity: its control points, weights and knots, so
@@ -5092,17 +5124,19 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
         // sets each already paired are two edges: a hole's short rim arc and
         // a box edge's chord across the opening, each shared by its own two
         // faces, would otherwise weld into one edge of four faces.
-        // An exact curve and a fitted one are copies of one edge only where
-        // proved one curve: their middles read on two curves, and a section
-        // fitted between a rim's two vertices (a cap's section from a
-        // crossing to a touch on the rim) shares both its ends with the rim's
-        // arc, 0.02 off it, and would trace the wall along the rim.
+        // An exact curve and a fitted one are not copies of one edge where
+        // the fit strays off the exact curve: their middles read on two
+        // curves, and a section fitted between a rim's two vertices (a cap's
+        // section from a crossing to a touch on the rim) shares both its
+        // ends with the rim's arc, 0.02 off it, and would trace the wall
+        // along the rim. Such a pair can still join below, where each is one
+        // use short of a partner: a chord standing for a curve.
         let fitted = |e: EdgeId| {
             topo.edge(e)
                 .is_ok_and(|edge| matches!(edge.curve(), EdgeCurve::NurbsCurve(_)))
         };
         let one_kind = |x: EdgeId, y: EdgeId| {
-            fitted(x) == fitted(y) || proved_one_curve(topo, x, y, 100.0 * tol)
+            fitted(x) == fitted(y) || !fit_strays_from_exact(topo, x, y, 100.0 * tol)
         };
         let mut sets: Vec<(EdgeId, EdgeMiddle, Vec<EdgeId>, usize)> = Vec::new();
         for &e in &unique {
@@ -5136,7 +5170,7 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
             } else if n % 2 == 1 {
                 canonicals
                     .iter_mut()
-                    .find(|(c, cm, cn)| *cn % 2 == 1 && alongside(mid, *cm) && one_kind(head, *c))
+                    .find(|(_, cm, cn)| *cn % 2 == 1 && alongside(mid, *cm))
             } else {
                 None
             };
