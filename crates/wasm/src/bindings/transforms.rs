@@ -4,14 +4,13 @@
 
 use wasm_bindgen::prelude::*;
 
-use brepkit_math::aabb::Aabb3;
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::transform::transform_solid;
 
 use crate::error::{
-    WasmError, validate_extent, validate_pattern_counts, validate_point, validate_positive,
-    validate_size, validate_vector,
+    WasmError, validate_pattern_counts, validate_point, validate_positive, validate_size,
+    validate_vector,
 };
 use crate::handles::{compound_id_to_u32, face_id_to_u32, solid_id_to_u32, wire_id_to_u32};
 use crate::kernel::BrepKernel;
@@ -290,6 +289,17 @@ fn matrix_from(matrix: &[f64]) -> Result<Mat4, WasmError> {
             reason: format!("matrix element at index {pos} is not finite"),
         });
     }
+    // A unit direction maps to a sum of three entries of the linear block's
+    // column, so each at most a third of the size limit keeps every moved
+    // axis and normal finite and within the limit.
+    for row in 0..3 {
+        for col in 0..3 {
+            validate_size(
+                3.0 * matrix[row * 4 + col],
+                "three times an entry of the matrix's linear block",
+            )?;
+        }
+    }
     Ok(Mat4(std::array::from_fn(|i| {
         std::array::from_fn(|j| matrix[i * 4 + j])
     })))
@@ -388,45 +398,28 @@ fn solid_points(
     Ok(points)
 }
 
-/// A box that holds every edge of `wires`.
-pub fn wires_extent(
+/// Points whose hull holds every edge of `wires`.
+pub fn wire_points(
     topo: &brepkit_topology::Topology,
     wires: impl IntoIterator<Item = brepkit_topology::wire::WireId>,
-) -> Result<Aabb3, WasmError> {
+) -> Result<Vec<Point3>, WasmError> {
     let mut points = Vec::new();
     for wire in wires {
         push_wire_points(topo, wire, &mut points)?;
     }
-    Ok(Aabb3::from_points(points))
+    Ok(points)
 }
 
-/// The box of `points` moved by `matrix`. An affine map takes a hull to
-/// the hull of the moved points, so this bounds the moved shape.
-fn moved(points: &[Point3], matrix: &Mat4) -> Aabb3 {
-    Aabb3::from_points(points.iter().map(|&p| matrix.mul_point(p)))
-}
-
-/// The box `aabb` takes under `matrix`: the box of its eight corners moved.
-pub fn placed(aabb: &Aabb3, matrix: &Mat4) -> Aabb3 {
-    Aabb3::from_points((0..8).map(|k| {
-        matrix.mul_point(Point3::new(
-            if k & 1 == 0 {
-                aabb.min.x()
-            } else {
-                aabb.max.x()
-            },
-            if k & 2 == 0 {
-                aabb.min.y()
-            } else {
-                aabb.max.y()
-            },
-            if k & 4 == 0 {
-                aabb.min.z()
-            } else {
-                aabb.max.z()
-            },
-        ))
-    }))
+/// Check each of `points` moved by `matrix` as a point within the size
+/// limit. An affine map takes a hull to the hull of the moved points, so
+/// this bounds the moved shape. Each point is checked on its own: a box of
+/// them would drop a coordinate that is not a number. A shape with no
+/// points, as an empty solid, has nothing to check.
+pub fn check_moved_points(points: &[Point3], matrix: &Mat4, what: &str) -> Result<(), WasmError> {
+    for &p in points {
+        validate_point(matrix.mul_point(p), what)?;
+    }
+    Ok(())
 }
 
 impl BrepKernel {
@@ -437,7 +430,7 @@ impl BrepKernel {
         matrix: &Mat4,
         what: &str,
     ) -> Result<(), WasmError> {
-        validate_extent(&moved(&solid_points(&self.topo, solid)?, matrix), what)
+        check_moved_points(&solid_points(&self.topo, solid)?, matrix, what)
     }
 
     /// The checked body of `transformSolid` and the batch's `transform`.
@@ -477,7 +470,7 @@ impl BrepKernel {
         let wire_id = self.resolve_wire(wire)?;
         let mut points = Vec::new();
         push_wire_points(&self.topo, wire_id, &mut points)?;
-        validate_extent(&moved(&points, &mat), "the moved wire")?;
+        check_moved_points(&points, &mat, "the moved wire")?;
         brepkit_operations::transform::transform_wire(self.topo_mut(), wire_id, &mat)?;
         Ok(())
     }
@@ -490,10 +483,7 @@ impl BrepKernel {
     ) -> Result<(), WasmError> {
         let mat = matrix_from(matrix)?;
         let face_id = self.resolve_face(face)?;
-        validate_extent(
-            &moved(&face_points(&self.topo, face_id)?, &mat),
-            "the moved face",
-        )?;
+        check_moved_points(&face_points(&self.topo, face_id)?, &mat, "the moved face")?;
         brepkit_operations::transform::transform_face(self.topo_mut(), face_id, &mat)?;
         Ok(())
     }

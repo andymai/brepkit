@@ -3,7 +3,6 @@
 //! Each body checks the numbers it is given before it builds anything, so
 //! the batch cannot pass a size, distance or count that the binding refuses.
 
-use brepkit_math::aabb::Aabb3;
 use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::fillet::FilletRadiusLaw;
@@ -11,9 +10,9 @@ use brepkit_topology::edge::EdgeId;
 use brepkit_topology::face::FaceId;
 
 use crate::bindings::operations::parse_join_type_str;
-use crate::bindings::transforms::{face_points, placed, scaled_length, wires_extent};
+use crate::bindings::transforms::{check_moved_points, face_points, scaled_length, wire_points};
 use crate::error::{
-    WasmError, validate_extent, validate_finite, validate_point, validate_positive, validate_size,
+    WasmError, validate_finite, validate_point, validate_positive, validate_size,
     validate_tolerance, validate_vector,
 };
 use crate::handles::{shell_id_to_u32, solid_id_to_u32, wire_id_to_u32};
@@ -39,33 +38,17 @@ fn revolve_radians(angle_degrees: f64) -> Result<f64, WasmError> {
     }
 }
 
-/// A box about `center` that holds `aabb` turned about any axis through
-/// `center`: a turn keeps each point's distance from it.
-fn turned_about(aabb: &Aabb3, center: Point3) -> Aabb3 {
-    let reach = (0..8)
-        .map(|k| {
-            let corner = Point3::new(
-                if k & 1 == 0 {
-                    aabb.min.x()
-                } else {
-                    aabb.max.x()
-                },
-                if k & 2 == 0 {
-                    aabb.min.y()
-                } else {
-                    aabb.max.y()
-                },
-                if k & 4 == 0 {
-                    aabb.min.z()
-                } else {
-                    aabb.max.z()
-                },
-            );
-            scaled_length(corner - center)
-        })
+/// Check that `points` turned about any axis through `center` stay within
+/// the size limit: a turn keeps each point's distance from `center`, so the
+/// cube round `center` out to the farthest point holds them.
+fn check_turned(points: &[Point3], center: Point3, what: &str) -> Result<(), WasmError> {
+    let reach = points
+        .iter()
+        .map(|&p| scaled_length(p - center))
         .fold(0.0, f64::max);
     let r = Vec3::new(reach, reach, reach);
-    Aabb3::from_points([center - r, center + r])
+    validate_point(center - r, what)?;
+    validate_point(center + r, what)
 }
 
 impl BrepKernel {
@@ -77,21 +60,12 @@ impl BrepKernel {
         handles.iter().map(|&h| self.resolve_face(h)).collect()
     }
 
-    /// A box that holds a face: its wires and the part of its surface that
-    /// can bulge past them.
-    fn face_extent(&self, face: FaceId) -> Result<Aabb3, WasmError> {
-        Ok(Aabb3::from_points(face_points(&self.topo, face)?))
-    }
-
-    /// Check a sweep of `extent` by `offset`: the offset, and the profile at
-    /// its far end, stay within the size limit.
-    fn check_swept(extent: &Aabb3, offset: Vec3) -> Result<(), WasmError> {
+    /// Check a sweep of a profile held by `points` by `offset`: the offset,
+    /// and the profile at its far end, stay within the size limit.
+    fn check_swept(points: &[Point3], offset: Vec3) -> Result<(), WasmError> {
         validate_vector(offset, "the sweep's offset")?;
-        let moved = placed(
-            extent,
-            &Mat4::translation(offset.x(), offset.y(), offset.z()),
-        );
-        validate_extent(&moved, "the swept profile")
+        let along = Mat4::translation(offset.x(), offset.y(), offset.z());
+        check_moved_points(points, &along, "the swept profile")
     }
 
     // ── Measurement ────────────────────────────────────────────────
@@ -149,7 +123,7 @@ impl BrepKernel {
         validate_vector(direction, "the extrusion's direction")?;
         validate_size(distance, "distance")?;
         let face_id = self.resolve_face(face)?;
-        Self::check_swept(&self.face_extent(face_id)?, direction * distance)?;
+        Self::check_swept(&face_points(&self.topo, face_id)?, direction * distance)?;
         let solid =
             brepkit_operations::extrude::extrude(self.topo_mut(), face_id, direction, distance)?;
         Ok(solid_id_to_u32(solid))
@@ -164,7 +138,7 @@ impl BrepKernel {
         validate_vector(direction, "the extrusion's direction")?;
         validate_size(distance, "distance")?;
         let wire_id = self.resolve_wire(wire)?;
-        Self::check_swept(&wires_extent(&self.topo, [wire_id])?, direction * distance)?;
+        Self::check_swept(&wire_points(&self.topo, [wire_id])?, direction * distance)?;
         let shell =
             brepkit_operations::sheet::extrude_wire(self.topo_mut(), wire_id, direction, distance)?;
         Ok(shell_id_to_u32(shell))
@@ -181,8 +155,9 @@ impl BrepKernel {
         validate_vector(axis, "the axis' direction")?;
         let angle = revolve_radians(angle_degrees)?;
         let face_id = self.resolve_face(face)?;
-        validate_extent(
-            &turned_about(&self.face_extent(face_id)?, origin),
+        check_turned(
+            &face_points(&self.topo, face_id)?,
+            origin,
             "the revolved solid",
         )?;
         let solid =
@@ -201,8 +176,11 @@ impl BrepKernel {
         validate_vector(axis, "the axis' direction")?;
         let angle = revolve_radians(angle_degrees)?;
         let wire_id = self.resolve_wire(wire)?;
-        let extent = wires_extent(&self.topo, [wire_id])?;
-        validate_extent(&turned_about(&extent, origin), "the revolved shell")?;
+        check_turned(
+            &wire_points(&self.topo, [wire_id])?,
+            origin,
+            "the revolved shell",
+        )?;
         let shell =
             brepkit_operations::sheet::revolve_wire(self.topo_mut(), wire_id, origin, axis, angle)?;
         Ok(shell_id_to_u32(shell))
@@ -626,18 +604,14 @@ mod tests {
 
     /// A turn about an axis whose origin lies 1e155 along it keeps a small
     /// profile within 1e155 of that origin, well within the size limit: its
-    /// reach is found without squaring 1e155, which overflows.
+    /// reach is found without squaring 1e155, which overflows. An empty
+    /// profile has nothing to check.
     #[test]
     fn a_turn_about_a_far_origin_is_bounded_without_overflow() {
-        let profile = Aabb3::from_points([Point3::new(1.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0)]);
-        let turned = turned_about(&profile, Point3::new(0.0, 0.0, 1e155));
-        assert!(
-            validate_extent(&turned, "the turned profile").is_ok(),
-            "{turned:?}"
-        );
-        assert!(
-            turned.max.z() > 1.9e155 && turned.max.z() < 2.1e155,
-            "{turned:?}"
-        );
+        let profile = [Point3::new(1.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0)];
+        let far = Point3::new(0.0, 0.0, 1e155);
+        assert!(check_turned(&profile, far, "the turned profile").is_ok());
+        assert!(check_turned(&profile, Point3::new(0.0, 0.0, 9e299), "past").is_err());
+        assert!(check_turned(&[], far, "nothing").is_ok());
     }
 }

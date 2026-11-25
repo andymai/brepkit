@@ -132,21 +132,6 @@ fn validate_coordinates(coordinates: [f64; 3], name: &str) -> Result<(), WasmErr
     Ok(())
 }
 
-/// Validate the box a shape takes once it is built or moved.
-///
-/// Each corner must be a point [`validate_point`] accepts. A move can take
-/// a shape past [`SIZE_LIMIT`] though each of its inputs is within it, as a
-/// scale of 1e200 does to a shape 1e200 across.
-///
-/// # Errors
-///
-/// Returns [`WasmError::InvalidInput`] if a corner of `aabb` is not finite
-/// or is past [`SIZE_LIMIT`].
-pub fn validate_extent(aabb: &brepkit_math::aabb::Aabb3, name: &str) -> Result<(), WasmError> {
-    validate_point(aabb.min, name)?;
-    validate_point(aabb.max, name)
-}
-
 /// The most iterations a solver or fit takes from JS.
 ///
 /// Each iteration is a pass over the whole system, so a count of

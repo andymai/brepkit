@@ -732,3 +732,77 @@ fn a_nested_option_written_as_null_is_refused() {
         ),
     ]);
 }
+
+/// A line from the origin to (1e200, 1e200, 0) under a matrix whose first
+/// row is (1e200, -1e200, 0, 0) maps its far end to an x of inf - inf: not
+/// a number. Each moved point is checked, not a box that drops NaN, and
+/// the wire is left as it was.
+#[test]
+fn a_move_that_makes_a_point_not_a_number_is_refused_before_any_change() {
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+    let mut k = BrepKernel::new();
+    let far = Point3::new(1e200, 1e200, 0.0);
+    let edge = brepkit_topology::builder::make_line_edge(
+        k.topo_mut(),
+        Point3::new(0.0, 0.0, 0.0),
+        far,
+        1e-7,
+    )
+    .unwrap();
+    let wire = k
+        .topo_mut()
+        .add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], false).unwrap());
+    let matrix = [
+        1e200, -1e200, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    let handle = crate::handles::wire_id_to_u32(wire);
+    let refused = k.transform_wire_impl(handle, &matrix);
+    assert!(refused.is_err(), "{refused:?}");
+    let end = k.topo.edge(edge).unwrap().end();
+    assert_eq!(k.topo.vertex(end).unwrap().point(), far);
+}
+
+/// The intersection of two boxes apart is a solid with no faces. Moving,
+/// copying, mirroring and patterning it is not a panic: it has no extent
+/// to check.
+#[test]
+fn an_empty_solid_is_moved_without_a_panic() {
+    let mut k = BrepKernel::new();
+    let a = made(
+        &mut k,
+        r#"{"op": "makeBox", "args": {"width": 1, "height": 1, "depth": 1}}"#,
+    );
+    let b = made(
+        &mut k,
+        r#"{"op": "makeBox", "args": {"width": 1, "height": 1, "depth": 1}}"#,
+    );
+    let shift = "[1, 0, 0, 10, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]";
+    let moved = run(
+        &mut k,
+        &format!(r#"{{"op": "transform", "args": {{"solid": {b}, "matrix": {shift}}}}}"#),
+    );
+    assert!(moved["ok"].is_number(), "{moved}");
+    let empty = made(
+        &mut k,
+        &format!(r#"{{"op": "intersect", "args": {{"solidA": {a}, "solidB": {b}}}}}"#),
+    );
+    assert!(k.get_solid_faces(empty).unwrap().is_empty());
+    let identity = "[1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]";
+    for op in [
+        format!(r#"{{"op": "transform", "args": {{"solid": {empty}, "matrix": {identity}}}}}"#),
+        format!(
+            r#"{{"op": "copyAndTransformSolid", "args": {{"solid": {empty}, "matrix": {identity}}}}}"#
+        ),
+        format!(r#"{{"op": "mirror", "args": {{"solid": {empty}}}}}"#),
+        format!(
+            r#"{{"op": "linearPattern", "args": {{"solid": {empty}, "spacing": 2, "count": 2}}}}"#
+        ),
+        format!(
+            r#"{{"op": "gridPattern", "args": {{"solid": {empty}, "spacingX": 2, "spacingY": 2, "countX": 2, "countY": 2}}}}"#
+        ),
+        format!(r#"{{"op": "circularPattern", "args": {{"solid": {empty}, "count": 3}}}}"#),
+    ] {
+        let out = run(&mut k, &op);
+        assert!(out.is_object(), "{op}: {out}");
+    }
+}
