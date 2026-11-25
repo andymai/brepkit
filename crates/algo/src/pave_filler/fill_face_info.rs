@@ -183,10 +183,9 @@ fn fill_section_sc(arena: &mut GfaArena) {
 
 /// Distance from `p` to the face's underlying surface (infinite extent).
 ///
-/// A B-spline surface's nearest point is proved within [`NURBS_PROOF`],
-/// and the distance is read that much short, so that a leaf is dropped only
-/// where it is proved off the surface. `None` where the measurement does
-/// not settle.
+/// A B-spline surface's distance is read short by the slack of the proof
+/// of its nearest point, so that a leaf is dropped only where it is proved
+/// off the surface. `None` where the measurement is not proved.
 fn dist_to_surface(
     surface: &brepkit_topology::face::FaceSurface,
     p: brepkit_math::vec::Point3,
@@ -197,9 +196,9 @@ fn dist_to_surface(
             Some((normal.dot(brepkit_math::vec::Vec3::new(p.x(), p.y(), p.z())) - d).abs())
         }
         FaceSurface::Nurbs(n) => {
-            brepkit_math::nurbs::projection::project_point_to_surface(n, p, NURBS_PROOF)
+            brepkit_math::nurbs::projection::distance_to_surface_at_least(n, p, NURBS_PROOF)
                 .ok()
-                .map(|found| (found.distance - NURBS_PROOF).max(0.0))
+                .flatten()
         }
         other => other
             .project_point(p)

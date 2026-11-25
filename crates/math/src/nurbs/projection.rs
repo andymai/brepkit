@@ -437,6 +437,39 @@ pub fn project_point_to_surface(
     nearest::nearest(surface, index, point, tolerance, start)
 }
 
+/// A distance from `point` to `surface` that no point of the surface is
+/// nearer than.
+///
+/// It is the distance [`project_point_to_surface`] finds, less the slack of
+/// its proof. `None` where the projection is not proved: the surface has no
+/// index of its spans, or the point is not finite.
+///
+/// # Errors
+///
+/// As [`project_point_to_surface`].
+pub fn distance_to_surface_at_least(
+    surface: &NurbsSurface,
+    point: Point3,
+    tolerance: f64,
+) -> Result<Option<f64>, MathError> {
+    if surface.span_index().is_none()
+        || tolerance.is_nan()
+        || tolerance <= 0.0
+        || ![point.x(), point.y(), point.z()]
+            .iter()
+            .all(|c| c.is_finite())
+    {
+        return Ok(None);
+    }
+    let found = project_point_to_surface(surface, point, tolerance)?;
+    if found.distance <= tolerance {
+        return Ok(Some(0.0));
+    }
+    Ok(Some(
+        (found.distance - nearest::slack(surface, point, tolerance)).max(0.0),
+    ))
+}
+
 /// Find the point of a NURBS surface nearest a point known to lie on it or
 /// close beside it: [`project_point_to_surface`], which proves its result
 /// nearest wherever the point is.
@@ -2255,5 +2288,54 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A flat patch far from the origin: the bound is never above the true
+    /// distance, where the projection's own distance can be by its slack,
+    /// and is within that slack of it.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn a_distance_at_least_is_below_the_true_distance_far_from_the_origin() {
+        for x in [0.0, 1e9, 1e11] {
+            let row = |y: f64| vec![Point3::new(x, y, 0.0), Point3::new(x + 10.0, y, 0.0)];
+            let patch = NurbsSurface::new(
+                1,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![row(0.0), row(10.0)],
+                vec![vec![1.0; 2]; 2],
+            )
+            .unwrap();
+            for h in [0.0, 1e-4, 0.5] {
+                let point = Point3::new(x + 3.3, 6.1, h);
+                let slack = nearest::slack(&patch, point, 1e-6);
+                let bound = distance_to_surface_at_least(&patch, point, 1e-6)
+                    .unwrap()
+                    .unwrap();
+                assert!(bound <= h, "{x} {h}: {bound} above {h}");
+                assert!(bound >= h - 2.0 * slack, "{x} {h}: {bound} far below {h}");
+            }
+        }
+    }
+
+    /// A weight too small to bound leaves the surface without an index of
+    /// its spans, so its projection is not proved: no bound.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn a_distance_at_least_is_unknown_where_the_projection_is_not_proved() {
+        let row = |y: f64| vec![Point3::new(0.0, y, 0.0), Point3::new(10.0, y, 0.0)];
+        let patch = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![row(0.0), row(10.0)],
+            vec![vec![1.0, 1e-310], vec![1.0, 1.0]],
+        )
+        .unwrap();
+        assert!(patch.span_index().is_none());
+        let bound = distance_to_surface_at_least(&patch, Point3::new(3.3, 6.1, 0.5), 1e-6);
+        assert!(matches!(bound, Ok(None)), "{bound:?}");
     }
 }
