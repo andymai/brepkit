@@ -822,6 +822,7 @@ fn check_edge_face_pairs(
             // not the face, as a hole in it: a crossing counts where the
             // face's pcurves hold it.
             if let FaceSurface::Nurbs(sheet) = surface
+                && !crossings.is_empty()
                 && let Some(trim) = nurbs_trims[face_idx]
                     .get_or_insert_with(|| {
                         face_tolerance(topo, fid, tol)

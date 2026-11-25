@@ -18,7 +18,8 @@ use crate::error::AlgoError;
 /// their coordinates.
 const MOST_HALVINGS: u32 = 56;
 
-/// How many pieces one reading of a point may halve.
+/// How many nodes and halvings of pieces one reading of a point may take,
+/// and how many bounds of pieces one reading of their images may take.
 const MOST_PIECES: usize = 1 << 12;
 
 /// The longest arc of a circle or an ellipse that one piece takes, in
@@ -33,9 +34,18 @@ const IMAGE_HALVINGS: usize = 256;
 /// lies off a face may read ([`NurbsFaceTrim::clear_of`]).
 const MOST_PARTS: usize = 512;
 
+/// How many nodes and halvings of pieces that proof may take over all its
+/// parts.
+const MOST_CLEAR_ITEMS: usize = 1 << 15;
+
 /// A pcurve run over its parameters from the first to the second, and the
 /// place in a trim's list of the edge whose pcurve it is.
 type Run<'a> = (&'a Curve2D, (f64, f64), usize);
+
+/// A piece read for how far its image stands from its edge
+/// ([`NurbsFaceTrim::image_reaches`]): the bound, the piece, and the places
+/// of its halves where it is halved.
+type Halved = (f64, Piece, Option<(usize, usize)>);
 
 /// A box in a surface's parameters.
 #[derive(Clone, Copy)]
@@ -64,6 +74,58 @@ impl Box2 {
             hi: [self.hi[0] + by, self.hi[1] + by],
         }
     }
+
+    fn union(self, other: Self) -> Self {
+        Self {
+            lo: [self.lo[0].min(other.lo[0]), self.lo[1].min(other.lo[1])],
+            hi: [self.hi[0].max(other.hi[0]), self.hi[1].max(other.hi[1])],
+        }
+    }
+
+    fn apart(self, other: Self) -> bool {
+        self.lo[0] > other.hi[0]
+            || other.lo[0] > self.hi[0]
+            || self.lo[1] > other.hi[1]
+            || other.lo[1] > self.hi[1]
+    }
+}
+
+/// Takes one item from `budget`: `None` where none is left.
+fn take(budget: &mut usize) -> Option<()> {
+    *budget = budget.checked_sub(1)?;
+    Some(())
+}
+
+/// A node of the tree of one loop's pieces: the pieces `first` to `last`,
+/// in order, the box that holds their boxes, and the nodes of its halves.
+struct Node {
+    first: usize,
+    last: usize,
+    held: Box2,
+    halves: Option<(usize, usize)>,
+}
+
+/// Adds to `nodes` the node of the pieces `first` to `last` whose boxes are
+/// `boxes`, after the nodes of its halves, and returns its place.
+fn grow(nodes: &mut Vec<Node>, boxes: &[Box2], first: usize, last: usize) -> usize {
+    let (held, halves) = if first == last {
+        (boxes[first], None)
+    } else {
+        let middle = first + (last - first) / 2;
+        let left = grow(nodes, boxes, first, middle);
+        let right = grow(nodes, boxes, middle + 1, last);
+        (
+            nodes[left].held.union(nodes[right].held),
+            Some((left, right)),
+        )
+    };
+    nodes.push(Node {
+        first,
+        last,
+        held,
+        halves,
+    });
+    nodes.len() - 1
 }
 
 /// What holds a piece of a wire between its two ends.
@@ -245,6 +307,9 @@ impl Piece {
 pub(super) struct NurbsFaceTrim {
     surface: NurbsSurface,
     pieces: Vec<Piece>,
+    /// The trees of the loops' pieces, and the root of each loop's tree.
+    nodes: Vec<Node>,
+    roots: Vec<usize>,
     /// How far a computed point of a piece, a control point of a half or the
     /// end of a run can stand from where it lies exactly.
     slack: f64,
@@ -329,17 +394,20 @@ impl NurbsFaceTrim {
             }
             runs.push(run);
         }
-        Ok(Self::of_runs(surface, &runs, edges))
+        let mut budget = MOST_LOOP_ITEMS;
+        Ok(Self::of_runs(surface, &runs, edges, &mut budget))
     }
 
     /// The trim on `surface` of loops each of which runs along its curves
     /// over their parameters, in order, each curve the pcurve of the edge
     /// in `edges` that it names. `None` where a B-spline's piece cannot be
-    /// read, or the loops hold no piece.
+    /// read, the loops hold no piece, or they are not proved simple within
+    /// `budget` items ([`loops_are_simple`]).
     fn of_runs(
         surface: &NurbsSurface,
         loops: &[Vec<Run<'_>>],
         edges: Vec<TrimEdge>,
+        budget: &mut usize,
     ) -> Option<Self> {
         let mut pieces: Vec<Piece> = Vec::new();
         let mut spans: Vec<(usize, usize)> = Vec::with_capacity(loops.len());
@@ -387,7 +455,7 @@ impl NurbsFaceTrim {
         let ((u0, u1), (v0, v1)) = (surface.domain_u(), surface.domain_v());
         let joint = 2e-6 * ((u1 - u0) + (v1 - v0)) + 4.0 * slack;
         let rounding = super::helpers::net_rounding(surface);
-        let joints = loops_are_simple(&pieces, &spans, slack, joint)?
+        let joints = loops_are_simple(&pieces, &spans, slack, joint, budget)?
             .into_iter()
             .filter_map(|b| {
                 let wider = |x: f64| 4.0 * f64::EPSILON * (1.0 + x.abs());
@@ -401,16 +469,19 @@ impl NurbsFaceTrim {
                 Some(Aabb3::try_from_points(points)?.expanded(rounding))
             })
             .collect();
-        let bounds = pieces
+        let boxes: Vec<Box2> = pieces.iter().map(|piece| piece.bounds(slack)).collect();
+        let bounds = boxes.iter().copied().reduce(Box2::union)?;
+        let mut nodes = Vec::with_capacity(2 * boxes.len());
+        let roots = spans
             .iter()
-            .map(|piece| piece.bounds(slack))
-            .reduce(|x, y| Box2 {
-                lo: [x.lo[0].min(y.lo[0]), x.lo[1].min(y.lo[1])],
-                hi: [x.hi[0].max(y.hi[0]), x.hi[1].max(y.hi[1])],
-            })?;
+            .filter(|&&(first, end)| first < end)
+            .map(|&(first, end)| grow(&mut nodes, &boxes, first, end - 1))
+            .collect();
         Some(Self {
             surface: surface.clone(),
             pieces,
+            nodes,
+            roots,
             slack,
             edges,
             image_reaches: std::cell::OnceCell::new(),
@@ -473,14 +544,16 @@ impl NurbsFaceTrim {
     /// the part lies outside the loops ([`Self::outside_loops`]); a part that
     /// holds no area of the domain holds no point. Each plane is read with
     /// the rounding of the cut and of the coordinates' size. `false` where a
-    /// part is left after [`MOST_PARTS`] are read.
+    /// part is left after [`MOST_PARTS`] are read, or the reads of the loops
+    /// take [`MOST_CLEAR_ITEMS`].
     fn clear_of(&self, p: Point3, reach: f64) -> bool {
         let rounding = super::helpers::net_rounding(&self.surface)
             + 64.0 * f64::EPSILON * (p.x().abs() + p.y().abs() + p.z().abs());
         let mut parts = vec![self.bounds];
         let mut read = 0_usize;
+        let mut budget = MOST_CLEAR_ITEMS;
         while let Some(part) = parts.pop() {
-            if read == MOST_PARTS {
+            if read == MOST_PARTS || budget == 0 {
                 return false;
             }
             read += 1;
@@ -488,7 +561,7 @@ impl NurbsFaceTrim {
             let Some(points) = super::helpers::cut_net_points(&self.surface, range) else {
                 continue;
             };
-            if parted(&points, p, reach + rounding) || self.outside_loops(part) {
+            if parted(&points, p, reach + rounding) || self.outside_loops(part, &mut budget) {
                 continue;
             }
             let (du, dv) = (part.hi[0] - part.lo[0], part.hi[1] - part.lo[1]);
@@ -525,30 +598,51 @@ impl NurbsFaceTrim {
     /// Whether every point of the box of parameters `part` lies outside the
     /// loops: no piece of a loop meets it, halved where its box does, so the
     /// loops wind round each point of the part alike, and its middle reads
-    /// outside them.
-    fn outside_loops(&self, part: Box2) -> bool {
-        let mut budget = MOST_PIECES;
-        for piece in &self.pieces {
-            if !self.misses(piece, part, &mut budget, 0) {
-                return false;
-            }
+    /// outside them. Each node of the loops' trees read and each halving
+    /// takes one of `budget`; `false` where it runs out.
+    fn outside_loops(&self, part: Box2, budget: &mut usize) -> bool {
+        if !self
+            .roots
+            .iter()
+            .all(|&root| self.keeps_out(root, part, budget))
+        {
+            return false;
         }
         let middle = Point2::new(
             f64::midpoint(part.lo[0], part.hi[0]),
             f64::midpoint(part.lo[1], part.hi[1]),
         );
-        self.holds_parameters(middle) == Some(false)
+        self.parity(middle, budget) == Some(false)
+    }
+
+    /// Whether the pieces of `node` keep out of the box `part`: all do where
+    /// the node's box does, else each half's do, and a piece's where it
+    /// misses the part ([`Self::misses`]).
+    fn keeps_out(&self, node: usize, part: Box2, budget: &mut usize) -> bool {
+        if take(budget).is_none() {
+            return false;
+        }
+        let Some(n) = self.nodes.get(node) else {
+            return false;
+        };
+        if n.held.apart(part) {
+            return true;
+        }
+        match n.halves {
+            Some((left, right)) => {
+                self.keeps_out(left, part, budget) && self.keeps_out(right, part, budget)
+            }
+            None => self
+                .pieces
+                .get(n.first)
+                .is_some_and(|piece| self.misses(piece, part, budget, 0)),
+        }
     }
 
     /// Whether `piece` keeps out of the box `part`, halved where its box
     /// meets it.
     fn misses(&self, piece: &Piece, part: Box2, budget: &mut usize, depth: u32) -> bool {
-        let b = piece.bounds(self.slack);
-        if b.lo[0] > part.hi[0]
-            || b.hi[0] < part.lo[0]
-            || b.lo[1] > part.hi[1]
-            || b.hi[1] < part.lo[1]
-        {
+        if piece.bounds(self.slack).apart(part) {
             return true;
         }
         if depth >= MOST_HALVINGS || *budget == 0 {
@@ -571,7 +665,8 @@ impl NurbsFaceTrim {
     /// bound times the span squared over eight. Each bound is grown by the
     /// rounding of the cut and of the distances. The piece with the widest
     /// bound is halved until each is within half the tolerance, or
-    /// [`IMAGE_HALVINGS`] halvings are spent.
+    /// [`IMAGE_HALVINGS`] halvings are spent. Each bound read takes one of
+    /// [`MOST_PIECES`].
     ///
     /// Near is not enough: a pcurve that runs out along its edge and back
     /// stays near it but does not wind as it does. So each pcurve's pieces,
@@ -582,49 +677,63 @@ impl NurbsFaceTrim {
     /// B-spline, a piece's box holds no area of the surface's domain, or a
     /// pcurve does not run along its edge so.
     fn image_reaches(&self, tol: Tolerance) -> Option<Vec<f64>> {
-        let bound = |piece: &Piece| -> Option<f64> {
+        let mut budget = MOST_PIECES;
+        let mut bound = |piece: &Piece| -> Option<f64> {
+            take(&mut budget)?;
             let [a, b] = piece.owner;
-            let first = self.image_bound(piece, self.edges.get(a)?)?;
-            if a == b {
-                return Some(first);
+            let mut most = self.image_bound(piece, self.edges.get(a)?)?;
+            if a != b {
+                most = most.min(self.image_bound(piece, self.edges.get(b)?)?);
             }
-            Some(first.min(self.image_bound(piece, self.edges.get(b)?)?))
+            (most.is_finite() && most >= 0.0).then_some(most.abs())
         };
-        let mut bounded: Vec<(f64, Piece)> = self
-            .pieces
-            .iter()
-            .map(|piece| Some((bound(piece)?, piece.clone())))
-            .collect::<Option<_>>()?;
+        // Each piece and each half, its bound, and the places of its halves;
+        // the widest first by its bound's bits, which order as the bounds
+        // do as none is negative.
+        let mut halved: Vec<Halved> = Vec::with_capacity(self.pieces.len() + 2 * IMAGE_HALVINGS);
+        let mut widest = std::collections::BinaryHeap::new();
+        for piece in &self.pieces {
+            let most = bound(piece)?;
+            widest.push((most.to_bits(), halved.len()));
+            halved.push((most, piece.clone(), None));
+        }
         for _ in 0..IMAGE_HALVINGS {
-            let Some((widest, &(most, _))) = bounded
-                .iter()
-                .enumerate()
-                .max_by(|x, y| x.1.0.total_cmp(&y.1.0))
-            else {
+            let Some((_, k)) = widest.pop() else {
                 break;
             };
-            if most <= 0.5 * tol.linear {
+            if halved[k].0 <= 0.5 * tol.linear {
                 break;
             }
-            let (_, piece) = bounded.remove(widest);
-            let (left, right) = piece.halves();
-            let halves = [(bound(&left)?, left), (bound(&right)?, right)];
-            bounded.splice(widest..widest, halves);
-        }
-        let mut reaches = vec![0.0_f64; self.edges.len()];
-        for (most, piece) in &bounded {
-            for &e in &piece.owner {
-                reaches[e] = reaches[e].max(*most);
+            let (left, right) = halved[k].1.halves();
+            halved[k].2 = Some((halved.len(), halved.len() + 1));
+            for half in [left, right] {
+                let most = bound(&half)?;
+                widest.push((most.to_bits(), halved.len()));
+                halved.push((most, half, None));
             }
         }
-        for (e, edge) in self.edges.iter().enumerate() {
-            let ends: Vec<Point3> = bounded
-                .iter()
-                .filter(|(_, piece)| piece.owner == [e, e])
-                .flat_map(|(_, piece)| [piece.a, piece.b])
-                .map(|q| self.surface.evaluate(q.x(), q.y()))
-                .collect();
-            if !runs_along(edge, &ends, edge.reach + reaches[e]) {
+        // The pieces left whole, in order, each edge's bound their most, and
+        // the points of the surface at their ends along each edge.
+        let mut reaches = vec![0.0_f64; self.edges.len()];
+        let mut ends: Vec<Vec<Point3>> = vec![Vec::new(); self.edges.len()];
+        let mut stack: Vec<usize> = (0..self.pieces.len()).rev().collect();
+        while let Some(k) = stack.pop() {
+            let (most, piece, halves) = &halved[k];
+            if let &Some((left, right)) = halves {
+                stack.extend([right, left]);
+                continue;
+            }
+            for &e in &piece.owner {
+                let reach = reaches.get_mut(e)?;
+                *reach = reach.max(*most);
+            }
+            if piece.owner[0] == piece.owner[1] {
+                ends.get_mut(piece.owner[0])?
+                    .extend([piece.a, piece.b].map(|q| self.surface.evaluate(q.x(), q.y())));
+            }
+        }
+        for ((edge, reach), along) in self.edges.iter().zip(&reaches).zip(&ends) {
+            if !runs_along(edge, along, edge.reach + reach) {
                 return None;
             }
         }
@@ -723,14 +832,48 @@ impl NurbsFaceTrim {
     }
 
     /// Whether the parameters `q` lie inside the loops, or `None` where they
-    /// lie in the box of a piece halved as far as it goes.
+    /// lie in the box of a piece halved as far as it goes, or the read takes
+    /// [`MOST_PIECES`] nodes and halvings ([`Self::parity`]).
     fn holds_parameters(&self, q: Point2) -> Option<bool> {
         let mut budget = MOST_PIECES;
+        self.parity(q, &mut budget)
+    }
+
+    /// Whether the parameters `q` lie inside the loops, read down each
+    /// loop's tree: the ray from `q` toward growing `v` crosses the pieces
+    /// of a node whose box it misses nowhere, and those of a node whose box
+    /// lies past `q` along `v` an odd number of times where the start of the
+    /// first and the end of the last lie on either side of `q`'s `u`, as the
+    /// pieces share their ends in order. Each node read and each halving
+    /// takes one of `budget`; `None` where it runs out, or `q` lies in the
+    /// box of a piece halved as far as it goes.
+    fn parity(&self, q: Point2, budget: &mut usize) -> Option<bool> {
         let mut odd = false;
-        for piece in &self.pieces {
-            odd ^= self.crossed(piece, q, &mut budget, 0)?;
+        for &root in &self.roots {
+            odd ^= self.crosses(root, q, budget)?;
         }
         Some(odd)
+    }
+
+    /// Whether the ray from `q` toward growing `v` crosses the pieces of
+    /// `node` an odd number of times ([`Self::parity`]).
+    fn crosses(&self, node: usize, q: Point2, budget: &mut usize) -> Option<bool> {
+        take(budget)?;
+        let n = self.nodes.get(node)?;
+        let b = n.held;
+        if b.lo[0] > q.x() || b.hi[0] < q.x() || b.hi[1] < q.y() {
+            return Some(false);
+        }
+        if b.lo[1] > q.y() {
+            let (a, z) = (self.pieces.get(n.first)?.a, self.pieces.get(n.last)?.b);
+            return Some((a.x() >= q.x()) != (z.x() >= q.x()));
+        }
+        match n.halves {
+            Some((left, right)) => {
+                Some(self.crosses(left, q, budget)? != self.crosses(right, q, budget)?)
+            }
+            None => self.crossed(self.pieces.get(n.first)?, q, budget, 0),
+        }
     }
 
     /// Whether the ray from `q` toward growing `v` crosses `piece` an odd
@@ -825,9 +968,11 @@ fn runs_along(edge: &TrimEdge, ends: &[Point3], reach: f64) -> bool {
     (at - end).abs() <= slip
 }
 
-/// How many pairs of pieces one proof that a trim's loops are simple may
-/// read ([`loops_are_simple`]).
-const MOST_LOOP_PAIRS: usize = 1 << 14;
+/// How many items one proof that a trim's loops are simple may take
+/// ([`loops_are_simple`]): a piece read or halved, a part read in a pass, a
+/// pair of items read in the sweep, a pair of a joint's parts set to read,
+/// and a pair of parts read.
+const MOST_LOOP_ITEMS: usize = 1 << 17;
 
 /// How many times a piece is halved, at most, in that proof.
 const MOST_LOOP_DEPTH: u32 = 40;
@@ -835,6 +980,22 @@ const MOST_LOOP_DEPTH: u32 = 40;
 /// The angle, in radians, by which the rounding of a direction's
 /// coordinates can move the angle between two directions read by `acos`.
 const ANGLE_SLACK: f64 = 1e-7;
+
+/// An item of the sweep in [`loops_are_simple`]: a part past the joints, by
+/// its place, or a joint, by its place in the list of joints.
+#[derive(Clone, Copy)]
+enum Item {
+    Part(usize),
+    Joint(usize),
+}
+
+/// A joint of a loop: the box that holds its parts' boxes, its parts, and
+/// the parts past joints it lies between.
+struct JointRun {
+    held: Box2,
+    parts: Vec<usize>,
+    ends: [usize; 2],
+}
 
 /// Whether each of the loops (`spans`, ranges of `pieces`) is a simple
 /// curve and no two meet: no piece crosses itself, and no two pieces meet
@@ -847,57 +1008,65 @@ const ANGLE_SLACK: f64 = 1e-7;
 /// line or a conic arc of under half a turn already does. A run of pieces
 /// whose box lies within `joint` of a point is read as the joint of the
 /// pieces on either side of it: each piece of the run may meet those two
-/// and the rest of the run, and no other. Two pieces that do not follow
-/// each other are apart where their boxes, grown by `slack`, keep apart,
-/// halved, the larger first, as far as needed. Two that follow each other
-/// at one point each lie in a cone from it ([`cone2`]): where the cones
-/// meet only there, the pieces do too; else they are halved, the halves at
-/// the joint read so again. Two that follow each other across a joint
-/// whose ends lie farther than `2 slack` apart are read as any two pieces
-/// are: a cone from each end does not bound the other's path, and the two
-/// can cross a little past the joint. Two ends of pieces within `2 slack`
-/// of each other away from a joint show the pieces meet. A loop of fewer than three
-/// pieces past its joints, more than [`MOST_LOOP_PAIRS`] pairs read, or a
-/// piece halved [`MOST_LOOP_DEPTH`] times reads as not simple: `None`. Else
-/// the boxes of the joints' parameters, inside which a joint can wind
-/// round its own small region; a parity read there is not proved.
+/// and the rest of the run, and no other. The parts past joints and the
+/// joints, each as one item with the box of its parts, are swept in order
+/// of their boxes along `u`; a joint whose box meets an item other than the
+/// two parts it lies between has each of its parts read against that item.
+/// Two parts that do not follow each other are apart where their boxes,
+/// grown by `slack`, keep apart, halved, the larger first, as far as
+/// needed. Two that follow each other at one point each lie in a cone from
+/// it ([`cone2`]): where the cones meet only there, the parts do too; else
+/// they are halved, the halves at the joint read so again. Two that follow
+/// each other across a joint whose ends lie farther than `2 slack` apart
+/// are read as any two parts are: a cone from each end does not bound the
+/// other's path, and the two can cross a little past the joint. Two ends of
+/// parts within `2 slack` of each other away from a joint show the parts
+/// meet.
+///
+/// Each item read takes one of `budget` before it is read. A loop of fewer
+/// than three parts past its joints, a spent budget, or a part halved
+/// [`MOST_LOOP_DEPTH`] times reads as not simple: `None`. Else the boxes of
+/// the joints' parameters, inside which a joint can wind round its own
+/// small region; a parity read there is not proved.
 #[allow(clippy::too_many_lines)]
 fn loops_are_simple(
     pieces: &[Piece],
     spans: &[(usize, usize)],
     slack: f64,
     joint: f64,
+    budget: &mut usize,
 ) -> Option<Vec<Box2>> {
-    let mut budget = MOST_LOOP_PAIRS;
     let mut joints: Vec<Box2> = Vec::new();
     // The loops' pieces, each running one way, and each loop's range.
     let mut parts: Vec<Piece> = Vec::new();
     let mut loops: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
     for &(first, end) in spans {
         let start = parts.len();
-        for piece in &pieces[first..end] {
-            if !one_way(piece.clone(), slack, 0, &mut budget, &mut parts) {
+        for piece in pieces.get(first..end)? {
+            if !one_way(piece.clone(), slack, 0, budget, &mut parts) {
                 return None;
             }
         }
         loops.push((start, parts.len()));
     }
     let size = |b: Box2| (b.hi[0] - b.lo[0]).hypot(b.hi[1] - b.lo[1]);
-    // Each part's loop, whether it lies in a joint, and the parts past its
-    // joint before and after it: for a part of a joint, those its joint
-    // lies between; for any other, its neighbours past their joints.
+    // Whether each part lies in a joint, and the parts past joints before
+    // and after it round its loop: for a part of a joint, those its joint
+    // lies between.
     let count = parts.len();
-    let mut loop_of = vec![0_usize; count];
     let mut in_joint = vec![false; count];
     let mut before = vec![0_usize; count];
     let mut after = vec![0_usize; count];
-    for (l, &(start, end)) in loops.iter().enumerate() {
+    for &(start, end) in &loops {
         let n = end - start;
-        let small: Vec<bool> = (start..end)
-            .map(|k| size(parts[k].bounds(0.0)) <= joint)
-            .collect();
+        let mut small = Vec::with_capacity(n);
+        for part in &parts[start..end] {
+            take(budget)?;
+            small.push(size(part.bounds(0.0)) <= joint);
+        }
         // A run of small parts is a joint where its whole box is small too.
-        let mut run_box: Vec<Option<Box2>> = vec![None; n];
+        // A run that wraps past the loop's start is read in two halves,
+        // each of which must be small.
         let mut k = 0;
         while k < n {
             if !small[k] {
@@ -908,102 +1077,120 @@ fn loops_are_simple(
             while stop + 1 < n && small[stop + 1] {
                 stop += 1;
             }
-            let held = (k..=stop)
-                .map(|m| parts[start + m].bounds(0.0))
-                .reduce(|x, y| Box2 {
-                    lo: [x.lo[0].min(y.lo[0]), x.lo[1].min(y.lo[1])],
-                    hi: [x.hi[0].max(y.hi[0]), x.hi[1].max(y.hi[1])],
-                });
+            let held = parts[start + k..=start + stop]
+                .iter()
+                .map(|part| part.bounds(0.0))
+                .reduce(Box2::union);
             if let Some(b) = held.filter(|&b| size(b) <= joint) {
                 joints.push(b);
-            }
-            for slot in &mut run_box[k..=stop] {
-                *slot = held;
+                in_joint[start + k..=start + stop].fill(true);
             }
             k = stop + 1;
         }
-        // A run that wraps past the loop's start is read in two halves,
-        // each of which must be small.
-        let joint_at: Vec<bool> = (0..n)
-            .map(|m| small[m] && run_box[m].is_some_and(|b| size(b) <= joint))
-            .collect();
-        if joint_at.iter().filter(|&&j| !j).count() < 3 {
+        let free = &in_joint[start..end];
+        if free.iter().filter(|&&j| !j).count() < 3 {
             return None;
         }
+        let mut last = (0..n).rev().find(|&m| !free[m])?;
         for m in 0..n {
-            loop_of[start + m] = l;
-            in_joint[start + m] = joint_at[m];
-            // The nearest parts past joints before and after `m`.
-            let prev = (1..=n)
-                .map(|d| (m + n - d) % n)
-                .find(|&q| !joint_at[q])
-                .unwrap_or(m);
-            let next = (1..=n)
-                .map(|d| (m + d) % n)
-                .find(|&q| !joint_at[q])
-                .unwrap_or(m);
-            before[start + m] = start + prev;
+            take(budget)?;
+            before[start + m] = start + last;
+            if !free[m] {
+                last = m;
+            }
+        }
+        let mut next = (0..n).find(|&m| !free[m])?;
+        for m in (0..n).rev() {
+            take(budget)?;
             after[start + m] = start + next;
+            if !free[m] {
+                next = m;
+            }
         }
     }
-    let boxes: Vec<Box2> = parts.iter().map(|piece| piece.bounds(slack)).collect();
-    let mut order: Vec<usize> = (0..count).collect();
-    order.sort_by(|&x, &y| boxes[x].lo[0].total_cmp(&boxes[y].lo[0]));
+    // The items of the sweep: each part past the joints, and each joint,
+    // known by the part past it, as one.
+    let mut runs: Vec<JointRun> = Vec::new();
+    let mut run_of: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut items: Vec<(Box2, Item)> = Vec::new();
+    for (k, part) in parts.iter().enumerate() {
+        take(budget)?;
+        let b = part.bounds(slack);
+        if !in_joint[k] {
+            items.push((b, Item::Part(k)));
+            continue;
+        }
+        let r = *run_of.entry(after[k]).or_insert_with(|| {
+            runs.push(JointRun {
+                held: b,
+                parts: Vec::new(),
+                ends: [before[k], after[k]],
+            });
+            runs.len() - 1
+        });
+        runs[r].held = runs[r].held.union(b);
+        runs[r].parts.push(k);
+    }
+    items.extend(
+        runs.iter()
+            .enumerate()
+            .map(|(r, run)| (run.held, Item::Joint(r))),
+    );
+    items.sort_by(|x, y| x.0.lo[0].total_cmp(&y.0.lo[0]));
+    let meet = |a: Point2, b: Point2| (a.x() - b.x()).hypot(a.y() - b.y()) <= 2.0 * slack;
     let mut work: Vec<(Piece, Piece, bool, u32)> = Vec::new();
-    for (place, &x) in order.iter().enumerate() {
-        for &y in &order[place + 1..] {
-            if budget == 0 {
-                return None;
-            }
-            budget -= 1;
-            if boxes[y].lo[0] > boxes[x].hi[0] {
+    for (place, &(bx, x)) in items.iter().enumerate() {
+        for &(by, y) in &items[place + 1..] {
+            take(budget)?;
+            if by.lo[0] > bx.hi[0] {
                 break;
             }
-            if boxes[y].lo[1] > boxes[x].hi[1] || boxes[y].hi[1] < boxes[x].lo[1] {
+            if by.lo[1] > bx.hi[1] || by.hi[1] < bx.lo[1] {
                 continue;
             }
-            let (px, py) = (&parts[x], &parts[y]);
-            let one_loop = loop_of[x] == loop_of[y];
-            // A part of a joint may meet the rest of its joint and the two
-            // parts it lies between.
-            let joined = |j: usize, o: usize| {
-                in_joint[j]
-                    && (o == before[j]
-                        || o == after[j]
-                        || (in_joint[o] && before[o] == before[j] && after[o] == after[j]))
-            };
-            if one_loop && (joined(x, y) || joined(y, x)) {
-                continue;
-            }
-            // Two parts past joints that follow each other, read from their
-            // joint where they meet there: cones from two points apart do
-            // not bound each other's parts, which can cross a little past
-            // the joint.
-            let meet = |a: Point2, b: Point2| (a.x() - b.x()).hypot(a.y() - b.y()) <= 2.0 * slack;
-            let neighbours = one_loop && !in_joint[x] && !in_joint[y];
-            if neighbours && after[x] == y && meet(px.b, py.a) {
-                work.push((px.reversed(), py.clone(), true, 0));
-            } else if neighbours && after[y] == x && meet(py.b, px.a) {
-                work.push((py.reversed(), px.clone(), true, 0));
-            } else {
-                work.push((px.clone(), py.clone(), false, 0));
+            match (x, y) {
+                (Item::Part(x), Item::Part(y)) => {
+                    // Two parts past joints that follow each other, read
+                    // from their joint where they meet there: cones from
+                    // two points apart do not bound each other's parts,
+                    // which can cross a little past the joint.
+                    let (px, py) = (&parts[x], &parts[y]);
+                    if after[x] == y && meet(px.b, py.a) {
+                        work.push((px.reversed(), py.clone(), true, 0));
+                    } else if after[y] == x && meet(py.b, px.a) {
+                        work.push((py.reversed(), px.clone(), true, 0));
+                    } else {
+                        work.push((px.clone(), py.clone(), false, 0));
+                    }
+                }
+                (Item::Joint(r), Item::Part(o)) | (Item::Part(o), Item::Joint(r)) => {
+                    // A joint's parts may meet the two parts it lies
+                    // between.
+                    if runs[r].ends.contains(&o) {
+                        continue;
+                    }
+                    for &k in &runs[r].parts {
+                        take(budget)?;
+                        work.push((parts[k].clone(), parts[o].clone(), false, 0));
+                    }
+                }
+                (Item::Joint(r), Item::Joint(s)) => {
+                    for &k in &runs[r].parts {
+                        for &m in &runs[s].parts {
+                            take(budget)?;
+                            work.push((parts[k].clone(), parts[m].clone(), false, 0));
+                        }
+                    }
+                }
             }
         }
     }
     while let Some((x, y, corner, depth)) = work.pop() {
-        if budget == 0 {
-            return None;
-        }
-        budget -= 1;
+        take(budget)?;
         let (bx, by) = (x.bounds(slack), y.bounds(slack));
-        let parted = bx.lo[0] > by.hi[0]
-            || by.lo[0] > bx.hi[0]
-            || bx.lo[1] > by.hi[1]
-            || by.lo[1] > bx.hi[1];
-        if parted || (corner && cones2_apart(&x, &y, slack)) {
+        if bx.apart(by) || (corner && cones2_apart(&x, &y, slack)) {
             continue;
         }
-        let meet = |p: Point2, q: Point2| (p.x() - q.x()).hypot(p.y() - q.y()) <= 2.0 * slack;
         let ends_meet = [x.a, x.b].into_iter().any(|p| meet(p, y.a) || meet(p, y.b));
         if (!corner && ends_meet) || depth >= MOST_LOOP_DEPTH {
             return None;
@@ -1044,10 +1231,14 @@ fn loops_are_simple(
 /// lie in a cone of half-angle under a right angle, else halved. Its
 /// derivative is a blend of those directions with weights that are not
 /// negative, where its weights are positive, so it moves along the cone's
-/// axis all along and cannot cross itself. Each halving takes one of
-/// `budget`; `false` where it runs out, a part is halved
-/// [`MOST_LOOP_DEPTH`] times, or a direction is too short to read.
+/// axis all along and cannot cross itself. Each piece and each part read
+/// takes one of `budget` before it is read; `false` where it runs out, a
+/// part is halved [`MOST_LOOP_DEPTH`] times, or a direction is too short to
+/// read.
 fn one_way(piece: Piece, slack: f64, depth: u32, budget: &mut usize, out: &mut Vec<Piece>) -> bool {
+    if take(budget).is_none() {
+        return false;
+    }
     let Hull::Bezier(net) = &piece.hull else {
         out.push(piece);
         return true;
@@ -1063,10 +1254,9 @@ fn one_way(piece: Piece, slack: f64, depth: u32, budget: &mut usize, out: &mut V
         out.push(piece);
         return true;
     }
-    if depth >= MOST_LOOP_DEPTH || *budget == 0 {
+    if depth >= MOST_LOOP_DEPTH {
         return false;
     }
-    *budget -= 1;
     let (left, right) = piece.halves();
     one_way(left, slack, depth + 1, budget, out) && one_way(right, slack, depth + 1, budget, out)
 }
@@ -1330,6 +1520,12 @@ mod tests {
         NurbsSurface::new(1, 1, knots.clone(), knots, rows, vec![vec![1.0; 2]; 2]).unwrap()
     }
 
+    /// The trim on [`sheet`] of `loops`, with no edges.
+    fn sheet_trim(loops: &[Vec<Run<'_>>]) -> Option<NurbsFaceTrim> {
+        let mut budget = MOST_LOOP_ITEMS;
+        NurbsFaceTrim::of_runs(&sheet(), loops, Vec::new(), &mut budget)
+    }
+
     /// The circle about `c` of radius `r` as a rational quadratic B-spline
     /// over `[0, 1]`.
     fn spline_circle(c: Point2, r: f64) -> NurbsCurve2D {
@@ -1425,7 +1621,7 @@ mod tests {
                 vec![(&round, round_run, 0)],
                 vec![(&oval, oval_run, 0)],
             ];
-            let trim = NurbsFaceTrim::of_runs(&sheet(), &loops, Vec::new()).unwrap();
+            let trim = sheet_trim(&loops).unwrap();
             let misread: Vec<(Point2, Option<bool>)> = points
                 .iter()
                 .filter(|q| {
@@ -1456,7 +1652,7 @@ mod tests {
             (&circle, (0.0, quarter), 0),
             (&circle, (quarter, std::f64::consts::TAU), 0),
         ]];
-        let trim = NurbsFaceTrim::of_runs(&sheet(), &loops, Vec::new()).unwrap();
+        let trim = sheet_trim(&loops).unwrap();
         assert_eq!(trim.holds_parameters(Point2::new(0.5, 0.5)), Some(true));
         assert_eq!(
             trim.holds_parameters(Point2::new(0.75 + 1e-9, 0.5)),
@@ -1470,6 +1666,64 @@ mod tests {
             trim.holds_parameters(Point2::new(0.5, 0.75 + 1e-9)),
             Some(false)
         );
+    }
+
+    /// A loop of 10^4 tiny pieces is proved simple within a count of items
+    /// that grows as its pieces do, not as their pairs, and a point is read
+    /// down the loop's tree in few. The pieces are those of a B-spline of
+    /// degree one along the bottom of a square: a zigzag 1e-6 long at its
+    /// corner, which the loop reads as one joint, or the side's whole
+    /// length, each piece 8e-5 long.
+    #[test]
+    fn a_loop_of_ten_thousand_tiny_pieces_is_read_in_few_items() {
+        const COUNT: u32 = 10_000;
+        let line = |p: (f64, f64), q: (f64, f64)| {
+            let along = Vec2::new(q.0 - p.0, q.1 - p.1);
+            let line = Line2D::new(Point2::new(p.0, p.1), along).unwrap();
+            (Curve2D::Line(line), (0.0, along.length()))
+        };
+        for (name, width, zig) in [("zigzag", 1e-6, 1e-7), ("side", 0.8, 0.0)] {
+            let points: Vec<Point2> = (0..=COUNT)
+                .map(|k| {
+                    let x = width.madd(f64::from(k) / f64::from(COUNT), 0.1);
+                    Point2::new(x, 0.1 + if k % 2 == 1 { zig } else { 0.0 })
+                })
+                .collect();
+            let mut knots = vec![0.0, 0.0];
+            knots.extend((1..COUNT).map(|k| f64::from(k) / f64::from(COUNT)));
+            knots.extend([1.0, 1.0]);
+            let weights = vec![1.0; points.len()];
+            let spline = NurbsCurve2D::new(1, knots, points, weights).unwrap();
+            let mut curves = vec![(Curve2D::Nurbs(spline), (0.0, 1.0))];
+            if width < 0.8 {
+                curves.push(line((0.1 + width, 0.1), (0.9, 0.1)));
+            }
+            curves.extend([
+                line((0.9, 0.1), (0.9, 0.9)),
+                line((0.9, 0.9), (0.1, 0.9)),
+                line((0.1, 0.9), (0.1, 0.1)),
+            ]);
+            let loops = vec![curves.iter().map(|(c, run)| (c, *run, 0)).collect()];
+            let mut budget = MOST_LOOP_ITEMS;
+            let trim = NurbsFaceTrim::of_runs(&sheet(), &loops, Vec::new(), &mut budget);
+            let taken = MOST_LOOP_ITEMS - budget;
+            assert!(trim.is_some(), "{name}: no trim after {taken} items");
+            assert!(taken <= 12 * COUNT as usize, "{name}: {taken} items");
+            let trim = trim.unwrap();
+            for (q, inside) in [
+                ((0.5, 0.5), true),
+                ((0.95, 0.5), false),
+                ((0.5, 0.95), false),
+                ((0.100_000_5, 0.05), false),
+                ((0.100_000_5, 0.5), true),
+            ] {
+                let mut read = MOST_PIECES;
+                let got = trim.parity(Point2::new(q.0, q.1), &mut read);
+                let taken = MOST_PIECES - read;
+                assert_eq!(got, Some(inside), "{name} at {q:?}");
+                assert!(taken <= 100, "{name} at {q:?}: {taken} items");
+            }
+        }
     }
 
     /// Loops that are no simple curves take no trim: a figure eight, whose
@@ -1494,7 +1748,7 @@ mod tests {
                 .iter()
                 .map(|w| w.iter().map(|(c, len)| (c, (0.0, *len), 0)).collect())
                 .collect();
-            NurbsFaceTrim::of_runs(&sheet(), &loops, Vec::new()).is_some()
+            sheet_trim(&loops).is_some()
         };
         let outer: &[(f64, f64)] = &[(0.1, 0.1), (0.9, 0.1), (0.9, 0.9), (0.1, 0.9)];
         let eight: &[(f64, f64)] = &[(0.1, 0.1), (0.9, 0.9), (0.9, 0.1), (0.1, 0.9)];
@@ -1537,7 +1791,7 @@ mod tests {
             .iter()
             .map(|w| w.iter().map(|(c, run)| (c, *run, 0)).collect())
             .collect();
-        NurbsFaceTrim::of_runs(&sheet(), &loops, Vec::new())
+        sheet_trim(&loops)
     }
 
     /// A loop whose cubic curls once round itself the way the square round
