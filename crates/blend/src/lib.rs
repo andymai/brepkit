@@ -16,6 +16,7 @@ pub mod fillet_builder;
 pub mod fillet_plan;
 #[allow(dead_code)]
 pub(crate) mod g1_chain;
+pub(crate) mod kinked_rim;
 pub mod radius_law;
 pub(crate) mod section;
 pub mod setback_corner;

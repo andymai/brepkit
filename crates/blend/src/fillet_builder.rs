@@ -201,10 +201,11 @@ impl<'a> FilletBuilder<'a> {
 
     #[allow(clippy::too_many_lines)]
     fn build_in_place_with_forced_postassembly_failure(
-        self,
+        mut self,
         force_postassembly_failure: bool,
     ) -> Result<BlendResult, BlendError> {
         let scope = trimmer::SplitScope::of_solid(self.topo, self.solid)?;
+        crate::kinked_rim::split_kinked_rims(self.topo, &scope, self.solid, &mut self.edge_sets)?;
         // Build the immutable plan before any result topology is allocated.
         // Every valid request is represented by one ordered contour; the
         // contour spine is then used for one coherent stripe computation.

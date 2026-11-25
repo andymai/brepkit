@@ -113,7 +113,7 @@ impl SplitScope {
     }
 
     /// The faces in scope, in id order.
-    fn faces(&self, topo: &Topology) -> Vec<FaceId> {
+    pub(crate) fn faces(&self, topo: &Topology) -> Vec<FaceId> {
         let made = (self.first_new_face..topo.num_faces())
             .filter_map(|index| topo.face_id_from_index(index));
         self.faces.iter().copied().chain(made).collect()
