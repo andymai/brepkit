@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.53](https://github.com/andymai/brepkit/compare/v4.11.52...v4.11.53) (2026-11-25)
+
+
+### Bug Fixes
+
+* **algo:** keep an arc and the rest of its circle apart in the section dedup and common blocks ([#2855](https://github.com/andymai/brepkit/issues/2855)) ([bfc99db](https://github.com/andymai/brepkit/commit/bfc99db98e6b66e040f7a7a7504da70172a9025d))
+
 ## [4.11.52](https://github.com/andymai/brepkit/compare/v4.11.51...v4.11.52) (2026-11-25)
 
 
