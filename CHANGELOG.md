@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.11.58](https://github.com/andymai/brepkit/compare/v4.11.57...v4.11.58) (2026-11-25)
+
+
+### Bug Fixes
+
+* **algo:** cut a rod against an elliptic wall on exact rulings, and refuse an N-way fuse with an unpaired edge ([#2879](https://github.com/andymai/brepkit/issues/2879)) ([fb27c8d](https://github.com/andymai/brepkit/commit/fb27c8d6dad32f4b9eb898250ab4218d888eadc1))
+* **math,algo,operations:** a box never hides a point that is not finite, and no box panics ([#2898](https://github.com/andymai/brepkit/issues/2898)) ([33c7b56](https://github.com/andymai/brepkit/commit/33c7b5637f0c8116a688101ab96c0064176d08af))
+
 ## [4.11.57](https://github.com/andymai/brepkit/compare/v4.11.56...v4.11.57) (2026-11-25)
 
 
