@@ -9,6 +9,7 @@
 //! This is used by boolean operations when a curved face must contribute
 //! with flipped winding without altering the underlying surface definition.
 
+use brepkit_math::curves::SIZE_LIMIT;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::surfaces::{
     ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface,
@@ -51,35 +52,36 @@ impl FaceSurface {
     /// and not built by a constructor, can hold any values.
     ///
     /// A NURBS surface passes [`NurbsSurface::is_well_formed`]. A plane's
-    /// normal is a unit vector and its distance is finite. A cylinder's,
-    /// sphere's or torus's radii are finite and positive, a cone's half
-    /// angle lies strictly between 0 and a right angle, the origin, apex or
-    /// centre is finite, and the frame's two radial axes and its axis make
-    /// a right-handed frame of unit axes at right angles.
+    /// normal is a unit vector. A cylinder's, sphere's or torus's radii are
+    /// positive, a cone's half angle lies strictly between 0 and a right
+    /// angle, and the frame's two radial axes and its axis make a
+    /// right-handed frame of unit axes at right angles. Each radius, a
+    /// plane's distance, and the coordinates of the origin, apex or centre
+    /// are at most [`SIZE_LIMIT`] in magnitude.
     #[must_use]
     pub fn is_well_formed(&self) -> bool {
-        use crate::edge::{is_finite_point, is_frame, is_length, is_unit};
+        use crate::edge::{is_bounded_point, is_frame, is_length, is_unit};
         match self {
-            Self::Plane { normal, d } => is_unit(*normal) && d.is_finite(),
+            Self::Plane { normal, d } => is_unit(*normal) && d.abs() <= SIZE_LIMIT,
             Self::Nurbs(n) => n.is_well_formed(),
             Self::Cylinder(c) => {
-                is_finite_point(c.origin())
+                is_bounded_point(c.origin())
                     && is_length(c.radius())
                     && is_frame(c.x_axis(), c.y_axis(), c.axis())
             }
             Self::Cone(c) => {
-                is_finite_point(c.apex())
+                is_bounded_point(c.apex())
                     && c.half_angle() > 0.0
                     && c.half_angle() < std::f64::consts::FRAC_PI_2
                     && is_frame(c.x_axis(), c.y_axis(), c.axis())
             }
             Self::Sphere(s) => {
-                is_finite_point(s.center())
+                is_bounded_point(s.center())
                     && is_length(s.radius())
                     && is_frame(s.x_axis(), s.y_axis(), s.z_axis())
             }
             Self::Torus(t) => {
-                is_finite_point(t.center())
+                is_bounded_point(t.center())
                     && is_length(t.major_radius())
                     && is_length(t.minor_radius())
                     && is_frame(t.x_axis(), t.y_axis(), t.z_axis())
@@ -370,6 +372,43 @@ impl Face {
     pub fn compose_orientation(&mut self, flip: bool) {
         if flip {
             self.reversed = !self.reversed;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+
+    /// A surface is well formed only while each point it gives over a
+    /// bounded patch is finite: its centre's coordinates, its radii and a
+    /// plane's distance are at most [`SIZE_LIMIT`].
+    #[test]
+    fn a_surface_past_the_size_limit_is_not_well_formed() {
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let at = |c: f64| Point3::new(c, 0.0, 0.0);
+        let surfaces = |c: f64, r: f64| {
+            [
+                FaceSurface::Plane { normal: z, d: c },
+                FaceSurface::Cylinder(CylindricalSurface::new(at(c), z, r).unwrap()),
+                FaceSurface::Cone(ConicalSurface::new(at(c), z, 0.5).unwrap()),
+                FaceSurface::Sphere(SphericalSurface::new(at(c), r).unwrap()),
+                FaceSurface::Torus(ToroidalSurface::new(at(c), r, 1.0).unwrap()),
+                FaceSurface::Torus(ToroidalSurface::new(at(c), 1.0, r).unwrap()),
+            ]
+        };
+        for surface in surfaces(SIZE_LIMIT, SIZE_LIMIT) {
+            assert!(surface.is_well_formed(), "{surface:?}");
+        }
+        for surface in surfaces(SIZE_LIMIT * 2.0, 1.0) {
+            assert!(!surface.is_well_formed(), "{surface:?}");
+        }
+        for surface in surfaces(0.0, SIZE_LIMIT * 2.0).into_iter().skip(1) {
+            if !matches!(surface, FaceSurface::Cone(_)) {
+                assert!(!surface.is_well_formed(), "{surface:?}");
+            }
         }
     }
 }

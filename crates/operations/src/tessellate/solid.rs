@@ -1239,6 +1239,9 @@ pub(super) fn tessellate_solid_core(
 
     super::check_deflection(deflection)?;
     let all_faces = explorer::solid_faces(topo, solid)?;
+    for &face in &all_faces {
+        super::check_reach(topo, face)?;
+    }
     let edge_face_map = explorer::edge_to_face_map(topo, solid)?;
     let mut phase_t = PhaseTimer::start();
     let phase = |label: &str, t: &mut PhaseTimer| t.lap(label);

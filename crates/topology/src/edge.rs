@@ -1,6 +1,6 @@
 //! Edge — a curve bounded by two vertices.
 
-use brepkit_math::curves::{Circle3D, Ellipse3D};
+use brepkit_math::curves::{Circle3D, Ellipse3D, SIZE_LIMIT};
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::traits::ParametricCurve;
 use brepkit_math::vec::{Point3, Vec3};
@@ -47,14 +47,15 @@ pub(crate) fn is_frame(a: Vec3, b: Vec3, c: Vec3) -> bool {
         && a.cross(b).dot(c) > 0.0
 }
 
-/// Whether each coordinate of `p` is finite.
-pub(crate) fn is_finite_point(p: Point3) -> bool {
-    p.x().is_finite() && p.y().is_finite() && p.z().is_finite()
+/// Whether each coordinate of `p` is finite and at most
+/// [`SIZE_LIMIT`] in magnitude.
+pub(crate) fn is_bounded_point(p: Point3) -> bool {
+    [p.x(), p.y(), p.z()].iter().all(|c| c.abs() <= SIZE_LIMIT)
 }
 
-/// Whether `r` is a finite positive length.
+/// Whether `r` is a positive length of at most [`SIZE_LIMIT`].
 pub(crate) fn is_length(r: f64) -> bool {
-    r.is_finite() && r > 0.0
+    r > 0.0 && r <= SIZE_LIMIT
 }
 
 impl EdgeCurve {
@@ -63,23 +64,27 @@ impl EdgeCurve {
     /// built by a constructor, can hold any values.
     ///
     /// A NURBS curve passes [`NurbsCurve::is_well_formed`]. A circle's
-    /// radius and an ellipse's semi-axes are finite and positive, the centre
-    /// is finite, and the two axes and the normal make a right-handed frame
-    /// of unit axes at right angles.
+    /// radius and an ellipse's semi-axes are positive, they and the centre's
+    /// coordinates are at most [`SIZE_LIMIT`] in magnitude, and the two axes
+    /// and the normal make a right-handed frame of unit axes at right
+    /// angles. An ellipse's `semi_major` is at least its `semi_minor`, as its
+    /// constructors give it: code that reads its size from `semi_major` alone
+    /// needs that.
     #[must_use]
     pub fn is_well_formed(&self) -> bool {
         match self {
             Self::Line => true,
             Self::NurbsCurve(n) => n.is_well_formed(),
             Self::Circle(c) => {
-                is_finite_point(c.center())
+                is_bounded_point(c.center())
                     && is_length(c.radius())
                     && is_frame(c.u_axis(), c.v_axis(), c.normal())
             }
             Self::Ellipse(e) => {
-                is_finite_point(e.center())
+                is_bounded_point(e.center())
                     && is_length(e.semi_major())
                     && is_length(e.semi_minor())
+                    && e.semi_minor() <= e.semi_major()
                     && is_frame(e.u_axis(), e.v_axis(), e.normal())
             }
         }
@@ -492,6 +497,62 @@ mod tests {
             EdgeCurve::Circle(Circle3D::new(o, Vec3::new(1.0, -2.0, 0.5), 3.0).unwrap())
                 .is_well_formed()
         );
+    }
+
+    /// The constructors put an ellipse's larger semi-axis on `u_axis`, and
+    /// code that reads its size from `semi_major` alone relies on that
+    /// order. An ellipse read from data with the smaller one first is not
+    /// well formed.
+    #[test]
+    fn an_ellipse_with_its_smaller_axis_first_is_not_well_formed() {
+        let o = Point3::new(1.0, 2.0, 3.0);
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let ellipse = |a, b| EdgeCurve::Ellipse(Ellipse3D::with_axes(o, z, a, b, x, y).unwrap());
+        assert!(!ellipse(1.0, 4.0).is_well_formed());
+        assert!(ellipse(4.0, 1.0).is_well_formed());
+        assert!(ellipse(4.0, 4.0).is_well_formed());
+    }
+
+    /// A conic is well formed only while each point it gives is finite: its
+    /// centre's coordinates and its radii are at most
+    /// [`brepkit_math::curves::SIZE_LIMIT`]. With both at the largest float,
+    /// a point is not finite.
+    #[test]
+    fn a_conic_past_the_size_limit_is_not_well_formed() {
+        use brepkit_math::curves::SIZE_LIMIT;
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let circle = |c: f64, r| Circle3D::with_axes(Point3::new(c, 0.0, 0.0), z, r, x, y).unwrap();
+        let ellipse =
+            |c: f64, a| Ellipse3D::with_axes(Point3::new(c, 0.0, 0.0), z, a, 1.0, x, y).unwrap();
+        let far = circle(f64::MAX, f64::MAX).evaluate(0.0);
+        assert!(!far.x().is_finite(), "{far:?}");
+        for (c, r, good) in [
+            (SIZE_LIMIT, SIZE_LIMIT, true),
+            (-SIZE_LIMIT, 1.0, true),
+            (SIZE_LIMIT * 2.0, 1.0, false),
+            (-SIZE_LIMIT * 2.0, 1.0, false),
+            (0.0, SIZE_LIMIT * 2.0, false),
+            (f64::MAX, f64::MAX, false),
+        ] {
+            assert_eq!(
+                EdgeCurve::Circle(circle(c, r)).is_well_formed(),
+                good,
+                "{c} {r}"
+            );
+            assert_eq!(
+                EdgeCurve::Ellipse(ellipse(c, r)).is_well_formed(),
+                good,
+                "{c} {r}"
+            );
+        }
     }
 
     fn make_test_vertices() -> (VertexId, VertexId) {

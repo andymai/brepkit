@@ -21,6 +21,77 @@ use crate::shapes::JsMesh;
 /// Default tolerance for vertices created by the kernel.
 pub const TOL: f64 = 1e-7;
 
+// ── Curves and surfaces from caller data ──────────────────────────
+
+/// The refusal of a curve or surface built from caller data that no
+/// evaluation can walk. `NurbsCurve::new` and `NurbsSurface::new` check only
+/// counts: knots that fall, a degree past the control points, or weights that
+/// are not positive normal floats panic, hang or give a wrong solid when the
+/// curve is evaluated.
+fn not_evaluable(what: &str) -> WasmError {
+    WasmError::InvalidInput {
+        reason: format!(
+            "{what} has a size, frame, degree, knots, weights or points \
+             it cannot be evaluated with"
+        ),
+    }
+}
+
+/// The caller's `degree`, if it is less than the number of control points
+/// `points`. No spline has a larger one, and its count of knots, the points
+/// and the degree and one more, can pass the largest `usize` of a 32-bit
+/// target.
+pub fn spline_degree(degree: u64, points: usize, what: &str) -> Result<usize, WasmError> {
+    usize::try_from(degree)
+        .ok()
+        .filter(|&d| d < points)
+        .ok_or_else(|| WasmError::InvalidInput {
+            reason: format!(
+                "{what} has degree {degree} over {points} control points, which it \
+                 cannot be evaluated with: the degree must be less than the count"
+            ),
+        })
+}
+
+/// `curve`, if it gives a finite point at each parameter of its domain on
+/// the shape its type names.
+pub fn well_formed_curve(
+    curve: brepkit_topology::edge::EdgeCurve,
+    what: &str,
+) -> Result<brepkit_topology::edge::EdgeCurve, WasmError> {
+    if curve.is_well_formed() {
+        Ok(curve)
+    } else {
+        Err(not_evaluable(what))
+    }
+}
+
+/// `curve`, if it can be evaluated without reading past its arrays and gives
+/// a finite point at each parameter of its domain.
+pub fn well_formed_nurbs(
+    curve: brepkit_math::nurbs::curve::NurbsCurve,
+    what: &str,
+) -> Result<brepkit_math::nurbs::curve::NurbsCurve, WasmError> {
+    if curve.is_well_formed() {
+        Ok(curve)
+    } else {
+        Err(not_evaluable(what))
+    }
+}
+
+/// `surface`, if it can be evaluated without reading past its arrays and
+/// gives a finite point at each parameter pair of its domain.
+pub fn well_formed_nurbs_surface(
+    surface: brepkit_math::nurbs::surface::NurbsSurface,
+    what: &str,
+) -> Result<brepkit_math::nurbs::surface::NurbsSurface, WasmError> {
+    if surface.is_well_formed() {
+        Ok(surface)
+    } else {
+        Err(not_evaluable(what))
+    }
+}
+
 // ── Parsing helpers ───────────────────────────────────────────────
 
 /// Parse flat `[x,y,z, ...]` coordinates into `Vec<Point3>`.

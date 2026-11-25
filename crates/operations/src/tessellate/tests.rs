@@ -6815,3 +6815,56 @@ fn a_tiny_closed_rim_meshes_closed() {
         }
     }
 }
+
+/// A cone's mesher reads each wire point's height along the axis over the
+/// sine of the half angle, its distance along a generator. Unit circles at
+/// heights 1 and 2 on a cone of half angle 1e-14 about the origin read as
+/// generators 1e14 long, though the circles lie near the origin: the face
+/// is refused, not meshed out past the grids' reach. A real flat cone, of
+/// half angle 1e-3 with its rims on it, meshes within its own box.
+#[test]
+fn a_cone_whose_wires_read_far_out_along_it_is_refused() {
+    use brepkit_math::mat::Mat4;
+    use brepkit_math::surfaces::ConicalSurface;
+
+    let mut topo = Topology::new();
+    let rod = crate::primitives::make_cylinder(&mut topo, 1.0, 1.0).unwrap();
+    crate::transform::transform_solid(&mut topo, rod, &Mat4::translation(0.0, 0.0, 1.0)).unwrap();
+    let side = brepkit_topology::explorer::solid_faces(&topo, rod)
+        .unwrap()
+        .into_iter()
+        .find(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
+        .unwrap();
+    let flat =
+        ConicalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 1e-14).unwrap();
+    topo.face_mut(side)
+        .unwrap()
+        .set_surface(FaceSurface::Cone(flat));
+    let too_far = |found: &Result<usize, crate::OperationsError>| {
+        matches!(found, Err(crate::OperationsError::InvalidInput { reason })
+            if reason.contains("too far out to mesh"))
+    };
+    let face = tessellate(&topo, side, 1.0).map(|m| m.positions.len());
+    assert!(too_far(&face), "{face:?}");
+    let solid = tessellate_solid(&topo, rod, 1.0).map(|m| m.positions.len());
+    assert!(too_far(&solid), "{solid:?}");
+
+    let cone = crate::primitives::make_cone(&mut topo, 11.0, 1.0, 0.01).unwrap();
+    let half_angle = brepkit_topology::explorer::solid_faces(&topo, cone)
+        .unwrap()
+        .into_iter()
+        .find_map(|f| match topo.face(f).unwrap().surface() {
+            FaceSurface::Cone(c) => Some(c.half_angle()),
+            _ => None,
+        })
+        .unwrap();
+    assert!((half_angle - 1e-3).abs() < 1e-6, "{half_angle}");
+    let mesh = tessellate_solid(&topo, cone, 0.01).unwrap();
+    assert!(is_watertight(&mesh));
+    for p in &mesh.positions {
+        assert!(
+            p.x().abs() <= 11.0 + 1e-9 && p.y().abs() <= 11.0 + 1e-9 && p.z().abs() <= 0.01 + 1e-9,
+            "{p:?}"
+        );
+    }
+}

@@ -10104,6 +10104,106 @@ fn fuse_box_top_crossing_plate_hole_keeps_the_open_part() {
     }
 }
 
+/// A unit cube from `(x, 0, 0)` whose top face carries two holes at its
+/// centre, each one closed edge of no length, the same edge once each way.
+/// Every edge has two uses, every wire closes and every edge lies on its
+/// faces, but with the two holes one loop, `V - E + F - L = 9 - 13 + 6 - 1 =
+/// 1`, and no closed surface has an odd count.
+fn cube_with_a_hole_of_no_size_both_ways(topo: &mut Topology, x: f64) -> SolidId {
+    let cube = make_unit_cube_manifold_at(topo, x, 0.0, 0.0);
+    let top = brepkit_topology::explorer::solid_faces(topo, cube)
+        .unwrap()
+        .into_iter()
+        .find(|&f| {
+            matches!(topo.face(f).unwrap().surface(), FaceSurface::Plane { normal, .. }
+                if normal.z() > 0.5)
+        })
+        .unwrap();
+    let centre = topo.add_vertex(Vertex::new(Point3::new(x + 0.5, 0.5, 1.0), 1e-7));
+    let point = topo.add_edge(Edge::new(centre, centre, EdgeCurve::Line));
+    let holes = [true, false].map(|forward| {
+        topo.add_wire(Wire::new(vec![OrientedEdge::new(point, forward)], true).unwrap())
+    });
+    let (outer, surface) = {
+        let face = topo.face(top).unwrap();
+        (face.outer_wire(), face.surface().clone())
+    };
+    *topo.face_mut(top).unwrap() = Face::new(outer, holes.to_vec(), surface);
+    cube
+}
+
+/// The strict gate refuses a solid whose counts break the Euler-Poincaré
+/// relation, though its edges, wires and faces pass every other test.
+#[test]
+fn the_strict_gate_rejects_a_solid_with_a_wrong_euler_count() {
+    let mut topo = Topology::new();
+    let cube = cube_with_a_hole_of_no_size_both_ways(&mut topo, 0.0);
+    assert_eq!(
+        brepkit_topology::explorer::solid_entity_counts(&topo, cube).unwrap(),
+        (6, 13, 9)
+    );
+    let err = super::assembly::validate_boolean_result(&topo, cube).unwrap_err();
+    assert!(err.to_string().contains("Euler"), "{err}");
+}
+
+/// Two copies of [`cube_with_a_hole_of_no_size_both_ways`], apart, as one
+/// solid. Each piece reads `V - E + F - L = 1`, which no closed surface has,
+/// but the two together read 2, the count of one sphere. Read piece by
+/// piece, both the validator and the strict gate report the Euler fault.
+#[test]
+fn two_pieces_with_odd_euler_counts_do_not_pass_as_one_sphere() {
+    let mut topo = Topology::new();
+    let faces: Vec<FaceId> = [0.0, 3.0]
+        .into_iter()
+        .flat_map(|x| {
+            let cube = cube_with_a_hole_of_no_size_both_ways(&mut topo, x);
+            brepkit_topology::explorer::solid_faces(&topo, cube).unwrap()
+        })
+        .collect();
+    let shell = topo.add_shell(brepkit_topology::shell::Shell::new(faces).unwrap());
+    let both = topo.add_solid(brepkit_topology::solid::Solid::new(shell, vec![]));
+    assert_eq!(
+        brepkit_topology::explorer::solid_entity_counts(&topo, both).unwrap(),
+        (12, 26, 18)
+    );
+    let report = crate::validate::validate_solid(&topo, both).unwrap();
+    assert!(
+        report
+            .issues
+            .iter()
+            .any(|i| i.description.contains("Euler")),
+        "{:?}",
+        report.issues
+    );
+    let err = super::assembly::validate_boolean_result(&topo, both).unwrap_err();
+    assert!(err.to_string().contains("Euler"), "{err}");
+}
+
+/// A cluster of three overlapping cubes whose one-pass fuse gives a solid
+/// with a wrong Euler count: `fuse_cluster` does not return it, and fuses the
+/// cubes one at a time instead, to the union's volume.
+#[test]
+fn fuse_cluster_refuses_a_one_pass_fuse_with_a_wrong_euler_count() {
+    let mut topo = Topology::new();
+    let cluster = [0.0, 0.5, 1.0].map(|x| make_unit_cube_manifold_at(&mut topo, x, 0.25 * x, 0.0));
+    let mut bad = None;
+    let fused = super::fuse_cluster_with(&mut topo, &cluster, |topo, _| {
+        let solid = cube_with_a_hole_of_no_size_both_ways(topo, 0.0);
+        bad = Some(solid);
+        Ok(solid)
+    })
+    .unwrap();
+    assert_ne!(Some(fused), bad, "the cluster kept the one-pass result");
+    let report = crate::validate::validate_solid(&topo, fused).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    let volume = crate::measure::solid_volume(&topo, fused, 1e-3).unwrap();
+    // Three unit cubes, each overlapping the next in 0.5 x 0.875 x 1.
+    assert!(
+        (volume - (3.0 - 2.0 * 0.5 * 0.875)).abs() < 1e-9,
+        "volume {volume}"
+    );
+}
+
 /// A hole that lies outside its face's outline passes the edge counts of the
 /// strict gate, but its face bounds the wrong region: the gate rejects it.
 #[test]

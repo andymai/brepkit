@@ -9713,8 +9713,9 @@ mod tests {
     /// A unit sheet in the plane `z = 0` with a face bounded by an ellipse
     /// pcurve about `(0.5, 0.5)`, stored, as data read from a file can
     /// store it, with its first semi-axis 0.1 along `u` shorter than its
-    /// second, 0.4 along `v`: the face reaches `v = 0.9`. The face's box
-    /// holds all of it, and a line through `(0.5, 0.8)` crosses it there.
+    /// second, 0.4 along `v`: the face reaches `v = 0.9`. A load refuses
+    /// that order, and the face's box still holds all of it, and a line
+    /// through `(0.5, 0.8)` crosses it there.
     #[test]
     fn a_face_bounded_by_an_ellipse_stored_short_axis_first_is_boxed_whole() {
         use brepkit_math::curves::Ellipse3D;
@@ -9742,7 +9743,7 @@ mod tests {
         let flat: Ellipse2D = serde_json::from_value(stored).unwrap();
         assert!(flat.semi_minor() > flat.semi_major());
         let pcurve = Curve2D::Ellipse(flat);
-        assert!(pcurve.is_well_formed());
+        assert!(!pcurve.is_well_formed());
         let z = Vec3::new(0.0, 0.0, 1.0);
         let rim = Ellipse3D::new_with_ref(
             Point3::new(0.5, 0.5, 0.0),

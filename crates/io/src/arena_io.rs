@@ -772,6 +772,59 @@ mod tests {
         }
     }
 
+    /// A dump circle or cylinder of radius 1e300 is well formed, since each
+    /// point it gives is finite. The mesher's grids cannot hold its points:
+    /// their integer cells overflow. Meshing it, the solid or one face, gives
+    /// an error, in a debug build and in a release build.
+    #[test]
+    fn a_dump_too_large_to_mesh_gives_an_error_from_the_mesher() {
+        use brepkit_operations::OperationsError;
+        use brepkit_operations::tessellate::{tessellate, tessellate_solid};
+        use serde_json::{Value, json};
+
+        let mut topo = Topology::new();
+        let rod = make_cylinder(&mut topo, 3.0, 4.0).unwrap();
+        let dump: Value = serde_json::from_slice(&serialize_solid(&topo, rod).unwrap()).unwrap();
+        // Each entity in `list` whose `field` holds a `variant`, its radius
+        // set to 1e300.
+        let enlarged = |list: &str, field: &str, variant: &str| {
+            let mut dump = dump.clone();
+            for entity in dump[list].as_array_mut().unwrap() {
+                if let Some(shape) = entity[field].get_mut(variant) {
+                    shape["radius"] = json!(1e300);
+                }
+            }
+            serde_json::to_vec(&dump).unwrap()
+        };
+        let too_large = |found: &Result<usize, OperationsError>| {
+            matches!(found, Err(OperationsError::InvalidInput { reason })
+                if reason.contains("too far out to mesh"))
+        };
+        // With its rims enlarged every face is too large; with its side
+        // enlarged only the side is, and the caps mesh.
+        for (bytes, every_face) in [
+            (enlarged("edges", "curve", "Circle"), true),
+            (enlarged("faces", "surface", "Cylinder"), false),
+        ] {
+            let mut fresh = Topology::new();
+            let solid = deserialize_solid(&bytes, &mut fresh).unwrap();
+            let found = tessellate_solid(&fresh, solid, 0.1).map(|mesh| mesh.positions.len());
+            assert!(too_large(&found), "{found:?}");
+            for face in solid_faces(&fresh, solid).unwrap() {
+                let side = matches!(
+                    fresh.face(face).unwrap().surface(),
+                    FaceSurface::Cylinder(_)
+                );
+                let found = tessellate(&fresh, face, 0.1).map(|mesh| mesh.positions.len());
+                if every_face || side {
+                    assert!(too_large(&found), "side {side}: {found:?}");
+                } else {
+                    assert!(found.is_ok(), "{found:?}");
+                }
+            }
+        }
+    }
+
     /// A circle or a surface of revolution whose frame has two axes alike,
     /// axes not at right angles, or a left-handed turn is not the shape its
     /// type names: a dump that holds one is refused. A knot span or weights
@@ -909,6 +962,68 @@ mod tests {
             assert!(
                 matches!(&found, Err(IoError::ParseError { reason }) if reason.contains("malformed pcurve")),
                 "{found:?}"
+            );
+        }
+    }
+
+    /// The constructors put an ellipse's larger semi-axis first, and code
+    /// that reads its size from `semi_major` alone relies on that order. A
+    /// dump holds whatever its bytes hold: an edge or a pcurve ellipse with
+    /// its smaller semi-axis first is refused. With its axes in order, the
+    /// dump loads.
+    #[test]
+    fn a_dump_with_an_ellipse_whose_smaller_axis_comes_first_is_refused() {
+        use brepkit_math::curves2d::Ellipse2D;
+        use brepkit_math::vec::Point2;
+        use serde_json::Value;
+
+        let mut topo = Topology::new();
+        let solid = make_cylinder(&mut topo, 3.0, 4.0).unwrap();
+        let wall = solid_faces(&topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .unwrap();
+        let rim = brepkit_topology::explorer::face_edges(&topo, wall).unwrap()[0];
+        let flat = Ellipse2D::new(Point2::new(0.5, 0.5), 0.4, 0.1, 0.0).unwrap();
+        topo.pcurves_mut()
+            .set(rim, wall, PCurve::new(Curve2D::Ellipse(flat), 0.0, 1.0));
+        let ellipse = Ellipse3D::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+            2.0,
+        )
+        .unwrap();
+        topo.edge_mut(rim)
+            .unwrap()
+            .set_curve(EdgeCurve::Ellipse(ellipse));
+        let bytes = serialize_solid(&topo, solid).unwrap();
+        assert!(deserialize_solid(&bytes, &mut Topology::new()).is_ok());
+
+        // The dump with the semi-axes of the ellipse that `pick` finds swapped.
+        let swapped = |pick: &dyn Fn(&mut Value) -> &mut Value| {
+            let mut dump: Value = serde_json::from_slice(&bytes).unwrap();
+            let ellipse = pick(&mut dump);
+            let (major, minor) = (ellipse["semi_major"].clone(), ellipse["semi_minor"].clone());
+            ellipse["semi_major"] = minor;
+            ellipse["semi_minor"] = major;
+            serde_json::to_vec(&dump).unwrap()
+        };
+        let edge = swapped(&|dump| {
+            dump["edges"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .find_map(|e| e["curve"].get_mut("Ellipse"))
+                .unwrap()
+        });
+        let pcurve = swapped(&|dump| dump["pcurves"][0]["curve"].get_mut("Ellipse").unwrap());
+        for (bad, why) in [(edge, "malformed curve"), (pcurve, "malformed pcurve")] {
+            let found = deserialize_solid(&bad, &mut Topology::new());
+            assert!(
+                matches!(&found, Err(IoError::ParseError { reason }) if reason.contains(why)),
+                "{why}: {found:?}"
             );
         }
     }

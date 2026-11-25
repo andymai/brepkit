@@ -21,10 +21,10 @@ impl Line2D {
     /// Creates a new 2D line.
     ///
     /// # Errors
-    /// Returns `MathError::ZeroVector` if direction has zero length.
+    /// Returns `MathError::ZeroVector` if direction has zero length or is not finite.
     pub fn new(origin: Point2, direction: Vec2) -> Result<Self, MathError> {
         let len = direction.length();
-        if len < 1e-15 {
+        if !(len >= 1e-15 && len.is_finite()) {
             return Err(MathError::ZeroVector);
         }
         Ok(Self {
@@ -89,9 +89,9 @@ impl Circle2D {
     /// Creates a new 2D circle.
     ///
     /// # Errors
-    /// Returns `MathError::ParameterOutOfRange` if radius is not positive.
+    /// Returns `MathError::ParameterOutOfRange` if radius is not finite and positive.
     pub fn new(center: Point2, radius: f64) -> Result<Self, MathError> {
-        if radius <= 0.0 {
+        if !(radius > 0.0 && radius.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: radius,
                 min: f64::EPSILON,
@@ -156,24 +156,33 @@ impl Ellipse2D {
     /// Creates a new 2D ellipse.
     ///
     /// # Errors
-    /// Returns `MathError::ParameterOutOfRange` if either semi-axis is not positive.
+    /// Returns `MathError::ParameterOutOfRange` if either semi-axis is not
+    /// finite and positive, `semi_minor` exceeds `semi_major`, or `rotation`
+    /// is not finite.
     pub fn new(
         center: Point2,
         semi_major: f64,
         semi_minor: f64,
         rotation: f64,
     ) -> Result<Self, MathError> {
-        if semi_major <= 0.0 {
+        if !(semi_major > 0.0 && semi_major.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: semi_major,
                 min: f64::EPSILON,
                 max: f64::MAX,
             });
         }
-        if semi_minor <= 0.0 {
+        if !(semi_minor > 0.0 && semi_minor.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: semi_minor,
                 min: f64::EPSILON,
+                max: f64::MAX,
+            });
+        }
+        if !rotation.is_finite() {
+            return Err(MathError::ParameterOutOfRange {
+                value: rotation,
+                min: f64::MIN,
                 max: f64::MAX,
             });
         }
@@ -262,7 +271,8 @@ impl NurbsCurve2D {
     ///
     /// # Errors
     /// Returns an error if knot vector or weights are inconsistent with
-    /// the number of control points and degree.
+    /// the number of control points and degree, or the count of knots they
+    /// ask for passes the largest `usize`.
     pub fn new(
         degree: usize,
         knots: Vec<f64>,
@@ -270,7 +280,11 @@ impl NurbsCurve2D {
         weights: Vec<f64>,
     ) -> Result<Self, MathError> {
         let n = control_points.len();
-        let expected_knots = n + degree + 1;
+        let expected_knots =
+            crate::nurbs::basis::knot_count(n, degree).ok_or(MathError::InvalidKnotVector {
+                expected: usize::MAX,
+                got: knots.len(),
+            })?;
         if knots.len() != expected_knots {
             return Err(MathError::InvalidKnotVector {
                 expected: expected_knots,
@@ -458,26 +472,32 @@ impl Curve2D {
     /// curve that was read from data and not built by a constructor need
     /// not be: the data can hold any values.
     ///
-    /// Every number is finite. A line's direction is not zero, and a
-    /// circle's radius and an ellipse's semi-axes are positive. A NURBS
-    /// curve's knots pass [`crate::nurbs::basis::knots_are_sound`] for its
-    /// degree and number of control points, each control point has a weight
-    /// that passes [`crate::nurbs::basis::weight_is_sound`], and the weights
-    /// and points pass [`crate::nurbs::basis::weighted_points_are_bounded`].
+    /// Every number is finite, and each coordinate, radius and semi-axis is
+    /// at most [`crate::curves::SIZE_LIMIT`] in magnitude. A line's direction
+    /// is not zero, a circle's radius and an ellipse's semi-axes are
+    /// positive, and an ellipse's `semi_major` is at least its `semi_minor`,
+    /// as its constructor gives it: code that reads its size from
+    /// `semi_major` alone needs that. A NURBS curve's knots pass
+    /// [`crate::nurbs::basis::knots_are_sound`] for its degree and number of
+    /// control points, each control point has a weight that passes
+    /// [`crate::nurbs::basis::weight_is_sound`], and the weights and points
+    /// pass [`crate::nurbs::basis::weighted_points_are_bounded`].
     #[must_use]
     pub fn is_well_formed(&self) -> bool {
-        let point = |p: Point2| p.x().is_finite() && p.y().is_finite();
+        use crate::curves::SIZE_LIMIT;
+        let point = |p: Point2| p.x().abs() <= SIZE_LIMIT && p.y().abs() <= SIZE_LIMIT;
+        let length = |a: f64| a > 0.0 && a <= SIZE_LIMIT;
         match self {
             Self::Line(c) => {
                 let d = c.direction();
                 point(c.origin()) && point(Point2::new(d.x(), d.y())) && d.length() > 0.0
             }
-            Self::Circle(c) => point(c.center) && c.radius.is_finite() && c.radius > 0.0,
+            Self::Circle(c) => point(c.center) && length(c.radius),
             Self::Ellipse(c) => {
                 point(c.center)
-                    && [c.semi_major, c.semi_minor]
-                        .iter()
-                        .all(|&a| a.is_finite() && a > 0.0)
+                    && length(c.semi_major)
+                    && length(c.semi_minor)
+                    && c.semi_minor <= c.semi_major
                     && c.rotation.is_finite()
             }
             Self::Nurbs(c) => {
@@ -555,6 +575,99 @@ mod tests {
             cubic(3, unit, 4, 0.0),
         ] {
             assert!(!bad.is_well_formed(), "{bad:?}");
+        }
+    }
+
+    /// Each constructor refuses a size, an angle or a direction that is not
+    /// finite and in range. A test of `value <= 0.0` alone lets NaN through,
+    /// since every comparison with NaN is false.
+    #[test]
+    fn constructors_refuse_sizes_that_are_not_finite_and_in_range() {
+        let o = Point2::new(0.0, 0.0);
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
+            assert!(Circle2D::new(o, bad).is_err(), "{bad}");
+            assert!(Ellipse2D::new(o, bad, 1.0, 0.0).is_err(), "{bad}");
+            assert!(Ellipse2D::new(o, 2.0, bad, 0.0).is_err(), "{bad}");
+        }
+        for bad in [f64::NAN, f64::INFINITY] {
+            assert!(Ellipse2D::new(o, 2.0, 1.0, bad).is_err(), "{bad}");
+            assert!(Line2D::new(o, Vec2::new(bad, 0.0)).is_err(), "{bad}");
+        }
+        assert!(Circle2D::new(o, 2.0).is_ok());
+        assert!(Ellipse2D::new(o, 2.0, 1.0, 0.3).is_ok());
+        assert!(Line2D::new(o, Vec2::new(1.0, 0.0)).is_ok());
+    }
+
+    /// The constructors put an ellipse's larger semi-axis first, and code
+    /// that reads its size from `semi_major` alone relies on that order. An
+    /// ellipse read from data with the smaller one first is not well formed.
+    /// With a `semi_major` of 0.1 and a `semi_minor` of 0.4 about (0.5, 0.5),
+    /// it reaches (0.5, 0.9), outside the box of half width 0.1 about its
+    /// centre.
+    #[test]
+    fn an_ellipse_with_its_smaller_axis_first_is_not_well_formed() {
+        let ellipse = |semi_major, semi_minor| {
+            Curve2D::Ellipse(Ellipse2D {
+                center: Point2::new(0.5, 0.5),
+                semi_major,
+                semi_minor,
+                rotation: 0.0,
+            })
+        };
+        let top = ellipse(0.1, 0.4).evaluate(std::f64::consts::FRAC_PI_2);
+        assert!((top.y() - 0.9).abs() < 1e-12, "{top:?}");
+        assert!(!ellipse(0.1, 0.4).is_well_formed());
+        assert!(ellipse(0.4, 0.1).is_well_formed());
+        assert!(ellipse(0.4, 0.4).is_well_formed());
+    }
+
+    /// A curve is well formed only while each point it gives stays finite:
+    /// its coordinates, radius and semi-axes are at most
+    /// [`crate::curves::SIZE_LIMIT`] in magnitude.
+    #[test]
+    fn a_curve_past_the_size_limit_is_not_well_formed() {
+        use crate::curves::SIZE_LIMIT;
+        let circle = |c: f64, radius| {
+            Curve2D::Circle(Circle2D {
+                center: Point2::new(c, 0.0),
+                radius,
+            })
+        };
+        let ellipse = |c: f64, semi_major| {
+            Curve2D::Ellipse(Ellipse2D {
+                center: Point2::new(0.0, c),
+                semi_major,
+                semi_minor: 1.0,
+                rotation: 0.0,
+            })
+        };
+        for (c, r, good) in [
+            (SIZE_LIMIT, SIZE_LIMIT, true),
+            (-SIZE_LIMIT * 2.0, 1.0, false),
+            (0.0, SIZE_LIMIT * 2.0, false),
+        ] {
+            assert_eq!(circle(c, r).is_well_formed(), good, "{c} {r}");
+            assert_eq!(ellipse(c, r).is_well_formed(), good, "{c} {r}");
+        }
+        let line = Curve2D::Line(Line2D {
+            origin: Point2::new(SIZE_LIMIT * 2.0, 0.0),
+            direction: Vec2::new(1.0, 0.0),
+        });
+        assert!(!line.is_well_formed());
+    }
+
+    /// A degree from outside data can be any number, and the count of knots
+    /// it asks for can pass the largest `usize`: the constructor refuses it
+    /// with an error, and does not overflow.
+    #[test]
+    fn a_degree_whose_knot_count_overflows_is_refused() {
+        let points = vec![Point2::new(0.0, 0.0), Point2::new(1.0, 0.0)];
+        for degree in [usize::MAX, usize::MAX - 1, usize::MAX - 2] {
+            let found = NurbsCurve2D::new(degree, vec![0.0; 4], points.clone(), vec![1.0; 2]);
+            assert!(
+                matches!(found, Err(MathError::InvalidKnotVector { .. })),
+                "{degree}: {found:?}"
+            );
         }
     }
 

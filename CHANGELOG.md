@@ -1,5 +1,15 @@
 # Changelog
 
+## [4.11.51](https://github.com/andymai/brepkit/compare/v4.11.50...v4.11.51) (2026-11-25)
+
+
+### Bug Fixes
+
+* **algo,operations:** give a straight pcurve only under a 3D bound, and refuse a fuse result that breaks Euler ([#2825](https://github.com/andymai/brepkit/issues/2825)) ([9e65ab5](https://github.com/andymai/brepkit/commit/9e65ab5ee856aa85e48ea12f1e921d5cf8817c6a))
+* **algo:** cut a whole circle on a plane face where another section meets it, not peel it as a cap ([#2845](https://github.com/andymai/brepkit/issues/2845)) ([ac7dade](https://github.com/andymai/brepkit/commit/ac7dade667fae975d02d0ef1ba1dd3ef7d7cb4d5))
+* **algo:** keep an arc apart from the line between its ends in the plane arrangement ([#2837](https://github.com/andymai/brepkit/issues/2837)) ([4af2de9](https://github.com/andymai/brepkit/commit/4af2de9f2635d8272c5eb6f6ef5907b401ac8e43))
+* **math,io,wasm,operations:** refuse NaN and huge sizes, check analytic geometry on load and in wasm, and refuse a face too far out to mesh ([#2834](https://github.com/andymai/brepkit/issues/2834)) ([78c85b2](https://github.com/andymai/brepkit/commit/78c85b2aa0ca1d47351d518ab34d0aab0f6e9850))
+
 ## [4.11.50](https://github.com/andymai/brepkit/compare/v4.11.49...v4.11.50) (2026-11-24)
 
 

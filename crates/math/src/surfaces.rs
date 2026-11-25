@@ -29,9 +29,9 @@ impl CylindricalSurface {
     /// Creates a new cylindrical surface.
     ///
     /// # Errors
-    /// Returns an error if radius is not positive or axis is zero.
+    /// Returns an error if radius is not finite and positive or axis is zero.
     pub fn new(origin: Point3, axis: Vec3, radius: f64) -> Result<Self, MathError> {
-        if radius <= 0.0 {
+        if !(radius > 0.0 && radius.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: radius,
                 min: f64::EPSILON,
@@ -102,14 +102,14 @@ impl CylindricalSurface {
     /// from STEP `AXIS2_PLACEMENT_3D` or BREP round-trips.
     ///
     /// # Errors
-    /// Returns an error if radius is not positive or axis is zero.
+    /// Returns an error if radius is not finite and positive or axis is zero.
     pub fn with_ref_dir(
         origin: Point3,
         axis: Vec3,
         radius: f64,
         ref_dir: Vec3,
     ) -> Result<Self, MathError> {
-        if radius <= 0.0 {
+        if !(radius > 0.0 && radius.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: radius,
                 min: f64::EPSILON,
@@ -244,7 +244,7 @@ impl ConicalSurface {
     /// # Errors
     /// Returns an error if half-angle is not in `(0, π/2)` or axis is zero.
     pub fn new(apex: Point3, axis: Vec3, half_angle: f64) -> Result<Self, MathError> {
-        if half_angle <= 0.0 || half_angle >= std::f64::consts::FRAC_PI_2 {
+        if !(half_angle > 0.0 && half_angle < std::f64::consts::FRAC_PI_2) {
             return Err(MathError::ParameterOutOfRange {
                 value: half_angle,
                 min: f64::EPSILON,
@@ -324,7 +324,7 @@ impl ConicalSurface {
         half_angle: f64,
         ref_dir: Vec3,
     ) -> Result<Self, MathError> {
-        if half_angle <= 0.0 || half_angle >= std::f64::consts::FRAC_PI_2 {
+        if !(half_angle > 0.0 && half_angle < std::f64::consts::FRAC_PI_2) {
             return Err(MathError::ParameterOutOfRange {
                 value: half_angle,
                 min: f64::EPSILON,
@@ -480,9 +480,9 @@ impl SphericalSurface {
     /// Creates a new spherical surface.
     ///
     /// # Errors
-    /// Returns an error if radius is not positive.
+    /// Returns an error if radius is not finite and positive.
     pub fn new(center: Point3, radius: f64) -> Result<Self, MathError> {
-        if radius <= 0.0 {
+        if !(radius > 0.0 && radius.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: radius,
                 min: f64::EPSILON,
@@ -501,9 +501,9 @@ impl SphericalSurface {
     /// Creates a spherical surface with a custom orientation.
     ///
     /// # Errors
-    /// Returns an error if radius is not positive or the z-axis is zero.
+    /// Returns an error if radius is not finite and positive or the z-axis is zero.
     pub fn with_axis(center: Point3, radius: f64, z_axis: Vec3) -> Result<Self, MathError> {
-        if radius <= 0.0 {
+        if !(radius > 0.0 && radius.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: radius,
                 min: f64::EPSILON,
@@ -528,14 +528,14 @@ impl SphericalSurface {
     /// [`ToroidalSurface::with_axis_and_ref_dir`] does for a torus.
     ///
     /// # Errors
-    /// Returns an error if radius is not positive or `z_axis` is zero.
+    /// Returns an error if radius is not finite and positive or `z_axis` is zero.
     pub fn with_axis_and_ref_dir(
         center: Point3,
         radius: f64,
         z_axis: Vec3,
         ref_dir: Vec3,
     ) -> Result<Self, MathError> {
-        if radius <= 0.0 {
+        if !(radius > 0.0 && radius.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: radius,
                 min: f64::EPSILON,
@@ -795,16 +795,16 @@ impl ToroidalSurface {
     /// Creates a new toroidal surface.
     ///
     /// # Errors
-    /// Returns an error if either radius is not positive or `minor_radius > major_radius`.
+    /// Returns an error if either radius is not finite and positive or `minor_radius > major_radius`.
     pub fn new(center: Point3, major_radius: f64, minor_radius: f64) -> Result<Self, MathError> {
-        if major_radius <= 0.0 {
+        if !(major_radius > 0.0 && major_radius.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: major_radius,
                 min: f64::EPSILON,
                 max: f64::MAX,
             });
         }
-        if minor_radius <= 0.0 {
+        if !(minor_radius > 0.0 && minor_radius.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: minor_radius,
                 min: f64::EPSILON,
@@ -827,21 +827,21 @@ impl ToroidalSurface {
     /// coordinate frame is derived from it.
     ///
     /// # Errors
-    /// Returns an error if either radius is not positive or axis is zero.
+    /// Returns an error if either radius is not finite and positive or axis is zero.
     pub fn with_axis(
         center: Point3,
         major_radius: f64,
         minor_radius: f64,
         z_axis: Vec3,
     ) -> Result<Self, MathError> {
-        if major_radius <= 0.0 {
+        if !(major_radius > 0.0 && major_radius.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: major_radius,
                 min: f64::EPSILON,
                 max: f64::MAX,
             });
         }
-        if minor_radius <= 0.0 {
+        if !(minor_radius > 0.0 && minor_radius.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: minor_radius,
                 min: f64::EPSILON,
@@ -868,7 +868,7 @@ impl ToroidalSurface {
     /// # Errors
     ///
     /// Returns [`MathError::ParameterOutOfRange`] if either radius is
-    /// non-positive, or [`MathError::ZeroVector`] if `z_axis` is zero.
+    /// not finite and positive, or [`MathError::ZeroVector`] if `z_axis` is zero.
     ///
     /// # Panics
     ///
@@ -881,14 +881,14 @@ impl ToroidalSurface {
         z_axis: Vec3,
         ref_dir: Vec3,
     ) -> Result<Self, MathError> {
-        if major_radius <= 0.0 {
+        if !(major_radius > 0.0 && major_radius.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: major_radius,
                 min: f64::EPSILON,
                 max: f64::MAX,
             });
         }
-        if minor_radius <= 0.0 {
+        if !(minor_radius > 0.0 && minor_radius.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
                 value: minor_radius,
                 min: f64::EPSILON,

@@ -607,8 +607,10 @@ fn build_manifold_shell(
 /// - Too few faces (< `MIN_SOLID_FACES`)
 /// - No edges or vertices (empty topology)
 /// - Unclosed wires and non-manifold edges (hard errors)
-/// - Euler characteristic, boundary edges, degenerate faces, and face area
-///   via [`crate::validate::validate_solid`] (logged as warnings)
+/// - The Euler-Poincaré relation on each piece, with its genus and inner
+///   loops, as [`crate::validate::validate_solid`] reads it (hard error)
+/// - Boundary edges, degenerate faces, and face area via
+///   [`crate::validate::validate_solid`] (logged as warnings)
 ///
 /// This is the strict acceptance gate for results that still have a fallback
 /// available (the GFA pipeline). The mesh fallback's terminal sanity check is
@@ -726,6 +728,15 @@ pub(super) fn validate_boolean_result(
                  {non_manifold_edges} non-manifold edge(s), and \
                  {free_edges} free boundary edge(s)"
             ),
+        });
+    }
+
+    // A closed shell whose counts break the Euler-Poincaré relation has a
+    // face that is not the patch its wires make it (a hole lost, a vertex
+    // that should be two), though every count above holds.
+    if let Some(misfit) = crate::validate::solid_euler_misfit(topo, solid)? {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: format!("boolean result: {misfit}"),
         });
     }
 
@@ -2770,75 +2781,6 @@ fn face_normal_at_point(face: &Face, point: Point3) -> Vec3 {
     } else {
         raw_normal
     }
-}
-
-/// Register pcurves for all edges on their faces.
-///
-/// For each face, iterates its outer and inner wires, and for each edge,
-/// computes the 2D pcurve (projection of the 3D edge curve into the face's
-/// surface parameter space) and stores it in the topology's pcurve registry.
-///
-/// This enables `build_manifold_shells` to look up pcurves for validated
-/// binormal computation on curved surfaces.
-#[allow(dead_code)]
-pub(super) fn register_pcurves(
-    topo: &mut Topology,
-    face_ids: &[FaceId],
-) -> Result<(), crate::OperationsError> {
-    use brepkit_algo::compute_pcurve_on_surface;
-    use brepkit_topology::pcurve::PCurve;
-
-    for &fid in face_ids {
-        let face = topo.face(fid)?;
-        let surface = face.surface().clone();
-
-        // Collect wire points for PlaneFrame construction (plane faces only).
-        let wire_pts: Vec<Point3> = {
-            let wire = topo.wire(face.outer_wire())?;
-            wire.edges()
-                .iter()
-                .filter_map(|oe| {
-                    topo.edge(oe.edge()).ok().and_then(|e| {
-                        topo.vertex(e.start())
-                            .ok()
-                            .map(brepkit_topology::vertex::Vertex::point)
-                    })
-                })
-                .collect()
-        };
-
-        let wire_ids: Vec<_> = {
-            let f = topo.face(fid)?;
-            std::iter::once(f.outer_wire())
-                .chain(f.inner_wires().iter().copied())
-                .collect()
-        };
-
-        for wid in wire_ids {
-            let wire = topo.wire(wid)?;
-            let edges: Vec<_> = wire.edges().to_vec();
-            for oe in &edges {
-                let eid = oe.edge();
-                // Skip if already registered.
-                if topo.pcurves().contains(eid, fid) {
-                    continue;
-                }
-
-                let edge = topo.edge(eid)?;
-                let start = topo.vertex(edge.start())?.point();
-                let end = topo.vertex(edge.end())?.point();
-                let curve_3d = edge.curve();
-
-                let pcurve_2d =
-                    compute_pcurve_on_surface(curve_3d, start, end, &surface, &wire_pts, None);
-
-                // Parameter range: [0, 1] for the pcurve.
-                let pc = PCurve::new(pcurve_2d, 0.0, 1.0);
-                topo.pcurves_mut().set(eid, fid, pc);
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Compute the binormal direction using a pcurve from the registry.
