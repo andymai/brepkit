@@ -286,8 +286,20 @@ fn link_along_split_arc(
             .ok()
             .map(brepkit_topology::vertex::Vertex::point)
     };
+    // The section's parameter at a vertex of the walk.
+    let along = |v: VertexId| {
+        if v == sv {
+            Some(start.parameter)
+        } else if v == ev {
+            Some(end.parameter)
+        } else {
+            point(v).and_then(inside)
+        }
+    };
     // Walk boundary pieces on this circle from the start vertex, each one
-    // lying inside the section's span, until the end vertex.
+    // lying inside the section's span and able to join the section's piece
+    // beside it, until the end vertex. A piece that cannot join (a copy on a
+    // turned circle) is passed over for the next.
     let mut chain: Vec<(PaveBlockId, VertexId)> = Vec::new();
     let mut at = sv;
     while at != ev && chain.len() < MAX_PIECES {
@@ -298,9 +310,6 @@ fn link_along_split_arc(
                 }
                 let pb = arena.pave_blocks.get(pb_id)?;
                 let edge = topo.edge(pb.original_edge).ok()?;
-                if !curves_compatible(section_curve, edge.curve(), tol) {
-                    return None;
-                }
                 let EdgeCurve::Circle(own) = edge.curve() else {
                     return None;
                 };
@@ -311,7 +320,8 @@ fn link_along_split_arc(
                 let other = if a == at { b } else { a };
                 let mid = own.evaluate(f64::midpoint(pb.start.parameter, pb.end.parameter));
                 inside(mid)?;
-                Some((pb_id, other))
+                let span = (along(at)?, along(other)?);
+                can_link(topo, tol, arena, section_curve, span, pb_id).then_some((pb_id, other))
             })
         });
         let Some((pb_id, other)) = next else {
@@ -732,6 +742,99 @@ mod tests {
             assert!(
                 !arena.pb_to_cb.contains_key(&block(rest)),
                 "run {run}: the rest joins a block"
+            );
+        }
+    }
+
+    /// A section along a rim from angle 0 to 2, a rim piece from 0 to 1, and
+    /// two pieces from 1 to 2: one on the rim's circle and one on that circle
+    /// turned a millionth of a radian about the x axis, which no bound holds
+    /// on the section. With either piece made first, the walk passes over
+    /// the turned piece, and the section's two pieces join the rim's pieces
+    /// on its circle.
+    #[test]
+    fn a_section_along_a_rim_takes_the_piece_the_bound_holds() {
+        let centre = Point3::new(0.0, 0.0, 0.0);
+        let circle = Circle3D::with_axes(
+            centre,
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap();
+        let (sin, cos) = 1e-6f64.sin_cos();
+        let tilted = Circle3D::with_axes(
+            centre,
+            Vec3::new(0.0, -sin, cos),
+            1.0,
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, cos, sin),
+        )
+        .unwrap();
+        for tilted_first in [true, false] {
+            let mut topo = Topology::default();
+            let v: Vec<_> = [0.0, 1.0, 2.0]
+                .iter()
+                .map(|&t| topo.add_vertex(Vertex::new(circle.evaluate(t), 1e-7)))
+                .collect();
+            let e01 = topo.add_edge(Edge::new(v[0], v[1], EdgeCurve::Circle(circle.clone())));
+            let second = |topo: &mut Topology, c: &Circle3D| {
+                topo.add_edge(Edge::new(v[1], v[2], EdgeCurve::Circle(c.clone())))
+            };
+            let (turned, exact) = if tilted_first {
+                let turned = second(&mut topo, &tilted);
+                (turned, second(&mut topo, &circle))
+            } else {
+                let exact = second(&mut topo, &circle);
+                (second(&mut topo, &tilted), exact)
+            };
+            let section = topo.add_edge(Edge::new(v[0], v[2], EdgeCurve::Circle(circle.clone())));
+            let wire =
+                topo.add_wire(Wire::new(vec![OrientedEdge::new(section, true)], false).unwrap());
+            let face = topo.add_face(Face::new(
+                wire,
+                vec![],
+                FaceSurface::Plane {
+                    normal: Vec3::new(0.0, 0.0, 1.0),
+                    d: 0.0,
+                },
+            ));
+            let mut arena = GfaArena::new();
+            arena.init_edge_pave_block(e01, v[0], 0.0, v[1], 1.0);
+            arena.init_edge_pave_block(turned, v[1], 1.0, v[2], 2.0);
+            arena.init_edge_pave_block(exact, v[1], 1.0, v[2], 2.0);
+            let section_pb = arena.pave_blocks.alloc(crate::ds::PaveBlock::new(
+                section,
+                crate::ds::Pave::new(v[0], 0.0),
+                crate::ds::Pave::new(v[2], 2.0),
+            ));
+            arena.curves.push(IntersectionCurveDS {
+                curve: EdgeCurve::Circle(circle.clone()),
+                face_a: face,
+                face_b: face,
+                bbox: Aabb3::from_points([
+                    Point3::new(-1.0, -1.0, 0.0),
+                    Point3::new(1.0, 1.0, 0.0),
+                ]),
+                pave_blocks: vec![section_pb],
+                t_range: (0.0, 2.0),
+            });
+
+            super::perform(&topo, Tolerance::default(), &mut arena).unwrap();
+
+            let block = |edge| arena.edge_pave_blocks[&edge][0];
+            let leaves = arena.collect_leaf_pave_blocks(&[section_pb]);
+            let joined: Vec<_> = leaves.iter().map(|pb| arena.pb_to_cb.get(pb)).collect();
+            let want = [block(e01), block(exact)].map(|pb| arena.pb_to_cb.get(&pb));
+            assert!(
+                leaves.len() == 2 && want.iter().all(Option::is_some) && joined == want,
+                "tilted first: {tilted_first}: {} pieces, joined {joined:?}, want {want:?}",
+                leaves.len()
+            );
+            assert!(
+                !arena.pb_to_cb.contains_key(&block(turned)),
+                "tilted first: {tilted_first}: the turned piece joins a block"
             );
         }
     }
