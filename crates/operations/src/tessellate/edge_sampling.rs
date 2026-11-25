@@ -228,33 +228,52 @@ pub(super) fn nurbs_edge_breaks(
         p - (a + chord * f)
     };
     let off_chord = |p: Point3, a: Point3, b: Point3| off_chord_by(p, a, b).length();
-    // While its weights are positive, the curve over a span lies in the hull
-    // of the control points whose basis functions reach into the span: no
-    // point of it is farther from the chord than the farthest of them. The
-    // span is straight as stored when each coordinate of each of their
-    // offsets is within the rounding of that coordinate, at its largest
-    // size among the stored control points there: a coordinate far from
-    // zero cannot hide another's offset.
-    let hull_off_chord = |span_lo: f64, span_hi: f64, pa: Point3, pb: Point3| {
-        let (all_knots, controls) = (nurbs.knots(), nurbs.control_points());
-        let (degree, last) = (nurbs.degree(), controls.len() - 1);
+    // The control points of `curve` whose basis functions reach into the
+    // span from `span_lo` to `span_hi`, as a range of their indices.
+    let reaching = |curve: &brepkit_math::nurbs::curve::NurbsCurve, span_lo: f64, span_hi: f64| {
+        let (degree, last) = (curve.degree(), curve.control_points().len() - 1);
         let span_of = |at: usize| at.saturating_sub(1).clamp(degree, last);
-        let first = span_of(all_knots.partition_point(|&k| k <= span_lo)) - degree;
-        let end = span_of(all_knots.partition_point(|&k| k < span_hi));
+        let first = span_of(curve.knots().partition_point(|&k| k <= span_lo)) - degree;
+        let end = span_of(curve.knots().partition_point(|&k| k < span_hi));
+        first..=end
+    };
+    // While its weights are positive, the curve over a span lies in the hull
+    // of the span's own control points: those that reach into it, cut at the
+    // span's ends by knots inserted to the degree, so that none stands for a
+    // part of the curve outside the span. No point of the span is farther
+    // from the chord than the farthest of them. The span is straight as
+    // stored when each coordinate of each of their offsets is within the
+    // rounding of that coordinate, at its largest size among the stored
+    // control points there: a coordinate far from zero cannot hide
+    // another's offset.
+    let hull_off_chord = |span_lo: f64, span_hi: f64, pa: Point3, pb: Point3| {
+        let degree = nurbs.degree();
+        let window = reaching(nurbs, span_lo, span_hi);
+        let weights = &nurbs.weights()[window.clone()];
+        if !weights.iter().all(|&w| w > 0.0 && w.is_finite()) {
+            return (f64::INFINITY, false);
+        }
         let mut scale = [0.0_f64; 3];
-        for p in &stored.control_points()[first..=end] {
+        for p in &stored.control_points()[window.clone()] {
             for (s, c) in scale.iter_mut().zip([p.x(), p.y(), p.z()]) {
                 *s = s.max(c.abs());
             }
         }
+        let knots_of_window = *window.start()..=*window.end() + degree + 1;
+        let own = brepkit_math::nurbs::curve::NurbsCurve::new(
+            degree,
+            nurbs.knots()[knots_of_window].to_vec(),
+            nurbs.control_points()[window.clone()].to_vec(),
+            weights.to_vec(),
+        )
+        .and_then(|w| brepkit_math::nurbs::knot_ops::curve_knot_insert(&w, span_lo, degree))
+        .and_then(|w| brepkit_math::nurbs::knot_ops::curve_knot_insert(&w, span_hi, degree))
+        .map(|piece| piece.control_points()[reaching(&piece, span_lo, span_hi)].to_vec())
+        .unwrap_or_else(|_| nurbs.control_points()[window].to_vec());
         let mut far = 0.0_f64;
         let mut straight = true;
-        for i in first..=end {
-            let w = nurbs.weights()[i];
-            if !(w > 0.0 && w.is_finite()) {
-                return (f64::INFINITY, false);
-            }
-            let off = off_chord_by(controls[i], pa, pb);
+        for &point in &own {
+            let off = off_chord_by(point, pa, pb);
             far = far.max(off.length());
             straight &= [off.x(), off.y(), off.z()]
                 .iter()
@@ -1185,6 +1204,99 @@ mod tests {
         let barely = bowed(base, ulp);
         let breaks = nurbs_edge_breaks(&barely, 0.0, 1.0, 1e-7, 0.0).unwrap();
         assert!(breaks.len() <= 3, "{breaks:?}");
+    }
+
+    /// An edge on part of its spline is read over its own range. A straight
+    /// spline of 1,000,001 pieces, and one of 1001 at degree 3, each with
+    /// an edge on 10 of them, from knots or from inside pieces, take one
+    /// span at a deflection of 1e-12 and an angle of 1e-9: bounded by the
+    /// control points of whole pieces, which run past the edge's ends, they
+    /// were cut for the rounding of their tangents past the limit. A zigzag
+    /// edge on 10 pieces keeps its 11 corners; a short piece of a curved
+    /// spline, and rational arcs with weights of 1e-6 and 1e6, keep within
+    /// the deflection.
+    #[test]
+    fn an_edge_on_part_of_its_spline_is_read_over_its_own_range() {
+        let spline = |degree: usize, points: Vec<Point3>, weights: Vec<f64>| {
+            let n = points.len();
+            let mut knots = vec![0.0; degree + 1];
+            #[allow(clippy::cast_precision_loss)]
+            knots.extend((1..n - degree).map(|k| k as f64));
+            #[allow(clippy::cast_precision_loss)]
+            knots.extend(vec![(n - degree) as f64; degree + 1]);
+            NurbsCurve::new(degree, knots, points, weights).unwrap()
+        };
+        let worst = |curve: &NurbsCurve, breaks: &[f64]| {
+            let polyline: Vec<Point3> = breaks.iter().map(|&t| curve.evaluate(t)).collect();
+            let (t0, t1) = (breaks[0], breaks[breaks.len() - 1]);
+            (0..=10_000)
+                .map(|k| {
+                    let q = curve.evaluate(t0 + (t1 - t0) * f64::from(k) / 10_000.0);
+                    polyline
+                        .windows(2)
+                        .map(|w| {
+                            let chord = w[1] - w[0];
+                            let f = ((q - w[0]).dot(chord) / chord.dot(chord)).clamp(0.0, 1.0);
+                            (q - (w[0] + chord * f)).length()
+                        })
+                        .fold(f64::INFINITY, f64::min)
+                })
+                .fold(0.0, f64::max)
+        };
+        let along = Vec3::new(1.0, 2.0, 3.0).normalize().unwrap();
+        for (degree, pieces) in [(1, 1_000_001_usize), (3, 1001)] {
+            #[allow(clippy::cast_precision_loss)]
+            let points: Vec<Point3> = (0..pieces + degree)
+                .map(|i| Point3::new(0.0, 0.0, 0.0) + along * (i as f64 * 1e-3))
+                .collect();
+            let weights = vec![1.0; points.len()];
+            let curve = spline(degree, points, weights);
+            let from = (pieces / 2) as f64;
+            for (t0, t1) in [(from, from + 10.0), (from + 0.3, from + 9.6)] {
+                let breaks = nurbs_edge_breaks(&curve, t0, t1, 1e-12, 1e-9);
+                assert!(
+                    matches!(&breaks, Ok(b) if b.len() <= 3),
+                    "degree {degree} on {t0}..{t1}: {:?}",
+                    breaks.map(|b| b.len())
+                );
+            }
+        }
+        let zigzag: Vec<Point3> = (0..=1001_u32)
+            .map(|i| Point3::new(f64::from(i), f64::from(i % 2), 0.0))
+            .collect();
+        let zigzag = spline(1, zigzag, vec![1.0; 1002]);
+        let breaks = nurbs_edge_breaks(&zigzag, 500.0, 510.0, 1e-3, 0.35).unwrap();
+        assert_eq!(breaks.len(), 11, "{breaks:?}");
+
+        #[allow(clippy::cast_precision_loss)]
+        let round: Vec<Point3> = (0..200)
+            .map(|i| {
+                let a = f64::from(i) / 200.0 * std::f64::consts::TAU * 0.9;
+                Point3::new(a.cos(), a.sin(), 0.0)
+            })
+            .collect();
+        let round = spline(3, round, vec![1.0; 200]);
+        let breaks = nurbs_edge_breaks(&round, 50.13, 50.57, 1e-9, 0.0).unwrap();
+        let off = worst(&round, &breaks);
+        assert!(
+            off <= 1e-9,
+            "a piece of a round: {off} in {} breaks",
+            breaks.len()
+        );
+        for w in [1e-6, 1e6] {
+            let arc = spline(
+                2,
+                vec![
+                    Point3::new(0.0, 0.0, 0.0),
+                    Point3::new(1.0, 1.0, 0.0),
+                    Point3::new(2.0, 0.0, 0.0),
+                ],
+                vec![1.0, w, 1.0],
+            );
+            let breaks = nurbs_edge_breaks(&arc, 0.0, 1.0, 1e-9, 0.0).unwrap();
+            let off = worst(&arc, &breaks);
+            assert!(off <= 1e-9, "weight {w}: {off} in {} breaks", breaks.len());
+        }
     }
 
     /// A spline that turns a corner on a middle piece that barely moves (its
