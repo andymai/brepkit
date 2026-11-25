@@ -168,7 +168,7 @@ pub(super) fn edge_sample_count(
 /// Returns [`crate::OperationsError::TooManySamples`] if the edge would take
 /// more samples than the tessellator allows.
 pub(super) fn nurbs_edge_breaks(
-    nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
+    stored: &brepkit_math::nurbs::curve::NurbsCurve,
     t0: f64,
     t1: f64,
     deflection: f64,
@@ -178,10 +178,33 @@ pub(super) fn nurbs_edge_breaks(
     // step over a polynomial piece.
     const MAX_KNOTS: usize = 8;
     const MIN_TURN_LENGTH: f64 = 0.1;
-    // The rounding of a point read off a chord, in units of the largest
-    // coordinate's relative precision: the error of the chord's evaluated
-    // ends and of the distance itself.
+    // The rounding of one coordinate of a point read off a chord, in units
+    // of that coordinate's relative precision at its largest size there:
+    // the error of the chord's evaluated ends and of the offset itself.
     const ROUNDING: f64 = 4.0;
+
+    // The curve is read from its first control point: the rounding of what
+    // is read then follows the curve's own size, not its distance from the
+    // origin. The parameters, which are what this gives, are the same.
+    let first_point = stored.control_points()[0];
+    let shifted = brepkit_math::nurbs::curve::NurbsCurve::new(
+        stored.degree(),
+        stored.knots().to_vec(),
+        stored
+            .control_points()
+            .iter()
+            .map(|p| {
+                Point3::new(
+                    p.x() - first_point.x(),
+                    p.y() - first_point.y(),
+                    p.z() - first_point.z(),
+                )
+            })
+            .collect(),
+        stored.weights().to_vec(),
+    )
+    .ok();
+    let nurbs = shifted.as_ref().unwrap_or(stored);
 
     let (lo, hi) = (t0.min(t1), t0.max(t1));
     let mut knots: Vec<f64> = nurbs
@@ -192,7 +215,8 @@ pub(super) fn nurbs_edge_breaks(
         .collect();
     knots.dedup();
     let turn_limit = 0.5 * angular_tol;
-    let off_chord = |p: Point3, a: Point3, b: Point3| {
+    // The offset of `p` from the chord's segment `a b`.
+    let off_chord_by = |p: Point3, a: Point3, b: Point3| {
         let chord = b - a;
         let len2 = chord.dot(chord);
         let f = if len2 > 0.0 {
@@ -200,50 +224,64 @@ pub(super) fn nurbs_edge_breaks(
         } else {
             0.0
         };
-        (p - (a + chord * f)).length()
+        p - (a + chord * f)
     };
+    let off_chord = |p: Point3, a: Point3, b: Point3| off_chord_by(p, a, b).length();
     // While its weights are positive, the curve over a span lies in the hull
     // of the control points whose basis functions reach into the span: no
-    // point of it is farther from the chord than the farthest of them. Also
-    // the largest coordinate there, the scale of its rounding.
+    // point of it is farther from the chord than the farthest of them. The
+    // span is straight as stored when each coordinate of each of their
+    // offsets is within the rounding of that coordinate, at its largest
+    // size among the stored control points there: a coordinate far from
+    // zero cannot hide another's offset.
     let hull_off_chord = |span_lo: f64, span_hi: f64, pa: Point3, pb: Point3| {
         let (all_knots, controls) = (nurbs.knots(), nurbs.control_points());
         let (degree, last) = (nurbs.degree(), controls.len() - 1);
         let span_of = |at: usize| at.saturating_sub(1).clamp(degree, last);
         let first = span_of(all_knots.partition_point(|&k| k <= span_lo)) - degree;
         let end = span_of(all_knots.partition_point(|&k| k < span_hi));
-        let size = |p: Point3| p.x().abs().max(p.y().abs()).max(p.z().abs());
+        let mut scale = [0.0_f64; 3];
+        for p in &stored.control_points()[first..=end] {
+            for (s, c) in scale.iter_mut().zip([p.x(), p.y(), p.z()]) {
+                *s = s.max(c.abs());
+            }
+        }
         let mut far = 0.0_f64;
-        let mut scale = size(pa).max(size(pb));
+        let mut straight = true;
         for i in first..=end {
             let w = nurbs.weights()[i];
             if !(w > 0.0 && w.is_finite()) {
-                return (f64::INFINITY, scale);
+                return (f64::INFINITY, false);
             }
-            far = far.max(off_chord(controls[i], pa, pb));
-            scale = scale.max(size(controls[i]));
+            let off = off_chord_by(controls[i], pa, pb);
+            far = far.max(off.length());
+            straight &= [off.x(), off.y(), off.z()]
+                .iter()
+                .zip(scale)
+                .all(|(d, s)| d.abs() <= ROUNDING * f64::EPSILON * s);
         }
-        (far, scale)
+        (far, straight)
     };
     let parts = |a: f64, b: f64| {
         let (span_lo, span_hi) = (a.min(b), a.max(b));
         let from = knots.partition_point(|&k| k <= span_lo);
         let to = knots.partition_point(|&k| k < span_hi).max(from);
         let (pa, pb) = (nurbs.evaluate(a), nurbs.evaluate(b));
-        // A span whose control points lie within rounding of its chord is
-        // straight as stored: what its probes read off the chord, and the
-        // turn of its tangents, is rounding. It takes one span, as no cut
-        // can bring its samples closer to the curve than their rounding.
-        let (hull, scale) = hull_off_chord(span_lo, span_hi, pa, pb);
-        if hull <= ROUNDING * f64::EPSILON * scale {
-            return 1;
-        }
         // A closed curve has no chord: however small, it takes three spans
         // to enclose anything. A part of the edge whose ends meet is a piece
         // where the curve stands still, not a loop: cut as a closed curve,
         // it would be cut in three at every level without end.
         let whole = a.to_bits() == t0.to_bits() && b.to_bits() == t1.to_bits();
         let closed = whole && (pb - pa).length() <= 1e-9;
+        // A span whose control points lie within rounding of its chord is
+        // straight as stored: what its probes read off the chord, and the
+        // turn of its tangents, is rounding. It takes one span, as no cut
+        // can bring its samples closer to the curve than their rounding. A
+        // closed edge still takes its three.
+        let (hull, straight) = hull_off_chord(span_lo, span_hi, pa, pb);
+        if straight && !closed {
+            return 1;
+        }
         if to - from > MAX_KNOTS {
             return if closed { 3 } else { 2 };
         }
@@ -1016,6 +1054,86 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A loop 4e-6 across, 1e10 from the origin along x (a clamped cubic,
+    /// its ends at one point): its offsets are far below the rounding of x
+    /// but well above that of y and z, so it is not straight. It takes at
+    /// least three spans and keeps within the deflection, 1e-7, in y and z,
+    /// where its coordinates resolve it. Turned so its offsets mix into
+    /// every coordinate, it still takes three spans. An open spline bowed
+    /// 4e-6 off its chord there is cut.
+    #[test]
+    fn a_small_curve_far_out_keeps_its_shape() {
+        let cubic = |points: [Point3; 4]| {
+            let knots = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+            NurbsCurve::new(3, knots, points.to_vec(), vec![1.0; 4]).unwrap()
+        };
+        let distinct = |curve: &NurbsCurve, breaks: &[f64]| {
+            let mut points: Vec<Point3> = breaks.iter().map(|&t| curve.evaluate(t)).collect();
+            points.dedup_by(|p, q| (*p - *q).length() == 0.0);
+            if points.len() > 1 && (points[0] - points[points.len() - 1]).length() == 0.0 {
+                points.pop();
+            }
+            points.len()
+        };
+        let base = Point3::new(1e10, 0.0, 0.0);
+        let offsets = [
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 4e-6, 4e-6),
+            Vec3::new(0.0, -4e-6, 4e-6),
+            Vec3::new(0.0, 0.0, 0.0),
+        ];
+        let deflection = 1e-7;
+        for angle in [0.0, 0.35] {
+            let curve = cubic(offsets.map(|o| base + o));
+            let breaks = nurbs_edge_breaks(&curve, 0.0, 1.0, deflection, angle).unwrap();
+            assert!(distinct(&curve, &breaks) >= 3, "{breaks:?}");
+            // In y and z, the curve against its polyline.
+            let flat = |p: Point3| (p.y(), p.z());
+            let polyline: Vec<(f64, f64)> =
+                breaks.iter().map(|&t| flat(curve.evaluate(t))).collect();
+            let off = |q: (f64, f64)| {
+                polyline
+                    .windows(2)
+                    .map(|w| {
+                        let (a, b) = (w[0], w[1]);
+                        let (cx, cy) = (b.0 - a.0, b.1 - a.1);
+                        let len2 = cx * cx + cy * cy;
+                        let f = if len2 > 0.0 {
+                            (((q.0 - a.0) * cx + (q.1 - a.1) * cy) / len2).clamp(0.0, 1.0)
+                        } else {
+                            0.0
+                        };
+                        (q.0 - a.0 - cx * f).hypot(q.1 - a.1 - cy * f)
+                    })
+                    .fold(f64::INFINITY, f64::min)
+            };
+            #[allow(clippy::cast_precision_loss)]
+            let worst = (0..=10_000)
+                .map(|k| off(flat(curve.evaluate(f64::from(k) / 10_000.0))))
+                .fold(0.0, f64::max);
+            assert!(
+                worst <= deflection * 1.001,
+                "off by {worst} in {} breaks",
+                breaks.len()
+            );
+
+            let turn = brepkit_math::mat::Mat4::rotation_x(0.7)
+                * brepkit_math::mat::Mat4::rotation_z(0.4)
+                * brepkit_math::mat::Mat4::rotation_y(1.1);
+            let turned = cubic(offsets.map(|o| turn.mul_point(base + o)));
+            let breaks = nurbs_edge_breaks(&turned, 0.0, 1.0, deflection, angle).unwrap();
+            assert!(distinct(&turned, &breaks) >= 3, "turned: {breaks:?}");
+        }
+        let bowed = cubic([
+            base,
+            base + Vec3::new(0.0, 1.0 / 3.0, 4e-6),
+            base + Vec3::new(0.0, 2.0 / 3.0, 4e-6),
+            base + Vec3::new(0.0, 1.0, 0.0),
+        ]);
+        let breaks = nurbs_edge_breaks(&bowed, 0.0, 1.0, deflection, 0.0);
+        assert!(matches!(&breaks, Ok(b) if b.len() > 3), "bowed: {breaks:?}");
     }
 
     /// A spline that turns a corner on a middle piece that barely moves (its
