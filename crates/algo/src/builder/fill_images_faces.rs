@@ -96,7 +96,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
     // if the edge endpoints match a CB's split_edge endpoints (by quantized
     // position), reuse the CB's edge entity. This ensures faces from different
     // input solids share the same EdgeId at their common boundaries.
-    let cb_qpair_edges: HashMap<CbEdgeKey, brepkit_topology::edge::EdgeId> = {
+    let cb_qpair_edges: HashMap<CbEdgeKey, Vec<brepkit_topology::edge::EdgeId>> = {
         let scale = VERTEX_DEDUP_SCALE;
         let qpt = |p: brepkit_math::vec::Point3| -> (i64, i64, i64) {
             (
@@ -114,7 +114,7 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
                 let qs = qpt(sv.point());
                 let qe = qpt(ev.point());
                 let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
-                map.insert(key, edge_id);
+                map.entry(key).or_insert_with(Vec::new).push(edge_id);
             }
         }
         map
@@ -1137,7 +1137,9 @@ fn expand_edge<S: BuildHasher>(
 /// Whether `cb_edge` runs where an edge on `curve` from `start` to `end`
 /// does. The CommonBlock map is keyed by endpoint pair alone, and a chord
 /// shares both ends with the arc it subtends (a mesh polygon's edge on a
-/// cone's rim circle): substituting it would trace the face along the chord.
+/// cone's rim circle), as do two different arcs: substituting it would trace
+/// the face along the other curve. The two must be proved one curve, within
+/// the band the copies of one edge keep, along their whole length.
 fn cb_edge_runs_along(
     topo: &Topology,
     curve: &EdgeCurve,
@@ -1151,50 +1153,30 @@ fn cb_edge_runs_along(
     let (Ok(cs), Ok(ce)) = (topo.vertex(cb.start()), topo.vertex(cb.end())) else {
         return false;
     };
-    let (cs, ce) = (cs.point(), ce.point());
-    let (t0, t1) = curve.domain_with_endpoints(start, end);
-    let mid = curve.evaluate_with_endpoints(0.5 * (t0 + t1), start, end);
-    let (c0, c1) = cb.curve().domain_with_endpoints(cs, ce);
-    let at = |k: f64| (c1 - c0).madd(k / 32.0, c0);
-    let on_cb = |t: f64| cb.curve().evaluate_with_endpoints(t, cs, ce);
-    let samples: Vec<Point3> = (0..=32).map(|k| on_cb(at(f64::from(k)))).collect();
-    // The nearest chord only brackets the foot: a coincident arc
-    // parameterized differently meets the curve between samples, as far off
-    // the chord as its sag, so the distance is read on the curve itself.
-    let Some(nearest) = samples
-        .windows(2)
-        .map(|w| {
-            let d = w[1] - w[0];
-            let len2 = d.dot(d);
-            let f = if len2 > 0.0 {
-                ((mid - w[0]).dot(d) / len2).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            (mid - (w[0] + d * f)).length()
-        })
-        .enumerate()
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map(|(k, _)| k)
-    else {
-        return false;
-    };
-    #[allow(clippy::cast_precision_loss)]
-    let (mut lo, mut hi) = (
-        at(nearest.saturating_sub(1) as f64),
-        at((nearest + 2).min(32) as f64),
-    );
-    for _ in 0..60 {
-        let m1 = lo + (hi - lo) / 3.0;
-        let m2 = hi - (hi - lo) / 3.0;
-        if (on_cb(m1) - mid).length() < (on_cb(m2) - mid).length() {
-            hi = m2;
-        } else {
-            lo = m1;
-        }
-    }
-    let gap = (on_cb(f64::midpoint(lo, hi)) - mid).length();
-    gap <= 1e-4_f64.max(1e-4 * (end - start).length())
+    let band = 1e-4_f64.max(1e-4 * (end - start).length());
+    super::face_splitter::curves_one_curve(
+        (curve, start, end),
+        (cb.curve(), cs.point(), ce.point()),
+        band,
+    )
+}
+
+/// The CommonBlock edge among `candidates` that the edge `(curve, start,
+/// end)` takes: the first that runs where it does
+/// ([`cb_edge_runs_along`]), `own` among them, so all the edges of one
+/// bucket take the same one; `None` where that first is `own`, which the
+/// edge already is.
+fn cb_edge_for(
+    topo: &Topology,
+    candidates: Option<&Vec<EdgeId>>,
+    (curve, start, end): (&EdgeCurve, Point3, Point3),
+    own: EdgeId,
+) -> Option<EdgeId> {
+    candidates?
+        .iter()
+        .copied()
+        .find(|&cb| cb == own || cb_edge_runs_along(topo, curve, start, end, cb))
+        .filter(|&cb| cb != own)
 }
 
 /// Rebuild an unsplit face replacing boundary edges with CommonBlock shared edges.
@@ -1210,7 +1192,7 @@ fn cb_edge_runs_along(
 fn rebuild_face_with_cb_edges(
     topo: &mut Topology,
     face_id: FaceId,
-    cb_qpair_edges: &HashMap<CbEdgeKey, brepkit_topology::edge::EdgeId>,
+    cb_qpair_edges: &HashMap<CbEdgeKey, Vec<brepkit_topology::edge::EdgeId>>,
     vv_vertex_seed: &std::collections::BTreeMap<
         (i64, i64, i64),
         brepkit_topology::vertex::VertexId,
@@ -1259,10 +1241,13 @@ fn rebuild_face_with_cb_edges(
                 let qs = qpt(sv.point());
                 let qe = qpt(ev.point());
                 let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
-                if let Some(&cb_edge) = cb_qpair_edges.get(&key)
-                    && cb_edge != oe.edge()
-                    && (qs == qe
-                        || cb_edge_runs_along(topo, edge.curve(), sv.point(), ev.point(), cb_edge))
+                if cb_edge_for(
+                    topo,
+                    cb_qpair_edges.get(&key),
+                    (edge.curve(), sv.point(), ev.point()),
+                    oe.edge(),
+                )
+                .is_some()
                 {
                     return true;
                 }
@@ -1349,7 +1334,7 @@ fn rebuild_face_with_cb_edges(
         // Pre-lookup CB edge start positions (needed for orientation)
         let cb_start_qs: HashMap<brepkit_topology::edge::EdgeId, (i64, i64, i64)> = {
             let mut m = HashMap::new();
-            for &eid in cb_qpair_edges.values() {
+            for &eid in cb_qpair_edges.values().flatten() {
                 if let Ok(e) = topo.edge(eid)
                     && let Ok(v) = topo.vertex(e.start())
                 {
@@ -1370,21 +1355,18 @@ fn rebuild_face_with_cb_edges(
 
             // (1) CB edge replacement
             let key = if qs <= qe { (qs, qe) } else { (qe, qs) };
-            let runs_along = |topo: &Topology| {
-                qs == qe
-                    || curve.as_ref().is_some_and(|c| {
-                        let (Ok(a), Ok(b)) = (topo.vertex(sv), topo.vertex(ev)) else {
-                            return false;
-                        };
-                        cb_qpair_edges.get(&key).is_some_and(|&cb| {
-                            cb_edge_runs_along(topo, c, a.point(), b.point(), cb)
-                        })
-                    })
-            };
-            if let Some(&cb_edge) = cb_qpair_edges.get(&key)
-                && cb_edge != eid
-                && runs_along(topo)
-            {
+            let shared = curve.as_ref().and_then(|c| {
+                let (Ok(a), Ok(b)) = (topo.vertex(sv), topo.vertex(ev)) else {
+                    return None;
+                };
+                cb_edge_for(
+                    topo,
+                    cb_qpair_edges.get(&key),
+                    (c, a.point(), b.point()),
+                    eid,
+                )
+            });
+            if let Some(cb_edge) = shared {
                 let new_fwd = if qs == qe {
                     // Closed rim replaced by the CB circle: endpoints cannot
                     // orient it (start == end makes the position test read
@@ -6373,7 +6355,7 @@ fn build_topology_face(
     tol: Tolerance,
     parent_face_id: FaceId,
     _shared_edge_cache: &mut HashMap<(usize, usize), brepkit_topology::edge::EdgeId>,
-    _cb_qpair_edges: &HashMap<CbEdgeKey, brepkit_topology::edge::EdgeId>,
+    _cb_qpair_edges: &HashMap<CbEdgeKey, Vec<brepkit_topology::edge::EdgeId>>,
     vv_vertex_seed: &BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
     rank_pool: Option<&BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>>,
     pb_vertex_registry: &mut BTreeMap<(i64, i64, i64), brepkit_topology::vertex::VertexId>,
@@ -7885,6 +7867,89 @@ mod tests {
             .unwrap(),
         );
         assert!(cb_edge_runs_along(&topo, &arc, a, b, along));
+    }
+
+    /// An arc of the circle of radius 2 about (5, 5) from 30 to 150 degrees
+    /// and an arc of the ellipse about (5, 4) of semi-axes 3 along y and
+    /// `3 root 3 / root 5` along x have the same ends and the same middle
+    /// (5, 7) but part by more than 0.02 between: neither runs along the
+    /// other. Nor does a whole circle along a whole ellipse that starts at
+    /// the circle's start. Each runs along its own curve.
+    #[test]
+    fn arcs_through_one_middle_on_two_curves_do_not_run_along_each_other() {
+        use brepkit_math::curves::Ellipse3D;
+        let c30 = 0.75f64.sqrt();
+        let sx = 3.0 * 3.0f64.sqrt() / 5.0f64.sqrt();
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let circle = EdgeCurve::Circle(
+            Circle3D::with_axes(Point3::new(5.0, 5.0, 0.0), z, 2.0, x, y).unwrap(),
+        );
+        let ellipse = EdgeCurve::Ellipse(
+            Ellipse3D::with_axes(Point3::new(5.0, 4.0, 0.0), z, 3.0, sx, y, -x).unwrap(),
+        );
+        let mut topo = Topology::new();
+        let (a, b) = (
+            Point3::new(2.0f64.madd(c30, 5.0), 6.0, 0.0),
+            Point3::new((-2.0f64).madd(c30, 5.0), 6.0, 0.0),
+        );
+        let va = topo.add_vertex(Vertex::new(a, 1e-7));
+        let vb = topo.add_vertex(Vertex::new(b, 1e-7));
+        let on_circle = topo.add_edge(Edge::new(va, vb, circle.clone()));
+        let on_ellipse = topo.add_edge(Edge::new(va, vb, ellipse.clone()));
+        assert!(!cb_edge_runs_along(&topo, &circle, a, b, on_ellipse));
+        assert!(!cb_edge_runs_along(&topo, &ellipse, a, b, on_circle));
+        assert!(cb_edge_runs_along(&topo, &circle, a, b, on_circle));
+        assert!(cb_edge_runs_along(&topo, &ellipse, a, b, on_ellipse));
+        // Whole curves, each closed at (7, 5): the ellipse about (5, 5) of
+        // semi-axes 2 along x and 1 along y.
+        let start = Point3::new(7.0, 5.0, 0.0);
+        let rim = EdgeCurve::Circle(
+            Circle3D::with_axes(Point3::new(5.0, 5.0, 0.0), z, 2.0, x, y).unwrap(),
+        );
+        let oval = EdgeCurve::Ellipse(
+            Ellipse3D::with_axes(Point3::new(5.0, 5.0, 0.0), z, 2.0, 1.0, x, y).unwrap(),
+        );
+        let vs = topo.add_vertex(Vertex::new(start, 1e-7));
+        let whole_rim = topo.add_edge(Edge::new(vs, vs, rim.clone()));
+        let whole_oval = topo.add_edge(Edge::new(vs, vs, oval.clone()));
+        assert!(!cb_edge_runs_along(&topo, &rim, start, start, whole_oval));
+        assert!(!cb_edge_runs_along(&topo, &oval, start, start, whole_rim));
+        assert!(cb_edge_runs_along(&topo, &rim, start, start, whole_rim));
+    }
+
+    /// Two CommonBlock edges on one segment in one bucket: an edge that is
+    /// the first of them keeps itself, the second takes the first, and an
+    /// edge on another curve between the same ends takes neither.
+    #[test]
+    fn a_bucket_of_two_matching_edges_shares_its_first() {
+        let mut topo = Topology::new();
+        let (a, b) = (Point3::new(0.0, 0.0, 0.0), Point3::new(2.0, 0.0, 0.0));
+        let va = topo.add_vertex(Vertex::new(a, 1e-7));
+        let vb = topo.add_vertex(Vertex::new(b, 1e-7));
+        let first = topo.add_edge(Edge::new(va, vb, EdgeCurve::Line));
+        let second = topo.add_edge(Edge::new(va, vb, EdgeCurve::Line));
+        let bucket = vec![first, second];
+        let line = (&EdgeCurve::Line, a, b);
+        assert_eq!(cb_edge_for(&topo, Some(&bucket), line, first), None);
+        assert_eq!(cb_edge_for(&topo, Some(&bucket), line, second), Some(first));
+        let arc = EdgeCurve::Circle(
+            Circle3D::new_with_ref(
+                Point3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                1.0,
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap(),
+        );
+        let arc_edge = topo.add_edge(Edge::new(vb, va, arc.clone()));
+        assert_eq!(
+            cb_edge_for(&topo, Some(&bucket), (&arc, b, a), arc_edge),
+            None
+        );
     }
 
     /// A plane sub-face whose hole the splitter reached twice (woven into
