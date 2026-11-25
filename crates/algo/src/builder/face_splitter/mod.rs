@@ -19341,6 +19341,99 @@ mod tests {
         }
     }
 
+    /// A half turn of a circle of radius 2 or an ellipse of semi-axes 3 and
+    /// 1.5 about the plate's (5, 5) from each of several angles, with its
+    /// chord: given twice, as is or the second stored the other way round,
+    /// it bounds the half and the rest with one arc; with the other half
+    /// from the same ends, the two halves and the rest. In each frame.
+    #[test]
+    fn half_turns_with_the_same_ends_are_one_on_one_half_and_two_on_two() {
+        use brepkit_math::curves::{Circle3D, Ellipse3D};
+        use std::f64::consts::PI;
+        for (pose, o, u, v) in plate_frames() {
+            let n = u.cross(v);
+            let centre = o + u * 5.0 + v * 5.0;
+            for (curve, ab) in [
+                (
+                    EdgeCurve::Circle(Circle3D::with_axes(centre, n, 2.0, u, v).unwrap()),
+                    4.0,
+                ),
+                (
+                    EdgeCurve::Ellipse(Ellipse3D::with_axes(centre, n, 3.0, 1.5, u, v).unwrap()),
+                    4.5,
+                ),
+            ] {
+                let half = 0.5 * PI * ab;
+                let reversed = curve.reversed().unwrap();
+                for start in [0.0, 0.3, 0.5 * PI, PI, 1.7] {
+                    let point = |t: f64| curve.evaluate_with_endpoints(t, centre, centre);
+                    let (p, q) = (point(start), point(start + PI));
+                    for case in ["twice", "reversed", "opposite"] {
+                        let second = match case {
+                            "twice" => curve_section(curve.clone(), p, q),
+                            "reversed" => curve_section(reversed.clone(), q, p),
+                            _ => curve_section(curve.clone(), q, p),
+                        };
+                        let sections = [
+                            curve_section(curve.clone(), p, q),
+                            second,
+                            line_section(q, p),
+                        ];
+                        let (topo, face_id) = plate_in_frame(o, u, v);
+                        let subs = split_face_2d(
+                            &topo,
+                            face_id,
+                            &sections,
+                            Rank::A,
+                            &brepkit_math::tolerance::Tolerance::new(),
+                            None,
+                            None,
+                            &std::collections::HashMap::new(),
+                            &std::collections::BTreeSet::new(),
+                            None,
+                        );
+                        let mut areas: Vec<f64> = subs
+                            .iter()
+                            .map(|s| {
+                                exact_wire_area(&s.outer_wire, o, u, v)
+                                    + s.inner_wires
+                                        .iter()
+                                        .map(|w| exact_wire_area(w, o, u, v))
+                                        .sum::<f64>()
+                            })
+                            .collect();
+                        areas.sort_by(f64::total_cmp);
+                        let mut want = if case == "opposite" {
+                            vec![half, half, 100.0 - 2.0 * half]
+                        } else {
+                            vec![half, 100.0 - half]
+                        };
+                        want.sort_by(f64::total_cmp);
+                        let what = format!("{pose}, {}, from {start:.3}, {case}", curve.type_tag());
+                        assert!(
+                            areas.len() == want.len()
+                                && areas.iter().zip(&want).all(|(a, w)| (a - w).abs() < 1e-9),
+                            "{what}: regions of areas {areas:?}, want {want:?}"
+                        );
+                        // Each half is bounded by its chord and one arc.
+                        for sub in &subs {
+                            let arcs = sub
+                                .outer_wire
+                                .iter()
+                                .filter(|e| !matches!(e.curve_3d, EdgeCurve::Line))
+                                .count();
+                            let lines = sub.outer_wire.len() - arcs;
+                            assert!(
+                                lines == 4 || (arcs == 1 && lines == 1),
+                                "{what}: a region of {arcs} arcs and {lines} lines"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// A circle of radius 2 and an ellipse of semi-axes 2 and 1.5 about the
     /// plate's (5, 5): a section over half a turn from each of several
     /// angles, its twin with it, and a line ending on its middle split both
