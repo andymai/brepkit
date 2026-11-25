@@ -114,10 +114,17 @@ impl<const N: usize> Vector<N> {
         Some((Self(std::array::from_fn(|i| self.0[i] * by)), back))
     }
 
-    /// The largest of the absolute values of the components.
+    /// The largest of the absolute values of the components; not a number
+    /// if a component is not.
     #[must_use]
     pub fn largest_component(self) -> f64 {
-        self.0.iter().fold(0.0_f64, |m, c| m.max(c.abs()))
+        self.0.iter().fold(0.0_f64, |m, c| {
+            if m.is_nan() || c.is_nan() {
+                f64::NAN
+            } else {
+                m.max(c.abs())
+            }
+        })
     }
 
     /// The vector scaled by [`unit_scale`] of its largest component: the
@@ -237,10 +244,13 @@ impl Vector<3> {
     /// Returns [`MathError::ZeroVector`] if the vector is zero or not
     /// finite, or lies so nearly along `axis` that its square part, under
     /// 1e-12 of its length, is rounding. A test of the part's length alone
-    /// takes the rounding of a vector along the axis for a direction.
+    /// takes the rounding of a vector along the axis for a direction. The
+    /// vector is taken at a unit size first, so that neither the projection
+    /// nor the test overflows or loses digits at either end of the range.
     pub fn square_part(self, axis: Self) -> Result<Self, MathError> {
-        let part = self - axis * self.dot(axis);
-        if part.length() > SQUARE_PART_LOW * self.length() {
+        let v = self.at_unit_size();
+        let part = v - axis * v.dot(axis);
+        if part.length() >= SQUARE_PART_LOW * v.length() {
             part.normalize()
         } else {
             Err(MathError::ZeroVector)
@@ -473,6 +483,96 @@ impl_serde_for_array_newtype!(Position, "Position");
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// The square part of a vector at either end of the float range: a
+    /// reference of 1.7e308 square to z, and one of the least subnormal
+    /// against (1, 1, 1). Each gives a unit direction square to the axis to
+    /// a few units of rounding. A vector along the axis is refused at any
+    /// size, and so is one that is not finite.
+    #[test]
+    fn a_square_part_holds_at_the_ends_of_the_float_range() {
+        let ulps = 8.0 * f64::EPSILON;
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let diagonal = Vec3::new(1.0, 1.0, 1.0).normalize().unwrap();
+        let least = f64::from_bits(1);
+        for (v, axis, want) in [
+            (
+                Vec3::new(1.7e308, 1.7e308, 0.0),
+                z,
+                Vec3::new(1.0, 1.0, 0.0).normalize().unwrap(),
+            ),
+            (
+                Vec3::new(least, 0.0, 0.0),
+                diagonal,
+                Vec3::new(2.0, -1.0, -1.0).normalize().unwrap(),
+            ),
+            (
+                Vec3::new(f64::MAX, -f64::MAX, f64::MAX),
+                diagonal,
+                Vec3::new(1.0, -2.0, 1.0).normalize().unwrap(),
+            ),
+        ] {
+            let part = v.square_part(axis).unwrap();
+            assert!(part.dot(axis).abs() <= ulps, "{v:?}: {part:?}");
+            assert!((part.length() - 1.0).abs() <= ulps, "{v:?}: {part:?}");
+            assert!((part - want).length() <= ulps, "{v:?}: {part:?}");
+        }
+        for s in [1.0, 1e-300, 1e300, least, f64::MAX] {
+            assert!(
+                Vec3::new(s, s, s).square_part(diagonal).is_err(),
+                "size {s}"
+            );
+        }
+        for bad in [
+            Vec3::new(f64::NAN, 1.0, 0.0),
+            Vec3::new(f64::INFINITY, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 0.0),
+        ] {
+            assert!(bad.square_part(z).is_err(), "{bad:?}");
+        }
+    }
+
+    /// A vector at a unit size at the ends of the float range: components
+    /// of `f64::MAX`, of the least subnormal, the two in one vector, and
+    /// zero. Each scaled vector is finite, its largest component is from
+    /// 2^-74 to 2^24, and each component keeps its sign. A vector with a
+    /// component that is not a number has no largest component.
+    #[test]
+    fn the_unit_size_holds_at_the_ends_of_the_float_range() {
+        let least = f64::from_bits(1);
+        for v in [
+            Vec3::new(f64::MAX, f64::MAX, -f64::MAX),
+            Vec3::new(least, 0.0, -least),
+            Vec3::new(f64::MAX, least, 0.0),
+            Vec3::new(-least, f64::MAX, 1.0),
+        ] {
+            let u = v.at_unit_size();
+            let most = u.largest_component();
+            assert!(u.0.iter().all(|c| c.is_finite()), "{v:?}: {u:?}");
+            assert!(
+                (2.0_f64.powi(-74)..=2.0_f64.powi(24)).contains(&most),
+                "{v:?}: {u:?}"
+            );
+            for (a, b) in v.0.iter().zip(u.0) {
+                assert!(
+                    b.to_bits() == 0 || a.signum().to_bits() == b.signum().to_bits(),
+                    "{v:?}: {u:?}"
+                );
+            }
+        }
+        let zero = Vec3::new(0.0, 0.0, 0.0);
+        assert_eq!(zero.at_unit_size(), zero);
+        for size in [0.0, f64::NAN, f64::INFINITY, -1.0] {
+            assert_eq!(unit_scale(size).to_bits(), 1.0_f64.to_bits(), "{size}");
+        }
+        assert_eq!(unit_scale(least).to_bits(), 2.0_f64.powi(1000).to_bits());
+        assert_eq!(
+            unit_scale(f64::MAX).to_bits(),
+            2.0_f64.powi(-1000).to_bits()
+        );
+        assert!(Vec3::new(f64::NAN, 1.0, 0.0).largest_component().is_nan());
+        assert!(Vec3::new(1.0, f64::NAN, 0.0).at_unit_size().y().is_nan());
+    }
 
     /// A vector's length and direction hold at every finite size: squared,
     /// a component of 1e200 overflows and one of 1e-200 underflows.
