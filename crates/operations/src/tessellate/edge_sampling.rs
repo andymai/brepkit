@@ -282,6 +282,20 @@ pub(super) fn nurbs_edge_breaks(
         .zip(corners.iter().copied().chain(std::iter::once(t1)))
         .map(|(a, b)| (a, b, false))
         .collect();
+    // A closed edge broken at one corner has two spans between the same two
+    // points, and two samples enclose nothing: the longer span is halved, so
+    // the edge keeps the three spans a closed curve needs. With no corner,
+    // the whole edge is cut in three or more as a closed curve.
+    let closed_edge = (nurbs.evaluate(t1) - nurbs.evaluate(t0)).length() <= 1e-9;
+    if closed_edge && spans.len() == 2 {
+        let longer = usize::from((spans[1].1 - spans[1].0).abs() > (spans[0].1 - spans[0].0).abs());
+        let (a, b, _) = spans[longer];
+        let mid = a + (b - a) * 0.5;
+        if mid.to_bits() == a.to_bits() || mid.to_bits() == b.to_bits() {
+            return Err(super::endless_samples("a NURBS edge", deflection));
+        }
+        spans.splice(longer..=longer, [(a, mid, false), (mid, b, false)]);
+    }
     loop {
         let mut next = Vec::with_capacity(spans.len() * 2);
         let mut cut = false;
@@ -354,7 +368,7 @@ pub(super) fn nurbs_edge_breaks(
     let kept = prune(1e-3 * deflection);
     // A closed curve smaller than that gap would lose the three spans it
     // needs to enclose anything: it keeps every break that moves at all.
-    if kept.len() < 4 && (nurbs.evaluate(t1) - nurbs.evaluate(t0)).length() <= 1e-9 {
+    if kept.len() < 4 && closed_edge {
         return Ok(prune(0.0));
     }
     Ok(kept)

@@ -7228,3 +7228,50 @@ fn a_grid_past_the_limit_in_one_direction_is_refused() {
     let solid = tessellate_solid(&topo, cone, 1e-14).map(|m| m.positions.len());
     assert!(refused(&solid), "{solid:?}");
 }
+
+/// A closed spline broken at one corner (its two halves meet at a knot as
+/// deep as its degree, at a turn) has two spans between the same two points.
+/// Each is within a coarse deflection of its chord, but two samples enclose
+/// nothing: the edge keeps three spans, and its face meshes to a triangle
+/// inside its outline, not to nothing. Finer, the mesh reaches the outline's
+/// area, 4/3.
+#[test]
+fn a_closed_spline_with_one_corner_meshes_its_face() {
+    use brepkit_math::nurbs::curve::NurbsCurve;
+
+    let mut topo = Topology::new();
+    let points = [(0.0, 0.0), (1.0, 1.0), (2.0, 0.0), (1.0, -1.0), (0.0, 0.0)]
+        .map(|(x, y)| Point3::new(x, y, 0.0));
+    let curve = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 1.0],
+        points.to_vec(),
+        vec![1.0; 5],
+    )
+    .unwrap();
+    let v = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+    let edge = topo.add_edge(Edge::new(v, v, EdgeCurve::NurbsCurve(curve)));
+    let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+    let face = topo.add_face(Face::new(
+        wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, -1.0),
+            d: 0.0,
+        },
+    ));
+    let area = |deflection: f64| {
+        let mesh = tessellate_with_tolerance(&topo, face, deflection, 0.0).unwrap();
+        mesh.indices
+            .chunks_exact(3)
+            .map(|t| {
+                let [a, b, c] = [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]);
+                0.5 * (b - a).cross(c - a).length()
+            })
+            .sum::<f64>()
+    };
+    let coarse = area(1.0);
+    assert!(coarse > 0.0 && coarse <= 4.0 / 3.0, "{coarse}");
+    let fine = area(1e-4);
+    assert!((fine - 4.0 / 3.0).abs() < 1e-3, "{fine}");
+}
