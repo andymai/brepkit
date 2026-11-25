@@ -574,12 +574,23 @@ fn b_spline_between(
     }
     breaks.push(to);
     let (mut points, mut weights, mut knots) =
-        (Vec::<Point3>::new(), Vec::new(), vec![from; p + 1]);
+        (Vec::<Point3>::new(), Vec::<f64>::new(), vec![from; p + 1]);
     for (n, span) in breaks.windows(2).enumerate() {
         let piece =
             brepkit_math::nurbs::decompose::curve_bezier_between(&local, span[0], span[1]).ok()?;
+        // One scale of all the weights of a piece keeps its shape. It brings
+        // the first weight of the piece to the last weight kept, so the one
+        // pole at the join stands for both pieces.
+        let factor = match weights.last() {
+            Some(&last) if n > 0 => last / piece.first()?[3],
+            _ => 1.0,
+        };
+        if !factor.is_finite() || factor <= 0.0 {
+            return None;
+        }
         for (k, q) in piece.iter().enumerate() {
-            if q[3].is_nan() || q[3] <= 0.0 {
+            let weight = q[3] * factor;
+            if !weight.is_finite() || weight <= 0.0 {
                 return None;
             }
             let point = Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3]);
@@ -594,7 +605,7 @@ fn b_spline_between(
                 continue;
             }
             points.push(point);
-            weights.push(q[3]);
+            weights.push(weight);
         }
         let joint = if n + 2 == breaks.len() { p + 1 } else { p };
         knots.extend(std::iter::repeat_n(span[1], joint));
@@ -1046,6 +1057,84 @@ mod tests {
             span_edge(&mut topo, &mut arena, &broken, (0.5, 2.5));
             span_edge(&mut topo, &mut arena, &segment, (0.5, 2.5));
             assert_eq!(common_blocks(&topo, &mut arena), 0, "{name}");
+        }
+    }
+
+    /// The unit half circle as two rational quadratic quarters on knots
+    /// [0, 0, 0, 1, 1, 1, 2, 2, 2], the second quarter's weights three times
+    /// the first's, so the quarters meet at (0, 1) with weights 1 and 3.
+    /// Over [0.5, 1.5] it shares its block with its own copy. It shares no
+    /// block with the spline that joins its two pieces end to start and
+    /// keeps weight 1 at the join, which bends the second piece off the
+    /// circle. Upright, turned and mirrored.
+    #[test]
+    fn a_block_across_a_join_of_unequal_weights_keeps_its_shape() {
+        use brepkit_math::nurbs::decompose::curve_bezier_between;
+        let axis = Vec3::new(1.0, 2.0, 3.0).normalize().unwrap();
+        let (sin, cos) = 0.7f64.sin_cos();
+        let turn = |e: Vec3| e * cos + axis.cross(e) * sin + axis * (axis.dot(e) * (1.0 - cos));
+        let mirror = |e: Vec3| Vec3::new(-e.x(), e.y(), e.z());
+        let o = Point3::new(3.0, -2.0, 5.0);
+        let (x, y) = (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
+        let poses: [(&str, Point3, Vec3, Vec3); 3] = [
+            ("upright", Point3::new(0.0, 0.0, 0.0), x, y),
+            ("turned", o, turn(x), turn(y)),
+            (
+                "mirrored",
+                Point3::new(-o.x(), o.y(), o.z()),
+                mirror(turn(x)),
+                mirror(turn(y)),
+            ),
+        ];
+        let half = std::f64::consts::FRAC_1_SQRT_2;
+        for (name, origin, u, v) in poses {
+            let at = |a: f64, b: f64| origin + u * a + v * b;
+            let round = NurbsCurve::new(
+                2,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 2.0, 2.0, 2.0],
+                vec![
+                    at(1.0, 0.0),
+                    at(1.0, 1.0),
+                    at(0.0, 1.0),
+                    at(0.0, 1.0),
+                    at(-1.0, 1.0),
+                    at(-1.0, 0.0),
+                ],
+                vec![1.0, half, 1.0, 3.0, 3.0 * half, 3.0],
+            )
+            .unwrap();
+            let pieces = [
+                curve_bezier_between(&round, 0.5, 1.0).unwrap(),
+                curve_bezier_between(&round, 1.0, 1.5).unwrap(),
+            ];
+            let homogeneous: Vec<[f64; 4]> = pieces[0]
+                .iter()
+                .chain(pieces[1].iter().skip(1))
+                .copied()
+                .collect();
+            let bent = NurbsCurve::new(
+                2,
+                vec![0.5, 0.5, 0.5, 1.0, 1.0, 1.5, 1.5, 1.5],
+                homogeneous
+                    .iter()
+                    .map(|q| Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3]))
+                    .collect(),
+                homogeneous.iter().map(|q| q[3]).collect(),
+            )
+            .unwrap();
+            assert!(
+                (bent.evaluate(1.25) - round.evaluate(1.25)).length() > 0.01,
+                "{name}: the end-to-start join bends the second piece"
+            );
+            let round = EdgeCurve::NurbsCurve(round);
+            let bent = EdgeCurve::NurbsCurve(bent);
+            for (other, common) in [(&round, 1), (&bent, 0)] {
+                let mut topo = Topology::new();
+                let mut arena = GfaArena::new();
+                span_edge(&mut topo, &mut arena, &round, (0.5, 1.5));
+                span_edge(&mut topo, &mut arena, other, (0.5, 1.5));
+                assert_eq!(common_blocks(&topo, &mut arena), common, "{name}");
+            }
         }
     }
 
