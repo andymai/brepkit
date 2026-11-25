@@ -182,10 +182,22 @@ fn transform_topology(
             flipped.insert(fid);
         }
     }
+    let stretch = largest_stretch(matrix);
     for &vid in vertex_ids {
         let vertex = topo.vertex_mut(vid)?;
         let new_point = matrix.mul_point(vertex.point());
         vertex.set_point(new_point);
+        if let Some(stretch) = stretch {
+            vertex.set_tolerance(vertex.tolerance() * stretch);
+        }
+    }
+    if let Some(stretch) = stretch {
+        for &eid in edge_ids {
+            let edge = topo.edge_mut(eid)?;
+            if let Some(tolerance) = edge.tolerance() {
+                edge.set_tolerance(Some(tolerance * stretch));
+            }
+        }
     }
     let moved_origins = transform_edges(topo, edge_ids, matrix)?;
     // A mirror turns every face's boundary clockwise about its outward
@@ -361,6 +373,71 @@ fn similarity_scale(matrix: &Mat4) -> Option<f64> {
         && nearly_orthogonal(cols[0], cols[2])
         && nearly_orthogonal(cols[1], cols[2]);
     similar.then_some(s)
+}
+
+/// The most `matrix` stretches a length, by which it scales a tolerance:
+/// the largest singular value of its linear block, rounded up. `None` for a
+/// motion, which keeps every length.
+///
+/// The block is divided by a power of two near its largest entry first, so
+/// that no product overflows or underflows, and the result is multiplied
+/// back: both are exact.
+pub(crate) fn largest_stretch(matrix: &Mat4) -> Option<f64> {
+    let m = &matrix.0;
+    let largest = (0..3)
+        .flat_map(|i| (0..3).map(move |j| m[i][j].abs()))
+        .fold(0.0, f64::max);
+    if !(largest.is_finite() && largest > 0.0) {
+        return None;
+    }
+    let unit = 2.0_f64.powi(largest.log2().floor() as i32);
+    let row = |i: usize| [m[i][0] / unit, m[i][1] / unit, m[i][2] / unit, 0.0];
+    let block = Mat4([row(0), row(1), row(2), [0.0, 0.0, 0.0, 1.0]]);
+    if similarity_scale(&block).is_some_and(|scale| nearly_equal(scale * unit, 1.0)) {
+        return None;
+    }
+    let cols = [
+        linear(&block, Vec3::new(1.0, 0.0, 0.0)),
+        linear(&block, Vec3::new(0.0, 1.0, 0.0)),
+        linear(&block, Vec3::new(0.0, 0.0, 1.0)),
+    ];
+    let mut gram = [[0.0; 3]; 3];
+    for (i, row) in gram.iter_mut().enumerate() {
+        for (j, entry) in row.iter_mut().enumerate() {
+            *entry = cols[i].dot(cols[j]);
+        }
+    }
+    let trace = gram[0][0] + gram[1][1] + gram[2][2];
+    // Jacobi rotations keep the eigenvalues. What is left off the diagonal
+    // moves the largest one by no more than its size, and the rounding of
+    // the Gram matrix and of the rotations by a few units of the trace.
+    for _ in 0..8 {
+        for (p, q) in [(0, 1), (0, 2), (1, 2)] {
+            if gram[p][q].abs() <= f64::MIN_POSITIVE {
+                continue;
+            }
+            let theta = (gram[q][q] - gram[p][p]) / (2.0 * gram[p][q]);
+            let t = theta.signum() / (theta.abs() + theta.hypot(1.0));
+            let c = 1.0 / t.hypot(1.0);
+            let s = t * c;
+            for k in 0..3 {
+                let (kp, kq) = (gram[k][p], gram[k][q]);
+                gram[k][p] = c * kp - s * kq;
+                gram[k][q] = s * kp + c * kq;
+            }
+            for k in 0..3 {
+                let (pk, qk) = (gram[p][k], gram[q][k]);
+                gram[p][k] = c * pk - s * qk;
+                gram[q][k] = s * pk + c * qk;
+            }
+        }
+    }
+    let off = gram[0][1].abs().max(gram[1][0].abs())
+        + gram[0][2].abs().max(gram[2][0].abs())
+        + gram[1][2].abs().max(gram[2][1].abs());
+    let top = gram[0][0].max(gram[1][1]).max(gram[2][2]);
+    let bound = top + 2.0 * off + 64.0 * f64::EPSILON * trace;
+    Some(bound.sqrt() * (1.0 + 4.0 * f64::EPSILON) * unit)
 }
 
 /// For a surface of revolution with frame images `x`, `y` (radial) and `z`

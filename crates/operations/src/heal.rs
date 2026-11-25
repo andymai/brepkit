@@ -653,6 +653,118 @@ pub fn close_wire_gaps(
     Ok(gaps_closed)
 }
 
+/// Raises the tolerance of each vertex of `faces` that lies off the end of
+/// one of its edges' curves to that gap.
+///
+/// The gap is read as [`crate::validate::validate_solid`] reads it, at the
+/// end of the edge's span, and the new tolerance is the gap plus the linear
+/// tolerance. A file gives each vertex as a point and each curve as its own
+/// control points, so a curve can end off its vertex by more than the
+/// file's tolerance, and a file has no vertex tolerance to cover it.
+///
+/// A gap of a tenth of the edge's size or more is not raised: such a vertex
+/// does not lie at its curve's end, and the edge is read on another part of
+/// its curve or is broken. An open edge's size is the distance between its
+/// two vertices, and a closed edge's is the size of its whole curve. A
+/// vertex with such a gap on one edge keeps its tolerance for all its
+/// edges, so that the gap is still reported.
+///
+/// Returns the number of vertices whose tolerance was raised.
+///
+/// # Errors
+/// Returns an error if a topology lookup fails.
+pub fn cover_curve_end_gaps(
+    topo: &mut Topology,
+    faces: &[FaceId],
+) -> Result<usize, crate::OperationsError> {
+    const PART_OF_EDGE: f64 = 0.1;
+    let linear = Tolerance::new().linear;
+    let mut seen = HashSet::new();
+    // The largest gap at each vertex, or `None` once an edge's gap at it is
+    // past that edge's limit.
+    let mut gaps: HashMap<VertexId, Option<f64>> = HashMap::new();
+    for &face in faces {
+        for eid in brepkit_topology::explorer::face_edges(topo, face)? {
+            if !seen.insert(eid) {
+                continue;
+            }
+            let edge = topo.edge(eid)?;
+            if !edge.curve().is_well_formed() {
+                continue;
+            }
+            let (start, end) = (edge.start(), edge.end());
+            let (ends, size) = if start == end {
+                (vec![start], closed_curve_size(edge.curve()))
+            } else {
+                let (a, b) = (topo.vertex(start)?.point(), topo.vertex(end)?.point());
+                (vec![start, end], (b - a).length())
+            };
+            for vid in ends {
+                let found = brepkit_check::validate::check_vertex_on_curve(topo, vid, eid, 0.0)
+                    .map_err(|e| crate::OperationsError::InvalidInput {
+                        reason: e.to_string(),
+                    })?;
+                let Some(gap) = found.first().and_then(|issue| issue.deviation) else {
+                    continue;
+                };
+                if gap <= topo.vertex(vid)?.tolerance() {
+                    continue;
+                }
+                let entry = gaps.entry(vid).or_insert(Some(0.0));
+                *entry = if gap < PART_OF_EDGE * size {
+                    entry.map(|largest| largest.max(gap))
+                } else {
+                    None
+                };
+            }
+        }
+    }
+    let mut raised = 0;
+    for (&vid, &gap) in &gaps {
+        if let Some(gap) = gap {
+            topo.vertex_mut(vid)?.set_tolerance(gap + linear);
+            raised += 1;
+        }
+    }
+    Ok(raised)
+}
+
+/// The size of a closed curve as a whole, wherever its ends lie on it and
+/// in any pose: a circle's diameter, an ellipse's longer axis, and the
+/// largest distance between two of a B-spline's control points.
+fn closed_curve_size(curve: &EdgeCurve) -> f64 {
+    match curve {
+        EdgeCurve::Line => 0.0,
+        EdgeCurve::Circle(circle) => 2.0 * circle.radius(),
+        EdgeCurve::Ellipse(ellipse) => 2.0 * ellipse.semi_major().max(ellipse.semi_minor()),
+        EdgeCurve::NurbsCurve(curve) => widest_apart(curve.control_points()),
+    }
+}
+
+/// The largest distance between two of `points`. Past 512 points, twice the
+/// largest distance from the first point, which is no less and at most
+/// twice as much, so that the cost stays linear.
+fn widest_apart(points: &[Point3]) -> f64 {
+    const PAIRS_UP_TO: usize = 512;
+    let Some(&first) = points.first() else {
+        return 0.0;
+    };
+    if points.len() > PAIRS_UP_TO {
+        return 2.0
+            * points
+                .iter()
+                .map(|&p| (p - first).length())
+                .fold(0.0, f64::max);
+    }
+    let mut widest = 0.0_f64;
+    for (i, &p) in points.iter().enumerate() {
+        for &q in &points[i + 1..] {
+            widest = widest.max((q - p).length());
+        }
+    }
+    widest
+}
+
 /// The control hull of a NURBS curve over `[t0, t1]` alone: the curve is
 /// split to that span, and the span lies inside its control points.
 fn nurbs_span_hull(

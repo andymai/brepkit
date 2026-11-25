@@ -30,7 +30,7 @@ use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::blend_ops::fillet_v2;
 use brepkit_operations::measure::solid_volume;
 use brepkit_operations::tessellate::{is_watertight, tessellate_solid};
-use brepkit_operations::validate::{Severity, ValidationIssue, ValidationReport, validate_solid};
+use brepkit_operations::validate::validate_solid;
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeId;
 use brepkit_topology::explorer::{solid_edges, solid_faces};
@@ -134,20 +134,6 @@ fn self_crossings(topo: &Topology, solid: SolidId) -> usize {
     hits
 }
 
-/// The errors `report` holds besides curves that miss their vertices. The
-/// walked rounds end up to 1.1e-3 off the vertices of their contact and end
-/// edges, past the band in which the edges' readers take a vertex to lie on
-/// its curve. That fault is open; every other fault is still refused.
-fn faults_besides_curve_ends(report: &ValidationReport) -> Vec<&ValidationIssue> {
-    report
-        .issues
-        .iter()
-        .filter(|issue| {
-            issue.severity == Severity::Error && !issue.description.contains("its curve misses")
-        })
-        .collect()
-}
-
 #[test]
 fn the_walls_under_a_ledge_run_up_to_a_round_run_off_it() {
     let mut topo = Topology::new();
@@ -161,8 +147,7 @@ fn the_walls_under_a_ledge_run_up_to_a_round_run_off_it() {
     let result = fillet_v2(&mut topo, plate, &picks, 30.0).unwrap();
     assert!(result.failed.is_empty(), "{:?}", result.failed);
     let report = validate_solid(&topo, result.solid).unwrap();
-    let faults = faults_besides_curve_ends(&report);
-    assert!(faults.is_empty(), "{faults:?}");
+    assert!(report.is_valid(), "{:?}", report.issues);
     assert_eq!(
         self_crossings(&topo, result.solid),
         0,
@@ -228,8 +213,7 @@ fn a_wall_beside_a_round_s_end_runs_on_under_the_ledge_and_up_to_the_band() {
     let result = fillet_v2(&mut topo, plate, &picks, 30.0).unwrap();
     assert!(result.failed.is_empty(), "{:?}", result.failed);
     let report = validate_solid(&topo, result.solid).unwrap();
-    let faults = faults_besides_curve_ends(&report);
-    assert!(faults.is_empty(), "{faults:?}");
+    assert!(report.is_valid(), "{:?}", report.issues);
     assert_eq!(
         self_crossings(&topo, result.solid),
         0,

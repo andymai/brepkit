@@ -1248,3 +1248,95 @@ fn a_tiny_mirror_scale_keeps_a_cylinder() {
         assert!((v - truth).abs() < 1e-9 * truth, "volume {v}");
     }
 }
+
+/// A tolerance is a length: a map scales it by the most the map stretches
+/// a length, and a motion leaves it as it was.
+#[test]
+fn a_scale_scales_vertex_and_edge_tolerances_and_a_motion_keeps_them() {
+    let motion = Mat4::translation(3.0, -2.0, 5.0) * Mat4::rotation_x(0.4) * Mat4::rotation_z(1.1);
+    let cases = [
+        ("motion", motion, 1.0),
+        ("mirror", Mat4::scale(-1.0, 1.0, 1.0) * motion, 1.0),
+        (
+            "millimetres from metres",
+            Mat4::scale(1000.0, 1000.0, 1000.0),
+            1000.0,
+        ),
+        (
+            "turned and halved",
+            motion * Mat4::scale(0.5, 0.5, 0.5),
+            0.5,
+        ),
+        (
+            "stretched along a turned axis",
+            Mat4::rotation_y(0.3) * Mat4::scale(1.0, 3.0, 2.0) * Mat4::rotation_z(0.8),
+            3.0,
+        ),
+    ];
+    for (name, matrix, stretch) in cases {
+        let mut topo = Topology::new();
+        let solid = crate::primitives::make_box(&mut topo, 2.0, 3.0, 4.0).unwrap();
+        let vertices = brepkit_topology::explorer::solid_vertices(&topo, solid).unwrap();
+        let edges = brepkit_topology::explorer::solid_edges(&topo, solid).unwrap();
+        topo.vertex_mut(vertices[0]).unwrap().set_tolerance(1e-3);
+        topo.edge_mut(edges[0]).unwrap().set_tolerance(Some(2e-3));
+        let before: Vec<f64> = vertices
+            .iter()
+            .map(|&v| topo.vertex(v).unwrap().tolerance())
+            .collect();
+        transform_solid(&mut topo, solid, &matrix).unwrap();
+        for (&v, &tolerance) in vertices.iter().zip(&before) {
+            let after = topo.vertex(v).unwrap().tolerance();
+            if (stretch - 1.0_f64).abs() < f64::EPSILON {
+                assert_eq!(after.to_bits(), tolerance.to_bits(), "{name}");
+            } else {
+                assert!(
+                    (after - tolerance * stretch).abs() <= 1e-9 * tolerance * stretch,
+                    "{name}: {after} against {}",
+                    tolerance * stretch
+                );
+            }
+        }
+        let edge = topo.edge(edges[0]).unwrap().tolerance().unwrap();
+        assert!(
+            (edge - 2e-3 * stretch).abs() <= 1e-9 * 2e-3 * stretch,
+            "{name}: edge {edge}"
+        );
+        assert!(topo.edge(edges[1]).unwrap().tolerance().is_none(), "{name}");
+    }
+}
+
+/// The stretch is a bound from above on the largest singular value, close
+/// to it, at any size of map and with the two largest singular values
+/// equal; a motion gives none.
+#[test]
+fn the_largest_stretch_bounds_the_largest_singular_value_at_any_size() {
+    let turn = Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1) * Mat4::rotation_z(0.3);
+    let cases = [
+        ("huge", Mat4::scale(1e80, 2e80, 3e80), 3e80),
+        ("tiny", Mat4::scale(1e-100, 2e-100, 3e-100), 3e-100),
+        (
+            "huge turned",
+            turn * Mat4::scale(1e150, 3e150, 2e150),
+            3e150,
+        ),
+        (
+            "tiny turned",
+            Mat4::scale(2e-150, 1e-150, 3e-150) * turn,
+            3e-150,
+        ),
+        ("two equal", turn * Mat4::scale(3.0, 3.0, 1.0) * turn, 3.0),
+        ("two equal at the top", Mat4::scale(3.0, 1.0, 3.0), 3.0),
+        ("uniform", turn * Mat4::scale(7.0, 7.0, 7.0), 7.0),
+    ];
+    for (name, matrix, singular) in cases {
+        let stretch = largest_stretch(&matrix).unwrap();
+        assert!(
+            stretch >= singular && stretch <= singular * (1.0 + 1e-12),
+            "{name}: {stretch:e} against {singular:e}"
+        );
+    }
+    for matrix in [turn, Mat4::scale(-1.0, 1.0, 1.0) * turn, Mat4::identity()] {
+        assert!(largest_stretch(&matrix).is_none());
+    }
+}
