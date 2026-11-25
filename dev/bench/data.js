@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795589733925,
+  "lastUpdate": 1795589964896,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -78515,6 +78515,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28685989,
             "range": "± 162197",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e4020f40bd797e8e132d8ff48c5c6b1d89fb4443",
+          "message": "chore(main): release 4.11.54 (#2874)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.54](https://github.com/andymai/brepkit/compare/v4.11.53...v4.11.54)\n(2026-11-25)\n\n\n### Bug Fixes\n\n* **algo:** prove a NURBS surface's sides apart, and keep a crossing of\na NURBS face only inside its pcurves\n([#2841](https://github.com/andymai/brepkit/issues/2841))\n([57892c6](https://github.com/andymai/brepkit/commit/57892c62e05fa7194200065b865b6452e9a2ffe3))\n* **operations:** refuse a chamfer chain that no chamfer fits, for its\ncause ([#2865](https://github.com/andymai/brepkit/issues/2865))\n([017e343](https://github.com/andymai/brepkit/commit/017e343384437f71e1cc3cc340b336cc29335039))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-25T06:50:54Z",
+          "tree_id": "4fe5645ea9f112164f469eb3c6ceaa3ae183c384",
+          "url": "https://github.com/andymai/brepkit/commit/e4020f40bd797e8e132d8ff48c5c6b1d89fb4443"
+        },
+        "date": 1795589952619,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 878729,
+            "range": "± 14646",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 937995,
+            "range": "± 8183",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9917,
+            "range": "± 195",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 546675,
+            "range": "± 9226",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19782885,
+            "range": "± 41155",
             "unit": "ns/iter"
           }
         ]
