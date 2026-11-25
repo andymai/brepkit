@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795580272854,
+  "lastUpdate": 1795584516587,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -78353,6 +78353,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24886199,
             "range": "± 27583",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "57892c62e05fa7194200065b865b6452e9a2ffe3",
+          "message": "fix(algo): prove a NURBS surface's sides apart, and keep a crossing of a NURBS face only inside its pcurves (#2841)\n\n## Summary\n\nOn main, phase EF reads NURBS faces by tests that do not prove what they\nclaim:\n\n- **Crossings off the face (#2813).** A crossing on a NURBS face is\nchecked only against the face's box. That box also holds surface that is\nnot the face: a hole, and a band just past the outer wire. Take a sheet\nwith a round hole in 4 poses, two of them 1e6 from the origin. On main,\n56 of 56 lines that should find nothing find a crossing.\n- **Closure (#2819).** Phase EF compares only the boxes of opposite\nsides of the surface's domain. The classifier compares 9 samples per\nside. A fold across a corner, a tube closed to 1e-8 of its size, and a\ntube run 2e-3 past its start read as open.\n\nWith this change, none of the 56 lines finds a crossing, and all 60\nlines that should find one still do, within 1e-7. Each of the three\nsurfaces reads as closed in both places. The pose sweep and the truth\naudit give the same output as main.\n\nFixes #2819. For #2813: the new trim runs only for faces whose edges\ncarry pcurves, and faces from booleans, STEP files and lofts carry none\n(#2814).\n\n## The change\n\n- **A trim for NURBS faces.** The new `pave_filler/nurbs_trim.rs`\nprojects a crossing onto the surface and checks the foot by evaluation.\nIt then reads the parameters against the face's pcurve loops, with\nproved boxes and a rounding margin. A crossing outside the loops counts\nonly within the tolerance of an edge of the face. A crossing the trim\ncannot place is kept, as on main.\n- **Sides proved apart.** The new `nurbs_sides.rs` holds\n`sides_are_apart`, which phase EF and the classifier's `nurbs_geom` both\nuse.\n- It tests all 6 pairs of sides. Pieces separate by control-point boxes,\nhalved as needed, past the face tolerance plus a rounding margin.\n- Two pieces that start at a shared corner must leave it in cones that\nmeet only there. A side whose spread is within the margin is a pole.\n- Where the test cannot separate two sides, the face takes the whole\nsurface's box, and the classifier reads each span. That is correct but\nlooser.\n- **Phase FF.** `compute_face_bbox` refuses a NURBS surface with a\nweight that is not a positive normal float, by the same check as phase\nEF.\n\n## Tests\n\n- `a_line_through_a_hole_in_a_nurbs_face_does_not_cross_it` runs the\nsheet with a hole in 4 poses. Lines through the hole and 2e-7 to 9e-7\npast a wire find nothing. Lines through the face find one crossing.\n- `nurbs_trim` tests read parameters inside loops of lines, splines and\nellipses, and a circle in two runs.\n- `sides_read_apart_only_where_they_keep_apart`,\n`a_face_on_a_surface_whose_sides_meet_is_boxed_whole` and\n`a_nurbs_face_is_read_by_its_wires_only_where_its_sides_keep_apart`\ncover the three closed surfaces, a ball with pole sides, a closed tube\n1e6 from the origin, and open sheets.\n- brepkit-algo (654), brepkit-check (195) and the boolean lib tests\n(230) pass, and so do all brepkit-operations and brepkit-io tests (3312,\n28 skipped). The 38 NURBS, spline, loft, sweep, blend, sheet and trim\nintegration files pass. Random sweep seeds 1 to 3 give the same result\nfor each case as main.\n\n## Still open\n\n- NURBS faces without pcurves still keep crossings anywhere in their box\n(#2813, #2814). Box alone decided 16 crossings in two loft and\nspline-wall test files.\n- A surface that passes through one point twice, away from its sides, is\nnot proved by the trim (#2813).\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes two correctness bugs in phase EF's reading of NURBS faces:\ncrossings through holes or past wires were kept as face contacts, and\nsurfaces that closed on themselves read as open.\n\n- Crossings on a NURBS face are now trimmed against the face's pcurve\nloops in surface parameters, so lines through a hole or just past a wire\nfind no contact. The trim runs only where each loop is a simple curve: a\nwire that runs an edge twice, as a slit does, or loops the trim cannot\nprove simple and apart, take no trim and keep crossings as before.\n- A pcurve is trusted only where it runs along its edge in order, from\nwhere the wire enters the edge to where it leaves it, never stepping\nback; a pcurve that stays near its edge but runs out and back is not\ntrusted, and its crossings are kept.\n- A crossing outside the loops is dropped only where the trim proves no\npoint of the surface over the pcurves lies within the tolerance and the\ncrossing's own distance from the surface; unplaceable crossings are kept\nas before. Near a joint of small pcurve pieces the parity read is not\nproved, so the trim keeps the surface's box over that joint and\ncrossings within reach of it.\n- The trim's proofs and reads take items from one limited budget, points\nare read down a tree of each loop's pieces, and a face with no crossing\nbuilds no trim. Where two pcurves leave a joint with ends apart, they\ncan meet only within a reach read from their cones; where it stays\nwithin a joint's size, its box joins the joints' boxes.\n- A Bezier piece is halved until the directions among its control points\nlie in a cone of half-angle under a right angle, so the piece runs one\nway and cannot cross itself. Pieces of a joint may meet the rest of\ntheir joint and their two neighbours, and must keep apart from every\nother piece; neighbours are read by cones only where their ends lie\nwithin rounding of each other, and as any other pair otherwise. A run of\nsmall pieces is a joint only where its whole box is small too.\n- A new `sides_are_apart` test proves all 6 side pairs of a NURBS\nsurface separate past the face's reach, with cones at shared corners and\npole detection; phase EF, the ray cast, and phase FF all use it. Phase\nEF looks for a face's pcurves before running the test, since most NURBS\nfaces carry none.\n- The side test reads each side's piece boxes down a tree, splitting the\nlarger box per pair and counting each pair against a bounded budget.\n- Phase FF now refuses NURBS faces with a weight that is not a positive\nnormal float, matching phase EF.\n- New tests pin the trim's edge cases: a face with a pole side takes no\ntrim, a point edge whose pcurve reads over no length still trims through\nthe next pcurve's joint, and a slit edge run out and back leaves both\nsides on the face.\n- Faces without pcurves (from booleans, STEP files, lofts) still keep\ncrossings anywhere in their box; surfaces that pass through a point\ntwice away from their sides are not trimmed.\n\nFixes #2813 and #2819.\n\n<sup>Written for commit 2840bf5bab883623eff7de2205778a0610360bda.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2841?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2841?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2841&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-25T05:23:59Z",
+          "tree_id": "8c24011015abc8e5f7a70e75c98054fcb9d644b6",
+          "url": "https://github.com/andymai/brepkit/commit/57892c62e05fa7194200065b865b6452e9a2ffe3"
+        },
+        "date": 1795584505163,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1207118,
+            "range": "± 3359",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1281785,
+            "range": "± 6544",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13754,
+            "range": "± 60",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 755217,
+            "range": "± 2113",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27806920,
+            "range": "± 98360",
             "unit": "ns/iter"
           }
         ]
