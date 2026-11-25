@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795575039797,
+  "lastUpdate": 1795576132849,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -78245,6 +78245,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 24691533,
             "range": "± 367932",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "bfc99db98e6b66e040f7a7a7504da70172a9025d",
+          "message": "fix(algo): keep an arc and the rest of its circle apart in the section dedup and common blocks (#2855)\n\n## Summary\n\nOn main, two places read an arc and the rest of its circle as one,\nbecause they share both ends and one circle:\n\n- **The face splitter's section dedup (#2827)** keys sections on their\nends and the shorter arc's middle. So it drops one of the two. An\nimprint of an arc and the rest of its circle on a box top gives one top\nface of area 100. The true faces are the disc and the rest.\n- **`curves_compatible` and `link_existing::try_link` (#2844)** join two\nblocks on one circle from the circle alone. With an arc and the rest as\ntool edges over a plate, the pave filler makes one common block across\nboth. Between two solids' edges this cannot happen, because each arc\nfirst gets a vertex at its middle.\n\nWith this change, the imprint gives the disc and the rest, of areas 4π\nand 100 − 4π. The solid is valid and closed, with volume 200. The tool\nedges make no common block. The pose sweep and the truth audit give the\nsame output as main.\n\nFixes #2827. Fixes #2844.\n\n## The change\n\n- **The dedup.** Sections with the same ends merge only where\n`same_section_curve`, the whole-curve bound from #2825, proves them one\ncurve.\n- **Common blocks.** A new `one_arc` check joins two blocks on circles\nor ellipses only where a whole-curve bound holds them within 6\ntolerances. The bound is `circle_arcs_apart` or `ellipse_arcs_apart`.\nEach curve is read on unit axes, with that form's gap added. The check\nalso refuses an ellipse paired with the same ellipse turned in its\nplane, which the old check joined. Two circles tilted by more than about\n6e-7 / r no longer form a common block; the old check took tilts up to\nabout 1.4e-6 rad.\n- **Coincident copies still link.** Two blocks link at once where their\ncurves are one circle or ellipse alike to the bit.\n  - The spans may match, run reversed, or run about the reversed normal.\n- The bound is read centre-relative and both ways round, keeping the\nlesser. So its answer does not depend on which block comes first.\n- A round ellipse on axes a hair off unit length is read as a circle. An\narc just short of a whole turn keeps its own start.\n- **Rim sections.** `can_link` checks the arc bound, so the preflight is\ncomplete before any section is split. While the walk picks a rim piece,\nit passes over a piece the bound refuses and tries the next.\n- `circle_arcs_apart`, `ellipse_arcs_apart`, `unit_conic` and\n`unit_conic_arc_gap` are now `pub` inside the private `builder` module.\n\n## Tests\n\n-\n`an_arc_and_the_rest_of_its_circle_split_a_plate_into_the_disc_and_the_rest`\nruns 3 poses, 3 ways to store the rest, and both section orders. On main\nall 18 splits give 1 region, and on this branch the true areas within\n4e-14.\n- `arc_and_rest_of_a_circle.rs` imprints the disc on a plate in 3 poses.\nIt also cuts, fuses and intersects a rod whose wall is an arc and the\nrest of its circle.\n- `an_arc_and_the_rest_of_its_circle_are_not_common` runs 3 poses and 5\ncases. A second test covers arcs of two ellipses, and of one ellipse and\nits rest. `an_arc_and_the_rest_of_its_circle_share_no_common_block` runs\ntwo sheets and tool edges over a plate. Each fails without the range\ncheck.\n- Tests link copies of a circle of radius 1e9 or 1e10 from the origin,\nof round ellipses on turned axes, and about the reversed normal. Each\npair reads alike both ways and on every run.\n- In the boolean lib tests, 312 pairs reached the new check, with bounds\nup to 1.07e-12 against a limit of 6e-7.\n- brepkit-algo (699) and the boolean lib tests (233) pass, and so do all\nbrepkit-operations and brepkit-io tests (3325, 28 skipped). Random sweep\nseeds 1 to 3 give BAD 0.\n\n## Still open\n\n- The first section dedup in `split_face_2d_impl` merges by sampling,\nand drops an ellipse arc through the same three points as a circle arc\n(#2853).\n- `loop_key` and `hole_key` match loops by their ends (#2854).\n- Pipeline-made copies of a circle of radius 1e9 about the reversed\nnormal link only half the time (#2856).",
+          "timestamp": "2026-11-25T03:02:34Z",
+          "tree_id": "b3a4d09781f5eb62c75626d9d110d96e67e57980",
+          "url": "https://github.com/andymai/brepkit/commit/bfc99db98e6b66e040f7a7a7504da70172a9025d"
+        },
+        "date": 1795576124065,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1208308,
+            "range": "± 21353",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1278771,
+            "range": "± 6931",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13968,
+            "range": "± 220",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 757168,
+            "range": "± 13957",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27198846,
+            "range": "± 31493",
             "unit": "ns/iter"
           }
         ]
