@@ -19135,6 +19135,57 @@ mod tests {
         }
     }
 
+    /// Circles of radius 1e-3, 1, 1e6 and 1e9, about the plate's (5, 5) and
+    /// 1e8 along its x from there, each over half a radian up to an end at
+    /// angle 0 (the seam) or 1, and a circle of the same radius across each
+    /// two and a half tolerances past that end: they meet nowhere on both
+    /// sections, in each frame.
+    #[test]
+    fn an_arc_does_not_meet_another_past_its_end() {
+        use brepkit_math::curves::Circle3D;
+        for (pose, o, u, v) in plate_frames() {
+            let n = u.cross(v);
+            for r in [1e-3, 1.0, 1e6, 1e9] {
+                for offset in [0.0, 1e8] {
+                    for end in [0.0f64, 1.0] {
+                        let b = Circle3D::with_axes(o + u * (5.0 + offset) + v * 5.0, n, r, u, v)
+                            .unwrap();
+                        let past = end + 2.5e-7 / r;
+                        let across = u * (-past.sin()) + v * past.cos();
+                        let a = Circle3D::with_axes(
+                            b.evaluate(past) + across * r,
+                            n,
+                            r,
+                            -across,
+                            n.cross(-across),
+                        )
+                        .unwrap();
+                        let edges = vec![
+                            meeting_edge(
+                                EdgeCurve::Circle(b.clone()),
+                                b.evaluate(end - 0.5),
+                                b.evaluate(end),
+                                1,
+                            ),
+                            meeting_edge(
+                                EdgeCurve::Circle(a.clone()),
+                                a.evaluate(-0.3),
+                                a.evaluate(0.3),
+                                2,
+                            ),
+                        ];
+                        let spans = edge_splitting::section_spans(&edges);
+                        let found = edge_splitting::section_meeting_points(&spans, 1e-7);
+                        assert!(
+                            !matches!(&found, Ok(m) if !m.is_empty()),
+                            "{pose}, radius {r:e}, offset {offset:e}, end {end}: {found:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     /// An arc in the plane square to the plate along the chord from (3, 5)
     /// to (7, 5), which is its shadow on the plate, and a line square to the
     /// arc's plane from (6, 7) to the chord at (6, 5), a hair off square to

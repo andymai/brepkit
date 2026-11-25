@@ -3496,17 +3496,33 @@ pub(super) fn section_meeting_points(
         };
         match e.curve {
             EdgeCurve::Line => {
-                let d = t - s;
-                let w = (p - s).dot(d) / d.dot(d);
-                (-1e-9..=1.0 + 1e-9).contains(&w) && (p - (s + d * w)).length() <= tol - chord
+                let (d, w) = (t - s, p - s);
+                let along = (w.dot(d) / d.dot(d)).clamp(0.0, 1.0);
+                (w - d * along).length() <= tol - chord
             }
-            EdgeCurve::Circle(c) => {
-                let u = c.project(p);
-                (c.evaluate(u) - p).length() <= tol && (u - t0).rem_euclid(TAU) <= sweep + 1e-9
-            }
-            EdgeCurve::Ellipse(el) => {
-                let u = el.project(p);
-                (el.evaluate(u) - p).length() <= tol && (u - t0).rem_euclid(TAU) <= sweep + 1e-9
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                if (p - s).length() <= tol || (p - t).length() <= tol {
+                    return true;
+                }
+                let (u, foot) = match e.curve {
+                    EdgeCurve::Circle(c) => {
+                        let u = c.project(p);
+                        (u, c.evaluate(u))
+                    }
+                    EdgeCurve::Ellipse(el) => {
+                        let u = el.project(p);
+                        (u, el.evaluate(u))
+                    }
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return false,
+                };
+                // The foot lies inside the span where the point lies on the
+                // inner side of the curve's normal at each end, read as
+                // lengths so the curve's size does not enter; the parameter
+                // only keeps the far side of the curve out.
+                (foot - p).length() <= tol
+                    && (u - t0 + 1e-3).rem_euclid(TAU) <= sweep + 2e-3
+                    && (p - s).dot(e.curve.tangent_with_endpoints(t0, s, t)) >= 0.0
+                    && (p - t).dot(e.curve.tangent_with_endpoints(t0 + sweep, s, t)) <= 0.0
             }
             EdgeCurve::NurbsCurve(_) => false,
         }
@@ -3944,22 +3960,30 @@ pub(super) fn section_meeting_points(
                     continue;
                 }
                 // A kept point stands for this junction where it lies within
-                // `tol` of both sections and on the arc within this run.
-                let stands_for = |k: Point3| {
-                    on_section(a, 0.0, k)
-                        && on_section(b, chord_b, k)
-                        && match &*unit_a {
-                            EdgeCurve::Circle(circle) => {
-                                let r = (circle.project(k) - run_start).rem_euclid(TAU);
-                                r <= (run_end - run_start) + 1e-9
-                            }
-                            EdgeCurve::Ellipse(el) => {
-                                let r = (el.project(k) - run_start).rem_euclid(TAU);
-                                r <= (run_end - run_start) + 1e-9
-                            }
-                            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => false,
-                        }
+                // `tol` of both sections and on the arc within this run: on
+                // the inner side, to within `tol`, of the arc's normal at
+                // each of the run's ends, read as lengths so the arc's size
+                // does not enter; the parameter only keeps the far side of
+                // the arc out.
+                let ahead = |t: f64| {
+                    let s = t - mid;
+                    let d = uu * (-s.sin()) + vv * s.cos();
+                    d * (1.0 / d.length())
                 };
+                let (from, to) = (point(run_start).0, point(run_end).0);
+                let (ahead_from, ahead_to) = (ahead(run_start), ahead(run_end));
+                let in_run = |k: Point3| {
+                    let near = match &*unit_a {
+                        EdgeCurve::Circle(circle) => circle.project(k),
+                        EdgeCurve::Ellipse(el) => el.project(k),
+                        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return false,
+                    };
+                    (near - run_start + 1e-3).rem_euclid(TAU) <= (run_end - run_start) + 2e-3
+                        && (k - from).dot(ahead_from) >= -tol
+                        && (k - to).dot(ahead_to) <= tol
+                };
+                let stands_for =
+                    |k: Point3| on_section(a, 0.0, k) && on_section(b, chord_b, k) && in_run(k);
                 if ends.iter().any(|&k| stands_for(k)) || found.iter().any(|m| stands_for(m.at)) {
                     continue;
                 }
