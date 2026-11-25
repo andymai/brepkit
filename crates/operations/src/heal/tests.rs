@@ -1382,3 +1382,72 @@ fn a_closed_edge_s_limit_is_the_same_in_every_pose() {
         }
     }
 }
+
+/// A box 200 across whose 0.03 edge is a B-spline standing 4e-3 to the side
+/// of its two vertices: a file's short edge, off its curve by its tolerance.
+fn box_with_short_edge_beside_its_curve(
+    topo: &mut Topology,
+    pose: &brepkit_math::mat::Mat4,
+) -> (SolidId, [VertexId; 2]) {
+    let solid = crate::primitives::make_box(topo, 0.03, 200.0, 200.0).unwrap();
+    crate::transform::transform_solid(topo, solid, pose).unwrap();
+    let (a, b) = (
+        pose.mul_point(Point3::new(0.0, 0.0, 0.0)),
+        pose.mul_point(Point3::new(0.03, 0.0, 0.0)),
+    );
+    let edge = brepkit_topology::explorer::solid_edges(topo, solid)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            let edge = topo.edge(e).unwrap();
+            let p = topo.vertex(edge.start()).unwrap().point();
+            let q = topo.vertex(edge.end()).unwrap().point();
+            ((p - a).length() < 1e-12 && (q - b).length() < 1e-12)
+                || ((p - b).length() < 1e-12 && (q - a).length() < 1e-12)
+        })
+        .unwrap();
+    let data = topo.edge(edge).unwrap();
+    let (start, end) = (data.start(), data.end());
+    let (p, q) = (
+        topo.vertex(start).unwrap().point(),
+        topo.vertex(end).unwrap().point(),
+    );
+    let side = pose.mul_point(Point3::new(0.0, 7e-4, -3.9e-3))
+        - pose.mul_point(Point3::new(0.0, 0.0, 0.0));
+    let curve = brepkit_math::nurbs::NurbsCurve::new(
+        3,
+        vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+        (0..4)
+            .map(|k| p + (q - p) * (f64::from(k) / 3.0) + side)
+            .collect(),
+        vec![1.0; 4],
+    )
+    .unwrap();
+    topo.edge_mut(edge)
+        .unwrap()
+        .set_curve(EdgeCurve::NurbsCurve(curve));
+    (solid, [start, end])
+}
+
+#[test]
+fn a_short_edge_s_vertices_beside_its_curve_take_the_gap_as_their_tolerance() {
+    for (pose, at) in poses() {
+        let mut topo = Topology::new();
+        let (solid, ends) = box_with_short_edge_beside_its_curve(&mut topo, &at);
+        assert_eq!(curve_misses(&topo, solid), 2, "{pose}");
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        assert_eq!(
+            cover_curve_end_gaps(&mut topo, &faces).unwrap(),
+            2,
+            "{pose}"
+        );
+        for v in ends {
+            let tolerance = topo.vertex(v).unwrap().tolerance();
+            assert!(
+                tolerance > 3.9e-3 && tolerance < 4.1e-3,
+                "{pose}: {tolerance}"
+            );
+        }
+        assert_eq!(curve_misses(&topo, solid), 0, "{pose}");
+    }
+}
