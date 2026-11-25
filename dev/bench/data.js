@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795559033098,
+  "lastUpdate": 1795567197372,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -78029,6 +78029,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 16498972,
             "range": "± 141578",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "823ea4be360b219cc9065893233e3dc745defe00",
+          "message": "ci: build only the operations lib tests for the complexity guards (#2849)\n\n## Summary\n\nThe Test job's \"Complexity guards\" step runs `cargo nextest run -p\nbrepkit-operations --features perf-counters -E 'test(scaling_)'`. The\nfilter picks the tests to run, but the feature change rebuilds each\nbrepkit-operations integration-test binary. That second set of binaries\nfills the runner's disk. Three Test runs of #2841 failed with \"No space\nleft on device\" and `ld terminated with signal 7 [Bus error]`, each\nafter all 5,989 to 5,994 tests had passed.\n\nEach `scaling_` test is a lib test, in\n`crates/operations/src/boolean/tests.rs`. With `--lib`, the step builds\nonly the lib test binary and runs the same tests.\n\n## Tests\n\n- `rg \"fn scaling_\" crates/` finds the tests only in\n`crates/operations/src/boolean/tests.rs`.\n- This PR's own CI run shows the step with `--lib`. If it found no\ntests, nextest would fail the step.\n\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nLimits the Complexity guards CI step to building only the lib test\nbinary for `brepkit-operations`. The previous command rebuilt every\nintegration-test binary when enabling the `perf-counters` feature,\nfilling the runner's disk and causing CI to fail with \"No space left on\ndevice\" after all tests passed. Adding `--lib` runs the same `scaling_`\ntests, which are all in `crates/operations/src/boolean/tests.rs`,\nwithout the extra binaries.\n\n<sup>Written for commit d291b7f1be4cd8f597aca05d8b5fcf92650e40e8.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2849?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2849?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2849&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-25T00:35:39Z",
+          "tree_id": "5d32e61ca20cf25c0dd2c28f88d56254876a61f8",
+          "url": "https://github.com/andymai/brepkit/commit/823ea4be360b219cc9065893233e3dc745defe00"
+        },
+        "date": 1795567183282,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1195809,
+            "range": "± 23056",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1263220,
+            "range": "± 10107",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13627,
+            "range": "± 45",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 740643,
+            "range": "± 6369",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27516348,
+            "range": "± 630553",
             "unit": "ns/iter"
           }
         ]
