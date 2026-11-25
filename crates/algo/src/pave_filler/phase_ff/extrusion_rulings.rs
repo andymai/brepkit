@@ -81,15 +81,29 @@ pub(super) fn cylinder_extrusion_rulings(
     // which the extrusion has no surface: a point there projects on to the
     // patch's edge and reads as on the face.
     let rise = along.dot(axis);
+    // A ruling's points lie off the wall by no more than its base lies off
+    // the profile, the extrusion's drift and the slack of its poles' moves.
+    let budget = DRIFT - (drift + slack + 4.0 * f64::EPSILON * length);
     let mut lines = Vec::with_capacity(roots.len());
     for t in roots {
-        let base = section.foot(t)?;
+        let (base, off) = section.foot(t)?;
+        if off > budget {
+            return None;
+        }
         let boxed = trim_t_range_to_aabb(base, axis, bbox_a, bbox_b);
         let t_range = (boxed.0.max(rise.min(0.0)), boxed.1.min(rise.max(0.0)));
         if t_range.1 - t_range.0 < 1e-9 {
             continue;
         }
         let (p0, p1) = (base + axis * t_range.0, base + axis * t_range.1);
+        // What the bounds above miss, a reading of each ruling's ends and
+        // middle against both surfaces catches.
+        if [p0, p0 + (p1 - p0) * 0.5, p1]
+            .into_iter()
+            .any(|p| !on_both(cylinder, surface, p))
+        {
+            return None;
+        }
         lines.push(RawCurve {
             curve: EdgeCurve::Line,
             bbox: Aabb3::from_points([p0, p1]),
@@ -99,6 +113,21 @@ pub(super) fn cylinder_extrusion_rulings(
         });
     }
     Some(lines)
+}
+
+/// Whether `p` lies within the linear tolerance of `cylinder`, by its
+/// distance from the axis less the radius, and of `wall`, by the distance
+/// to a point of it that a projection finds, which no nearest point is
+/// farther than.
+fn on_both(cylinder: &CylindricalSurface, wall: &NurbsSurface, p: Point3) -> bool {
+    let Ok(axis) = cylinder.axis().normalize() else {
+        return false;
+    };
+    let w = p - cylinder.origin();
+    let off_axis = (w - axis * w.dot(axis)).length();
+    (off_axis - cylinder.radius()).abs() <= DRIFT
+        && brepkit_math::nurbs::projection::project_point_to_surface(wall, p, 1e-3 * DRIFT)
+            .is_ok_and(|found| found.distance <= DRIFT)
 }
 
 /// `surface` as a profile moved along a vector: degree one with two control
@@ -183,33 +212,59 @@ impl CircleSection<'_> {
         w.dot(w) - self.radius * self.radius
     }
 
-    /// The point where the profile near `t` crosses the circle.
+    /// The point where the profile near `t` crosses the circle, and a bound
+    /// on how far it lies from the profile.
     ///
     /// The parameter places a crossing only as finely as its spacing, which
     /// on a fast stretch of a rational profile is far coarser in space than
     /// the tolerance: at a shallow crossing the profile's point there stands
     /// off the circle by that spacing times the sine of the angle. So the
-    /// crossing is read in space too, where the profile's tangent across
-    /// the axis meets the circle (see [`Self::tangent_step`]). Where that
-    /// does not settle, the point is set on the circle across from the
-    /// profile's point.
-    fn foot(&self, t: f64) -> Option<Point3> {
-        self.crossing_near(t).or_else(|| {
-            let point = self.profile.evaluate(t);
-            let w = point - self.origin;
-            let height = w.dot(self.axis);
-            let out = self.across(point).normalize().ok()?;
-            Some(self.origin + self.axis * height + out * self.radius)
-        })
+    /// crossing is read in space too, where the profile's tangent meets the
+    /// cylinder (see [`Self::crossing_near`]). The other choice is the point
+    /// on the circle across from the profile's point, as far from the
+    /// profile as the profile's point is from the circle. Of the two, the
+    /// one with the smaller bound.
+    fn foot(&self, t: f64) -> Option<(Point3, f64)> {
+        let point = self.profile.evaluate(t);
+        let w = point - self.origin;
+        let height = w.dot(self.axis);
+        let a = self.across(point);
+        let radial = a.normalize().ok().map(|out| {
+            (
+                self.origin + self.axis * height + out * self.radius,
+                (a.length() - self.radius).abs() + self.rounding(point),
+            )
+        });
+        match (self.crossing_near(t), radial) {
+            (Some(near), Some(radial)) => Some(if near.1 <= radial.1 { near } else { radial }),
+            (near, radial) => near.or(radial),
+        }
     }
 
-    /// Where the profile's tangent across the axis meets the circle, from
-    /// Newton steps in the parameter from `t0` until the parameter can move
-    /// no more, then one step in space. `None` where a step does not
-    /// settle, the parameter strays more than 1e-6 of the domain, the last
-    /// step leaves the domain, or the profile bends off its tangent over
-    /// that step by more than a thousandth of [`SPREAD`].
-    fn crossing_near(&self, t0: f64) -> Option<Point3> {
+    /// What rounding can move a distance read at `point` by: a few units in
+    /// the last place of the largest coordinate there or at the origin.
+    fn rounding(&self, point: Point3) -> f64 {
+        let place = [point, self.origin]
+            .iter()
+            .flat_map(|p| [p.x(), p.y(), p.z()])
+            .fold(self.radius, |m: f64, c| m.max(c.abs()));
+        64.0 * f64::EPSILON * place
+    }
+
+    /// Where the profile's tangent meets the cylinder, from Newton steps in
+    /// the parameter from `t0` until it can move no more, then one step
+    /// along the tangent in space, and a bound on how far that point lies
+    /// from the profile.
+    ///
+    /// Over the parameters from the last one to the float past the step,
+    /// the profile lies in the hull of its Bezier control points there, so
+    /// within the largest distance of those from the tangent line. Its
+    /// shadow on that line runs from its two ends' shadows, so a point of
+    /// the line between them lies within that distance of the profile.
+    /// `None` where a step does not settle, the parameter strays more than
+    /// 1e-6 of the domain, the step leaves the domain, or the point's
+    /// shadow lies outside the ends' shadows.
+    fn crossing_near(&self, t0: f64) -> Option<(Point3, f64)> {
         let (lo, hi) = self.profile.domain();
         let mut t = t0;
         let mut read = self.tangent_step(t)?;
@@ -222,27 +277,56 @@ impl CircleSection<'_> {
             read = self.tangent_step(t)?;
         }
         let s = read.step;
-        let bend = read.bend * (0.5 * s * s);
-        if (t - t0).abs() > 1e-6 * (hi - lo)
-            || !(lo..=hi).contains(&(t + s))
-            || bend.length() > 1e-3 * SPREAD
-        {
+        let reached = t + s;
+        if (t - t0).abs() > 1e-6 * (hi - lo) || !(lo..=hi).contains(&reached) {
             return None;
         }
-        Some(read.point + read.slope * s)
+        let point = read.point + read.slope * s;
+        let slack = self.rounding(point);
+        if s == 0.0 {
+            return Some((point, slack));
+        }
+        let (a, b) = if s > 0.0 {
+            (t, reached.next_up().min(hi))
+        } else {
+            (reached.next_down().max(lo), t)
+        };
+        let dir = read.slope.normalize().ok()?;
+        let shadow = |p: Point3| (p - read.point).dot(dir);
+        let off_line = |p: Point3| {
+            let d = p - read.point;
+            (d - dir * d.dot(dir)).length()
+        };
+        let (from, to) = (
+            shadow(self.profile.evaluate(a)),
+            shadow(self.profile.evaluate(b)),
+        );
+        let here = shadow(point);
+        if here < from.min(to) - slack || here > from.max(to) + slack {
+            return None;
+        }
+        let mut most: f64 = 0.0;
+        for q in curve_bezier_between(self.profile, a, b).ok()? {
+            if q[3] <= 0.0 {
+                return None;
+            }
+            most = most.max(off_line(Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3])));
+        }
+        Some((point, most + 2.0 * slack))
     }
 
-    /// The profile's point at `t`, its first and second derivatives across
-    /// the axis, and the step in the parameter along the first to where its
-    /// tangent across the axis meets the circle: the root of
-    /// `|a + s b|^2 = r^2` nearer zero, for `a` the point across the axis
-    /// and `b` that derivative. `None` where the tangent misses the circle.
+    /// The profile's point at `t`, its derivative there, and the step in the
+    /// parameter along that derivative to where the profile's tangent meets
+    /// the cylinder: the root of `|a + s b|^2 = r^2` nearer zero, for `a`
+    /// the point across the axis and `b` the derivative across it. The step
+    /// moves along the whole derivative, so it keeps to the profile's
+    /// height along the axis too. `None` where the tangent misses.
     fn tangent_step(&self, t: f64) -> Option<TangentStep> {
-        let ders = self.profile.derivatives(t, 2);
+        let ders = self.profile.derivatives(t, 1);
         let point = self.profile.evaluate(t);
-        let flat = |v: Vec3| v - self.axis * v.dot(self.axis);
+        let slope = *ders.get(1)?;
         let a = self.across(point);
-        let b = flat(*ders.get(1)?);
+        let b = slope - self.axis * slope.dot(self.axis);
         let (ab, bb) = (a.dot(b), b.dot(b));
         let c = a.dot(a) - self.radius * self.radius;
         let disc = ab.madd(ab, -(bb * c));
@@ -255,8 +339,7 @@ impl CircleSection<'_> {
         }
         Some(TangentStep {
             point,
-            slope: b,
-            bend: flat(*ders.get(2)?),
+            slope,
             step: -c / q,
         })
     }
@@ -600,12 +683,11 @@ impl Bernstein {
     }
 }
 
-/// A profile's point, its first and second derivatives across the axis,
-/// and the step in its parameter to where its tangent meets the circle.
+/// A profile's point, its derivative there, and the step in its parameter
+/// along that derivative to where its tangent meets the cylinder.
 struct TangentStep {
     point: Point3,
     slope: Vec3,
-    bend: Vec3,
     step: f64,
 }
 
@@ -1274,6 +1356,84 @@ mod tests {
                 } else {
                     assert!(found.is_none_or(|l| l.len() == 2), "{name}, far");
                 }
+            }
+        }
+    }
+
+    /// A profile through `poles` of degree `degree` over `knots` with
+    /// `weights`, moved by `along`, placed by `pose`.
+    fn moved_profile(
+        poles: &[Point3],
+        (degree, knots): (usize, Vec<f64>),
+        weights: &[f64],
+        along: Vec3,
+        pose: &Mat4,
+    ) -> NurbsSurface {
+        let row = |shift: Vec3| -> Vec<Point3> {
+            poles.iter().map(|p| pose.mul_point(*p + shift)).collect()
+        };
+        NurbsSurface::new(
+            1,
+            degree,
+            vec![0.0, 0.0, 1.0, 1.0],
+            knots,
+            vec![row(Vec3::new(0.0, 0.0, 0.0)), row(along)],
+            vec![weights.to_vec(); 2],
+        )
+        .unwrap()
+    }
+
+    /// The cubic (0.5 + 1.5s, 0.5s^3) over a knot domain one float wide
+    /// crosses a circle of radius 1.1 near (1.0993, 0.0319). The parameter
+    /// cannot move between its two values, and the profile's tangent at the
+    /// lower one, straight along x, meets the circle at (1.1, 0), 0.0316
+    /// off the wall: the ruling is placed within the tolerance or the
+    /// section is left to the marcher.
+    #[test]
+    fn a_crossing_on_a_span_one_float_wide_is_placed_on_the_wall_or_deferred() {
+        let one_up = 1.0_f64.next_up();
+        for (name, pose) in poses() {
+            let wall = moved_profile(
+                &[
+                    Point3::new(0.5, 0.0, 0.0),
+                    Point3::new(1.0, 0.0, 0.0),
+                    Point3::new(1.5, 0.0, 0.0),
+                    Point3::new(2.0, 0.5, 0.0),
+                ],
+                (3, vec![1.0, 1.0, 1.0, 1.0, one_up, one_up, one_up, one_up]),
+                &[1.0; 4],
+                Vec3::new(0.0, 0.0, 4.0),
+                &pose,
+            );
+            let rod = cylinder_about(0.0, 0.0, 1.1, &pose);
+            if let Some(lines) = rulings(&rod, &wall, &room(), &room()) {
+                assert!(lines.len() <= 1, "{name}: {}", lines.len());
+            }
+        }
+    }
+
+    /// The line from (0.5, -2, 0) to (0.5, 2, 1e6) with weights 1e10 and 1
+    /// rises along the axis as it runs: a crossing moved across the axis
+    /// alone leaves its height behind, and the ruling's end overshoots the
+    /// wall. The ruling is placed within the tolerance or the section is
+    /// left to the marcher.
+    #[test]
+    fn a_crossing_on_a_profile_that_rises_keeps_its_height() {
+        for (name, pose) in poses() {
+            let wall = moved_profile(
+                &[Point3::new(0.5, -2.0, 0.0), Point3::new(0.5, 2.0, 1e6)],
+                (1, vec![0.0, 0.0, 1.0, 1.0]),
+                &[1e10, 1.0],
+                Vec3::new(0.0, 0.0, 4.0),
+                &pose,
+            );
+            let rod = cylinder_about(0.0, 0.0, 1.0, &pose);
+            let huge = Aabb3 {
+                min: Point3::new(-1e7, -1e7, -1e7),
+                max: Point3::new(1e7, 1e7, 1e7),
+            };
+            if let Some(lines) = rulings(&rod, &wall, &huge, &huge) {
+                assert!(lines.len() <= 2, "{name}: {}", lines.len());
             }
         }
     }
