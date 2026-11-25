@@ -6868,3 +6868,41 @@ fn a_cone_whose_wires_read_far_out_along_it_is_refused() {
         );
     }
 }
+
+/// A ball of radius 1e10 meshed to a deflection of 0.1 asks the chord
+/// formula for about 2e6 samples round its seam and 2e12 across it: the
+/// solid and face meshers refuse it with an error before they allocate them.
+/// A ball of radius 1e6 at the same deflection keeps each edge and
+/// direction to 2e4 samples, and its grid of about 2e8 is refused where a
+/// mesher sizes it. A circle of radius 1e11 drawn to a deflection of 1e-3
+/// asks for about 6e7 samples, and the wireframe sampler refuses it. A ball
+/// of radius 10, and the large ball at a deflection its size allows, still
+/// mesh closed.
+#[test]
+fn a_face_or_edge_past_the_sample_limit_is_refused() {
+    let refused = |found: &Result<usize, crate::OperationsError>, what: &str| {
+        matches!(found, Err(crate::OperationsError::InvalidInput { reason })
+            if reason.contains("mesh samples") && reason.contains(what))
+    };
+    let mut topo = Topology::new();
+    for (radius, what) in [(1e10, ""), (1e6, "grid")] {
+        let ball = crate::primitives::make_sphere(&mut topo, radius, 16).unwrap();
+        let solid = tessellate_solid(&topo, ball, 0.1).map(|m| m.positions.len());
+        assert!(refused(&solid, what), "{radius}: {solid:?}");
+        for face in brepkit_topology::explorer::solid_faces(&topo, ball).unwrap() {
+            let found = tessellate(&topo, face, 0.1).map(|m| m.positions.len());
+            assert!(refused(&found, what), "{radius}: {found:?}");
+        }
+    }
+
+    let ball = crate::primitives::make_sphere(&mut topo, 1e10, 16).unwrap();
+    let coarse = tessellate_solid(&topo, ball, 1e7).unwrap();
+    assert!(is_watertight(&coarse));
+    let small = crate::primitives::make_sphere(&mut topo, 10.0, 16).unwrap();
+    let mesh = tessellate_solid(&topo, small, 0.1).unwrap();
+    assert!(is_watertight(&mesh));
+
+    let rod = crate::primitives::make_cylinder(&mut topo, 1e11, 1.0).unwrap();
+    let drawn = sample_solid_edges(&topo, rod, 1e-3).map(|lines| lines.positions.len());
+    assert!(refused(&drawn, "an edge"), "{drawn:?}");
+}

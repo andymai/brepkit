@@ -521,6 +521,7 @@ pub fn drawn_edge_samples(
             }
         }
         let edge = topo.edge(edge_id)?;
+        super::check_edge_samples(edge.curve(), deflection, angular_tol)?;
         out.push((
             edge_id,
             sample_edge(topo, edge, deflection, angular_tol, false)?,

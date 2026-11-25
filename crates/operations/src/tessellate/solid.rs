@@ -1241,6 +1241,7 @@ pub(super) fn tessellate_solid_core(
     let all_faces = explorer::solid_faces(topo, solid)?;
     for &face in &all_faces {
         super::check_reach(topo, face)?;
+        super::check_samples(topo, face, deflection, angular_tol)?;
     }
     let edge_face_map = explorer::edge_to_face_map(topo, solid)?;
     let mut phase_t = PhaseTimer::start();
@@ -2084,6 +2085,11 @@ pub(super) fn tessellate_solid_core(
             &mut merged,
             &mut point_to_global,
         ) {
+            // A face skipped for too many samples would leave a hole where
+            // the caller asked for a mesh finer than any the limit allows.
+            if super::is_sample_limit(&e) {
+                return Err(e);
+            }
             log::warn!("skipping face during tessellation: {e}");
         }
         // Attribute every triangle appended by this face (even partial output

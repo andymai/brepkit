@@ -1059,6 +1059,7 @@ pub(super) fn tessellate_torus_two_rim_band(
     };
     let n_rows =
         segments_for_chord_deviation_a(sweep_radius, widest, deflection, angular_tol, true).max(1);
+    super::check_grid(n_cols, n_rows, deflection)?;
 
     // Rims joined from several arcs turn corners where the arcs meet, and can
     // run nearly along a latitude near one (a lobe near its pinch). A row
@@ -1309,6 +1310,7 @@ pub(super) fn tessellate_torus_notch_band(
     let n_v =
         segments_for_chord_deviation_a(torus.minor_radius(), TAU, deflection, angular_tol, true)
             .max(8);
+    super::check_grid(n_u, n_v, deflection)?;
 
     // Build interior rings as `LatRing` (sorted by v) of fresh vertices.
     let build_u_ring =
@@ -1461,6 +1463,7 @@ pub(super) fn tessellate_latitude_band_shared(
             segments_for_chord_deviation_a(band_radius, v_hi - v_lo, deflection, angular_tol, true)
                 .max(1);
         let n_u_interior = ring_lo.len().max(ring_hi.len()).max(full_circle_cols);
+        super::check_grid(n_u_interior, n_v, deflection)?;
         let mut prev_ring: LatRing = ring_lo.clone();
         for iv in 1..n_v {
             #[allow(clippy::cast_precision_loss)]
@@ -1552,6 +1555,7 @@ pub(super) fn tessellate_latitude_band_shared(
         true,
     )
     .max(1);
+    super::check_grid(floor.len(), n_v, deflection)?;
 
     // Lower boundary ring as a LatRing (drop the v component; the gid carries
     // the shared scalloped-floor vertex).
@@ -1762,6 +1766,8 @@ pub(super) fn tessellate_sphere_triangle_shared(
     // Row `s` runs from the `s`-th sample towards `b` to the `s`-th towards
     // `c` in up to `s` segments, at the barycentric level `s / m` from the
     // apex.
+    // Row `s` holds at most `s + 1` samples.
+    super::check_grid(m + 1, m / 2 + 1, deflection)?;
     let mut rows: Vec<Vec<u32>> = Vec::with_capacity(m + 1);
     rows.push(vec![along_b[0]]);
     for s in 1..m {
@@ -3633,6 +3639,17 @@ fn cdt_in_surface_frame(
         angular_tol,
     );
     let divisions = lines.as_ref().map(|(us, vs)| (us.len() - 1, vs.len() - 1));
+    if lines.is_none() && du > 1e-15 && dv > 1e-15 {
+        let (n_u, n_v) = interior_grid_resolution(
+            face_data.surface(),
+            du,
+            dv,
+            deflection,
+            angular_tol,
+            circle_floor,
+        );
+        super::check_grid(n_u + 1, n_v + 1, deflection)?;
+    }
     let (cdt_u_scale, cdt_v_scale) = match stripe_radius.or(holed_wall_radius) {
         Some(radius) if reaches_apex => (radius, 1.0),
         Some(radius) if du > 1e-15 && dv > 1e-15 => {

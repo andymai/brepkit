@@ -229,6 +229,7 @@ pub(super) fn tessellate_with_uvs_floor(
 ) -> Result<TriangleMeshUV, crate::OperationsError> {
     super::check_deflection(deflection)?;
     super::check_reach(topo, face)?;
+    super::check_samples(topo, face, deflection, angular_tol)?;
     let face_data = topo.face(face)?;
     let is_reversed = face_data.is_reversed();
 
@@ -298,6 +299,7 @@ pub(super) fn tessellate_with_uvs_floor(
             ) {
                 Ok(mesh) if !mesh.mesh.indices.is_empty() => Some(mesh),
                 Ok(_) => None,
+                Err(e) if super::is_sample_limit(&e) => return Err(e),
                 Err(e) => {
                     log::debug!("holed wall {face:?} falls back to the analytic grid: {e}");
                     None
@@ -464,6 +466,7 @@ pub(super) fn tessellate_with_uvs_floor(
                     angular_tol * ang_shrink,
                     curvature_floor,
                 );
+                super::check_grid(nu + 1, nv + 1, deflection)?;
                 let kind = sphere_analytic_kind(v_range);
                 let sphere = sphere.clone();
                 Ok(tessellate_analytic(
@@ -493,6 +496,7 @@ pub(super) fn tessellate_with_uvs_floor(
                     angular_tol,
                     true,
                 );
+                super::check_grid(nu + 1, nv + 1, deflection)?;
                 let torus = torus.clone();
                 Ok(tessellate_analytic(
                     |u, v| torus.evaluate(u, v),
