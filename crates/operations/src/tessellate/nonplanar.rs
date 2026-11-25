@@ -3369,6 +3369,7 @@ fn cdt_in_surface_frame(
                     let slant = (rim_point - point).length();
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     let n = ((slant / rim_spacing).ceil() as usize).max(2);
+                    super::check_count("a cone's seam down to its apex", n, deflection)?;
                     (1..n)
                         .map(|k| {
                             #[allow(clippy::cast_precision_loss)]
@@ -4672,7 +4673,7 @@ pub(super) fn tessellate_holed_face_local(
             // CDT cannot take comes back empty for the caller's grid.
             banded || {
                 let before = merged.indices.len();
-                let cdt = tessellate_nonplanar_cdt(
+                let cdt = super::pass_on_sample_limit(tessellate_nonplanar_cdt(
                     topo,
                     face_id,
                     face_data,
@@ -4682,7 +4683,7 @@ pub(super) fn tessellate_holed_face_local(
                     &pool,
                     &mut merged,
                     &mut point_to_global,
-                );
+                ))?;
                 cdt.is_ok() && merged.indices.len() > before
             }
         }

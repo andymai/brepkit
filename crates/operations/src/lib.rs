@@ -252,4 +252,22 @@ pub enum OperationsError {
     /// A geometry conversion error occurred.
     #[error("geometry: {0}")]
     Geometry(#[from] brepkit_geometry::error::GeomError),
+
+    /// A mesh would take more samples than the tessellator allows at the
+    /// deflection asked for. A mesher passes it on and never retries with
+    /// another mesher, which would sample as finely.
+    #[error(
+        "{what} would take about {samples:.1e} mesh samples, past the mesher's limit \
+         of {limit:e} at deflection {deflection:e}"
+    )]
+    TooManySamples {
+        /// What would take them: an edge, a face or a face's grid.
+        what: String,
+        /// About how many samples it would take.
+        samples: f64,
+        /// The limit it passes.
+        limit: f64,
+        /// The deflection asked for.
+        deflection: f64,
+    },
 }

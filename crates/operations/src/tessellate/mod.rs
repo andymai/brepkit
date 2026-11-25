@@ -257,11 +257,6 @@ const MAX_SAMPLES: f64 = 1e7;
 /// that.
 const MAX_EDGE_SAMPLES: f64 = 1e6;
 
-/// The words that mark a refusal for too many samples, so that a mesher's
-/// fallback passes it on instead of trying a mesher that samples the same
-/// grid.
-const SAMPLE_LIMIT: &str = "mesh samples, past the mesher's limit of";
-
 /// The refusal of `what`, which would take `samples` samples at
 /// `deflection`, past `limit`.
 fn too_many_samples(
@@ -270,17 +265,49 @@ fn too_many_samples(
     limit: f64,
     deflection: f64,
 ) -> crate::OperationsError {
-    crate::OperationsError::InvalidInput {
-        reason: format!(
-            "{what} would take about {samples:.1e} {SAMPLE_LIMIT} {limit:e} at deflection \
-             {deflection:e}"
-        ),
+    crate::OperationsError::TooManySamples {
+        what: what.to_string(),
+        samples,
+        limit,
+        deflection,
     }
 }
 
 /// Whether `error` refuses a mesh for too many samples.
 pub(super) fn is_sample_limit(error: &crate::OperationsError) -> bool {
-    matches!(error, crate::OperationsError::InvalidInput { reason } if reason.contains(SAMPLE_LIMIT))
+    matches!(error, crate::OperationsError::TooManySamples { .. })
+}
+
+/// `result`, unless it refuses a mesh for too many samples: that refusal is
+/// returned as the error, so a fallback passes it on instead of trying
+/// another mesher on the same face.
+pub(super) fn pass_on_sample_limit<T>(
+    result: Result<T, crate::OperationsError>,
+) -> Result<Result<T, crate::OperationsError>, crate::OperationsError> {
+    match result {
+        Err(e) if is_sample_limit(&e) => Err(e),
+        other => Ok(other),
+    }
+}
+
+/// Refuses `count` samples along one line of a face past
+/// [`MAX_EDGE_SAMPLES`], before a mesher allocates them.
+pub(super) fn check_count(
+    what: &str,
+    count: usize,
+    deflection: f64,
+) -> Result<(), crate::OperationsError> {
+    let samples = count as f64;
+    if samples <= MAX_EDGE_SAMPLES {
+        Ok(())
+    } else {
+        Err(too_many_samples(
+            what,
+            samples,
+            MAX_EDGE_SAMPLES,
+            deflection,
+        ))
+    }
 }
 
 /// Refuses a grid of `columns` by `rows` samples past [`MAX_SAMPLES`], before
@@ -310,8 +337,9 @@ fn arc_segments(radius: f64, span: f64, deflection: f64, angular_tol: f64) -> f6
         as f64
 }
 
-/// The samples the mesher takes along an edge on `curve`, at most. A NURBS
-/// edge's samples are capped at 4096 spans where they are chosen.
+/// The samples the mesher takes along an edge on `curve`, at most. An
+/// ellipse is counted as its meshers count it; a NURBS edge's samples are
+/// capped at 4096 spans where they are chosen.
 fn edge_samples(
     curve: &brepkit_topology::edge::EdgeCurve,
     deflection: f64,
@@ -322,10 +350,8 @@ fn edge_samples(
     match curve {
         EdgeCurve::Line => 2.0,
         EdgeCurve::Circle(c) => arc_segments(c.radius(), TAU, deflection, angular_tol) + 1.0,
-        // The meshers read an ellipse at its largest radius of curvature.
         EdgeCurve::Ellipse(e) => {
-            let radius = e.semi_major() * e.semi_major() / e.semi_minor();
-            arc_segments(radius, TAU, deflection, angular_tol) + 1.0
+            edge_sampling::ellipse_segments(e, TAU, deflection, angular_tol) as f64 + 1.0
         }
         EdgeCurve::NurbsCurve(_) => 4097.0,
     }

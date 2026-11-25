@@ -2514,7 +2514,7 @@ pub(super) fn tessellate_face_with_shared_edges(
         }
     } else if matches!(face_data.surface(), FaceSurface::Nurbs(_)) {
         let triangles_before = merged.indices.len();
-        let cdt_ok = tessellate_nonplanar_cdt(
+        let cdt_ok = super::pass_on_sample_limit(tessellate_nonplanar_cdt(
             topo,
             face_id,
             face_data,
@@ -2524,7 +2524,7 @@ pub(super) fn tessellate_face_with_shared_edges(
             edge_global_indices,
             merged,
             point_to_global,
-        );
+        ))?;
         // A boundary that encloses nothing in (u, v), such as a whole torus's
         // seam pair collapsed onto one vertex, leaves the CDT without
         // triangles: the snap mesher covers the surface's whole domain.
@@ -2597,7 +2597,7 @@ pub(super) fn tessellate_face_with_shared_edges(
                 let pos_save = merged.positions.len();
                 let nrm_save = merged.normals.len();
                 let idx_save = merged.indices.len();
-                let cdt_ok = tessellate_nonplanar_cdt(
+                let cdt_ok = super::pass_on_sample_limit(tessellate_nonplanar_cdt(
                     topo,
                     face_id,
                     face_data,
@@ -2607,7 +2607,7 @@ pub(super) fn tessellate_face_with_shared_edges(
                     edge_global_indices,
                     merged,
                     point_to_global,
-                );
+                ))?;
                 if cdt_ok.is_err() || merged.indices.len() == idx_save {
                     merged.positions.truncate(pos_save);
                     merged.normals.truncate(nrm_save);
@@ -2637,7 +2637,7 @@ pub(super) fn tessellate_face_with_shared_edges(
             let pos_save = merged.positions.len();
             let nrm_save = merged.normals.len();
             let idx_save = merged.indices.len();
-            let cdt_ok = tessellate_nonplanar_cdt(
+            let cdt_ok = super::pass_on_sample_limit(tessellate_nonplanar_cdt(
                 topo,
                 face_id,
                 face_data,
@@ -2647,7 +2647,7 @@ pub(super) fn tessellate_face_with_shared_edges(
                 edge_global_indices,
                 merged,
                 point_to_global,
-            );
+            ))?;
             if cdt_ok.is_err() || merged.indices.len() == idx_save {
                 merged.positions.truncate(pos_save);
                 merged.normals.truncate(nrm_save);
@@ -2736,7 +2736,7 @@ pub(super) fn tessellate_face_with_shared_edges(
             let idx_save = merged.indices.len();
             let ptg_count_save = point_to_global.len();
 
-            let cdt_ok = tessellate_nonplanar_cdt(
+            let cdt_ok = super::pass_on_sample_limit(tessellate_nonplanar_cdt(
                 topo,
                 face_id,
                 face_data,
@@ -2746,7 +2746,7 @@ pub(super) fn tessellate_face_with_shared_edges(
                 edge_global_indices,
                 merged,
                 point_to_global,
-            );
+            ))?;
             let cdt_produced_tris = cdt_ok.is_ok() && merged.indices.len() > idx_save;
             if tess_trace() {
                 log::debug!(

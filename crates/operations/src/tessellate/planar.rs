@@ -349,18 +349,13 @@ pub(super) fn tessellate_planar(
                     }
                     (ts, te)
                 };
-                let arc_range = t_end - t_start;
-                // Largest radius of curvature (a^2/b) governs uniform-parameter
-                // sampling density; matches the wall edge sampling so the cap
-                // boundary stays watertight against the side faces.
-                let max_curv_radius =
-                    ellipse.semi_major() * ellipse.semi_major() / ellipse.semi_minor();
-                let n_samples = segments_for_chord_deviation_a(
-                    max_curv_radius,
-                    arc_range,
+                // The wall edges' count, so the cap boundary stays watertight
+                // against the side faces.
+                let n_samples = super::edge_sampling::ellipse_segments(
+                    ellipse,
+                    t_end - t_start,
                     deflection,
                     angular_tol,
-                    true,
                 );
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve(

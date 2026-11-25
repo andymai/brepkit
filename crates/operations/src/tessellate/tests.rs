@@ -6880,9 +6880,9 @@ fn a_cone_whose_wires_read_far_out_along_it_is_refused() {
 /// mesh closed.
 #[test]
 fn a_face_or_edge_past_the_sample_limit_is_refused() {
-    let refused = |found: &Result<usize, crate::OperationsError>, what: &str| {
-        matches!(found, Err(crate::OperationsError::InvalidInput { reason })
-            if reason.contains("mesh samples") && reason.contains(what))
+    let refused = |found: &Result<usize, crate::OperationsError>, part: &str| {
+        matches!(found, Err(crate::OperationsError::TooManySamples { what, .. })
+            if what.contains(part))
     };
     let mut topo = Topology::new();
     for (radius, what) in [(1e10, ""), (1e6, "grid")] {
@@ -6917,8 +6917,7 @@ fn a_small_cone_counted_at_the_meshers_radius_floor_is_refused() {
     let mut topo = Topology::new();
     let cone = crate::primitives::make_cone(&mut topo, 1e-6, 0.0, 1e-6).unwrap();
     let refused = |found: &Result<usize, crate::OperationsError>| {
-        matches!(found, Err(crate::OperationsError::InvalidInput { reason })
-            if reason.contains("mesh samples"))
+        matches!(found, Err(crate::OperationsError::TooManySamples { .. }))
     };
     let side = brepkit_topology::explorer::solid_faces(&topo, cone)
         .unwrap()
@@ -6950,8 +6949,123 @@ fn a_band_grid_is_checked_on_the_columns_it_samples() {
         crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, tor, bx).unwrap();
     let found = tessellate_solid(&topo, notched, 3e-5).map(|m| m.positions.len());
     assert!(
-        matches!(&found, Err(crate::OperationsError::InvalidInput { reason })
-            if reason.contains("a face's grid would take about 1.1e7 mesh samples")),
+        matches!(&found, Err(crate::OperationsError::TooManySamples { what, samples, .. })
+            if what == "a face's grid" && (1.1e7..1.2e7).contains(samples)),
         "{found:?}"
     );
+}
+
+/// A torus face with holes goes to the holed-face mesher, which tries the
+/// torus bands and then the constrained triangulation. A ring with a rod
+/// cut through its tube, meshed to 1e-5, asks for a triangulation grid of
+/// about 2e7: the holed-face mesher passes that refusal on, and does not
+/// give the caller an empty mesh to fill with another grid.
+#[test]
+fn a_holed_torus_face_passes_its_sample_refusal_on() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let ring = crate::primitives::make_torus(&mut topo, 10.0, 3.0, 32).unwrap();
+    let rod = crate::primitives::make_cylinder(&mut topo, 1.0, 20.0).unwrap();
+    crate::transform::transform_solid(&mut topo, rod, &Mat4::translation(10.0, 0.0, -10.0))
+        .unwrap();
+    let cut =
+        crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, ring, rod).unwrap();
+    let wall = brepkit_topology::explorer::solid_faces(&topo, cut)
+        .unwrap()
+        .into_iter()
+        .find(|&f| {
+            let face = topo.face(f).unwrap();
+            matches!(face.surface(), FaceSurface::Torus(_)) && !face.inner_wires().is_empty()
+        })
+        .unwrap();
+    let face = topo.face(wall).unwrap();
+    let local = super::nonplanar::tessellate_holed_face_local(
+        &topo,
+        wall,
+        face,
+        1e-5,
+        brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+        false,
+    )
+    .map(|m| m.mesh.positions.len());
+    assert!(
+        matches!(local, Err(crate::OperationsError::TooManySamples { .. })),
+        "{local:?}"
+    );
+    let mesh = tessellate(&topo, wall, 0.05).unwrap();
+    assert!(!mesh.indices.is_empty());
+}
+
+/// A pointed cone with a hole in its side is meshed with each side of its
+/// seam sampled down to the apex at the spacing of its rim. A cone 0.02
+/// across and 1000 tall with a rod cut through it, meshed to 1e-4, spaces
+/// its rim 2.6e-4 apart and would take 3.4e6 samples down its 900 long
+/// seam: the mesher refuses it before it takes them. A cone 10 across and
+/// 20 tall, cut the same way, meshes.
+#[test]
+fn a_ruling_past_the_sample_limit_is_refused() {
+    use brepkit_math::mat::Mat4;
+
+    let holed_wall = |rb: f64, h: f64| {
+        let mut topo = Topology::new();
+        let cone = crate::primitives::make_cone(&mut topo, rb, 0.0, h).unwrap();
+        let rod = crate::primitives::make_cylinder(&mut topo, rb * 0.2, rb * 4.0).unwrap();
+        let place = Mat4::translation(0.0, 0.0, h * 0.1)
+            * Mat4::rotation_y(std::f64::consts::FRAC_PI_2)
+            * Mat4::translation(0.0, 0.0, -rb * 2.0);
+        crate::transform::transform_solid(&mut topo, rod, &place).unwrap();
+        let cut =
+            crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, cone, rod).unwrap();
+        let wall = brepkit_topology::explorer::solid_faces(&topo, cut)
+            .unwrap()
+            .into_iter()
+            .find(|&f| {
+                let face = topo.face(f).unwrap();
+                matches!(face.surface(), FaceSurface::Cone(_)) && !face.inner_wires().is_empty()
+            })
+            .unwrap();
+        (topo, wall)
+    };
+    let (topo, wall) = holed_wall(1e-2, 1e3);
+    let found = tessellate(&topo, wall, 1e-4).map(|m| m.positions.len());
+    assert!(
+        matches!(&found, Err(crate::OperationsError::TooManySamples { samples, .. })
+            if *samples > 3e6),
+        "{found:?}"
+    );
+    let (topo, wall) = holed_wall(5.0, 20.0);
+    assert!(tessellate(&topo, wall, 1e-2).is_ok());
+}
+
+/// The meshers sample an ellipse at most 4096 segments however eccentric it
+/// is, and the sample check counts it the same way. A prism on an ellipse
+/// with semi-axes 1e4 and 1e-2, drawn and meshed to 0.01, asks the chord
+/// formula for 6e6 segments round it, and takes 4096.
+#[test]
+fn an_eccentric_ellipse_is_counted_at_the_meshers_cap() {
+    let mut topo = Topology::new();
+    let rim = brepkit_topology::builder::make_ellipse_edge(
+        &mut topo,
+        Point3::new(0.0, 0.0, 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        1e4,
+        1e-2,
+        1e-7,
+    )
+    .unwrap();
+    let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+    let base = brepkit_topology::builder::make_face_from_wire(&mut topo, wire).unwrap();
+    let prism = crate::extrude::extrude(&mut topo, base, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+    let lines = sample_solid_edges(&topo, prism, 0.01).unwrap();
+    let longest = lines
+        .offsets
+        .iter()
+        .zip(lines.offsets.iter().skip(1).chain([&lines.positions.len()]))
+        .map(|(a, b)| b - a)
+        .max()
+        .unwrap();
+    assert!(longest <= 4097, "{longest}");
+    let cap = tessellate(&topo, base, 0.01).map(|m| m.positions.len());
+    assert!(matches!(cap, Ok(n) if n <= 4097 * 2), "{cap:?}");
 }

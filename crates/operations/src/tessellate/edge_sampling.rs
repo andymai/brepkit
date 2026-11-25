@@ -26,6 +26,29 @@ pub(super) fn segments_for_chord_deviation_a(
     )
 }
 
+/// The most segments an ellipse is sampled in, however eccentric it is.
+const ELLIPSE_MAX_SEGMENTS: usize = 4096;
+
+/// The segments every mesher samples an arc of `ellipse` over `arc_range`
+/// of its parameter in, at most [`ELLIPSE_MAX_SEGMENTS`].
+///
+/// Density is driven by the largest radius of curvature (a^2/b, at the
+/// minor-axis ends). Under uniform-parameter sampling the per-segment chord
+/// deviation is set by how far the parameter sweeps in arc length, which
+/// peaks where curvature is lowest; the small-radius criterion (b^2/a)
+/// satisfies pointwise sag but lets the integrated (area/volume) error grow
+/// about 15 times. Using a^2/b keeps both bounded.
+pub(super) fn ellipse_segments(
+    ellipse: &brepkit_math::curves::Ellipse3D,
+    arc_range: f64,
+    deflection: f64,
+    angular_tol: f64,
+) -> usize {
+    let (a, b) = (ellipse.semi_major(), ellipse.semi_minor());
+    segments_for_chord_deviation_a(a * a / b, arc_range, deflection, angular_tol, true)
+        .min(ELLIPSE_MAX_SEGMENTS)
+}
+
 /// Compute orthogonal axes for a plane given its normal.
 ///
 /// Falls back to identity axes if the normal is degenerate (should not
@@ -92,15 +115,6 @@ pub(super) fn edge_sample_count(
             }
         }
         EdgeCurve::Ellipse(ellipse) => {
-            // Density is driven by the LARGEST radius of curvature (a^2/b, at the
-            // minor-axis ends). Under uniform-parameter sampling the per-segment
-            // chord deviation is set by how far the parameter sweeps in arc length,
-            // which peaks where curvature is lowest; the small-radius criterion
-            // (b^2/a) satisfies pointwise sag but lets the integrated (area/volume)
-            // error grow ~15x. Using a^2/b keeps both bounded.
-            let a = ellipse.semi_major();
-            let b = ellipse.semi_minor();
-            let max_curv_radius = a * a / b;
             let arc_range = if edge.is_closed() {
                 std::f64::consts::TAU
             } else if let (Ok(sp), Ok(ep)) = (
@@ -118,14 +132,7 @@ pub(super) fn edge_sample_count(
             } else {
                 std::f64::consts::TAU
             };
-            segments_for_chord_deviation_a(
-                max_curv_radius,
-                arc_range,
-                deflection,
-                angular_tol,
-                true,
-            )
-            .min(4096)
+            ellipse_segments(ellipse, arc_range, deflection, angular_tol)
         }
         EdgeCurve::NurbsCurve(nurbs) => {
             // Endpoint-trimmed convention: a section edge can be a validated
@@ -666,18 +673,7 @@ pub(super) fn sample_wire_positions(
                     }
                     (ts, te)
                 };
-                let arc_range = t_end - t_start;
-                // Largest radius of curvature (a^2/b) governs uniform-parameter
-                // sampling density; see edge_sample_count for the rationale.
-                let max_curv_radius =
-                    ellipse.semi_major() * ellipse.semi_major() / ellipse.semi_minor();
-                let n_samples = segments_for_chord_deviation_a(
-                    max_curv_radius,
-                    arc_range,
-                    deflection,
-                    angular_tol,
-                    true,
-                );
+                let n_samples = ellipse_segments(ellipse, t_end - t_start, deflection, angular_tol);
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve_into(
                     &|t| ellipse.evaluate(t),
