@@ -444,16 +444,25 @@ fn split_sections_at_t_junctions(
                 pave_block_id: None,
             });
         };
+        // A circle or ellipse splits at the foot of the split point, which
+        // both twins read alike; along the shorter arc, a half turn reads
+        // either way to rounding.
+        let at_split = |t: f64, sp: Point3| match &edge.curve_3d {
+            EdgeCurve::Circle(c) => c.evaluate(c.project(sp)),
+            EdgeCurve::Ellipse(e) => e.evaluate(e.project(sp)),
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => {
+                evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t)
+            }
+        };
         if let Some(reg) = split_registry.as_deref_mut()
             && let Some(pb_id) = edge.pave_block_id
         {
-            for &(t, _) in &splits {
-                let s3 = evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t);
-                reg.entry(pb_id).or_default().push(s3);
+            for &(t, sp) in &splits {
+                reg.entry(pb_id).or_default().push(at_split(t, sp));
             }
         }
-        for &(t, _) in &splits {
-            let s3 = evaluate_edge_at_t(&edge.curve_3d, edge.start_3d, edge.end_3d, t);
+        for &(t, sp) in &splits {
+            let s3 = at_split(t, sp);
             let s_uv = project(s3, prev_uv);
             push_piece(prev_3d, s3, prev_uv, s_uv);
             prev_3d = s3;
@@ -19180,6 +19189,102 @@ mod tests {
                             !matches!(&found, Ok(m) if !m.is_empty()),
                             "{pose}, radius {r:e}, offset {offset:e}, end {end}: {found:?}"
                         );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A circle of radius 2 and an ellipse of semi-axes 2 and 1.5 about the
+    /// plate's (5, 5): a section over half a turn from each of several
+    /// angles, its twin with it, and a line ending on its middle split both
+    /// twins there alike, each piece and its twin one id and the two halves
+    /// two. A closed section is left whole, its twins one id. In each frame.
+    #[test]
+    fn a_half_turn_section_and_its_twin_split_alike() {
+        use brepkit_math::curves::{Circle3D, Ellipse3D};
+        use std::f64::consts::PI;
+        for (pose, o, u, v) in plate_frames() {
+            let n = u.cross(v);
+            let frame = PlaneFrame::from_normal_and_point(n, o);
+            let surface = FaceSurface::Plane {
+                normal: n,
+                d: n.dot(o - Point3::new(0.0, 0.0, 0.0)),
+            };
+            let both = |curve: &EdgeCurve, from: Point3, to: Point3, src: usize| {
+                let forward = OrientedPCurveEdge {
+                    start_uv: frame.project(from),
+                    end_uv: frame.project(to),
+                    ..meeting_edge(curve.clone(), from, to, src)
+                };
+                let reverse = OrientedPCurveEdge {
+                    start_uv: forward.end_uv,
+                    end_uv: forward.start_uv,
+                    start_3d: to,
+                    end_3d: from,
+                    forward: false,
+                    ..forward.clone()
+                };
+                [forward, reverse]
+            };
+            let centre = o + u * 5.0 + v * 5.0;
+            let curves = [
+                EdgeCurve::Circle(Circle3D::with_axes(centre, n, 2.0, u, v).unwrap()),
+                EdgeCurve::Ellipse(Ellipse3D::with_axes(centre, n, 2.0, 1.5, u, v).unwrap()),
+            ];
+            for curve in &curves {
+                let point = |t: f64| curve.evaluate_with_endpoints(t, centre, centre);
+                for start in [0.0, 0.3, 0.5 * PI, PI, 1.7] {
+                    for closed in [false, true] {
+                        let to = if closed { start } else { start + PI };
+                        let cuts = if closed {
+                            vec![start + 0.4, start + 0.4 + PI]
+                        } else {
+                            vec![start + 0.5 * PI]
+                        };
+                        let mut edges = both(curve, point(start), point(to), 0).to_vec();
+                        for (k, &t) in cuts.iter().enumerate() {
+                            let p = point(t);
+                            let out = (p - centre).normalize().unwrap();
+                            edges.extend(both(&EdgeCurve::Line, p + out * 3.0, p, 1 + k));
+                        }
+                        split_sections_at_t_junctions(
+                            &mut edges,
+                            0,
+                            &surface,
+                            Some(&frame),
+                            &[],
+                            1e-7,
+                            None,
+                            &[],
+                        );
+                        let pieces: Vec<&OrientedPCurveEdge> = edges
+                            .iter()
+                            .filter(|e| !matches!(e.curve_3d, EdgeCurve::Line))
+                            .collect();
+                        let what = format!(
+                            "{pose}, {}, from {start:.3}, closed {closed}",
+                            curve.type_tag()
+                        );
+                        assert_eq!(
+                            pieces.len(),
+                            if closed { 2 } else { 4 },
+                            "{what}: {pieces:?}"
+                        );
+                        let mut ids = std::collections::BTreeSet::new();
+                        for piece in pieces.iter().filter(|e| e.forward) {
+                            ids.insert(piece.source_edge_idx);
+                            assert!(
+                                pieces.iter().any(|e| {
+                                    !e.forward
+                                        && e.source_edge_idx == piece.source_edge_idx
+                                        && (e.start_3d - piece.end_3d).length() < 1e-9
+                                        && (e.end_3d - piece.start_3d).length() < 1e-9
+                                }),
+                                "{what}: no twin for {piece:?} in {pieces:?}"
+                            );
+                        }
+                        assert_eq!(ids.len(), if closed { 1 } else { 2 }, "{what}: ids {ids:?}");
                     }
                 }
             }

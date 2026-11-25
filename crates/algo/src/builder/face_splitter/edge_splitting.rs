@@ -1174,7 +1174,9 @@ pub(super) fn find_splits_on_nurbs_section(
 /// matches the evaluator for both twins. Boundary-edge splitting keeps the
 /// CCW-domain convention (`find_splits_on_circle`) — boundary arcs may
 /// genuinely exceed π, as may ellipse sections (no π-split guarantee), so
-/// both stay on the domain-based finders.
+/// both stay on the domain-based finders. A section of a half turn, which
+/// either way reads to rounding, is read counter-clockwise from its stored
+/// start for both twins ([`splits_on_section_conic`]).
 pub(super) fn find_splits_on_section_arc(
     edge: &OrientedPCurveEdge,
     split_pts_3d: &[Point3],
@@ -1183,20 +1185,59 @@ pub(super) fn find_splits_on_section_arc(
     let EdgeCurve::Circle(circle) = &edge.curve_3d else {
         return Vec::new();
     };
-    let a0 = circle.project(edge.start_3d);
-    let delta = shorter_arc_delta(circle.project(edge.end_3d) - a0);
+    splits_on_section_conic(
+        edge,
+        &|p| circle.project(p),
+        &|t| circle.evaluate(t),
+        split_pts_3d,
+        tol,
+    )
+}
+
+/// The splits of a circle or ellipse section at the points of
+/// `split_pts_3d` within `tol` of its curve and strictly inside it, as
+/// fractions along it in the traversal's order. The arc is read from the
+/// stored edge's start to its end the shorter way round, or
+/// counter-clockwise, the stored way, where both ways are a half turn to
+/// rounding: a section and its reverse twin read the one arc.
+fn splits_on_section_conic(
+    edge: &OrientedPCurveEdge,
+    project: &dyn Fn(Point3) -> f64,
+    evaluate: &dyn Fn(f64) -> Point3,
+    split_pts_3d: &[Point3],
+    tol: f64,
+) -> Vec<(f64, Point3)> {
+    use std::f64::consts::{PI, TAU};
+    let (stored_start, stored_end) = if edge.forward {
+        (edge.start_3d, edge.end_3d)
+    } else {
+        (edge.end_3d, edge.start_3d)
+    };
+    let a0 = project(stored_start);
+    let raw = project(stored_end) - a0;
+    let half_turn = (shorter_arc_delta(raw).abs() - PI).abs() <= 1e-9;
+    let delta = if half_turn {
+        raw.rem_euclid(TAU)
+    } else {
+        shorter_arc_delta(raw)
+    };
     if delta.abs() < 1e-14 {
         return Vec::new();
     }
     let mut splits = Vec::new();
     for &sp in split_pts_3d {
         crate::perf::bump_face_split_probe();
-        let angle = circle.project(sp);
-        let closest = circle.evaluate(angle);
+        let angle = project(sp);
+        let closest = evaluate(angle);
         if (sp - closest).length() > tol {
             continue;
         }
-        let t_norm = shorter_arc_delta(angle - a0) / delta;
+        let along = if half_turn {
+            (angle - a0).rem_euclid(TAU) / delta
+        } else {
+            shorter_arc_delta(angle - a0) / delta
+        };
+        let t_norm = if edge.forward { along } else { 1.0 - along };
         if t_norm <= tol || t_norm >= 1.0 - tol {
             continue;
         }
@@ -1232,28 +1273,13 @@ pub(super) fn find_splits_on_section_ellipse(
     let EdgeCurve::Ellipse(ellipse) = &edge.curve_3d else {
         return Vec::new();
     };
-    let a0 = ellipse.project(edge.start_3d);
-    let delta = shorter_arc_delta(ellipse.project(edge.end_3d) - a0);
-    if delta.abs() < 1e-14 {
-        return Vec::new();
-    }
-    let mut splits = Vec::new();
-    for &sp in split_pts_3d {
-        crate::perf::bump_face_split_probe();
-        let angle = ellipse.project(sp);
-        let closest = ellipse.evaluate(angle);
-        if (sp - closest).length() > tol {
-            continue;
-        }
-        let t_norm = shorter_arc_delta(angle - a0) / delta;
-        if t_norm <= tol || t_norm >= 1.0 - tol {
-            continue;
-        }
-        splits.push((t_norm, sp));
-    }
-    splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
-    splits
+    splits_on_section_conic(
+        edge,
+        &|p| ellipse.project(p),
+        &|t| ellipse.evaluate(t),
+        split_pts_3d,
+        tol,
+    )
 }
 
 /// The span of its ellipse that an ellipse edge runs on, counter-clockwise
