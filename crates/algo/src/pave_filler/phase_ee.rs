@@ -332,17 +332,34 @@ fn find_edge_edge_crossings(
     // bound a sliver edge.
     let mut matched: Vec<bool> = Vec::new();
     let mut read = |crossings: &mut Vec<(f64, f64, Point3)>, hit: &ChordApproach| {
+        // A touch stops the refinement on parallel tangents anywhere along
+        // the run where the curves keep within the tolerance; it is read at
+        // its one point instead, so that each pair that holds it reads it
+        // there.
         let refined = refine_on_curves(
             (edge_a.curve(), ea),
             (edge_b.curve(), eb),
             (hit.t_a, hit.t_b),
             tol.linear,
-        );
+        )
+        .or_else(|| {
+            touch_point(
+                (edge_a.curve(), ea),
+                (edge_b.curve(), eb),
+                (hit.t_a, hit.t_b),
+                tol.linear,
+            )
+        });
         let (t_a, t_b, pt) = refined.unwrap_or((hit.t_a, hit.t_b, hit.point));
+        // A touch where a closed curve's domain wraps reads at either end of
+        // it: one point.
         let is_dup = crossings
             .iter()
-            .any(|&(ct_a, ct_b, _): &(f64, f64, Point3)| {
-                (t_a - ct_a).abs() < 1e-6 && (t_b - ct_b).abs() < 1e-6
+            .any(|&(ct_a, ct_b, cp): &(f64, f64, Point3)| {
+                ((t_a - ct_a).abs() < 1e-6 && (t_b - ct_b).abs() < 1e-6)
+                    || (refined.is_some()
+                        && (cp - pt).length()
+                            <= 1e-12 * (1.0 + pt.x().abs() + pt.y().abs() + pt.z().abs()))
             });
         if !is_dup {
             crossings.push((t_a, t_b, pt));
@@ -1285,8 +1302,12 @@ fn refine(
         let det = a11.madd(a22, -(a12 * a12));
         if det.abs() <= 1e-12 * a11 * a22 {
             return if r.length() <= tol {
-                let (pa, pb) = (at_a(ta), at_b(tb));
-                Refined::Along(ta, tb, pa + (pb - pa) * 0.5)
+                let (ta, tb, point) = touch_point((ca, ea), (cb, eb), (ta, tb), tol)
+                    .unwrap_or_else(|| {
+                        let (pa, pb) = (at_a(ta), at_b(tb));
+                        (ta, tb, pa + (pb - pa) * 0.5)
+                    });
+                Refined::Along(ta, tb, point)
             } else {
                 Refined::Apart
             };
@@ -1296,10 +1317,135 @@ fn refine(
     }
     let (pa, pb) = (at_a(ta), at_b(tb));
     if (pa - pb).length() <= tol {
-        Refined::Met(ta, tb, pa + (pb - pa) * 0.5)
+        let (ta, tb, point) = touch_point((ca, ea), (cb, eb), (ta, tb), tol).unwrap_or((
+            ta,
+            tb,
+            pa + (pb - pa) * 0.5,
+        ));
+        Refined::Met(ta, tb, point)
     } else {
         Refined::Apart
     }
+}
+
+/// Above this sine of the angle between two curves' tangents where they
+/// meet, they cross rather than touch.
+const TOUCH_SIN: f64 = 1e-3;
+
+/// Where two curves that meet within `tol` near `(ta, tb)`, along all but
+/// parallel tangents, touch: the parameter of `a` where its tangent turns
+/// parallel to `b`'s at the point of `b` nearest it.
+///
+/// Curves that touch keep within the tolerance of each other over a run of
+/// both, so the point where a search first finds them that near can lie
+/// anywhere along that run, and two searches of one touch can place it
+/// apart. Across the touch the part of `a`'s tangent square to `b`'s
+/// changes sign, a simple root found by bisection. `None` where it keeps
+/// one sign over the bracket (a shallow crossing), or where the curves
+/// stand farther apart than `tol` at the root (two crossings close
+/// together, not a touch).
+fn touch_point(
+    (ca, ea): (&EdgeCurve, &EdgeData),
+    (cb, eb): (&EdgeCurve, &EdgeData),
+    (ta, tb): (f64, f64),
+    tol: f64,
+) -> Option<(f64, f64, Point3)> {
+    let at_a = |t: f64| ca.evaluate_with_endpoints(t, ea.start_pos, ea.end_pos);
+    let at_b = |t: f64| cb.evaluate_with_endpoints(t, eb.start_pos, eb.end_pos);
+    let tan_a = |t: f64| ca.tangent_with_endpoints(t, ea.start_pos, ea.end_pos);
+    let tan_b = |t: f64| cb.tangent_with_endpoints(t, eb.start_pos, eb.end_pos);
+    let (lo_a, hi_a) = (ea.t0.min(ea.t1), ea.t0.max(ea.t1));
+    let (lo_b, hi_b) = (eb.t0.min(eb.t1), eb.t0.max(eb.t1));
+    // A closed circle or ellipse runs on past the ends of its domain: a
+    // touch at the point where its domain wraps lies inside either end.
+    let whole_turn = |curve: &EdgeCurve, lo: f64, hi: f64| {
+        matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
+            && (hi - lo - std::f64::consts::TAU).abs() <= 1e-9
+    };
+    let (turn_a, turn_b) = (whole_turn(ca, lo_a, hi_a), whole_turn(cb, lo_b, hi_b));
+    let keep_b = |s: f64| if turn_b { s } else { s.clamp(lo_b, hi_b) };
+    let wrap = |t: f64, lo: f64, turn: bool| {
+        if turn {
+            lo + (t - lo).rem_euclid(std::f64::consts::TAU)
+        } else {
+            t
+        }
+    };
+    let (da, db) = (tan_a(ta), tan_b(tb));
+    if da.cross(db).length() > TOUCH_SIN * da.length() * db.length() {
+        return None;
+    }
+    // The point of `b` nearest `a` at `t`, from `s`. A circle's tangent is
+    // of unit length, so the step reads `b`'s derivative off its points.
+    let step_b = 1e-6 * (hi_b - lo_b);
+    let foot = |t: f64, mut s: f64| {
+        let p = at_a(t);
+        for _ in 0..16 {
+            let (s0, s1) = if turn_b {
+                (s - step_b, s + step_b)
+            } else {
+                ((s - step_b).max(lo_b), (s + step_b).min(hi_b))
+            };
+            let d = (at_b(s1) - at_b(s0)) * (1.0 / (s1 - s0));
+            let len2 = d.dot(d);
+            if len2 <= 0.0 {
+                break;
+            }
+            let next = keep_b(s + (p - at_b(s)).dot(d) / len2);
+            if (next - s).abs() <= 1e-15 * (hi_b - lo_b) {
+                s = next;
+                break;
+            }
+            s = next;
+        }
+        s
+    };
+    // The part of `a`'s tangent at `t` square to `b`'s at its foot.
+    let square = |t: f64, s: f64| {
+        let (x, y) = (tan_a(t), tan_b(s));
+        let len2 = y.dot(y);
+        if len2 <= 0.0 {
+            return x;
+        }
+        x - y * (x.dot(y) / len2)
+    };
+    let reach = 1e-3 * (hi_a - lo_a);
+    let (mut lo, mut hi) = if turn_a {
+        (ta - reach, ta + reach)
+    } else {
+        ((ta - reach).max(lo_a), (ta + reach).min(hi_a))
+    };
+    let (s_lo, s_hi) = (foot(lo, tb), foot(hi, tb));
+    // Curves that stay within the tolerance over the whole bracket run
+    // along each other there, and have no one point of touch.
+    if (at_a(lo) - at_b(s_lo)).length() <= tol || (at_a(hi) - at_b(s_hi)).length() <= tol {
+        return None;
+    }
+    let side = square(hi, s_hi).normalize().ok()?;
+    if square(lo, s_lo).dot(side) >= 0.0 {
+        return None;
+    }
+    let mut s = tb;
+    for _ in 0..200 {
+        let mid = f64::midpoint(lo, hi);
+        if mid <= lo || mid >= hi {
+            break;
+        }
+        s = foot(mid, s);
+        if square(mid, s).dot(side) < 0.0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    let t = f64::midpoint(lo, hi);
+    let s = foot(t, s);
+    let (pa, pb) = (at_a(t), at_b(s));
+    let (t, s) = (wrap(t, lo_a, turn_a), wrap(s, lo_b, turn_b));
+    if !turn_b && !(lo_b..=hi_b).contains(&s) || !turn_a && !(lo_a..=hi_a).contains(&t) {
+        return None;
+    }
+    ((pa - pb).length() <= tol).then(|| (t, s, pa + (pb - pa) * 0.5))
 }
 
 /// Exact line-segment vs circular-arc intersection.
@@ -3148,5 +3294,76 @@ mod tests {
 
         let hits = line_circle_intersection(&line, &arc, &circle, tol, false);
         assert!(hits.is_empty(), "line far from circle should not intersect");
+    }
+
+    /// A circle of radius 2 about (5, 5) and an ellipse of semi-axes 3 and
+    /// `sqrt(5.4)` about (4, 5) cross at (6, 5 -/+ sqrt(3)) and touch at
+    /// (7, 5), where they stay within the tolerance of each other 1.9e-3
+    /// along both sides. Read either way round and in each pose, the touch
+    /// is one point, at (7, 5): for two arcs, and for the whole circle,
+    /// whose domain wraps at the touch, against a piece of the ellipse
+    /// that holds one crossing.
+    #[test]
+    fn a_circle_and_an_ellipse_touching_meet_at_the_touch() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::mat::Mat4;
+        type Layout<'a> = ((f64, f64), (f64, f64), &'a [f64]);
+        let poses = [
+            Mat4::identity(),
+            Mat4::translation(3.0, -2.0, 1.0) * Mat4::rotation_x(0.4) * Mat4::rotation_z(0.6),
+            Mat4::translation(1.0, 0.5, -2.0) * Mat4::scale(-1.0, 1.0, 1.0),
+        ];
+        let root3 = 3.0_f64.sqrt();
+        // The circle's ends, the ellipse's, and the crossings between.
+        let layouts: [Layout<'_>; 2] = [
+            ((-1.5, 1.5), (-1.2, 1.2), &[5.0 - root3, 5.0 + root3]),
+            ((2.0, 2.0), (-1.1416, 0.4292), &[5.0 - root3]),
+        ];
+        for pose in poses {
+            for ((c0, c1), (e0, e1), ys) in layouts {
+                let at = |x: f64, y: f64| pose.mul_point(Point3::new(x, y, 0.0));
+                let (u, v) = (at(1.0, 0.0) - at(0.0, 0.0), at(0.0, 1.0) - at(0.0, 0.0));
+                let n = u.cross(v);
+                let circle = Circle3D::with_axes(at(5.0, 5.0), n, 2.0, u, v).unwrap();
+                let ellipse =
+                    Ellipse3D::with_axes(at(4.0, 5.0), n, 3.0, 5.4_f64.sqrt(), u, v).unwrap();
+                let mut topo = Topology::new();
+                let arc = add_edge(
+                    &mut topo,
+                    circle.evaluate(c0),
+                    circle.evaluate(c1),
+                    EdgeCurve::Circle(circle),
+                );
+                let other = add_edge(
+                    &mut topo,
+                    ellipse.evaluate(e0),
+                    ellipse.evaluate(e1),
+                    EdgeCurve::Ellipse(ellipse),
+                );
+                let touch = at(7.0, 5.0);
+                for (ea, eb) in [(arc, other), (other, arc)] {
+                    let hits = crossings(&topo, ea, eb);
+                    let near: Vec<_> = hits
+                        .iter()
+                        .filter(|h| (h.2 - touch).length() < 1e-3)
+                        .collect();
+                    assert_eq!(near.len(), 1, "{hits:?}");
+                    assert!(
+                        (near[0].2 - touch).length() < 1e-12,
+                        "touch read at {:?}, {:e} off",
+                        near[0].2,
+                        (near[0].2 - touch).length()
+                    );
+                    for &y in ys {
+                        let crossing = at(6.0, y);
+                        assert!(
+                            hits.iter().any(|h| (h.2 - crossing).length() < 1e-9),
+                            "{hits:?}"
+                        );
+                    }
+                    assert_eq!(hits.len(), ys.len() + 1, "{hits:?}");
+                }
+            }
+        }
     }
 }
