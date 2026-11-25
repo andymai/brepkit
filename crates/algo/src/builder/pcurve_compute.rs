@@ -886,7 +886,7 @@ impl EdgeRun<'_> {
         match self {
             Self::Line(..) => 0.0,
             Self::Circle(c, _, sweep) => c.radius() * sweep.powi(4),
-            Self::Ellipse(e, _, sweep) => e.semi_major() * sweep.powi(4),
+            Self::Ellipse(e, _, sweep) => e.semi_major().max(e.semi_minor()) * sweep.powi(4),
         }
     }
 }
@@ -1599,7 +1599,10 @@ fn piece_stray(curve: &EdgeCurve, a: Point3, b: Point3, span: Option<(f64, f64)>
     let stray = match curve {
         EdgeCurve::Line => Some(0.0),
         EdgeCurve::Circle(c) => sagitta(c.project(b) - c.project(a), c.radius()),
-        EdgeCurve::Ellipse(e) => sagitta(e.project(b) - e.project(a), e.semi_major()),
+        EdgeCurve::Ellipse(e) => sagitta(
+            e.project(b) - e.project(a),
+            e.semi_major().max(e.semi_minor()),
+        ),
         EdgeCurve::NurbsCurve(nurbs) => {
             let (t0, t1) = span?;
             if !(t0.is_finite() && t1.is_finite()) {

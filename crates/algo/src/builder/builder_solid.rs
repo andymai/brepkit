@@ -3850,7 +3850,7 @@ fn split_arc_edges_at_collinear_vertices(
         }
         let radius_scale = match &curve {
             EdgeCurve::Circle(c) => c.radius(),
-            EdgeCurve::Ellipse(e) => e.semi_major(),
+            EdgeCurve::Ellipse(e) => e.semi_major().max(e.semi_minor()),
             EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => continue,
         };
         if radius_scale < snap {
@@ -4870,6 +4870,75 @@ fn project_angle_on_curve(curve: &brepkit_topology::edge::EdgeCurve, p: Point3) 
 /// An edge's middle and size, as `merge_duplicate_edges` compares copies.
 type EdgeMiddle = Option<(Point3, f64, u64)>;
 
+/// Whether one of edges `a` and `b`, which share their ends, is fitted and
+/// strays more than `band` off the other's exact curve (a line, circle or
+/// ellipse, read whole) at one of seven places along its own span. A fit of
+/// the exact curve keeps within its fit error of it. `false` where neither or
+/// both are fitted, or where the fitted edge's span cannot be read: its
+/// parameters then resolve to the whole parent curve, past the edge's ends.
+fn fit_strays_from_exact(
+    topo: &Topology,
+    a: brepkit_topology::edge::EdgeId,
+    b: brepkit_topology::edge::EdgeId,
+    band: f64,
+) -> bool {
+    let read = |e: brepkit_topology::edge::EdgeId| -> Option<(EdgeCurve, Point3, Point3)> {
+        let edge = topo.edge(e).ok()?;
+        Some((
+            edge.curve().clone(),
+            topo.vertex(edge.start()).ok()?.point(),
+            topo.vertex(edge.end()).ok()?.point(),
+        ))
+    };
+    let (Some(x), Some(y)) = (read(a), read(b)) else {
+        return false;
+    };
+    let (fitted, exact) = match (&x.0, &y.0) {
+        (EdgeCurve::NurbsCurve(_), EdgeCurve::NurbsCurve(_)) => return false,
+        (EdgeCurve::NurbsCurve(_), _) => (x, y),
+        (_, EdgeCurve::NurbsCurve(_)) => (y, x),
+        _ => return false,
+    };
+    let (EdgeCurve::NurbsCurve(fit), from, to) = fitted else {
+        return false;
+    };
+    let (t0, t1) = EdgeCurve::NurbsCurve(fit.clone()).domain_with_endpoints(from, to);
+    let (d0, d1) = fit.domain();
+    let whole = (t1 - t0).abs() >= (d1 - d0) * (1.0 - 1e-9);
+    let ends_are_curve_ends = [fit.evaluate(d0), fit.evaluate(d1)]
+        .iter()
+        .all(|p| (*p - from).length().min((*p - to).length()) <= band);
+    if whole && !ends_are_curve_ends {
+        return false;
+    }
+    let off = |p: Point3| -> f64 {
+        match &exact.0 {
+            EdgeCurve::Line => {
+                let d = exact.2 - exact.1;
+                let len2 = d.dot(d);
+                if len2 <= 0.0 {
+                    return (p - exact.1).length();
+                }
+                let w = p - exact.1;
+                (w - d * (w.dot(d) / len2)).length()
+            }
+            EdgeCurve::Circle(c) => {
+                let w = p - c.center();
+                let height = w.dot(c.normal());
+                let across = (w - c.normal() * height).length();
+                (across - c.radius()).hypot(height)
+            }
+            EdgeCurve::Ellipse(e) => (p - e.evaluate(e.project(p))).length(),
+            EdgeCurve::NurbsCurve(_) => 0.0,
+        }
+    };
+    (1..8).any(|k| {
+        let t = (t1 - t0).madd(f64::from(k) / 8.0, t0);
+        let near = off(fit.evaluate(t)) <= band;
+        !near
+    })
+}
+
 /// A fitted curve's identity: its control points, weights and knots, so
 /// edges cut from one curve key alike (never 0, which marks an exact curve).
 fn nurbs_key(nc: &brepkit_math::nurbs::curve::NurbsCurve) -> u64 {
@@ -5055,11 +5124,28 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
         // sets each already paired are two edges: a hole's short rim arc and
         // a box edge's chord across the opening, each shared by its own two
         // faces, would otherwise weld into one edge of four faces.
+        // An exact curve and a fitted one are not copies of one edge where
+        // the fit strays off the exact curve: their middles read on two
+        // curves, and a section fitted between a rim's two vertices (a cap's
+        // section from a crossing to a touch on the rim) shares both its
+        // ends with the rim's arc, 0.02 off it, and would trace the wall
+        // along the rim. Such a pair can still join below, where each is one
+        // use short of a partner: a chord standing for a curve.
+        let fitted = |e: EdgeId| {
+            topo.edge(e)
+                .is_ok_and(|edge| matches!(edge.curve(), EdgeCurve::NurbsCurve(_)))
+        };
+        let one_kind = |x: EdgeId, y: EdgeId| {
+            fitted(x) == fitted(y) || !fit_strays_from_exact(topo, x, y, 100.0 * tol)
+        };
         let mut sets: Vec<(EdgeId, EdgeMiddle, Vec<EdgeId>, usize)> = Vec::new();
         for &e in &unique {
             let mid = middle(e)?;
             let n = uses.get(&e).copied().unwrap_or(0);
-            if let Some(set) = sets.iter_mut().find(|set| same(mid, set.1)) {
+            if let Some(set) = sets
+                .iter_mut()
+                .find(|set| same(mid, set.1) && one_kind(e, set.0))
+            {
                 set.2.push(e);
                 set.3 += n;
             } else {

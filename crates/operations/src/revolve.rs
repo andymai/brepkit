@@ -2413,7 +2413,8 @@ fn boundary_in_plane(
             }
             EdgeCurve::Ellipse(e) => {
                 off(e.center()) <= slack
-                    && e.normal().cross(normal).length() * e.semi_major() <= slack
+                    && e.normal().cross(normal).length() * e.semi_major().max(e.semi_minor())
+                        <= slack
             }
             EdgeCurve::NurbsCurve(spline) => {
                 let weights = spline.weights();
@@ -2500,7 +2501,10 @@ fn boundary_sweep_meets_itself(
         let conic = match curve {
             EdgeCurve::Line => Some(((ne - ns).length(), 0.0)),
             EdgeCurve::Circle(c) => Some((c.radius() * (b - a).abs(), c.radius())),
-            EdgeCurve::Ellipse(e) => Some((e.semi_major() * (b - a).abs(), e.semi_major())),
+            EdgeCurve::Ellipse(e) => {
+                let longer = e.semi_major().max(e.semi_minor());
+                Some((longer * (b - a).abs(), longer))
+            }
             EdgeCurve::NurbsCurve(_) => None,
         };
         if let Some((length, radius)) = conic {

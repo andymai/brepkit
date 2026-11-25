@@ -3967,7 +3967,9 @@ pub(super) fn section_meeting_points(
                 // rounding of its place.
                 let e_q = match &*unit_b {
                     EdgeCurve::Circle(c) => (c.center() - origin).length() + c.radius(),
-                    EdgeCurve::Ellipse(el) => (el.center() - origin).length() + el.semi_major(),
+                    EdgeCurve::Ellipse(el) => {
+                        (el.center() - origin).length() + el.semi_major().max(el.semi_minor())
+                    }
                     EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => {
                         (sb - origin).length() + (tb - sb).length()
                     }

@@ -3220,6 +3220,7 @@ fn detect_trivial_relation(
     let b_in_a = !hollow(a)
         && (b_vertex_term || (ca.is_none() && aabb_strictly_contains(&aabb_b, &aabb_a)))
         && nurbs_faces_proved_inside(topo, b, a, tol)
+        && outer_faces_hold(topo, b, a, tol)
         && !center_outside(topo, b, a, &aabb_b)
         && !boundary_probe_outside(topo, b, a, &aabb_b)
         && !axis_outside(topo, b, ca, &aabb_b)
@@ -3229,6 +3230,7 @@ fn detect_trivial_relation(
     let a_in_b = !hollow(b)
         && (a_vertex_term || (cb.is_none() && aabb_strictly_contains(&aabb_a, &aabb_b)))
         && nurbs_faces_proved_inside(topo, a, b, tol)
+        && outer_faces_hold(topo, a, b, tol)
         && !center_outside(topo, a, b, &aabb_a)
         && !boundary_probe_outside(topo, a, b, &aabb_a)
         && !axis_outside(topo, a, cb, &aabb_a)
@@ -3426,6 +3428,311 @@ fn nurbs_faces_proved_inside(
                     .all(|&(n, offset)| n.dot(p - origin) - offset <= tol.linear)
             })
     })
+}
+
+/// Whether every face of `outer` that `inner` could pass out through is
+/// proved to hold `inner` on its material side. A face is near `inner`
+/// where the box that holds it meets the box that holds `inner`. A plane
+/// face holds `inner` where `inner` reaches no farther out along its
+/// outward normal than the plane; a cylinder, cone or sphere face with the
+/// material inside it holds `inner` where its [`Gauge`] over `inner` reads
+/// no more than the surface. Each bound is the tolerance past the surface.
+/// A near face of any other kind (a torus, a B-spline, a face round a hole)
+/// is not proved.
+///
+/// Where every near face holds it, `inner` crosses the boundary of `outer`
+/// nowhere, so each piece of `inner` lies wholly inside `outer` or wholly
+/// outside, and the witnesses read which. Probes alone miss a ring that
+/// pokes out of a rod between its one vertex and the points they read.
+fn outer_faces_hold(
+    topo: &Topology,
+    inner: SolidId,
+    outer: SolidId,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> bool {
+    let Ok(inner_box) = crate::measure::solid_outer_bounds(topo, inner) else {
+        return false;
+    };
+    let near = inner_box.expanded(tol.linear);
+    let (Ok(faces), Ok(inner_faces)) = (
+        brepkit_topology::explorer::solid_faces(topo, outer),
+        brepkit_topology::explorer::solid_faces(topo, inner),
+    ) else {
+        return false;
+    };
+    faces.into_iter().all(|fid| {
+        let Ok(face) = topo.face(fid) else {
+            return false;
+        };
+        let Ok(bounds) = crate::measure::face_set_bounding_box(topo, &[fid])
+            .and_then(|b| crate::measure::hold_nurbs_faces(topo, &[fid], b))
+        else {
+            return false;
+        };
+        if !bounds.intersects(near) {
+            return true;
+        }
+        if let FaceSurface::Plane { normal, d } = face.surface() {
+            let Ok(n) = normal.normalize() else {
+                return false;
+            };
+            let (n, offset) = if face.is_reversed() {
+                (-n, -d / normal.length())
+            } else {
+                (n, d / normal.length())
+            };
+            return reach_along(topo, &inner_faces, n).is_some_and(|r| r <= offset + tol.linear);
+        }
+        Gauge::round_material(topo, fid).is_some_and(|(gauge, limit)| {
+            gauge
+                .over(topo, &inner_faces)
+                .is_some_and(|r| r <= limit + tol.linear)
+        })
+    })
+}
+
+/// The control points of a B-spline curve or surface when every weight is
+/// positive, so that they hold it in their hull; `None` otherwise.
+fn held_by_poles<'a>(
+    points: impl Iterator<Item = &'a Point3>,
+    weights: impl Iterator<Item = &'a f64>,
+    out: &mut Vec<Point3>,
+) -> Option<()> {
+    weights.into_iter().all(|&w| w > 0.0).then_some(())?;
+    out.extend(points.copied());
+    Some(())
+}
+
+/// A bound on how far `faces` reach along the unit direction `n`: the most
+/// of `n . p` over them. A linear function peaks on the boundary of a plane
+/// face and of a cylinder or cone face, whose straight lines end there (a
+/// pointed cone's apex is a vertex of its face), so those are read by their
+/// edges; a ball, a ring and a B-spline face by the reach of what holds
+/// them. `None` where a bound is not found.
+fn reach_along(topo: &Topology, faces: &[FaceId], n: Vec3) -> Option<f64> {
+    let along = |p: Point3| n.dot(p - Point3::new(0.0, 0.0, 0.0));
+    let mut most = f64::NEG_INFINITY;
+    for &fid in faces {
+        let face = topo.face(fid).ok()?;
+        let mut points = Vec::new();
+        match face.surface() {
+            FaceSurface::Sphere(s) => most = most.max(along(s.center()) + s.radius()),
+            FaceSurface::Torus(t) => most = most.max(along(Round::Ring(t.clone()).reach(n))),
+            FaceSurface::Nurbs(s) => {
+                held_by_poles(
+                    s.control_points().iter().flatten(),
+                    s.weights().iter().flatten(),
+                    &mut points,
+                )?;
+            }
+            FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {
+                edge_points(topo, fid, Some(n), &mut points)?;
+            }
+        }
+        most = points.into_iter().map(along).fold(most, f64::max);
+    }
+    most.is_finite().then_some(most)
+}
+
+/// A convex reading of a point against a cylinder, a cone or a sphere: its
+/// distance from the axis (or from the centre, with no axis) less `slope`
+/// times its height along the unit axis from `origin`. The solid round a
+/// cylinder or a sphere is where it reads no more than the radius, with no
+/// slope; the solid in one nappe of a cone, where it reads no more than
+/// nothing, from the apex with the axis turned into that nappe and the
+/// slope the cone's radius per unit of height.
+struct Gauge {
+    origin: Point3,
+    axis: Option<Vec3>,
+    slope: f64,
+}
+
+impl Gauge {
+    /// The gauge of a cylinder, cone or sphere face whose material lies
+    /// inside its surface, and the most it reads on the material side.
+    /// `None` for other faces, a face round a hole, or a face whose outward
+    /// normal at a vertex off the axis does not run up the gauge.
+    fn round_material(topo: &Topology, fid: FaceId) -> Option<(Self, f64)> {
+        let face = topo.face(fid).ok()?;
+        let mut corners = Vec::new();
+        edge_points(topo, fid, None, &mut corners)?;
+        let (gauge, limit) = match face.surface() {
+            FaceSurface::Cylinder(c) => (
+                Self {
+                    origin: c.origin(),
+                    axis: Some(c.axis().normalize().ok()?),
+                    slope: 0.0,
+                },
+                c.radius(),
+            ),
+            FaceSurface::Sphere(s) => (
+                Self {
+                    origin: s.center(),
+                    axis: None,
+                    slope: 0.0,
+                },
+                s.radius(),
+            ),
+            FaceSurface::Cone(c) => {
+                let axis = c.axis().normalize().ok()?;
+                // The nappe the face lies on, read at its vertex farthest
+                // along the axis either way from the apex.
+                let height = corners
+                    .iter()
+                    .map(|&p| axis.dot(p - c.apex()))
+                    .max_by(|x, y| x.abs().total_cmp(&y.abs()))?;
+                let axis = if height < 0.0 { -axis } else { axis };
+                let (sin_a, cos_a) = c.half_angle().sin_cos();
+                (
+                    Self {
+                        origin: c.apex(),
+                        axis: Some(axis),
+                        slope: cos_a / sin_a,
+                    },
+                    0.0,
+                )
+            }
+            FaceSurface::Plane { .. } | FaceSurface::Torus(_) | FaceSurface::Nurbs(_) => {
+                return None;
+            }
+        };
+        // The material lies inside where the face's outward normal runs up
+        // the gauge, read at the vertex farthest from the axis or centre.
+        let p = corners
+            .iter()
+            .copied()
+            .max_by(|x, y| gauge.away(*x).total_cmp(&gauge.away(*y)))?;
+        let (u, v) = face.surface().project_point(p)?;
+        let normal = face.surface().normal(u, v);
+        let outward = if face.is_reversed() { -normal } else { normal };
+        (outward.dot(gauge.rise(p)?) > 0.0).then_some((gauge, limit))
+    }
+
+    /// The distance of `p` from the axis, or from the origin with no axis.
+    fn away(&self, p: Point3) -> f64 {
+        let w = p - self.origin;
+        self.axis.map_or(w, |a| w - a * w.dot(a)).length()
+    }
+
+    /// The height of `p` along the axis from the origin.
+    fn height(&self, p: Point3) -> f64 {
+        self.axis.map_or(0.0, |a| a.dot(p - self.origin))
+    }
+
+    fn at(&self, p: Point3) -> f64 {
+        self.away(p) - self.slope * self.height(p)
+    }
+
+    /// The direction the gauge rises fastest at `p`, off the axis.
+    fn rise(&self, p: Point3) -> Option<Vec3> {
+        let w = p - self.origin;
+        let out = self.axis.map_or(w, |a| w - a * w.dot(a)).normalize().ok()?;
+        Some(self.axis.map_or(out, |a| out - a * self.slope))
+    }
+
+    /// How fast the gauge can change along any unit step: the distance by
+    /// one, the height by the slope, at right angles to each other.
+    fn steepness(&self) -> f64 {
+        self.slope.hypot(1.0)
+    }
+
+    /// A bound on the gauge over a circle about `centre` square to the unit
+    /// `normal`, or an ellipse there whose larger semi-axis is `radius`:
+    /// each point lies within `radius` of the centre in that plane, so its
+    /// distance from the axis by no more, and its height by no more than
+    /// `radius` times the axis's part in the plane.
+    fn round(&self, centre: Point3, normal: Vec3, radius: f64) -> f64 {
+        let tilt = self.axis.map_or(0.0, |a| a.cross(normal).length());
+        self.at(centre) + radius + self.slope * radius * tilt
+    }
+
+    /// A bound on the gauge over `faces`. It is convex, so it peaks where a
+    /// linear function does (see [`reach_along`]); over a conic edge, a ball
+    /// or a ring it is no more than [`Self::round`] of the circle that
+    /// holds it, with the tube added at the steepness. `None` where a bound
+    /// is not found.
+    fn over(&self, topo: &Topology, faces: &[FaceId]) -> Option<f64> {
+        let mut most = f64::NEG_INFINITY;
+        for &fid in faces {
+            let face = topo.face(fid).ok()?;
+            let mut points = Vec::new();
+            match face.surface() {
+                FaceSurface::Sphere(s) => {
+                    most = most.max(self.at(s.center()) + s.radius() * self.steepness());
+                }
+                FaceSurface::Torus(t) => {
+                    let ring = self.round(t.center(), t.z_axis(), t.major_radius());
+                    most = most.max(ring + t.minor_radius() * self.steepness());
+                }
+                FaceSurface::Nurbs(s) => {
+                    held_by_poles(
+                        s.control_points().iter().flatten(),
+                        s.weights().iter().flatten(),
+                        &mut points,
+                    )?;
+                }
+                FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {
+                    edge_points(topo, fid, None, &mut points)?;
+                    for w in
+                        std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied())
+                    {
+                        for oe in topo.wire(w).ok()?.edges() {
+                            match topo.edge(oe.edge()).ok()?.curve() {
+                                EdgeCurve::Circle(c) => {
+                                    most = most.max(self.round(c.center(), c.normal(), c.radius()));
+                                }
+                                EdgeCurve::Ellipse(e) => {
+                                    // A loaded ellipse can store its longer
+                                    // semi-axis as the minor one.
+                                    let longer = e.semi_major().max(e.semi_minor());
+                                    most = most.max(self.round(e.center(), e.normal(), longer));
+                                }
+                                EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => {}
+                            }
+                        }
+                    }
+                }
+            }
+            most = points.into_iter().map(|p| self.at(p)).fold(most, f64::max);
+        }
+        most.is_finite().then_some(most)
+    }
+}
+
+/// The points of a face's edges that bound a linear function along `n` over
+/// them: each edge's ends, a circle's or an ellipse's farthest point along
+/// `n`, and a B-spline edge's control points. With no direction, only the
+/// ends and the control points. `None` where an edge is not read.
+fn edge_points(
+    topo: &Topology,
+    face: FaceId,
+    n: Option<Vec3>,
+    out: &mut Vec<Point3>,
+) -> Option<()> {
+    let face = topo.face(face).ok()?;
+    for w in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+        for oe in topo.wire(w).ok()?.edges() {
+            let edge = topo.edge(oe.edge()).ok()?;
+            let (ps, pe) = (
+                topo.vertex(edge.start()).ok()?.point(),
+                topo.vertex(edge.end()).ok()?.point(),
+            );
+            out.extend([ps, pe]);
+            match edge.curve() {
+                EdgeCurve::Line => {}
+                EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                    if let Some(n) = n {
+                        let span = edge.curve().domain_with_endpoints(ps, pe);
+                        out.extend(rim_reach(edge.curve(), span, n));
+                    }
+                }
+                EdgeCurve::NurbsCurve(c) => {
+                    held_by_poles(c.control_points().iter(), c.weights().iter(), out)?;
+                }
+            }
+        }
+    }
+    Some(())
 }
 
 /// The outward planes of `solid` when it is a convex polyhedron: every face
