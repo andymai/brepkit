@@ -14002,15 +14002,10 @@ fn plane_internal_line_loops(
     Some(deduped)
 }
 
-/// Whether `a` and `b`, edges of one face that share their two ends, are one
-/// curve within `tol`: `Some` where both are lines, circles or ellipses, read
-/// by [`same_section_curve`] each from its stored start, and `None` where
-/// either is a B-spline.
-pub fn edges_one_curve(a: &OrientedPCurveEdge, b: &OrientedPCurveEdge, tol: f64) -> Option<bool> {
-    let analytic = |e: &OrientedPCurveEdge| !matches!(e.curve_3d, EdgeCurve::NurbsCurve(_));
-    if !(analytic(a) && analytic(b)) {
-        return None;
-    }
+/// Whether `a` and `b`, edges of one face that share their two ends, are
+/// proved one curve within `tol` by [`same_section_curve`], each read from
+/// its stored start.
+pub fn edges_one_curve(a: &OrientedPCurveEdge, b: &OrientedPCurveEdge, tol: f64) -> bool {
     let section = |e: &OrientedPCurveEdge| {
         let (start, end) = if e.forward {
             (e.start_3d, e.end_3d)
@@ -14031,7 +14026,7 @@ pub fn edges_one_curve(a: &OrientedPCurveEdge, b: &OrientedPCurveEdge, tol: f64)
             pave_block_id: None,
         }
     };
-    Some(same_section_curve(&section(a), &section(b), tol))
+    same_section_curve(&section(a), &section(b), tol)
 }
 
 /// Whether sections `a` and `b`, whose ends lie within `tol` of each other
@@ -18258,7 +18253,32 @@ mod tests {
                         let ab = el.semi_major() * el.semi_minor();
                         el.normal().dot(normal).signum() * 0.5 * ab * (phi - phi.sin())
                     }
-                    other @ EdgeCurve::NurbsCurve(_) => unreachable!("a wire edge on {other:?}"),
+                    // Half of `x dy - y dx` along the curve, by five-point
+                    // Gauss-Legendre on 64 even steps of its span: exact
+                    // for a polynomial piece of low degree.
+                    EdgeCurve::NurbsCurve(n) => {
+                        let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+                        let nodes = [
+                            (0.0, 128.0 / 225.0),
+                            (0.538_469_310_105_683, 0.478_628_670_499_366_5),
+                            (-0.538_469_310_105_683, 0.478_628_670_499_366_5),
+                            (0.906_179_845_938_664, 0.236_926_885_056_189_1),
+                            (-0.906_179_845_938_664, 0.236_926_885_056_189_1),
+                        ];
+                        let h = (t1 - t0) / 64.0;
+                        let mut along = 0.0;
+                        for k in 0..64 {
+                            let mid = t0 + h * (f64::from(k) + 0.5);
+                            for (x, w) in nodes {
+                                let t = mid + 0.5 * h * x;
+                                let d = n.derivatives(t, 1);
+                                let (p, dp) = (local(Point3::new(0.0, 0.0, 0.0) + d[0]), d[1]);
+                                let (dx, dy) = (dp.dot(u), dp.dot(v));
+                                along += w * 0.5 * h * 0.5 * (p.0 * dy - p.1 * dx);
+                            }
+                        }
+                        along - chord
+                    }
                 };
                 if e.forward {
                     chord + segment
@@ -19511,6 +19531,39 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Two quadratic B-splines from the plate's (3, 5) to (7, 5), one through
+    /// the control point (5, 5.3) and one through (5, 5.2), which leave their
+    /// ends 0.05 radians apart, and their chord: the plate splits into the
+    /// lower one's segment, the lens between them and the rest, in each
+    /// frame. A parabolic segment's area is two thirds of its control
+    /// triangle's.
+    #[test]
+    fn two_b_splines_leaving_their_ends_close_together_bound_a_lens() {
+        use brepkit_math::nurbs::NurbsCurve;
+        let lower = 2.0 / 3.0 * (0.5 * 4.0 * 0.2);
+        let upper = 2.0 / 3.0 * (0.5 * 4.0 * 0.3);
+        let sections = |o: Point3, u: Vec3, v: Vec3| {
+            let at = |x: f64, y: f64| o + u * x + v * y;
+            let spline = |rise: f64| {
+                EdgeCurve::NurbsCurve(
+                    NurbsCurve::new(
+                        2,
+                        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                        vec![at(3.0, 5.0), at(5.0, 5.0 + rise), at(7.0, 5.0)],
+                        vec![1.0, 1.0, 1.0],
+                    )
+                    .unwrap(),
+                )
+            };
+            vec![
+                curve_section(spline(0.3), at(3.0, 5.0), at(7.0, 5.0)),
+                curve_section(spline(0.2), at(3.0, 5.0), at(7.0, 5.0)),
+                line_section(at(7.0, 5.0), at(3.0, 5.0)),
+            ]
+        };
+        plate_regions_match(&sections, &[lower, upper - lower], 1e-9);
     }
 
     /// A circle of radius 2 and an ellipse of semi-axes 2 and 1.5 about the

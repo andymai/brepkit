@@ -231,12 +231,12 @@ fn trace_loops(
                 {
                     // Check if this is truly the reverse edge (same curve,
                     // opposite direction): a section's own twin, or another
-                    // edge leaving close by. Two lines, circles or ellipses
-                    // that leave the vertex close together but apart are two
-                    // curves unless proved one (a circle and an ellipse
-                    // through the same ends). Edges that leave along one
-                    // direction to rounding cannot be told apart here, and a
-                    // B-spline is read by angle alone.
+                    // edge leaving close by. Two edges that leave the vertex
+                    // close together but apart are two curves unless proved
+                    // one (a circle and an ellipse through the same ends, two
+                    // B-splines that part between their ends). Edges that
+                    // leave along one direction to rounding cannot be told
+                    // apart here.
                     let angle_diff = (entry.angle - incoming_angle).abs();
                     let close = angle_diff < 0.1 || (angle_diff - TAU).abs() < 0.1;
                     let along = angle_diff < 1e-9 || (angle_diff - TAU).abs() < 1e-9;
@@ -250,8 +250,7 @@ fn trace_loops(
                                     current_edge,
                                     candidate,
                                     10.0 * tol,
-                                )
-                                .unwrap_or(true));
+                                ));
                     if is_reverse {
                         continue;
                     }
