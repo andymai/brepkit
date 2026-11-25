@@ -7204,3 +7204,27 @@ fn an_arc_and_a_patch_of_a_huge_circle_and_ball_are_counted_over_their_span() {
         mesh.positions.len()
     );
 }
+
+/// A grid is checked along each of its directions as well as over its
+/// whole. A cone 1e-6 across and 1e-6 tall meshed to 1e-14 has its columns
+/// counted at the meshers' radius floor of 0.01: 2.2e6 of them, past the
+/// limit for one direction, in a grid of only 4.4e6. The face mesher
+/// refuses it, as the solid mesher's rim check does.
+#[test]
+fn a_grid_past_the_limit_in_one_direction_is_refused() {
+    let mut topo = Topology::new();
+    let cone = crate::primitives::make_cone(&mut topo, 1e-6, 0.0, 1e-6).unwrap();
+    let side = brepkit_topology::explorer::solid_faces(&topo, cone)
+        .unwrap()
+        .into_iter()
+        .find(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cone(_)))
+        .unwrap();
+    let refused = |found: &Result<usize, crate::OperationsError>| {
+        matches!(found, Err(crate::OperationsError::TooManySamples { samples, .. })
+            if (2e6..3e6).contains(samples))
+    };
+    let face = tessellate(&topo, side, 1e-14).map(|m| m.positions.len());
+    assert!(refused(&face), "{face:?}");
+    let solid = tessellate_solid(&topo, cone, 1e-14).map(|m| m.positions.len());
+    assert!(refused(&solid), "{solid:?}");
+}

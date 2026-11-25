@@ -236,9 +236,18 @@ pub(super) fn nurbs_edge_breaks(
         // turn: a sharp bend cut that fine gives samples the face's (u, v)
         // cannot tell apart.
         if turn_limit > 0.0 && length > MIN_TURN_LENGTH * deflection {
-            let mut last = nurbs.tangent(a).ok();
-            for f in [0.25, 0.5, 0.75, 1.0] {
-                let next = nurbs.tangent(a + (b - a) * f).ok();
+            // Up the parameter; at the span's upper end the tangent is read
+            // just below it, on the span's own piece: a knot there can turn
+            // the curve's tangent, as a degree-one spline's does.
+            let width = span_hi - span_lo;
+            let mut last = nurbs.tangent(span_lo).ok();
+            for t in [
+                span_lo + 0.25 * width,
+                span_lo + 0.5 * width,
+                span_lo + 0.75 * width,
+                span_hi.next_down(),
+            ] {
+                let next = nurbs.tangent(t.max(span_lo)).ok();
                 if let (Some(p), Some(q)) = (last, next) {
                     turned += p.dot(q).clamp(-1.0, 1.0).acos();
                 }
@@ -249,9 +258,28 @@ pub(super) fn nurbs_edge_breaks(
         super::nurbs::parts_needed(sag / deflection, turned)
     };
 
-    // Level by level, so every part of the span is read alike at each
-    // level.
-    let mut spans = vec![(t0, t1, false)];
+    // The edge is broken first at each knot where its tangent turns (a knot
+    // as deep as the degree can turn it), so no span holds a break in its
+    // tangent: a degree-one spline is lines between its corners. Then level
+    // by level, so every part of the span is read alike at each level.
+    let turns_at = |k: f64| match (nurbs.tangent(k.next_down()), nurbs.tangent(k)) {
+        (Ok(before), Ok(after)) => before.dot(after) < 1.0 - 1e-12,
+        _ => true,
+    };
+    let mut corners: Vec<f64> = Vec::new();
+    for run in nurbs.knots().chunk_by(|x, y| x.to_bits() == y.to_bits()) {
+        if run.len() >= nurbs.degree() && run[0] > lo && run[0] < hi && turns_at(run[0]) {
+            corners.push(run[0]);
+        }
+    }
+    if t0 > t1 {
+        corners.reverse();
+    }
+    let mut spans: Vec<(f64, f64, bool)> = std::iter::once(t0)
+        .chain(corners.iter().copied())
+        .zip(corners.iter().copied().chain(std::iter::once(t1)))
+        .map(|(a, b)| (a, b, false))
+        .collect();
     loop {
         let mut next = Vec::with_capacity(spans.len() * 2);
         let mut cut = false;
@@ -262,6 +290,10 @@ pub(super) fn nurbs_edge_breaks(
                 continue;
             }
             cut = true;
+            let mid = a + (b - a) * 0.5;
+            if mid.to_bits() == a.to_bits() || mid.to_bits() == b.to_bits() {
+                return Err(super::endless_samples("a NURBS edge", deflection));
+            }
             for part in 0..n {
                 #[allow(clippy::cast_precision_loss)]
                 let (from, to) = (
@@ -755,6 +787,39 @@ mod tests {
     use brepkit_math::nurbs::curve::NurbsCurve;
     use brepkit_topology::edge::{Edge, EdgeCurve};
     use brepkit_topology::vertex::Vertex;
+
+    /// A degree-one spline is lines between its knots, each with a tangent
+    /// that breaks at the knot. Asked for a deflection of 1e-18, it is broken
+    /// at its knot into two lines that need no cutting, not cut toward the
+    /// corner until the parameters stop moving.
+    #[test]
+    fn a_degree_one_spline_breaks_at_its_knot_and_nowhere_else() {
+        let curve = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 0.5, 1.0, 1.0],
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(1.0, 1.0, 0.0),
+            ],
+            vec![1.0; 3],
+        )
+        .unwrap();
+        let started = std::time::Instant::now();
+        let breaks = nurbs_edge_breaks(&curve, 0.0, 1.0, 1e-18, 0.35);
+        assert_eq!(
+            breaks.as_ref().ok(),
+            Some(&vec![0.0, 0.5, 1.0]),
+            "{breaks:?}"
+        );
+        let backward = nurbs_edge_breaks(&curve, 1.0, 0.0, 1e-18, 0.35);
+        assert_eq!(
+            backward.as_ref().ok(),
+            Some(&vec![1.0, 0.5, 0.0]),
+            "{backward:?}"
+        );
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
 
     /// A spline that turns a corner on a middle piece that barely moves (its
     /// three control points there a hair apart, not in line) has parts whose

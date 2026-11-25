@@ -6215,6 +6215,9 @@ fn surface_path_parameters(
             deflection,
         )?;
         let tm = 0.5 * (t0 + t1);
+        if tm.to_bits() == t0.to_bits() || tm.to_bits() == t1.to_bits() {
+            return Err(super::endless_samples("a path across a face", deflection));
+        }
         pending.push((tm, quarters[1], t1, p1, depth + 1));
         pending.push((t0, p0, tm, quarters[1], depth + 1));
     }

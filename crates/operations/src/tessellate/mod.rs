@@ -290,6 +290,13 @@ pub(super) fn pass_on_sample_limit<T>(
     }
 }
 
+/// The refusal of `what`, whose samples a halving can no longer part: the
+/// middle of a span reads as one of its ends, so no count reaches the
+/// deflection.
+pub(super) fn endless_samples(what: &str, deflection: f64) -> crate::OperationsError {
+    too_many_samples(what, f64::INFINITY, MAX_EDGE_SAMPLES, deflection)
+}
+
 /// Refuses `count` samples along one line of a face past
 /// [`MAX_EDGE_SAMPLES`], before a mesher allocates them.
 pub(super) fn check_count(
@@ -310,13 +317,16 @@ pub(super) fn check_count(
     }
 }
 
-/// Refuses a grid of `columns` by `rows` samples past [`MAX_SAMPLES`], before
-/// a mesher allocates it.
+/// Refuses a grid of `columns` by `rows` samples, before a mesher allocates
+/// it, past [`MAX_EDGE_SAMPLES`] in either direction or [`MAX_SAMPLES`] in
+/// all: a row is sampled like an edge.
 pub(super) fn check_grid(
     columns: usize,
     rows: usize,
     deflection: f64,
 ) -> Result<(), crate::OperationsError> {
+    check_count("a face grid's columns", columns, deflection)?;
+    check_count("a face grid's rows", rows, deflection)?;
     let samples = columns as f64 * rows as f64;
     if samples <= MAX_SAMPLES {
         Ok(())
