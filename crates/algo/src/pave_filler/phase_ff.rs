@@ -413,6 +413,14 @@ pub fn perform(
                 {
                     coincident_boundary_curves(topo, (fa, na), (fb, nb))
                 }
+                (FaceSurface::Cylinder(cyl), FaceSurface::Nurbs(nurbs))
+                | (FaceSurface::Nurbs(nurbs), FaceSurface::Cylinder(cyl))
+                    if let Some(lines) = extrusion_rulings::cylinder_extrusion_rulings(
+                        cyl, nurbs, bbox_a, bbox_b, tol.linear,
+                    ) =>
+                {
+                    lines
+                }
                 _ => compute_raw_curves(surf_a, surf_b, bbox_a, bbox_b, v_range_a, v_range_b)?,
             };
             if std::env::var("BK_RAWC").is_ok() {
@@ -7774,21 +7782,9 @@ fn compute_raw_curves(
         }
 
         (analytic_surf, FaceSurface::Nurbs(nurbs)) if analytic_surf.as_analytic().is_some() => {
-            if let FaceSurface::Cylinder(cyl) = analytic_surf
-                && let Some(lines) =
-                    extrusion_rulings::cylinder_extrusion_rulings(cyl, nurbs, bbox_a, bbox_b)
-            {
-                return Ok(lines);
-            }
             analytic_nurbs_intersection(analytic_surf, v_range_a, nurbs)
         }
         (FaceSurface::Nurbs(nurbs), analytic_surf) if analytic_surf.as_analytic().is_some() => {
-            if let FaceSurface::Cylinder(cyl) = analytic_surf
-                && let Some(lines) =
-                    extrusion_rulings::cylinder_extrusion_rulings(cyl, nurbs, bbox_a, bbox_b)
-            {
-                return Ok(lines);
-            }
             analytic_nurbs_intersection(analytic_surf, v_range_b, nurbs)
         }
 

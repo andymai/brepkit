@@ -29,36 +29,28 @@ const NARROWEST: f64 = 1e-12;
 /// marcher.
 const MOST_INTERVALS: usize = 4096;
 
-/// A crossing that rounding hides lies within a run of parameters whose
-/// points spread no wider than this, or it is left to the marcher. A run
-/// with one side at both ends holds no crossing that counts where its
-/// points spread no wider, or keep this near the circle.
-const SPREAD: f64 = brepkit_math::tolerance::Tolerance::new().linear;
-
-/// The most an extrusion may drift across the cylinder's axis over its
-/// length, rounding included: past it, a ruling along the axis strays
-/// from the extrusion's far end.
-const DRIFT: f64 = brepkit_math::tolerance::Tolerance::new().linear;
-
 /// A profile within rounding of the circle over more of its knot span than
 /// this runs along the cylinder, and the section is left to the marcher.
 const WIDEST_GRAZE: f64 = 1e-3;
 
 /// The rulings where `cylinder` crosses the B-spline extrusion `surface`,
-/// trimmed to both faces' boxes and to the extrusion's height. `None` where
-/// `surface` is not an extrusion along the cylinder's axis to within
-/// [`DRIFT`] over its length, or where its profile runs along the circle,
-/// so the section is not a set of isolated lines.
+/// trimmed to both faces' boxes and to the extrusion's height, each within
+/// `tol`, the caller's linear tolerance, of both surfaces. `None` where
+/// `surface` is not an extrusion along the cylinder's axis to within `tol`
+/// over its length, where its profile runs along the circle, so the
+/// section is not a set of isolated lines, or where a ruling is not proved
+/// within `tol` of both.
 ///
 /// A ruling where the circle only touches the profile is left out, as a
 /// graze splits neither face. A crossing so shallow that rounding hides the
 /// profile's side about it is placed at the middle of the hidden run, or
-/// left to the marcher where that run spreads wider than [`SPREAD`].
+/// left to the marcher where that run spreads wider than `tol`.
 pub(super) fn cylinder_extrusion_rulings(
     cylinder: &CylindricalSurface,
     surface: &NurbsSurface,
     bbox_a: &Aabb3,
     bbox_b: &Aabb3,
+    tol: f64,
 ) -> Option<Vec<RawCurve>> {
     let axis = cylinder.axis().normalize().ok()?;
     let (profile, along, slack) = extrusion(surface)?;
@@ -66,7 +58,7 @@ pub(super) fn cylinder_extrusion_rulings(
     let drift = along.cross(axis).length();
     if length <= 0.0
         || drift > PARALLEL_SIN * length
-        || drift + slack + 4.0 * f64::EPSILON * length > DRIFT
+        || drift + slack + 4.0 * f64::EPSILON * length > tol
     {
         return None;
     }
@@ -75,6 +67,7 @@ pub(super) fn cylinder_extrusion_rulings(
         origin: cylinder.origin(),
         axis,
         radius: cylinder.radius(),
+        tol,
     };
     let roots = section.crossings()?;
     // Each ruling runs from the profile to its copy moved by `along`, past
@@ -83,7 +76,7 @@ pub(super) fn cylinder_extrusion_rulings(
     let rise = along.dot(axis);
     // A ruling's points lie off the wall by no more than its base lies off
     // the profile, the extrusion's drift and the slack of its poles' moves.
-    let budget = DRIFT - (drift + slack + 4.0 * f64::EPSILON * length);
+    let budget = tol - (drift + slack + 4.0 * f64::EPSILON * length);
     let mut lines = Vec::with_capacity(roots.len());
     for t in roots {
         let (base, off) = section.foot(t)?;
@@ -92,7 +85,7 @@ pub(super) fn cylinder_extrusion_rulings(
         }
         let boxed = trim_t_range_to_aabb(base, axis, bbox_a, bbox_b);
         let t_range = (boxed.0.max(rise.min(0.0)), boxed.1.min(rise.max(0.0)));
-        if t_range.1 - t_range.0 < 1e-9 {
+        if t_range.1 - t_range.0 <= tol {
             continue;
         }
         let (p0, p1) = (base + axis * t_range.0, base + axis * t_range.1);
@@ -100,7 +93,7 @@ pub(super) fn cylinder_extrusion_rulings(
         // middle against both surfaces catches.
         if [p0, p0 + (p1 - p0) * 0.5, p1]
             .into_iter()
-            .any(|p| !on_both(cylinder, surface, p))
+            .any(|p| !on_both(cylinder, surface, p, tol))
         {
             return None;
         }
@@ -115,19 +108,18 @@ pub(super) fn cylinder_extrusion_rulings(
     Some(lines)
 }
 
-/// Whether `p` lies within the linear tolerance of `cylinder`, by its
-/// distance from the axis less the radius, and of `wall`, by the distance
-/// to a point of it that a projection finds, which no nearest point is
-/// farther than.
-fn on_both(cylinder: &CylindricalSurface, wall: &NurbsSurface, p: Point3) -> bool {
+/// Whether `p` lies within `tol` of `cylinder`, by its distance from the
+/// axis less the radius, and of `wall`, by the distance to a point of it
+/// that a projection finds, which no nearest point is farther than.
+fn on_both(cylinder: &CylindricalSurface, wall: &NurbsSurface, p: Point3, tol: f64) -> bool {
     let Ok(axis) = cylinder.axis().normalize() else {
         return false;
     };
     let w = p - cylinder.origin();
     let off_axis = (w - axis * w.dot(axis)).length();
-    (off_axis - cylinder.radius()).abs() <= DRIFT
-        && brepkit_math::nurbs::projection::project_point_to_surface(wall, p, 1e-3 * DRIFT)
-            .is_ok_and(|found| found.distance <= DRIFT)
+    (off_axis - cylinder.radius()).abs() <= tol
+        && brepkit_math::nurbs::projection::project_point_to_surface(wall, p, 1e-3 * tol)
+            .is_ok_and(|found| found.distance <= tol)
 }
 
 /// `surface` as a profile moved along a vector: degree one with two control
@@ -196,6 +188,8 @@ struct CircleSection<'a> {
     origin: Point3,
     axis: Vec3,
     radius: f64,
+    /// The caller's linear tolerance.
+    tol: f64,
 }
 
 impl CircleSection<'_> {
@@ -348,7 +342,7 @@ impl CircleSection<'_> {
     /// `None` when the crossings are not isolated within
     /// [`MOST_INTERVALS`] intervals, where the profile runs within rounding
     /// of the circle over more than [`WIDEST_GRAZE`] of a span, where a
-    /// crossing hidden by rounding is not placed within [`SPREAD`], or where
+    /// crossing hidden by rounding is not placed within the tolerance, or where
     /// a run with no crossing found may hide some (see [`Self::quiet`]).
     ///
     /// The intervals are read in order. One with no root, or with one,
@@ -401,7 +395,7 @@ impl CircleSection<'_> {
             }
         }
         let poles = self.profile.control_points();
-        let closed = (*poles.first()? - *poles.last()?).length() <= SPREAD;
+        let closed = (*poles.first()? - *poles.last()?).length() <= self.tol;
         walk.finish(closed, self, &mut roots)?;
         roots.sort_by(f64::total_cmp);
         Some(roots)
@@ -416,10 +410,10 @@ impl CircleSection<'_> {
     }
 
     /// The middle of a run of parameters, given as one or two pieces. `None`
-    /// where the run's points spread wider than [`SPREAD`] apart.
+    /// where the run's points spread wider than the tolerance apart.
     fn middle(&self, run: Pieces) -> Option<f64> {
         let ((a, b), (c, d)) = run;
-        if self.spread(run) > SPREAD {
+        if self.spread(run) > self.tol {
             return None;
         }
         let half = 0.5 * ((b - a) + (d - c));
@@ -435,11 +429,11 @@ impl CircleSection<'_> {
     /// touch. Crossings are merged into a touch only here, and only where
     /// one of two bounds holds:
     ///
-    /// - the run's points spread no wider than [`SPREAD`], so any crossings
+    /// - the run's points spread no wider than the tolerance, so any crossings
     ///   in it lie within the tolerance of each other;
     /// - `|reach| <= most` all along the run keeps the profile within
     ///   `most / (r + sqrt(r^2 - most))` of the circle, and that is no more
-    ///   than [`SPREAD`], so any lens between crossings in it is thinner
+    ///   than the tolerance, so any lens between crossings in it is thinner
     ///   than the tolerance.
     ///
     /// Two crossings around a lens deeper than the tolerance fail both, and
@@ -449,7 +443,7 @@ impl CircleSection<'_> {
         // How far `reach` within `most` of zero lets the profile stand off
         // the circle, read so that it does not cancel.
         let off = most / (self.radius + (r2 - most).max(0.0).sqrt());
-        self.spread(run) <= SPREAD || off <= SPREAD
+        self.spread(run) <= self.tol || off <= self.tol
     }
 
     /// The Bernstein coefficients over `[a, b]` of `reach` times the weight
@@ -731,8 +725,23 @@ mod tests {
         bbox_a: &Aabb3,
         bbox_b: &Aabb3,
     ) -> Option<Vec<RawCurve>> {
-        let lines = cylinder_extrusion_rulings(cylinder, wall, bbox_a, bbox_b)?;
-        let tol = brepkit_math::tolerance::Tolerance::new().linear;
+        rulings_within(
+            cylinder,
+            wall,
+            (bbox_a, bbox_b),
+            brepkit_math::tolerance::Tolerance::new().linear,
+        )
+    }
+
+    /// [`rulings`] with `tol` for the caller's linear tolerance, each ruling
+    /// checked within it.
+    fn rulings_within(
+        cylinder: &CylindricalSurface,
+        wall: &NurbsSurface,
+        (bbox_a, bbox_b): (&Aabb3, &Aabb3),
+        tol: f64,
+    ) -> Option<Vec<RawCurve>> {
+        let lines = cylinder_extrusion_rulings(cylinder, wall, bbox_a, bbox_b, tol)?;
         let axis = cylinder.axis().normalize().unwrap();
         for line in &lines {
             for p in [
@@ -1302,7 +1311,14 @@ mod tests {
     /// thinner, a touch may stand for them.
     #[test]
     fn rulings_at_shallow_crossings_lie_on_both_walls() {
-        let tol = brepkit_math::tolerance::Tolerance::new().linear;
+        for tol in [1e-9, 1e-7, 1e-5] {
+            shallow_crossings_within(tol);
+        }
+    }
+
+    /// [`rulings_at_shallow_crossings_lie_on_both_walls`] for the caller's
+    /// linear tolerance `tol`.
+    fn shallow_crossings_within(tol: f64) {
         let huge = Aabb3 {
             min: Point3::new(-1e13, -1e13, -1e13),
             max: Point3::new(1e13, 1e13, 1e13),
@@ -1316,10 +1332,12 @@ mod tests {
                                 let (rod, wall) =
                                     shallow_crossing((r, angle), weights, length, place, &pose);
                                 let what = format!(
-                                    "{name}, angle {angle:e}, weights {weights:?}, length \
-                                     {length:e}, radius {r:e}, place {place:?}"
+                                    "tolerance {tol:e}, {name}, angle {angle:e}, weights \
+                                     {weights:?}, length {length:e}, radius {r:e}, place \
+                                     {place:?}"
                                 );
-                                let Some(lines) = rulings(&rod, &wall, &huge, &huge) else {
+                                let Some(lines) = rulings_within(&rod, &wall, (&huge, &huge), tol)
+                                else {
                                     continue;
                                 };
                                 let depth = 2.0 * r * (0.5 * angle).sin().powi(2);
@@ -1434,6 +1452,47 @@ mod tests {
             };
             if let Some(lines) = rulings(&rod, &wall, &huge, &huge) {
                 assert!(lines.len() <= 2, "{name}: {}", lines.len());
+            }
+        }
+    }
+
+    /// A line through (0.5, -2), (0.5, 0) and (0.5, 2), whose middle pole
+    /// moves 5e-8 across as well as 4 up, crosses a unit cylinder at
+    /// y = -/+ 0.866, where its wall's top strays 2.8e-8 off a ruling along
+    /// the axis. A caller's tolerance of 1e-9 leaves the section to the
+    /// marcher; 1e-7 and 1e-5 hold the rulings. Each ruling lies within the
+    /// caller's tolerance of both surfaces.
+    #[test]
+    fn rulings_hold_to_the_callers_tolerance() {
+        for (name, pose) in poses() {
+            let points = [(0.5, -2.0), (0.5, 0.0), (0.5, 2.0)];
+            let row = |shift: &dyn Fn(usize) -> Vec3| -> Vec<Point3> {
+                points
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &(x, y))| pose.mul_point(Point3::new(x, y, 0.0) + shift(i)))
+                    .collect()
+            };
+            let wall = NurbsSurface::new(
+                1,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.5, 1.0, 1.0],
+                vec![
+                    row(&|_| Vec3::new(0.0, 0.0, 0.0)),
+                    row(&|i| Vec3::new(if i == 1 { 5e-8 } else { 0.0 }, 0.0, 4.0)),
+                ],
+                vec![vec![1.0; 3]; 2],
+            )
+            .unwrap();
+            let rod = cylinder_about(0.0, 0.0, 1.0, &pose);
+            for tol in [1e-9, 1e-7, 1e-5] {
+                let found = rulings_within(&rod, &wall, (&room(), &room()), tol);
+                if tol < 2.8e-8 {
+                    assert!(found.is_none(), "{name}, tolerance {tol:e}");
+                } else {
+                    assert_eq!(found.map(|l| l.len()), Some(2), "{name}, tolerance {tol:e}");
+                }
             }
         }
     }
