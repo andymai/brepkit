@@ -194,7 +194,7 @@ fn bounded_by_domain(
             topo.vertex(edge.end())?.point(),
         );
         let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
-        let samples = 2 * edge_sample_count(topo, edge, deflection, angular_tol, false).max(4);
+        let samples = 2 * edge_sample_count(topo, edge, deflection, angular_tol, false)?.max(4);
         for k in 0..=samples {
             #[allow(clippy::cast_precision_loss)]
             let t = t0 + (t1 - t0) * (k as f64) / (samples as f64);
@@ -229,6 +229,7 @@ pub(super) fn tessellate_with_uvs_floor(
 ) -> Result<TriangleMeshUV, crate::OperationsError> {
     super::check_deflection(deflection)?;
     super::check_reach(topo, face)?;
+    super::check_samples(topo, face, deflection, angular_tol, curvature_floor)?;
     let face_data = topo.face(face)?;
     let is_reversed = face_data.is_reversed();
 
@@ -298,6 +299,7 @@ pub(super) fn tessellate_with_uvs_floor(
             ) {
                 Ok(mesh) if !mesh.mesh.indices.is_empty() => Some(mesh),
                 Ok(_) => None,
+                Err(e) if super::is_sample_limit(&e) => return Err(e),
                 Err(e) => {
                     log::debug!("holed wall {face:?} falls back to the analytic grid: {e}");
                     None
@@ -372,6 +374,7 @@ pub(super) fn tessellate_with_uvs_floor(
                         false,
                     );
                     let nv = 1;
+                    super::check_grid(nu.saturating_add(1), nv + 1, deflection)?;
                     let cyl = cyl.clone();
                     Ok(tessellate_analytic(
                         |u, v| cyl.evaluate(u, v),
@@ -410,15 +413,15 @@ pub(super) fn tessellate_with_uvs_floor(
                     let v_range =
                         compute_v_param_range(topo, face_data, |p| cone.project_point(p).1);
                     let u_range = compute_angular_range(topo, face_data, |p| cone.project_point(p));
-                    let max_radius = cone.radius_at(v_range.1.abs().max(v_range.0.abs()));
                     let nu = segments_for_chord_deviation_a(
-                        max_radius.max(0.01),
+                        super::nurbs::cone_column_radius(cone, v_range),
                         u_range.1 - u_range.0,
                         deflection,
                         angular_tol,
                         false,
                     );
                     let nv = 1;
+                    super::check_grid(nu.saturating_add(1), nv + 1, deflection)?;
                     let kind = if v_range.0.abs() < 1e-10 {
                         AnalyticKind::ConeApex
                     } else {
@@ -464,6 +467,7 @@ pub(super) fn tessellate_with_uvs_floor(
                     angular_tol * ang_shrink,
                     curvature_floor,
                 );
+                super::check_grid(nu.saturating_add(1), nv.saturating_add(1), deflection)?;
                 let kind = sphere_analytic_kind(v_range);
                 let sphere = sphere.clone();
                 Ok(tessellate_analytic(
@@ -493,6 +497,7 @@ pub(super) fn tessellate_with_uvs_floor(
                     angular_tol,
                     true,
                 );
+                super::check_grid(nu.saturating_add(1), nv.saturating_add(1), deflection)?;
                 let torus = torus.clone();
                 Ok(tessellate_analytic(
                     |u, v| torus.evaluate(u, v),

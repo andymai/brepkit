@@ -2211,3 +2211,146 @@ mod js_curve_tests {
         refused("surface", &k.nurbs_surface_to_face(surface));
     }
 }
+
+#[cfg(test)]
+mod js_count_tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use serde_json::{Value, json};
+
+    use super::*;
+    use crate::error::{MAX_COUNT, MAX_GRID_SIDE};
+
+    fn batch_one(kernel: &mut BrepKernel, op: &str, args: &Value) -> Value {
+        let ops = json!([{ "op": op, "args": args }]).to_string();
+        let parsed: Value = serde_json::from_str(&kernel.execute_batch(&ops)).unwrap();
+        parsed[0].clone()
+    }
+
+    /// The batch arguments of one binding for a count.
+    type Args = Box<dyn Fn(u64) -> Value>;
+
+    /// Each binding that sizes an allocation by a count from JS refuses a
+    /// count past its limit through the batch, `u32::MAX` among them, before
+    /// anything is allocated for it. A count from real use is built.
+    #[test]
+    fn counts_past_their_limits_are_refused_through_the_batch() {
+        let mut k = BrepKernel::new();
+        let profile = k.make_circle_face(0.5, 24).unwrap();
+        let solid = k.make_box_impl(1.0, 1.0, 1.0).unwrap();
+        let path = batch_one(
+            &mut k,
+            "makeNurbsEdge",
+            &json!({
+                "startX": 0.0, "startY": 0.0, "startZ": 0.0,
+                "endX": 0.0, "endY": 0.0, "endZ": 3.0,
+                "degree": 1, "knots": [0.0, 0.0, 1.0, 1.0],
+                "controlPoints": [0.0, 0.0, 0.0, 0.0, 0.0, 3.0], "weights": [1.0, 1.0],
+            }),
+        )["ok"]
+            .as_u64()
+            .unwrap();
+        let bump: Vec<f64> = (0..4)
+            .flat_map(|i| (0..4).map(move |j| (f64::from(i), f64::from(j))))
+            .flat_map(|(x, y)| [x, y, 0.1 * x * (3.0 - x) * y * (3.0 - y)])
+            .collect();
+        let sheet = k.interpolate_surface(bump, 4, 4, 3, 3).unwrap();
+
+        let cases: Vec<(&str, Args, u32, u64)> = vec![
+            (
+                "makeCircle",
+                Box::new(|n| json!({"radius": 1.0, "segments": n})),
+                MAX_COUNT,
+                32,
+            ),
+            (
+                "makeCircleFace",
+                Box::new(|n| json!({"radius": 1.0, "segments": n})),
+                MAX_COUNT,
+                24,
+            ),
+            (
+                "makeRegularPolygonWire",
+                Box::new(|n| json!({"radius": 1.0, "nSides": n})),
+                MAX_COUNT,
+                6,
+            ),
+            (
+                "sweepWithOptions",
+                Box::new(move |n| json!({"profile": profile, "pathEdge": path, "segments": n})),
+                MAX_COUNT,
+                16,
+            ),
+            (
+                "offsetFace",
+                Box::new(move |n| json!({"face": sheet, "distance": 0.1, "samples": n})),
+                MAX_GRID_SIDE,
+                10,
+            ),
+            (
+                "untrimFace",
+                Box::new(
+                    move |n| json!({"face": sheet, "samplesPerCurve": n, "interiorSamples": 8}),
+                ),
+                MAX_COUNT,
+                10,
+            ),
+            (
+                "untrimFace",
+                Box::new(
+                    move |n| json!({"face": sheet, "samplesPerCurve": 10, "interiorSamples": n}),
+                ),
+                MAX_GRID_SIDE,
+                8,
+            ),
+            (
+                "linearPattern",
+                Box::new(move |n| json!({"solid": solid, "spacing": 2.0, "count": n})),
+                MAX_COUNT,
+                3,
+            ),
+            (
+                "circularPattern",
+                Box::new(move |n| json!({"solid": solid, "count": n})),
+                MAX_COUNT,
+                4,
+            ),
+            (
+                "gridPattern",
+                Box::new(move |n| {
+                    json!({"solid": solid, "spacingX": 2.0, "spacingY": 2.0,
+                           "countX": n, "countY": 1})
+                }),
+                MAX_COUNT,
+                3,
+            ),
+        ];
+        for (op, args, limit, real) in &cases {
+            for n in [u64::from(*limit) + 1, u64::from(u32::MAX)] {
+                let found = batch_one(&mut k, op, &args(n));
+                let error = found["error"].as_str().unwrap_or_default();
+                assert!(
+                    error.contains(&format!("at most {limit}")),
+                    "{op} {n}: {found}"
+                );
+            }
+            let built = batch_one(&mut k, op, &args(*real));
+            assert!(built["ok"].is_number(), "{op} {real}: {built}");
+        }
+
+        let side = u64::from(MAX_GRID_SIDE);
+        let grid = json!({"solid": solid, "spacingX": 2.0, "spacingY": 2.0,
+                          "countX": side, "countY": side + 1});
+        let found = batch_one(&mut k, "gridPattern", &grid);
+        let error = found["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains(&format!("at most {MAX_COUNT} copies")),
+            "{found}"
+        );
+
+        let edge = u32::try_from(path).unwrap();
+        assert!(k.tessellate_edge_impl(edge, MAX_COUNT + 1).is_err());
+        assert!(k.tessellate_edge_impl(edge, u32::MAX).is_err());
+        assert_eq!(k.tessellate_edge_impl(edge, 33).unwrap().len(), 99);
+    }
+}

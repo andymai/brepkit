@@ -118,6 +118,9 @@ impl MeshBodies {
                 ),
             });
         }
+        for (index, &position) in mesh.positions.iter().enumerate() {
+            crate::bounded_point(position, || format!("mesh position {index}"))?;
+        }
 
         let (points, remap) = merge_positions(&mesh.positions, tolerance);
         let mut tris = mesh_triangles(mesh, &remap);
@@ -2301,6 +2304,34 @@ mod tests {
     use super::*;
     use crate::stl::reader::read_stl;
     use crate::stl::writer::{self, StlFormat};
+
+    /// A mesh position that is not finite, or past the size limit, is
+    /// refused before the mesh is welded. The mesh it was made from imports.
+    #[test]
+    fn a_mesh_position_that_is_not_finite_is_refused() {
+        use brepkit_math::vec::Vec3;
+        use brepkit_operations::tessellate::TriangleMesh;
+
+        let tetra = |apex: Point3| TriangleMesh {
+            positions: vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(0.0, 1.0, 0.0),
+                apex,
+            ],
+            normals: vec![Vec3::new(0.0, 0.0, 1.0); 4],
+            indices: vec![0, 2, 1, 0, 1, 3, 1, 2, 3, 2, 0, 3],
+        };
+        let mut topo = Topology::new();
+        assert!(import_mesh(&mut topo, &tetra(Point3::new(0.0, 0.0, 1.0)), 1e-7).is_ok());
+        for bad in [f64::NAN, f64::INFINITY, 1e305] {
+            let found = import_mesh(&mut topo, &tetra(Point3::new(0.0, 0.0, bad)), 1e-7);
+            assert!(
+                matches!(found, Err(IoError::ParseError { .. })),
+                "{bad}: {found:?}"
+            );
+        }
+    }
 
     #[test]
     fn vol_from_faces_8_vertex_box() {

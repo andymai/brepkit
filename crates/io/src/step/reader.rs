@@ -203,9 +203,11 @@ impl<'a> StepBuilder<'a> {
                         solid
                     };
                     if !super::assembly::is_identity(placement) {
+                        check_placed_vertices(self.topo, instance, placement)?;
                         brepkit_operations::transform::transform_solid(
                             self.topo, instance, placement,
                         )?;
+                        check_placed_geometry(self.topo, instance)?;
                     }
                     solid_ids.push(instance);
                 }
@@ -1968,7 +1970,9 @@ impl<'a> StepBuilder<'a> {
                 ),
             });
         }
-        Ok(Point3::new(coords[0], coords[1], coords[2]))
+        crate::bounded_point(Point3::new(coords[0], coords[1], coords[2]), || {
+            format!("CARTESIAN_POINT #{cp_ref}")
+        })
     }
 
     fn build_direction(&self, dir_ref: u64) -> Result<Vec3, IoError> {
@@ -2340,6 +2344,45 @@ fn parse_list_refs(attrs: &str) -> Vec<u64> {
         return parse_refs(inner);
     }
     Vec::new()
+}
+
+/// Refuses `solid` when `placement`, its unit scale and its place in the
+/// assembly, would put a vertex past the size limit: a coordinate within it
+/// in the file's unit can pass it in millimetres. Checked before the solid
+/// moves.
+fn check_placed_vertices(
+    topo: &Topology,
+    solid: SolidId,
+    placement: &brepkit_math::mat::Mat4,
+) -> Result<(), IoError> {
+    for vertex in brepkit_topology::explorer::solid_vertices(topo, solid)? {
+        let point = topo.vertex(vertex)?.point();
+        crate::bounded_point(placement.mul_point(point), || {
+            format!("a vertex at {point:?} scaled and placed")
+        })?;
+    }
+    Ok(())
+}
+
+/// Refuses a placed `solid` whose curve or surface the placement scaled or
+/// moved past what [`EdgeCurve::is_well_formed`] and
+/// [`FaceSurface::is_well_formed`] accept: a radius scales with the unit.
+fn check_placed_geometry(topo: &Topology, solid: SolidId) -> Result<(), IoError> {
+    for face in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        if !topo.face(face)?.surface().is_well_formed() {
+            return Err(IoError::ParseError {
+                reason: "a surface scaled and placed is past the size limit".to_string(),
+            });
+        }
+    }
+    for edge in brepkit_topology::explorer::solid_edges(topo, solid)? {
+        if !topo.edge(edge)?.curve().is_well_formed() {
+            return Err(IoError::ParseError {
+                reason: "a curve scaled and placed is past the size limit".to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// `curve`, read from `#entity`, if it gives a finite point at each
@@ -3294,6 +3337,45 @@ mod tests {
             assert!(
                 matches!(found, Err(IoError::ParseError { .. })),
                 "{what}: {found:?}"
+            );
+        }
+    }
+
+    /// A vertex point that is not finite, or past the size limit, gives an
+    /// edge whose ends cannot be read: the reader refuses each. The file it
+    /// was made from reads.
+    #[test]
+    fn a_vertex_point_the_reader_cannot_use_is_refused() {
+        let mut topo = Topology::new();
+        let block = brepkit_operations::primitives::make_box(&mut topo, 1.0, 2.0, 3.0).unwrap();
+        let step = writer::write_step(&topo, &[block]).unwrap();
+        assert_eq!(read_step(&step, &mut Topology::new()).unwrap().len(), 1);
+
+        let point = step
+            .lines()
+            .find_map(|l| l.split_once("= VERTEX_POINT("))
+            .and_then(|(_, rest)| rest.split_once('#'))
+            .map(|(_, rest)| rest.trim_end_matches(");").to_owned())
+            .unwrap();
+        let head = format!("#{point} = CARTESIAN_POINT(");
+        let moved = |x: &str| {
+            step.lines()
+                .map(|line| {
+                    if line.starts_with(&head) {
+                        format!("{head}'',({x},0.,0.));")
+                    } else {
+                        line.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert_ne!(moved("NaN"), step);
+        for x in ["NaN", "inf", "-inf", "1.E400", "1.E305", "-1.E305"] {
+            let found = read_step(&moved(x), &mut Topology::new());
+            assert!(
+                matches!(found, Err(IoError::ParseError { .. })),
+                "{x}: {found:?}"
             );
         }
     }

@@ -170,3 +170,28 @@ pub enum IoError {
     #[error(transparent)]
     Zip(#[from] zip::result::ZipError),
 }
+
+/// `point`, if each coordinate is finite and at most
+/// [`SIZE_LIMIT`](brepkit_math::curves::SIZE_LIMIT) in magnitude: the bound
+/// the load checks put on the centre of a curve or surface. `what` names the
+/// point in the refusal.
+pub(crate) fn bounded_point(
+    point: brepkit_math::vec::Point3,
+    what: impl FnOnce() -> String,
+) -> Result<brepkit_math::vec::Point3, IoError> {
+    use brepkit_math::curves::SIZE_LIMIT;
+    // `abs() <= SIZE_LIMIT` is false for NaN, so this refuses it too.
+    if [point.x(), point.y(), point.z()]
+        .iter()
+        .all(|c| c.abs() <= SIZE_LIMIT)
+    {
+        Ok(point)
+    } else {
+        Err(IoError::ParseError {
+            reason: format!(
+                "{} has a coordinate that is not finite or is past {SIZE_LIMIT:e}",
+                what()
+            ),
+        })
+    }
+}
