@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795648785976,
+  "lastUpdate": 1795649272575,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -79163,6 +79163,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28283439,
             "range": "± 195748",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "57fa715d440596aed0effaa0e58dca1b7f6c37f1",
+          "message": "fix(algo): pave co-endpoint edges and find common blocks only on a whole-length proof (#2902)\n\n## Summary\n\n#2867 listed edge dedups in the GFA that merge two edges by their ends\nor by samples. So two different curves with the same ends and middle can\nmerge. This PR fixes three of those sites. Each now merges only where a\nproof holds the two curves within the tolerance along their whole\nlength:\n\n- `pave_co_endpoint_curves`, which grouped edges with the same ends by\ntheir middles. On main, two arcs through one middle on two different\ncurves were paved as one path.\n- The CommonBlock lookup in `fill_images_faces.rs`, which chose an edge\nby its ends and tested its middle at 33 samples.\n- `block_lies_on_block`, which compared B-spline blocks at a few places\non each span.\n\nThe pose sweep and the truth audit give the same output as main, and\nevery brepkit-io test passes.\n\nRefs #2867. The arrangement dedup, the wire walker's reverse test and\n`merge_duplicate_edges` stay open. Made strict, each refuses three\ntool-workflow cases that main gets right by an unproved weld. The causes\nare two near-tangent B-spline sections that bound a thin lens, and\n#2804.\n\n## The change\n\n- **Whole-length proofs.** `same_section_curve` gains arms for the pairs\nit could not read before:\n  - one stored conic read twice, by its speed times the parameter gap;\n  - closed conics;\n- a conic arc against a B-spline, by a Bernstein bound on its distance\nfrom the conic;\n  - a line against a B-spline, by the trim's own Bezier pieces;\n  - two B-splines at different paces, by matched Bezier pieces.\n- **Matched pieces.** Two B-splines are cut at matched parameters, and\neach pair of pieces is compared by control nets at one degree and pace.\nA pair that fails is halved, up to 4096 pairs.\n- **Guards on the proofs.**\n- A trim end moves only to a knot within rounding, and the bound takes\nthe moved stretch's own hull.\n- Each piece's weights are normalised by a power of two, gaps are read\nby `hypot`, and a NaN term fails the bound.\n- A B-spline trim whose pieces do not meet end to start is refused. So\nis a pair with more knots than the work cap allows.\n- A conic arc is read along its stored arc, and a whole turn only where\nits span is one.\n- **The three sites** use these proofs in place of their ends and\nsamples. A pave block is proved over its own parameter span.\n\n## Tests\n\n- `arcs_through_one_middle_on_two_curves_are_two_paths` gives each arc a\nmiddle on its own curve in 3 poses. On main the two were paved as one.\n- `arcs_through_one_middle_on_two_curves_do_not_run_along_each_other`\nfails on main.\n- `b_splines_that_agree_at_their_knots_and_part_between_are_not_common`\ncovers `block_lies_on_block`.\n- The proof tests cover:\n  - a circle arc and an ellipse arc through one middle;\n  - half turns on opposite halves between one pair of ends;\n  - B-splines that agree at 33 knots and part between them.\n- `b_splines_at_other_paces_are_proved_one_curve_in_few_pieces` proves a\n32-span spline against its copy on doubled knots in exactly 32 pairs. A\nlinear spline with 1,000 inner knots is proved against its copy in 1,001\npairs.\n- Further tests cover:\n  - a trim end a rounding short of a knot, and curves near 1e-166;\n- a spline of two disjoint quarter circles, and opposite halves of a\nclosed cubic;\n  - a tiny circle arc against the rest of an ellipse.\n- A 270° arc and a whole circle are each common with their rational\nquadratic forms, as on main.\n- brepkit-algo (808), the boolean lib tests (234) and brepkit-io (638)\npass, and so do all brepkit-operations and brepkit-io tests (3376, 28\nskipped).",
+          "timestamp": "2026-11-25T23:23:32Z",
+          "tree_id": "b7d2fd6b0cadc0880c96522ea374572fdd89e67e",
+          "url": "https://github.com/andymai/brepkit/commit/57fa715d440596aed0effaa0e58dca1b7f6c37f1"
+        },
+        "date": 1795649262066,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1236043,
+            "range": "± 2634",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1301838,
+            "range": "± 2567",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14651,
+            "range": "± 1593",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 771830,
+            "range": "± 6613",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28145725,
+            "range": "± 324813",
             "unit": "ns/iter"
           }
         ]
