@@ -9375,8 +9375,11 @@ fn split_face_2d_impl(
     // the general split. The weld is the one the shortcut chains by.
     let loops_apart = || {
         if is_plane {
-            // On a plane face the loops must be proved apart: two that cross
-            // or touch where neither has an end go to the general split.
+            // On a plane face, loops proved to cross or touch where neither
+            // has an end go to the general split. A pair the finder cannot
+            // settle (an arc of an ellipse whose centre lies far off, which
+            // its wave reads only to some tens of tolerances) keeps the
+            // shortcut, as the general split would refuse it.
             let spans: Vec<_> = deduped_line_loops
                 .as_deref()
                 .unwrap_or(sections)
@@ -9387,7 +9390,8 @@ fn split_face_2d_impl(
                     end: s.end,
                 })
                 .collect();
-            edge_splitting::section_meeting_points(&spans, tol.linear).is_ok_and(|m| m.is_empty())
+            edge_splitting::section_meeting_points(&spans, tol.linear)
+                .map_or(true, |m| m.is_empty())
         } else {
             !matches!(surface, FaceSurface::Sphere(_))
                 || sections_meet_in_pairs(
