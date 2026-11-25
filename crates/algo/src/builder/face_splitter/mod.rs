@@ -130,6 +130,9 @@ fn collinear_overlap_span(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> Opt
     (tb - ta > 1e-6).then_some((ta, tb))
 }
 
+/// A section piece's two quantized ends, in either order.
+type EndsKey = (i64, i64, i64, i64, i64, i64);
+
 /// Split section edges at interior T-junctions with other sections.
 ///
 /// `all_edges[section_start..]` holds the section edges as consecutive
@@ -137,7 +140,9 @@ fn collinear_overlap_span(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> Opt
 /// section's 3D endpoint lands strictly inside another section's span, the
 /// crossed section is split there so both meet at a shared vertex — without
 /// this the dangling end is pruned as a pendant and the face never splits at
-/// that junction. Boundary edges (`..section_start`) are left untouched.
+/// that junction. Sections are split at `meetings` too, points where two of
+/// them meet inside both. Boundary edges (`..section_start`) are left
+/// untouched.
 ///
 /// This covers the analytic (cylinder/cone) faces that
 /// `try_split_crossing_plane_face` (plane-only) does not reach — e.g. a
@@ -145,6 +150,7 @@ fn collinear_overlap_span(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> Opt
 /// wall-top line on a corner cylinder. Each split piece gets a fresh unique
 /// `source_edge_idx` (forward/reverse of a piece share it) so
 /// `build_topology_face` still shares one topology edge per piece.
+#[allow(clippy::too_many_arguments)]
 fn split_sections_at_t_junctions(
     all_edges: &mut Vec<OrientedPCurveEdge>,
     section_start: usize,
@@ -153,6 +159,7 @@ fn split_sections_at_t_junctions(
     wire_pts: &[Point3],
     tol: f64,
     mut split_registry: Option<&mut std::collections::HashMap<usize, Vec<Point3>>>,
+    meetings: &[Point3],
 ) {
     // Every distinct section endpoint (3D) is a candidate split point. Dedup
     // with a fine grid (cell = tol), then index the unique points in a COARSE
@@ -176,24 +183,27 @@ fn split_sections_at_t_junctions(
         std::collections::HashMap::new();
     let mut len_sum = 0.0_f64;
     let mut len_cnt = 0.0_f64;
+    let ends = all_edges[section_start..]
+        .iter()
+        .flat_map(|e| [e.start_3d, e.end_3d]);
     for e in &all_edges[section_start..] {
         len_sum += (e.end_3d - e.start_3d).length();
         len_cnt += 1.0;
-        for p in [e.start_3d, e.end_3d] {
-            let (cx, cy, cz) = fine_cell(p);
-            let dup = (-1..=1).any(|dx| {
-                (-1..=1).any(|dy| {
-                    (-1..=1).any(|dz| {
-                        fine_grid
-                            .get(&(cx + dx, cy + dy, cz + dz))
-                            .is_some_and(|pts| pts.iter().any(|q| (*q - p).length() < tol))
-                    })
+    }
+    for p in ends.chain(meetings.iter().copied()) {
+        let (cx, cy, cz) = fine_cell(p);
+        let dup = (-1..=1).any(|dx| {
+            (-1..=1).any(|dy| {
+                (-1..=1).any(|dz| {
+                    fine_grid
+                        .get(&(cx + dx, cy + dy, cz + dz))
+                        .is_some_and(|pts| pts.iter().any(|q| (*q - p).length() < tol))
                 })
-            });
-            if !dup {
-                endpoints.push(p);
-                fine_grid.entry((cx, cy, cz)).or_default().push(p);
-            }
+            })
+        });
+        if !dup {
+            endpoints.push(p);
+            fine_grid.entry((cx, cy, cz)).or_default().push(p);
         }
     }
     // Coarse query grid: cell sized to the mean section length so a section
@@ -265,9 +275,13 @@ fn split_sections_at_t_junctions(
         .filter_map(|e| e.source_edge_idx)
         .max()
         .map_or(section_start, |m| m + 1);
-    let mut piece_src: std::collections::HashMap<(i64, i64, i64, i64, i64, i64), usize> =
+    // Pieces by their ends, each with its id and the piece as a section read
+    // from its stored start: two pieces with the same ends share an id only
+    // where they are one curve (a circle's and an ellipse's pieces between
+    // the two points where they meet are two).
+    let mut piece_src: std::collections::HashMap<EndsKey, Vec<(usize, SectionEdge)>> =
         std::collections::HashMap::new();
-    let key = |a: Point3, b: Point3| -> (i64, i64, i64, i64, i64, i64) {
+    let key = |a: Point3, b: Point3| -> EndsKey {
         let q = |x: f64| (x / tol).round() as i64;
         let ka = (q(a.x()), q(a.y()), q(a.z()));
         let kb = (q(b.x()), q(b.y()), q(b.z()));
@@ -365,13 +379,34 @@ fn split_sections_at_t_junctions(
         let mut prev_3d = edge.start_3d;
         let mut prev_uv = edge.start_uv;
         let mut push_piece = |s3: Point3, e3: Point3, s_uv: Point2, e_uv: Point2| {
-            let src = *piece_src.entry(key(s3, e3)).or_insert_with(|| {
-                let v = next_src;
-                next_src += 1;
-                v
-            });
             let pcurve =
                 compute_pcurve_on_surface(&edge.curve_3d, s3, e3, surface, wire_pts, frame);
+            let (start, end) = if edge.forward { (s3, e3) } else { (e3, s3) };
+            let piece = SectionEdge {
+                curve_3d: edge.curve_3d.clone(),
+                pcurve_a: pcurve.clone(),
+                pcurve_b: pcurve.clone(),
+                start,
+                end,
+                start_uv_a: None,
+                end_uv_a: None,
+                start_uv_b: None,
+                end_uv_b: None,
+                target_face: None,
+                pave_block_id: None,
+            };
+            let same_ends = piece_src.entry(key(s3, e3)).or_default();
+            let src = if let Some(&(src, _)) = same_ends
+                .iter()
+                .find(|(_, other)| same_section_curve(other, &piece, 10.0 * tol))
+            {
+                src
+            } else {
+                let v = next_src;
+                next_src += 1;
+                same_ends.push((v, piece));
+                v
+            };
             new_sections.push(OrientedPCurveEdge {
                 curve_3d: edge.curve_3d.clone(),
                 pcurve,
@@ -8481,21 +8516,13 @@ fn split_face_2d_impl(
     // Duplicate sections become parallel twin edges in the trace input, and
     // the greedy walker's angular successor is ill-defined on parallel
     // twins — it grand-tours adjacent regions into one slitted loop instead
-    // of partitioning them. Drop near-exact geometric duplicates.
+    // of partitioning them. Drop duplicates: sections with the same ends
+    // that a bound over their whole length holds together, as two curves
+    // through the same ends and middle (a circle and an ellipse) can part
+    // between them.
     let deduped_sections: Option<Vec<SectionEdge>> = {
         let band = tol.linear * 10.0;
         let same_pt = |p: Point3, q: Point3| (p - q).length() <= band;
-        // Each section's own middle: a NURBS piece shares its parent's
-        // parameters, so one raw parameter is one point for every piece of a
-        // loop (the two halves of a closed section then read as twins).
-        let mids: Vec<Point3> = sections
-            .iter()
-            .map(|s| {
-                let (t0, t1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
-                s.curve_3d
-                    .evaluate_with_endpoints(f64::midpoint(t0, t1), s.start, s.end)
-            })
-            .collect();
         let mut keep = vec![true; sections.len()];
         let mut any_dup = false;
         for i in 0..sections.len() {
@@ -8509,7 +8536,7 @@ fn split_face_2d_impl(
                 let (a, b) = (&sections[i], &sections[j]);
                 let ends_match = (same_pt(a.start, b.start) && same_pt(a.end, b.end))
                     || (same_pt(a.start, b.end) && same_pt(a.end, b.start));
-                if ends_match && same_pt(mids[i], mids[j]) {
+                if ends_match && same_section_curve(a, b, band) {
                     keep[j] = false;
                     any_dup = true;
                 }
@@ -10791,6 +10818,13 @@ fn split_face_2d_impl(
     // another); runs after the partial-band u-unwrap so split UVs match the
     // face's continuous window.
     if all_edges.len() > n_boundary_edges + 2 {
+        // Two sections may also meet inside both, where no end of either
+        // lies (a circle and an ellipse touching at one point).
+        let meetings = if is_plane {
+            edge_splitting::section_meeting_points(&all_edges[n_boundary_edges..], tol.linear)
+        } else {
+            Vec::new()
+        };
         split_sections_at_t_junctions(
             &mut all_edges,
             n_boundary_edges,
@@ -10799,6 +10833,7 @@ fn split_face_2d_impl(
             &wire_pts,
             tol.linear,
             split_registry.as_deref_mut(),
+            &meetings,
         );
     }
 
@@ -13900,6 +13935,38 @@ fn plane_internal_line_loops(
         return None;
     }
     Some(deduped)
+}
+
+/// Whether `a` and `b`, edges of one face that share their two ends, are one
+/// curve within `tol`: `Some` where both are lines, circles or ellipses, read
+/// by [`same_section_curve`] each from its stored start, and `None` where
+/// either is a B-spline.
+pub fn edges_one_curve(a: &OrientedPCurveEdge, b: &OrientedPCurveEdge, tol: f64) -> Option<bool> {
+    let analytic = |e: &OrientedPCurveEdge| !matches!(e.curve_3d, EdgeCurve::NurbsCurve(_));
+    if !(analytic(a) && analytic(b)) {
+        return None;
+    }
+    let section = |e: &OrientedPCurveEdge| {
+        let (start, end) = if e.forward {
+            (e.start_3d, e.end_3d)
+        } else {
+            (e.end_3d, e.start_3d)
+        };
+        SectionEdge {
+            curve_3d: e.curve_3d.clone(),
+            pcurve_a: e.pcurve.clone(),
+            pcurve_b: e.pcurve.clone(),
+            start,
+            end,
+            start_uv_a: None,
+            end_uv_a: None,
+            start_uv_b: None,
+            end_uv_b: None,
+            target_face: None,
+            pave_block_id: None,
+        }
+    };
+    Some(same_section_curve(&section(a), &section(b), tol))
 }
 
 /// Whether sections `a` and `b`, whose ends lie within `tol` of each other
@@ -18076,7 +18143,15 @@ mod tests {
                         let r = c.radius();
                         c.normal().dot(normal).signum() * 0.5 * r * r * (phi - phi.sin())
                     }
-                    other => unreachable!("a wire edge on {other:?}"),
+                    // An ellipse is a circle scaled by its semi-axes, which
+                    // scales its segments' areas by their product.
+                    EdgeCurve::Ellipse(el) => {
+                        let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+                        let phi = t1 - t0;
+                        let ab = el.semi_major() * el.semi_minor();
+                        el.normal().dot(normal).signum() * 0.5 * ab * (phi - phi.sin())
+                    }
+                    other @ EdgeCurve::NurbsCurve(_) => unreachable!("a wire edge on {other:?}"),
                 };
                 if e.forward {
                     chord + segment
@@ -18211,6 +18286,58 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    /// A circle of radius 2 about the plate's (5, 5) from -60 to 60 degrees,
+    /// an ellipse about (4, 5) of semi-axes 3 along the plate's x and
+    /// `sqrt(5.4)` through the same three points `P`, `M = (7, 5)` and `Q`,
+    /// and the chord from `Q` to `P`, in each frame. The two curves touch at
+    /// `M`, the ellipse inside, so the plate splits in four: the ellipse's
+    /// segment, two lenses between the curves meeting at `M`, and the rest.
+    #[test]
+    fn a_circle_and_an_ellipse_through_three_points_split_a_plate_in_four() {
+        use brepkit_math::curves::{Circle3D, Ellipse3D};
+        let pi = std::f64::consts::PI;
+        let b = 5.4f64.sqrt();
+        let s0 = (2.0f64 / 3.0).acos();
+        let circle_segment = 2.0 * (2.0 * pi / 3.0 - (2.0 * pi / 3.0).sin());
+        let ellipse_segment = 0.5 * 3.0 * b * (2.0 * s0 - (2.0 * s0).sin());
+        let lens = 0.5 * (circle_segment - ellipse_segment);
+        let mut want = [ellipse_segment, lens, lens, 100.0 - circle_segment];
+        want.sort_by(f64::total_cmp);
+        for (pose, o, u, v) in plate_frames() {
+            let normal = u.cross(v);
+            let at = |x: f64, y: f64| o + u * x + v * y;
+            let circle = Circle3D::with_axes(at(5.0, 5.0), normal, 2.0, u, v).unwrap();
+            let ellipse = Ellipse3D::with_axes(at(4.0, 5.0), normal, 3.0, b, u, v).unwrap();
+            let (p, q) = (circle.evaluate(-pi / 3.0), circle.evaluate(pi / 3.0));
+            for (x, t) in [(p, -s0), (q, s0)] {
+                assert!((ellipse.evaluate(t) - x).length() < 1e-12, "{pose}");
+            }
+            let sections = [
+                SectionEdge {
+                    curve_3d: EdgeCurve::Circle(circle),
+                    ..line_section(p, q)
+                },
+                SectionEdge {
+                    curve_3d: EdgeCurve::Ellipse(ellipse),
+                    ..line_section(p, q)
+                },
+                line_section(q, p),
+            ];
+            let areas = framed_plate_region_areas(o, u, v, &sections);
+            assert_eq!(
+                areas.len(),
+                4,
+                "{pose}: regions of areas {areas:?}, want {want:?}"
+            );
+            for (got, want) in areas.iter().zip(want) {
+                assert!(
+                    (got - want).abs() < 1e-9,
+                    "{pose}: regions of areas {areas:?}, want {want}"
+                );
             }
         }
     }

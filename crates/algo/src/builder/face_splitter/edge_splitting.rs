@@ -2576,3 +2576,194 @@ mod hole_copy_tests {
         }
     }
 }
+
+/// Points where two section edges of a plane face meet inside both: where
+/// they touch (a circle and an ellipse tangent at one point) or cross, away
+/// from every section's ends. Each comes from a local least of the distance
+/// from one curve to the other, read on 64 samples along the first and
+/// refined by golden-section search, and stands only where that least is
+/// within `tol`: at such a point the curves meet, and each lies within half
+/// of it of the point given. A meeting the samples miss is not given.
+///
+/// Only lines, circles and ellipses take part, at least one of each pair
+/// curved, and an arc only over at most half a turn, which every reading of
+/// it covers alike. One circle or ellipse twice (two arcs of it) is left to
+/// the arcs' own ends.
+pub(super) fn section_meeting_points(sections: &[OrientedPCurveEdge], tol: f64) -> Vec<Point3> {
+    use std::f64::consts::{PI, TAU};
+    const SAMPLES: usize = 64;
+    /// The edge's stored start and end, and its curve's parameter at the
+    /// start with the sweep to the end; `None` for a B-spline or an arc over
+    /// half a turn.
+    fn span(e: &OrientedPCurveEdge) -> Option<(Point3, Point3, f64, f64)> {
+        let (s, t) = if e.forward {
+            (e.start_3d, e.end_3d)
+        } else {
+            (e.end_3d, e.start_3d)
+        };
+        match &e.curve_3d {
+            EdgeCurve::Line => Some((s, t, 0.0, 1.0)),
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                let (t0, t1) = e.curve_3d.domain_with_endpoints(s, t);
+                (t1 - t0 <= PI && (s - t).length() > 0.0).then_some((s, t, t0, t1 - t0))
+            }
+            EdgeCurve::NurbsCurve(_) => None,
+        }
+    }
+    /// How far `p` lies from the curve of `e` (from `s` to `t`), the point of
+    /// the curve it is read against, and that point's parameter.
+    fn foot(e: &OrientedPCurveEdge, s: Point3, t: Point3, p: Point3) -> (f64, Point3, f64) {
+        match &e.curve_3d {
+            EdgeCurve::Line => {
+                let d = t - s;
+                let w = (p - s).dot(d) / d.dot(d);
+                let q = s + d * w;
+                ((p - q).length(), q, w)
+            }
+            EdgeCurve::Circle(c) => {
+                let u = c.project(p);
+                let q = c.evaluate(u);
+                ((p - q).length(), q, u)
+            }
+            EdgeCurve::Ellipse(el) => {
+                let u = el.project(p);
+                let q = el.evaluate(u);
+                ((p - q).length(), q, u)
+            }
+            EdgeCurve::NurbsCurve(_) => (f64::INFINITY, p, 0.0),
+        }
+    }
+    /// A box about the whole curve of `e`, grown by `tol`.
+    fn reach(e: &OrientedPCurveEdge, tol: f64) -> (Point3, Point3) {
+        let about = |c: Point3, r: f64| {
+            let r = r + tol;
+            (
+                Point3::new(c.x() - r, c.y() - r, c.z() - r),
+                Point3::new(c.x() + r, c.y() + r, c.z() + r),
+            )
+        };
+        match &e.curve_3d {
+            EdgeCurve::Circle(c) => about(c.center(), c.radius()),
+            EdgeCurve::Ellipse(el) => about(el.center(), el.semi_major()),
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => {
+                let (a, b) = (e.start_3d, e.end_3d);
+                (
+                    Point3::new(
+                        a.x().min(b.x()) - tol,
+                        a.y().min(b.y()) - tol,
+                        a.z().min(b.z()) - tol,
+                    ),
+                    Point3::new(
+                        a.x().max(b.x()) + tol,
+                        a.y().max(b.y()) + tol,
+                        a.z().max(b.z()) + tol,
+                    ),
+                )
+            }
+        }
+    }
+    /// Whether `a` and `b` are one circle or one ellipse.
+    fn one_conic(a: &EdgeCurve, b: &EdgeCurve, tol: f64) -> bool {
+        if let (EdgeCurve::Circle(p), EdgeCurve::Circle(q)) = (a, b) {
+            (p.center() - q.center()).length() <= tol && (p.radius() - q.radius()).abs() <= tol
+        } else if let (EdgeCurve::Ellipse(p), EdgeCurve::Ellipse(q)) = (a, b) {
+            (p.center() - q.center()).length() <= tol
+                && (p.semi_major() - q.semi_major()).abs() <= tol
+                && (p.semi_minor() - q.semi_minor()).abs() <= tol
+        } else {
+            false
+        }
+    }
+    let at = |e: &OrientedPCurveEdge, s: Point3, t: Point3, u: f64| {
+        e.curve_3d.evaluate_with_endpoints(u, s, t)
+    };
+    // Whether parameter `u` of the curve of `e` lies inside its span.
+    let inside = |e: &OrientedPCurveEdge, (t0, sweep): (f64, f64), u: f64| match &e.curve_3d {
+        EdgeCurve::Line => u > 0.0 && u < 1.0,
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+            let r = (u - t0).rem_euclid(TAU);
+            r > 0.0 && r < sweep
+        }
+        EdgeCurve::NurbsCurve(_) => false,
+    };
+    let curved =
+        |e: &OrientedPCurveEdge| matches!(e.curve_3d, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_));
+    // One section per forward/reverse pair.
+    let mut seen = std::collections::HashSet::new();
+    let unique: Vec<&OrientedPCurveEdge> = sections
+        .iter()
+        .filter(|e| e.source_edge_idx.is_none_or(|i| seen.insert(i)))
+        .collect();
+    let boxes: Vec<(Point3, Point3)> = unique.iter().map(|e| reach(e, tol)).collect();
+    let overlap = |i: usize, j: usize| {
+        let ((lo_a, hi_a), (lo_b, hi_b)) = (boxes[i], boxes[j]);
+        lo_a.x() <= hi_b.x()
+            && lo_b.x() <= hi_a.x()
+            && lo_a.y() <= hi_b.y()
+            && lo_b.y() <= hi_a.y()
+            && lo_a.z() <= hi_b.z()
+            && lo_b.z() <= hi_a.z()
+    };
+    let ends: Vec<Point3> = unique.iter().flat_map(|e| [e.start_3d, e.end_3d]).collect();
+    let near_end = |p: Point3| ends.iter().any(|&q| (p - q).length() <= 100.0 * tol);
+    let mut found: Vec<Point3> = Vec::new();
+    for (i, a) in unique.iter().enumerate() {
+        for (j, b) in unique.iter().enumerate().skip(i + 1) {
+            if !(curved(a) || curved(b))
+                || !overlap(i, j)
+                || one_conic(&a.curve_3d, &b.curve_3d, tol)
+            {
+                continue;
+            }
+            // Sample the curved one when one is a line.
+            let (a, b) = if curved(a) { (*a, *b) } else { (*b, *a) };
+            let (Some((sa, ta, a0, a_sweep)), Some((sb, tb, b0, b_sweep))) = (span(a), span(b))
+            else {
+                continue;
+            };
+            let gap = |u: f64| foot(b, sb, tb, at(a, sa, ta, u)).0;
+            #[allow(clippy::cast_precision_loss)]
+            let u_of = |k: usize| a_sweep.madd(k as f64 / SAMPLES as f64, a0);
+            let gaps: Vec<f64> = (0..=SAMPLES).map(|k| gap(u_of(k))).collect();
+            for k in 1..SAMPLES {
+                if gaps[k] > gaps[k - 1] || gaps[k] > gaps[k + 1] {
+                    continue;
+                }
+                // Golden-section search for the least gap between the
+                // neighbouring samples.
+                let (mut lo, mut hi) = (u_of(k - 1), u_of(k + 1));
+                let ratio = 0.5 * (5.0f64.sqrt() - 1.0);
+                let (mut x1, mut x2) = (hi - ratio * (hi - lo), lo + ratio * (hi - lo));
+                let (mut f1, mut f2) = (gap(x1), gap(x2));
+                for _ in 0..200 {
+                    if hi - lo <= 1e-15 * (1.0 + lo.abs().max(hi.abs())) {
+                        break;
+                    }
+                    if f1 <= f2 {
+                        hi = x2;
+                        (x2, f2) = (x1, f1);
+                        x1 = hi - ratio * (hi - lo);
+                        f1 = gap(x1);
+                    } else {
+                        lo = x1;
+                        (x1, f1) = (x2, f2);
+                        x2 = lo + ratio * (hi - lo);
+                        f2 = gap(x2);
+                    }
+                }
+                let u = if f1 <= f2 { x1 } else { x2 };
+                let p = at(a, sa, ta, u);
+                let (d, q, w) = foot(b, sb, tb, p);
+                if d.is_nan() || d > tol || !inside(b, (b0, b_sweep), w) {
+                    continue;
+                }
+                let m = p + (q - p) * 0.5;
+                if near_end(m) || found.iter().any(|&f| (f - m).length() <= 100.0 * tol) {
+                    continue;
+                }
+                found.push(m);
+            }
+        }
+    }
+    found
+}
