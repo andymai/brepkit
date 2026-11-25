@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795584516587,
+  "lastUpdate": 1795585635747,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -78407,6 +78407,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27806920,
             "range": "± 98360",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "017e343384437f71e1cc3cc340b336cc29335039",
+          "message": "fix(operations): refuse a chamfer chain that no chamfer fits, for its cause (#2865)\n\n## Summary\n\n#2860 reported chamfers whose arcs end 7.0 and 7.5 off their vertices.\nThe chain path does not build those arcs. For three configurations no\nchamfer fits, and the chain path handed the pick to the walking chamfer.\nThat engine cut the cap's arcs back but kept their radius-8 circles, and\n`valid_chamfer` then refused the solid with a message about a missed\nvertex.\n\nThe three configurations are impossible:\n\n- at a distance of 9, the cap's contact runs past the arc's axis, since\n8 − 9 < 0;\n- at 11, the contact also runs past the 10-high wall;\n- with the lines only at 8.5, the two strips overlap by 1 on the bottom.\n\nWith this change, the chain path refuses each of them before it builds\nanything, with an error that names the cause. Just inside each limit,\nthe chamfer builds to the exact volume. The pose sweep and the truth\naudit give the same output as main.\n\nFixes #2860. The walking chamfer's fault is open as #2864.\n\n## The change\n\n- `plan_on` now reads the pieces and checks them before it plans.\n`chamfer_chains` returns an error on a misfit before it copies the\nsolid.\n- A chamfer past the axis is refused where the cap's contact circle has\na radius of 0 or less.\n- A chamfer past a face's far side is refused where the distance reaches\nthe face's extent along the contact direction. That extent includes\nfaces that carry it on across a flat seam or a tangent join. So a face\nthat continues is never refused.\n- These checks apply only to chains that hold an arc or a ruling, or end\nbeside a curved face. A plain box keeps its old path.\n- `chains_overlap` checks each chain's contacts and end edges against\nthe other chain's strips before the copy. A misfit found later, after an\nearlier chain is built, gives a named error too.\n- The checks read each run of faces once for its far side, and\n`chains_overlap` finds its pairs through box trees. A rim of 1000 arcs\nreads 1000 face boxes, not 1,000,000.\n\n## Tests\n\n- `a_distance_past_the_arc_or_the_wall_is_refused` and\n`two_chains_must_clear_each_other` run in 4 poses. Each error names its\ncause, and the counts of solids, faces and edges do not change. Just\ninside each limit, the chamfer is valid and closed, and its volumes\nmatch the closed form.\n- `a_far_side_runs_on_across_a_flat_seam_and_stops_at_a_crease` covers a\nface that continues across a flat seam.\n- `a_rim_of_many_arcs_reads_its_walls_once` asserts 1000 face boxes for\na rim of 1000 arcs. `scaling_two_rims_of_many_arcs_read_each_wall_once`\nruns in the complexity guards. At a distance of 1, the overlap check\nreads 0 pairs. At 5.5, it reads 8 or fewer and refuses.\n- A probe over every chamfer chain result in 31 test files found no arc,\nline or conic that the chain path builds off its vertices.\n- `chamfer_tangent_chains` (27) and every chamfer test file pass, and so\ndo all brepkit-operations and brepkit-io tests (3324, 28 skipped).\n\n## Still open\n\n- The walking chamfer moves an arc's vertices but keeps its old circle\n(#2864). A pick that the chain path reads as \"other\" can still reach it,\nand `valid_chamfer` refuses the result.\n- The chain planner takes time in proportion to the square of its pieces\n(#2866). A rim of 1000 arcs takes about 10 s in a debug build. The\nchecks in this change take 11 ms of that.",
+          "timestamp": "2026-11-25T05:43:20Z",
+          "tree_id": "d722ca2fe85248dd723974b12420cbd52685d5d8",
+          "url": "https://github.com/andymai/brepkit/commit/017e343384437f71e1cc3cc340b336cc29335039"
+        },
+        "date": 1795585621078,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 888845,
+            "range": "± 7601",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 941576,
+            "range": "± 11908",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9623,
+            "range": "± 50",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 548206,
+            "range": "± 11359",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19790469,
+            "range": "± 69880",
             "unit": "ns/iter"
           }
         ]
