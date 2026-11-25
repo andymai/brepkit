@@ -369,15 +369,198 @@ fn a_pockets_mouth_loop_is_a_hole_of_its_cap() {
     }
 }
 
-/// A distance that would swallow an arc's cap or a wall is refused rather than
-/// built inside out.
+/// A plate 10 high whose outline runs from `(40, 8)` along a chain that
+/// steps down: 15 to the left, a quarter turn left of radius 2, a turn
+/// right of radius 2 a quarter less `tilt`, and 15 on at that slant, so
+/// that the two lines' directions differ by `tilt`. A half turn of radius
+/// 0.7 brings it round, tangent, to the floor's bottom, a line back to
+/// `x = 40` and up the right side. Returns the plate, the chain's four
+/// edges, the outline's area, and the volume a chamfer of 1 along the
+/// chain takes off: `1 / 2` along each line and round each arc at
+/// `r -+ 1 / 3`.
+fn stepped_plate(topo: &mut Topology, tilt: f64) -> (SolidId, Vec<EdgeId>, f64, f64) {
+    let mut at = Point3::new(LENGTH, RADIUS, 0.0);
+    let mut heading = PI;
+    let start = topo.add_vertex(Vertex::new(at, 1e-7));
+    let mut from = start;
+    let (mut area, mut removed) = (0.0, 0.0);
+    let mut sides = Vec::new();
+    // Each step: a line of the length given, or an arc of the radius and the
+    // signed turn given (left positive), and whether the chain holds it.
+    let steps = [
+        (15.0, None, true),
+        (2.0, Some(0.5 * PI), true),
+        (2.0, Some(-(0.5 * PI - tilt)), true),
+        (15.0, None, true),
+        (0.7, Some(PI - tilt), false),
+    ];
+    for (size, turn, chained) in steps {
+        let Some(turn) = turn else {
+            let to = at + Vec3::new(heading.cos(), heading.sin(), 0.0) * size;
+            if chained {
+                removed += 0.5 * size;
+            }
+            area += 0.5 * (at.x() * to.y() - to.x() * at.y());
+            let vertex = topo.add_vertex(Vertex::new(to, 1e-7));
+            sides.push((from, vertex, EdgeCurve::Line, chained));
+            (at, from) = (to, vertex);
+            continue;
+        };
+        let (to, curve) = {
+            let left = turn.signum();
+            let normal = Vec3::new(-heading.sin(), heading.cos(), 0.0) * left;
+            let center = at + normal * size;
+            let (from_angle, to_angle) =
+                (heading - left * 0.5 * PI, heading + turn - left * 0.5 * PI);
+            let to = center + Vec3::new(to_angle.cos(), to_angle.sin(), 0.0) * size;
+            // Green's theorem along the arc about the origin.
+            area += 0.5
+                * (size * size * turn + size * center.x() * (to_angle.sin() - from_angle.sin())
+                    - size * center.y() * (to_angle.cos() - from_angle.cos()));
+            // A left turn holds the floor inside its circle.
+            if chained {
+                removed += 0.5 * turn.abs() * (size - left / 3.0);
+            }
+            let circle = Circle3D::new(center, Vec3::new(0.0, 0.0, left), size).unwrap();
+            (to, EdgeCurve::Circle(circle))
+        };
+        let vertex = topo.add_vertex(Vertex::new(to, 1e-7));
+        sides.push((from, vertex, curve, chained));
+        (at, from, heading) = (to, vertex, heading + turn);
+    }
+    let corner = Point3::new(LENGTH, at.y(), 0.0);
+    let corner_vertex = topo.add_vertex(Vertex::new(corner, 1e-7));
+    for (p, q) in [(at, corner), (corner, Point3::new(LENGTH, RADIUS, 0.0))] {
+        area += 0.5 * (p.x() * q.y() - q.x() * p.y());
+    }
+    sides.push((from, corner_vertex, EdgeCurve::Line, false));
+    sides.push((corner_vertex, start, EdgeCurve::Line, false));
+    let mut chain = Vec::new();
+    let mut edges = Vec::new();
+    for (s, e, curve, chained) in sides {
+        let edge = topo.add_edge(Edge::new(s, e, curve));
+        if chained {
+            chain.push(edge);
+        }
+        edges.push(OrientedEdge::new(edge, true));
+    }
+    let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+    let plane = FaceSurface::Plane {
+        normal: Vec3::new(0.0, 0.0, 1.0),
+        d: 0.0,
+    };
+    let face = topo.add_face(Face::new(wire, Vec::new(), plane));
+    let solid = extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), HEIGHT).unwrap();
+    (solid, chain, area, removed)
+}
+
+/// Two lines of one chain whose directions into the floor differ by 5e-8,
+/// with the plate placed 1e7 out and posed: each line's far side is read
+/// along its own direction, from a point on the line. A far side read along
+/// the other line's direction would move by about 0.5 there, and the lower
+/// line's floor ends 1.4 below it, so that reading would refuse a chamfer
+/// of 1 that fits. The chamfer takes off its closed form in each pose.
+#[test]
+fn two_lines_a_hair_apart_each_read_their_own_far_side() {
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let (solid, chain, area, removed) = stepped_plate(&mut topo, 5e-8);
+        let far_out = pose * Mat4::translation(1e7, 0.0, 0.0);
+        transform_solid(&mut topo, solid, &far_out).unwrap();
+
+        let result = chamfer(&mut topo, solid, &chain, 1.0).unwrap();
+
+        assert_exact(&topo, result, area * HEIGHT - removed, name);
+    }
+}
+
+/// The chamfer of `edges` at `d` is refused for a reason that holds one of
+/// `causes`, and the refusal adds no solid, face or edge to the topology.
+fn refused_for(
+    topo: &mut Topology,
+    solid: SolidId,
+    edges: &[EdgeId],
+    d: f64,
+    causes: &[&str],
+    what: &str,
+) {
+    let count = |t: &Topology| (t.num_solids(), t.num_faces(), t.num_edges());
+    let before = count(topo);
+    let reason = chamfer(topo, solid, edges, d).unwrap_err().to_string();
+    assert!(
+        causes.iter().any(|cause| reason.contains(cause)),
+        "{what}: {reason}"
+    );
+    assert_eq!(count(topo), before, "{what}: the refusal built geometry");
+}
+
+/// An obround `height` high placed by `pose`, and its bottom loop or its two
+/// straight bottom edges alone.
+fn bottom_pick(
+    topo: &mut Topology,
+    height: f64,
+    lines_only: bool,
+    pose: &Mat4,
+) -> (SolidId, Vec<EdgeId>) {
+    let solid = obround(topo, false, 0.0, height);
+    let edges: Vec<_> = edges_at(topo, solid, 0.0, |_, _| true)
+        .into_iter()
+        .filter(|&e| !lines_only || is_line(topo, e))
+        .collect();
+    transform_solid(topo, solid, pose).unwrap();
+    (solid, edges)
+}
+
+const PAST_THE_AXIS: &str = "runs past the axis of an arc of radius 8";
+const PAST_THE_WALL: &str = "runs past the face's far side, 5.000000 from the edge";
+
+/// A distance past an arc's radius takes its cap's contact past the arc's
+/// axis, and one past the wall's height runs off the wall: the chamfer is
+/// refused for that cause before anything is built, in each pose. Just
+/// short of either, the chamfer takes off the triangle swept along the
+/// loop, `d^2 / 2` along the lines' 80 and round the two half turns at
+/// `8 - d / 3`.
 #[test]
 fn a_distance_past_the_arc_or_the_wall_is_refused() {
-    let mut topo = Topology::new();
-    let solid = obround(&mut topo, false, 0.0, HEIGHT);
-    let edges = edges_at(&topo, solid, 0.0, |_, _| true);
-    assert!(chamfer(&mut topo, solid, &edges, RADIUS + 1.0).is_err());
-    assert!(chamfer(&mut topo, solid, &edges, HEIGHT + 1.0).is_err());
+    let loop_volume =
+        |height: f64, d: f64| AREA * height - d * d * (40.0 + PI * (RADIUS - d / 3.0));
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let (solid, edges) = bottom_pick(&mut topo, HEIGHT, false, &pose);
+        refused_for(
+            &mut topo,
+            solid,
+            &edges,
+            RADIUS + 1.0,
+            &[PAST_THE_AXIS],
+            name,
+        );
+        refused_for(
+            &mut topo,
+            solid,
+            &edges,
+            HEIGHT + 1.0,
+            &[PAST_THE_AXIS, "runs past the face's far side"],
+            name,
+        );
+        let result = chamfer(&mut topo, solid, &edges, 7.9).unwrap();
+        assert_exact(&topo, result, loop_volume(HEIGHT, 7.9), name);
+
+        // On a wall 5 high a distance of 6 stays short of the axis.
+        for lines_only in [false, true] {
+            let what = format!("{name} lines only {lines_only}");
+            let mut topo = Topology::new();
+            let (solid, edges) = bottom_pick(&mut topo, 5.0, lines_only, &pose);
+            refused_for(&mut topo, solid, &edges, 6.0, &[PAST_THE_WALL], &what);
+            let result = chamfer(&mut topo, solid, &edges, 4.9).unwrap();
+            let expected = if lines_only {
+                AREA * 5.0 - 40.0 * 4.9 * 4.9
+            } else {
+                loop_volume(5.0, 4.9)
+            };
+            assert_exact(&topo, result, expected, &what);
+        }
+    }
 }
 
 /// A D: a half disc of radius 5 about the origin, closed by a straight back
@@ -813,43 +996,32 @@ fn a_chain_refuses_a_cap_hole_inside_the_bevel() {
     assert!(chamfer(&mut topo, opened, &[edge], 1.0).is_err());
 }
 
-/// Two chains on one cap whose strips overlap: the second finds the first's
-/// new edge in its way.
+const OVERLAP: &str = "the chamfers of two chains take strips of one face that overlap";
+
+/// Two chains on one cap whose strips overlap: refused for that cause before
+/// anything is built, in each pose. The straight sides stand 16 apart, so
+/// at 8.5 their strips overlap by 1, and at 7.9 each takes off its prism.
+/// The two rims are two chains on each wall, which is 10 high: at 5.5 their
+/// strips overlap by 1, and at 4.9 both loops come off.
 #[test]
 fn two_chains_must_clear_each_other() {
-    let mut topo = Topology::new();
-    let solid = obround(&mut topo, false, 0.0, HEIGHT);
-    let edges: Vec<_> = edges_at(&topo, solid, 0.0, |_, _| true)
-        .into_iter()
-        .filter(|&e| is_line(&topo, e))
-        .collect();
-    // The straight sides stand 16 apart, so at 8.5 their strips overlap by 1.
-    assert!(chamfer(&mut topo, solid, &edges, 8.5).is_err());
-}
-
-/// A distance past an arc's cap, and two chains whose strips overlap, leave
-/// the cap an arc whose end vertex lies off its circle, by the distance past
-/// the radius or the overlap and the strip's width (7 and 7.5 here). The
-/// chamfer is refused for that fault, in each pose.
-#[test]
-fn a_chamfer_that_leaves_an_arc_off_its_vertex_is_refused_for_it() {
+    let rim = |d: f64| d * d * (40.0 + PI * (RADIUS - d / 3.0));
     for (name, pose) in poses() {
-        for (lines_only, distance, gap) in [(false, RADIUS + 1.0, "7.00e0"), (true, 8.5, "7.50e0")]
-        {
-            let mut topo = Topology::new();
-            let solid = obround(&mut topo, false, 0.0, HEIGHT);
-            let edges: Vec<_> = edges_at(&topo, solid, 0.0, |_, _| true)
-                .into_iter()
-                .filter(|&e| !lines_only || is_line(&topo, e))
-                .collect();
-            transform_solid(&mut topo, solid, &pose).unwrap();
-            let refused = chamfer(&mut topo, solid, &edges, distance).unwrap_err();
-            let reason = refused.to_string();
-            assert!(
-                reason.contains("its curve misses its") && reason.contains(gap),
-                "{name} {distance}: {reason}"
-            );
-        }
+        let mut topo = Topology::new();
+        let (solid, edges) = bottom_pick(&mut topo, HEIGHT, true, &pose);
+        refused_for(&mut topo, solid, &edges, 8.5, &[OVERLAP], name);
+        let result = chamfer(&mut topo, solid, &edges, 7.9).unwrap();
+        assert_exact(&topo, result, AREA * HEIGHT - 40.0 * 7.9 * 7.9, name);
+
+        let mut topo = Topology::new();
+        let solid = obround(&mut topo, false, 0.0, HEIGHT);
+        let mut rims = edges_at(&topo, solid, 0.0, |_, _| true);
+        rims.extend(edges_at(&topo, solid, HEIGHT, |_, _| true));
+        transform_solid(&mut topo, solid, &pose).unwrap();
+        let what = format!("{name} both rims");
+        refused_for(&mut topo, solid, &rims, 5.5, &[OVERLAP], &what);
+        let result = chamfer(&mut topo, solid, &rims, 4.9).unwrap();
+        assert_exact(&topo, result, AREA * HEIGHT - 2.0 * rim(4.9), &what);
     }
 }
 
