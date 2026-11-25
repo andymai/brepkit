@@ -461,11 +461,21 @@ fn unit_form(curve: &EdgeCurve) -> Option<(std::borrow::Cow<'_, EdgeCurve>, f64)
     Some((std::borrow::Cow::Owned(form.into_owned()), gap + moved))
 }
 
+/// A block read for [`block_lies_on_block`]: its curve and its two ends.
+type BlockRead = Option<(
+    EdgeCurve,
+    brepkit_math::vec::Point3,
+    brepkit_math::vec::Point3,
+)>;
+
 /// Whether the parts of their edges' curves that two blocks cover are one
 /// curve, within tolerance. The two blocks share their ends already.
 ///
-/// Each block is read as its edge's curve from its start's point to its
-/// end's, and the two must be proved one curve along their whole length
+/// Each block is read over its own parameters: a B-spline cut to the
+/// block's span, so neither a short block nor half of a closed curve is
+/// read back from its ends as some other trim, and a line, circle or
+/// ellipse from its point at the block's start to its point at the block's
+/// end. The two must be proved one curve along their whole length
 /// ([`crate::builder::face_splitter::curves_one_curve`]): two B-splines that
 /// agree at any number of places may part between them. A pair no bound
 /// holds together is two curves.
@@ -480,21 +490,56 @@ fn block_lies_on_block(
     else {
         return Ok(false);
     };
-    let read = |block: &crate::ds::PaveBlock| -> Result<_, AlgoError> {
+    let read = |block: &crate::ds::PaveBlock| -> Result<BlockRead, AlgoError> {
         let edge = topo.edge(block.original_edge)?;
         let ends = (
             topo.vertex(edge.start())?.point(),
             topo.vertex(edge.end())?.point(),
         );
-        let at = |t: f64| edge.curve().evaluate_with_endpoints(t, ends.0, ends.1);
         let (from, to) = (block.start.parameter, block.end.parameter);
         let (from, to) = if from <= to { (from, to) } else { (to, from) };
-        Ok((edge.curve(), at(from), at(to)))
+        if let EdgeCurve::NurbsCurve(curve) = edge.curve() {
+            let Some(piece) = b_spline_between(curve, from, to) else {
+                return Ok(None);
+            };
+            let (d0, d1) = piece.domain();
+            let (a, b) = (piece.evaluate(d0), piece.evaluate(d1));
+            return Ok(Some((EdgeCurve::NurbsCurve(piece), a, b)));
+        }
+        let at = |t: f64| edge.curve().evaluate_with_endpoints(t, ends.0, ends.1);
+        Ok(Some((edge.curve().clone(), at(from), at(to))))
     };
-    let (i, j) = (read(block_i)?, read(block_j)?);
+    let (Some(i), Some(j)) = (read(block_i)?, read(block_j)?) else {
+        return Ok(false);
+    };
     Ok(crate::builder::face_splitter::curves_one_curve(
-        i, j, tol.linear,
+        (&i.0, i.1, i.2),
+        (&j.0, j.1, j.2),
+        tol.linear,
     ))
+}
+
+/// B-spline `curve` cut to `[from, to]`, or `curve` itself where that is its
+/// whole domain; `None` where a cut fails or the span is empty.
+fn b_spline_between(
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    from: f64,
+    to: f64,
+) -> Option<brepkit_math::nurbs::curve::NurbsCurve> {
+    let (d0, d1) = curve.domain();
+    if from.is_nan() || to.is_nan() || from < d0 || to > d1 || from >= to {
+        return None;
+    }
+    let tail = if from > d0 {
+        brepkit_math::nurbs::curve_split(curve, from).ok()?.1
+    } else {
+        curve.clone()
+    };
+    if to < d1 {
+        Some(brepkit_math::nurbs::curve_split(&tail, to).ok()?.0)
+    } else {
+        Some(tail)
+    }
 }
 
 #[cfg(test)]
@@ -671,6 +716,133 @@ mod tests {
                 EdgeCurve::NurbsCurve(other),
             );
             assert_eq!(common_blocks(&topo, &mut arena), common);
+        }
+    }
+
+    /// An edge from `curve`'s point at `t0` to its point at `t1`, with its
+    /// own two vertices and one pave block over `(t0, t1)`.
+    fn span_edge(
+        topo: &mut Topology,
+        arena: &mut GfaArena,
+        curve: &EdgeCurve,
+        (t0, t1): (f64, f64),
+    ) -> EdgeId {
+        let tol = Tolerance::default().linear;
+        let at = |t: f64| match curve {
+            EdgeCurve::NurbsCurve(n) => n.evaluate(t),
+            EdgeCurve::Circle(c) => c.evaluate(t),
+            EdgeCurve::Ellipse(e) => e.evaluate(t),
+            EdgeCurve::Line => Point3::new(t, 0.0, 0.0),
+        };
+        let from = topo.add_vertex(Vertex::new(at(t0), tol));
+        let to = topo.add_vertex(Vertex::new(at(t1), tol));
+        let edge = topo.add_edge(Edge::new(from, to, curve.clone()));
+        arena.init_edge_pave_block(edge, from, t0, to, t1);
+        edge
+    }
+
+    /// A closed cubic through (2, 0) round a square of half side 2: its
+    /// halves over [0, 0.5] and [0.5, 1] share their two ends but are
+    /// opposite sides of the loop, so they share no block.
+    #[test]
+    fn opposite_halves_of_a_closed_b_spline_are_not_common() {
+        let loop_curve = EdgeCurve::NurbsCurve(
+            NurbsCurve::new(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0, 1.0, 1.0],
+                vec![
+                    Point3::new(2.0, 0.0, 0.0),
+                    Point3::new(2.0, 2.0, 0.0),
+                    Point3::new(-2.0, 2.0, 0.0),
+                    Point3::new(-2.0, 0.0, 0.0),
+                    Point3::new(-2.0, -2.0, 0.0),
+                    Point3::new(2.0, -2.0, 0.0),
+                    Point3::new(2.0, 0.0, 0.0),
+                ],
+                vec![1.0; 7],
+            )
+            .unwrap(),
+        );
+        let mut topo = Topology::new();
+        let mut arena = GfaArena::new();
+        span_edge(&mut topo, &mut arena, &loop_curve, (0.0, 0.5));
+        span_edge(&mut topo, &mut arena, &loop_curve, (0.5, 1.0));
+        assert_eq!(common_blocks(&topo, &mut arena), 0);
+    }
+
+    /// Two cubics on eight even spans that differ only in their last
+    /// control point, so they are one curve over their first spans: blocks
+    /// of each over [0.3, 0.3 + 5e-7], a millionth of the domain, share
+    /// their block, and blocks over their last span do not.
+    #[test]
+    fn short_blocks_of_curves_that_agree_there_are_common() {
+        let poles: Vec<Point3> = (0..11)
+            .map(|i| Point3::new(f64::from(i), (0.7 * f64::from(i)).sin(), 0.0))
+            .collect();
+        let mut moved = poles.clone();
+        moved[10] = Point3::new(10.0, 3.0, 0.0);
+        let mut knots = vec![0.0; 4];
+        knots.extend((1..8).map(|k| f64::from(k) / 8.0));
+        knots.extend([1.0; 4]);
+        let cubic = |p: &[Point3]| {
+            EdgeCurve::NurbsCurve(
+                NurbsCurve::new(3, knots.clone(), p.to_vec(), vec![1.0; 11]).unwrap(),
+            )
+        };
+        for (span, common) in [((0.3, 0.3 + 5e-7), 1), ((0.9, 0.95), 0)] {
+            let mut topo = Topology::new();
+            let mut arena = GfaArena::new();
+            span_edge(&mut topo, &mut arena, &cubic(&poles), span);
+            span_edge(&mut topo, &mut arena, &cubic(&moved), span);
+            assert_eq!(common_blocks(&topo, &mut arena), common, "{span:?}");
+        }
+    }
+
+    /// The circle of radius 2 about (1, -2, 0.5) as three quarter turns
+    /// from (3, -2, 0.5) to (1, -4, 0.5), and as three rational quadratic
+    /// quarters, and as a whole turn against four: each pair shares its
+    /// block.
+    #[test]
+    fn a_major_arc_and_a_whole_circle_share_their_blocks_with_their_b_splines() {
+        let centre = Point3::new(1.0, -2.0, 0.5);
+        let (x, z) = (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0));
+        let circle = Circle3D::new_with_ref(centre, z, 2.0, x).unwrap();
+        let at = |k: f64| circle.evaluate(k * std::f64::consts::FRAC_PI_2);
+        let corner = |k: f64| {
+            let (a, b) = (at(k) - centre, at(k + 1.0) - centre);
+            centre + a + b
+        };
+        let quarters = |n: u32| {
+            let mut points = vec![at(0.0)];
+            let mut weights = vec![1.0];
+            let mut knots = vec![0.0; 3];
+            for k in 0..n {
+                let k = f64::from(k);
+                points.extend([corner(k), at(k + 1.0)]);
+                weights.extend([std::f64::consts::FRAC_1_SQRT_2, 1.0]);
+                knots.extend([k + 1.0, k + 1.0]);
+            }
+            knots.push(f64::from(n));
+            NurbsCurve::new(2, knots, points, weights).unwrap()
+        };
+        for (turns, end) in [(3, at(3.0)), (4, at(0.0))] {
+            let mut topo = Topology::new();
+            let mut arena = GfaArena::new();
+            whole_edge(
+                &mut topo,
+                &mut arena,
+                at(0.0),
+                end,
+                EdgeCurve::Circle(circle.clone()),
+            );
+            whole_edge(
+                &mut topo,
+                &mut arena,
+                at(0.0),
+                end,
+                EdgeCurve::NurbsCurve(quarters(turns)),
+            );
+            assert_eq!(common_blocks(&topo, &mut arena), 1, "{turns} quarters");
         }
     }
 
