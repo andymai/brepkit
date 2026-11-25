@@ -684,7 +684,9 @@ fn smooth_order(knots: &[f64], p: usize, a: f64, b: f64) -> usize {
     while i < knots.len() {
         let k = knots[i];
         let mut m = 1;
-        while i + m < knots.len() && knots[i + m].to_bits() == k.to_bits() {
+        // The knots do not fall, so the next is the same knot where it is
+        // not above this one: `-0.0` and `0.0` are one knot.
+        while i + m < knots.len() && knots[i + m] <= k {
             m += 1;
         }
         if k > lo && k < hi {
@@ -1642,5 +1644,74 @@ mod tests {
             }
         }
         assert!(proved >= 2, "{proved}");
+    }
+
+    /// Knots `-0.0` and `+0.0` are one knot: a cubic's three of them make it
+    /// only continuous there, as three plain zeros do. On a sheet written
+    /// with the zeros mixed, a line across that knot line, and a curve
+    /// across the fold the sheet makes there when it is bent, get the same
+    /// pcurves as on the sheet written with plain zeros.
+    #[test]
+    fn knots_of_either_signed_zero_count_as_one() {
+        let mixed = [-1.0, -1.0, -1.0, -1.0, -0.0, -0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        let plain = [-1.0, -1.0, -1.0, -1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        assert_eq!(smooth_order(&plain, 3, -0.5, 0.5), 1);
+        assert_eq!(smooth_order(&mixed, 3, -0.5, 0.5), 1);
+        let sheet = |knots: &[f64], fold: f64| {
+            let points = (0..7)
+                .map(|i| {
+                    (0..7)
+                        .map(|j| {
+                            let (x, y) = (-30.0 + 10.0 * f64::from(i), -30.0 + 10.0 * f64::from(j));
+                            Point3::new(x, y, fold * x.abs() + 3.0 * (y / 15.0).sin())
+                        })
+                        .collect()
+                })
+                .collect();
+            NurbsSurface::new(
+                3,
+                3,
+                knots.to_vec(),
+                clamped(4, 3, 0.0, 1.0),
+                points,
+                vec![vec![1.0; 7]; 7],
+            )
+            .unwrap()
+        };
+        for fold in [0.0, 0.4] {
+            let (with_mixed, with_plain) = (sheet(&mixed, fold), sheet(&plain, fold));
+            // Along `u` the unfolded sheet runs straight: its control points
+            // lie evenly along `x` on either side of the knot.
+            let row = iso_u(&with_plain, 0.21);
+            let (a, b) = (row.evaluate(-0.8), row.evaluate(0.66));
+            let curve = if fold > 0.0 {
+                EdgeCurve::NurbsCurve(row)
+            } else {
+                EdgeCurve::Line
+            };
+            let from_plain =
+                proved_nurbs_pcurve(&curve, a, b, &with_plain, 1e-7).expect("plain zeros");
+            let from_mixed =
+                proved_nurbs_pcurve(&curve, a, b, &with_mixed, 1e-7).expect("mixed zeros");
+            assert!(
+                stray(&from_mixed, &curve, a, b, &with_plain) <= 1e-7,
+                "fold {fold}"
+            );
+            let (Curve2D::Nurbs(p), Curve2D::Nurbs(m)) = (&from_plain, &from_mixed) else {
+                unreachable!()
+            };
+            assert_eq!(
+                p.control_points().len(),
+                m.control_points().len(),
+                "fold {fold}"
+            );
+            assert!(
+                p.control_points()
+                    .iter()
+                    .zip(m.control_points())
+                    .all(|(x, y)| (*x - *y).length() <= 0.0),
+                "fold {fold}"
+            );
+        }
     }
 }
