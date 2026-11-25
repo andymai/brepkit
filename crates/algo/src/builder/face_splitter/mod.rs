@@ -19098,6 +19098,43 @@ mod tests {
         }
     }
 
+    /// The flat arc of a circle of radius 1e9 over the plate's x from 4 to
+    /// 6 near y = 5, and a B-spline whose chord lies one tolerance above the
+    /// arc's but which bows a half up between: the finder leaves the
+    /// B-spline out and does not refuse the pair, in each frame.
+    #[test]
+    fn a_flat_arc_beside_a_b_spline_whose_chord_touches_it_is_left_alone() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::nurbs::NurbsCurve;
+        for (pose, o, u, v) in plate_frames() {
+            let n = u.cross(v);
+            let at = |x: f64, y: f64| o + u * x + v * y;
+            let circle = EdgeCurve::Circle(
+                Circle3D::with_axes(at(5.0, 5.0 - 1e9), n, 1e9, v, n.cross(v)).unwrap(),
+            );
+            let (right, left) = (
+                edge_splitting::conic_point(&circle, -1e-9).unwrap(),
+                edge_splitting::conic_point(&circle, 1e-9).unwrap(),
+            );
+            let lift = v * 1e-7;
+            let spline = EdgeCurve::NurbsCurve(
+                NurbsCurve::new(
+                    2,
+                    vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                    vec![right + lift - u * 0.5, at(5.0, 6.0), left + lift + u * 0.5],
+                    vec![1.0, 1.0, 1.0],
+                )
+                .unwrap(),
+            );
+            let edges = vec![
+                meeting_edge(circle, right, left, 1),
+                meeting_edge(spline, right + lift - u * 0.5, left + lift + u * 0.5, 2),
+            ];
+            let found = meetings(&edges);
+            assert!(found.is_empty(), "{pose}: meetings {found:?}");
+        }
+    }
+
     /// An arc in the plane square to the plate along the chord from (3, 5)
     /// to (7, 5), which is its shadow on the plate, and a line square to the
     /// arc's plane from (6, 7) to the chord at (6, 5), a hair off square to

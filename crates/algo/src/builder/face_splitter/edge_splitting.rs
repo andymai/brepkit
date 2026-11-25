@@ -3440,8 +3440,9 @@ pub(super) fn conic_point(curve: &EdgeCurve, t: f64) -> Option<Point3> {
 /// so a centre far off never enters: against a line or another such arc,
 /// the two segments' nearest points settle it ([`segments_meet`]).
 ///
-/// Lines, circles and ellipses take part, at least one of each pair curved
-/// or read as a chord, and an arc only over at most half a turn, which
+/// Lines, circles and ellipses take part, and no B-spline, at least one of
+/// each pair curved or read as a chord, and an arc only over at most half a
+/// turn, which
 /// every reading of it covers alike. Two conics proved within `tol` of each other along their
 /// whole length ([`conics_apart`]) are one curve: their arcs overlap or lie
 /// apart, and are left to their ends. So is a conic no form on unit axes
@@ -3534,7 +3535,11 @@ pub(super) fn section_meeting_points(
     let mut found: Vec<Meeting> = Vec::new();
     for (i, first) in unique.iter().enumerate() {
         for (j, second) in unique.iter().enumerate().skip(i + 1) {
-            if !boxes[i].intersects(boxes[j]) {
+            // A B-spline section stays out of the finder.
+            if !boxes[i].intersects(boxes[j])
+                || matches!(first.curve, EdgeCurve::NurbsCurve(_))
+                || matches!(second.curve, EdgeCurve::NurbsCurve(_))
+            {
                 continue;
             }
             if !(curved(first) || curved(second)) {
