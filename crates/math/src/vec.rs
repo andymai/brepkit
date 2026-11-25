@@ -49,9 +49,11 @@ const SCALE_UP: f64 = f64::from_bits(1623 << 52);
 const SCALE_DOWN: f64 = f64::from_bits(423 << 52);
 
 /// The least part of a vector square to an axis, over the vector's length,
-/// that [`Vector::square_part`] takes for a direction. A vector along the
-/// axis leaves a part of a few units of rounding, far under it.
-const SQUARE_PART_LOW: f64 = 1e-12;
+/// that [`Vector::square_part`] takes for a direction. The projection leaves
+/// rounding of about 1e-16 of the vector in the part, so a part at this
+/// size has a direction good to about 1e-8; a vector along the axis leaves
+/// a part of rounding alone, far under it.
+const SQUARE_PART_LOW: f64 = 1e-8;
 
 /// A power of two by which a vector whose largest component is `size` comes
 /// near one in size.
@@ -242,19 +244,28 @@ impl Vector<3> {
     /// # Errors
     ///
     /// Returns [`MathError::ZeroVector`] if the vector is zero or not
-    /// finite, or lies so nearly along `axis` that its square part, under
-    /// 1e-12 of its length, is rounding. A test of the part's length alone
-    /// takes the rounding of a vector along the axis for a direction. The
-    /// vector is taken at a unit size first, so that neither the projection
-    /// nor the test overflows or loses digits at either end of the range.
+    /// finite, or lies so nearly along `axis` that its square part is
+    /// under 1e-8 of its length. A test of the part's length alone takes
+    /// the rounding of a vector along the axis for a direction. The vector
+    /// is taken at a unit size first, so that neither the projection nor
+    /// the test overflows or loses digits at either end of the range.
     pub fn square_part(self, axis: Self) -> Result<Self, MathError> {
         let v = self.at_unit_size();
         let part = v - axis * v.dot(axis);
-        if part.length() >= SQUARE_PART_LOW * v.length() {
-            part.normalize()
-        } else {
-            Err(MathError::ZeroVector)
+        let length = part.length();
+        let taken = length >= SQUARE_PART_LOW * v.length() && length.is_finite();
+        if !taken {
+            return Err(MathError::ZeroVector);
         }
+        let unit = part.normalize()?;
+        // The rounding of the projection, about 1e-16 of the vector, lies
+        // partly along the axis: over a part much shorter than the vector it
+        // tilts the direction off square. A second projection of the unit
+        // direction takes that tilt out.
+        if length >= 0.5 * v.length() {
+            return Ok(unit);
+        }
+        (unit - axis * unit.dot(axis)).normalize()
     }
 }
 
@@ -483,6 +494,44 @@ impl_serde_for_array_newtype!(Position, "Position");
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// The square part of a vector near the axis, at 1e-14 to 0.3 off it,
+    /// at sizes 1e-200, 1 and 1e200. A part under 1e-8 of the vector is
+    /// refused; one at or past it is a unit direction square to the axis to
+    /// 8 units of rounding, near the true one. A projection alone leaves
+    /// its rounding, about 1e-16 of the vector over the part, along the
+    /// axis.
+    #[test]
+    fn a_square_part_near_the_axis_is_square_to_it_or_refused() {
+        let ulps = 8.0 * f64::EPSILON;
+        let axis = Vec3::new(1.0, 1.0, 1.0).normalize().unwrap();
+        let across = Vec3::new(1.0, -1.0, 0.0).normalize().unwrap();
+        for s in [1e-200, 1.0, 1e200] {
+            for off in [1e-14, 1e-12, 1e-10, 1e-9, 1e-7, 1e-4, 0.3] {
+                let v = (axis + across * off) * s;
+                let found = v.square_part(axis);
+                if off < 1e-8 {
+                    assert!(found.is_err(), "size {s}, {off} off: {found:?}");
+                    continue;
+                }
+                let part = found.unwrap();
+                assert!(
+                    part.dot(axis).abs() <= ulps,
+                    "size {s}, {off} off: {part:?}"
+                );
+                assert!(
+                    (part.length() - 1.0).abs() <= ulps,
+                    "size {s}, {off} off: {part:?}"
+                );
+                assert!(
+                    (part - across).length() <= 64.0 * f64::EPSILON / off,
+                    "size {s}, {off} off: {part:?}"
+                );
+            }
+        }
+        let tilted = Vec3::new(1e-200, 1e-200, 1e-200 * (1.0 + 1e-10));
+        assert!(tilted.square_part(axis).is_err());
+    }
 
     /// The square part of a vector at either end of the float range: a
     /// reference of 1.7e308 square to z, and one of the least subnormal

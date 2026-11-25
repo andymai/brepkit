@@ -115,6 +115,21 @@ mod tests {
         }
     }
 
+    /// A reference 1e-10 off the normal, at size 1e-200, gives a frame
+    /// whose axes are square to each other to 8 units of rounding.
+    #[test]
+    fn a_reference_just_off_the_normal_gives_square_axes() {
+        let f = Frame3::from_normal_and_ref(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(1e-200, 1e-200, 1e-200 * (1.0 + 1e-10)),
+        )
+        .unwrap();
+        for (a, b) in [(f.x, f.y), (f.x, f.z), (f.y, f.z)] {
+            assert!(a.dot(b).abs() <= 8.0 * f64::EPSILON, "{f:?}");
+        }
+    }
+
     #[test]
     fn frame_from_x_axis() {
         // Tests the branch where x_component > 0.9
