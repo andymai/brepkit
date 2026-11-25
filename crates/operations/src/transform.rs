@@ -182,10 +182,22 @@ fn transform_topology(
             flipped.insert(fid);
         }
     }
+    let stretch = largest_stretch(matrix);
     for &vid in vertex_ids {
         let vertex = topo.vertex_mut(vid)?;
         let new_point = matrix.mul_point(vertex.point());
         vertex.set_point(new_point);
+        if let Some(stretch) = stretch {
+            vertex.set_tolerance(vertex.tolerance() * stretch);
+        }
+    }
+    if let Some(stretch) = stretch {
+        for &eid in edge_ids {
+            let edge = topo.edge_mut(eid)?;
+            if let Some(tolerance) = edge.tolerance() {
+                edge.set_tolerance(Some(tolerance * stretch));
+            }
+        }
     }
     let moved_origins = transform_edges(topo, edge_ids, matrix)?;
     // A mirror turns every face's boundary clockwise about its outward
@@ -361,6 +373,39 @@ fn similarity_scale(matrix: &Mat4) -> Option<f64> {
         && nearly_orthogonal(cols[0], cols[2])
         && nearly_orthogonal(cols[1], cols[2]);
     similar.then_some(s)
+}
+
+/// The most `matrix` stretches a length, by which it scales a tolerance:
+/// the scale of a similarity, and the largest singular value of the linear
+/// block of any other map. `None` for a motion, which keeps every length.
+pub(crate) fn largest_stretch(matrix: &Mat4) -> Option<f64> {
+    if let Some(scale) = similarity_scale(matrix) {
+        return (!nearly_equal(scale, 1.0)).then_some(scale);
+    }
+    let cols = [
+        linear(matrix, Vec3::new(1.0, 0.0, 0.0)),
+        linear(matrix, Vec3::new(0.0, 1.0, 0.0)),
+        linear(matrix, Vec3::new(0.0, 0.0, 1.0)),
+    ];
+    // The largest eigenvalue of the columns' Gram matrix, in closed form.
+    let g = |i: usize, j: usize| cols[i].dot(cols[j]);
+    let mean = (g(0, 0) + g(1, 1) + g(2, 2)) / 3.0;
+    let off = g(0, 1).powi(2) + g(0, 2).powi(2) + g(1, 2).powi(2);
+    let spread = (((g(0, 0) - mean).powi(2)
+        + (g(1, 1) - mean).powi(2)
+        + (g(2, 2) - mean).powi(2)
+        + 2.0 * off)
+        / 6.0)
+        .sqrt();
+    if spread <= f64::EPSILON * mean {
+        return Some(mean.sqrt());
+    }
+    let b = |i: usize, j: usize| (g(i, j) - if i == j { mean } else { 0.0 }) / spread;
+    let det = b(0, 0) * (b(1, 1) * b(2, 2) - b(1, 2) * b(2, 1))
+        - b(0, 1) * (b(1, 0) * b(2, 2) - b(1, 2) * b(2, 0))
+        + b(0, 2) * (b(1, 0) * b(2, 1) - b(1, 1) * b(2, 0));
+    let angle = (det / 2.0).clamp(-1.0, 1.0).acos() / 3.0;
+    Some((mean + 2.0 * spread * angle.cos()).sqrt())
 }
 
 /// For a surface of revolution with frame images `x`, `y` (radial) and `z`
