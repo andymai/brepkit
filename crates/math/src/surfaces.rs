@@ -1236,9 +1236,10 @@ impl RevolutionSurface {
     ///
     /// # Errors
     /// Returns an error if the profile is empty or has one point, the radii
-    /// and heights differ in count, a radius is negative, a radius or height
-    /// is not finite or is past [`SIZE_LIMIT`](crate::curves::SIZE_LIMIT)
-    /// in magnitude, or the axis is zero.
+    /// and heights differ in count, a radius is negative, a radius, height or
+    /// coordinate of the origin is not finite or is past
+    /// [`SIZE_LIMIT`](crate::curves::SIZE_LIMIT) in magnitude, or the axis is
+    /// zero.
     pub fn new(
         origin: Point3,
         axis: Vec3,
@@ -1271,6 +1272,7 @@ impl RevolutionSurface {
         }
         if let Some(&h) = heights
             .iter()
+            .chain(&[origin.x(), origin.y(), origin.z()])
             .find(|h| !(-SIZE_LIMIT..=SIZE_LIMIT).contains(*h))
         {
             return Err(MathError::ParameterOutOfRange {

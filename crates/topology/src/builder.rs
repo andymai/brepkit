@@ -31,6 +31,14 @@ pub fn make_line_edge(
     tolerance: f64,
 ) -> Result<EdgeId, crate::TopologyError> {
     let tol = Tolerance::new();
+    if ![start, end]
+        .iter()
+        .all(|p| p.x().is_finite() && p.y().is_finite() && p.z().is_finite())
+    {
+        return Err(crate::TopologyError::NonManifold {
+            reason: "degenerate edge: an end point is not finite".into(),
+        });
+    }
     if (end - start).length_squared() < tol.linear * tol.linear {
         return Err(crate::TopologyError::NonManifold {
             reason: "degenerate edge: start and end points coincide".into(),
@@ -818,6 +826,27 @@ mod tests {
         let mut topo = Topology::new();
         let p = Point3::new(1.0, 2.0, 3.0);
         assert!(make_line_edge(&mut topo, p, p, TOL).is_err());
+    }
+
+    /// An end that is not a number, or not finite, gives a length that is
+    /// not either: the edge is refused, not built with a vertex nowhere.
+    #[test]
+    fn make_line_edge_refuses_an_end_that_is_not_finite() {
+        let mut topo = Topology::new();
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            for end in [Point3::new(bad, 0.0, 0.0), Point3::new(1.0, 0.0, bad)] {
+                assert!(
+                    make_line_edge(&mut topo, origin, end, TOL).is_err(),
+                    "{end:?}"
+                );
+                assert!(
+                    make_line_edge(&mut topo, end, origin, TOL).is_err(),
+                    "{end:?}"
+                );
+            }
+        }
+        assert_eq!(topo.num_vertices(), 0);
     }
 
     #[test]

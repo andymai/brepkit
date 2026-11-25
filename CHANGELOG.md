@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.56](https://github.com/andymai/brepkit/compare/v4.11.55...v4.11.56) (2026-11-25)
+
+
+### Bug Fixes
+
+* **algo:** split a face by two curves through the same ends and middle ([#2871](https://github.com/andymai/brepkit/issues/2871)) ([9da5c42](https://github.com/andymai/brepkit/commit/9da5c42db0ce5d2a8804ad6be59d8949b2246d0a))
+
 ## [4.11.55](https://github.com/andymai/brepkit/compare/v4.11.54...v4.11.55) (2026-11-25)
 
 

@@ -8,7 +8,9 @@ use brepkit_math::mat::Mat4;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::transform::transform_solid;
 
-use crate::error::{WasmError, validate_finite, validate_pattern_counts, validate_positive};
+use crate::error::{
+    WasmError, validate_pattern_counts, validate_point, validate_positive, validate_vector,
+};
 use crate::handles::{compound_id_to_u32, face_id_to_u32, solid_id_to_u32, wire_id_to_u32};
 use crate::kernel::BrepKernel;
 
@@ -21,34 +23,12 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if the solid handle is invalid, the matrix doesn't
-    /// have 16 elements, or the matrix is singular.
+    /// have 16 elements, the matrix is singular, or the moved solid would
+    /// pass the size limit.
     #[wasm_bindgen(js_name = "transformSolid")]
     #[allow(clippy::needless_pass_by_value)] // wasm-bindgen requires owned Vec
     pub fn transform_solid_binding(&mut self, solid: u32, matrix: Vec<f64>) -> Result<(), JsError> {
-        if matrix.len() != 16 {
-            return Err(WasmError::InvalidInput {
-                reason: format!(
-                    "transform matrix must have 16 elements, got {}",
-                    matrix.len()
-                ),
-            }
-            .into());
-        }
-
-        if let Some(pos) = matrix.iter().position(|v| !v.is_finite()) {
-            return Err(WasmError::InvalidInput {
-                reason: format!("matrix element at index {pos} is not finite"),
-            }
-            .into());
-        }
-
-        let solid_id = self.resolve_solid(solid)?;
-
-        let rows = std::array::from_fn(|i| std::array::from_fn(|j| matrix[i * 4 + j]));
-        let mat = Mat4(rows);
-
-        transform_solid(self.topo_mut(), solid_id, &mat)?;
-        Ok(())
+        Ok(self.transform_solid_impl(solid, &matrix)?)
     }
 
     /// Compose (multiply) two 4x4 transformation matrices.
@@ -66,24 +46,13 @@ impl BrepKernel {
         matrix_a: Vec<f64>,
         matrix_b: Vec<f64>,
     ) -> Result<Vec<f64>, JsError> {
-        if matrix_a.len() != 16 {
+        let product = matrix_from(&matrix_a)? * matrix_from(&matrix_b)?;
+        let out: Vec<f64> = product.0.iter().flatten().copied().collect();
+        if let Some(pos) = out.iter().position(|v| !v.is_finite()) {
             return Err(WasmError::InvalidInput {
-                reason: format!("matrix A must have 16 elements, got {}", matrix_a.len()),
+                reason: format!("the composed matrix's element at index {pos} is not finite"),
             }
             .into());
-        }
-        if matrix_b.len() != 16 {
-            return Err(WasmError::InvalidInput {
-                reason: format!("matrix B must have 16 elements, got {}", matrix_b.len()),
-            }
-            .into());
-        }
-        let rows_a = std::array::from_fn(|i| std::array::from_fn(|j| matrix_a[i * 4 + j]));
-        let rows_b = std::array::from_fn(|i| std::array::from_fn(|j| matrix_b[i * 4 + j]));
-        let result = Mat4(rows_a) * Mat4(rows_b);
-        let mut out = Vec::with_capacity(16);
-        for row in &result.0 {
-            out.extend_from_slice(row);
         }
         Ok(out)
     }
@@ -136,32 +105,12 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if the wire handle is invalid, the matrix doesn't
-    /// have 16 elements, or the matrix is singular.
+    /// have 16 elements, the matrix is singular, or the moved wire would
+    /// pass the size limit.
     #[wasm_bindgen(js_name = "transformWire")]
     #[allow(clippy::needless_pass_by_value)]
     pub fn transform_wire(&mut self, wire: u32, matrix: Vec<f64>) -> Result<(), JsError> {
-        if matrix.len() != 16 {
-            return Err(WasmError::InvalidInput {
-                reason: format!(
-                    "transform matrix must have 16 elements, got {}",
-                    matrix.len()
-                ),
-            }
-            .into());
-        }
-
-        if let Some(pos) = matrix.iter().position(|v| !v.is_finite()) {
-            return Err(WasmError::InvalidInput {
-                reason: format!("matrix element at index {pos} is not finite"),
-            }
-            .into());
-        }
-
-        let wire_id = self.resolve_wire(wire)?;
-        let rows = std::array::from_fn(|i| std::array::from_fn(|j| matrix[i * 4 + j]));
-        let mat = Mat4(rows);
-        brepkit_operations::transform::transform_wire(self.topo_mut(), wire_id, &mat)?;
-        Ok(())
+        Ok(self.transform_wire_impl(wire, &matrix)?)
     }
 
     /// Apply a 4×4 affine transform to a face (in place).
@@ -172,32 +121,12 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if the face handle is invalid, the matrix doesn't
-    /// have 16 elements, or the matrix is singular.
+    /// have 16 elements, the matrix is singular, or the moved face would
+    /// pass the size limit.
     #[wasm_bindgen(js_name = "transformFace")]
     #[allow(clippy::needless_pass_by_value)]
     pub fn transform_face(&mut self, face: u32, matrix: Vec<f64>) -> Result<(), JsError> {
-        if matrix.len() != 16 {
-            return Err(WasmError::InvalidInput {
-                reason: format!(
-                    "transform matrix must have 16 elements, got {}",
-                    matrix.len()
-                ),
-            }
-            .into());
-        }
-
-        if let Some(pos) = matrix.iter().position(|v| !v.is_finite()) {
-            return Err(WasmError::InvalidInput {
-                reason: format!("matrix element at index {pos} is not finite"),
-            }
-            .into());
-        }
-
-        let face_id = self.resolve_face(face)?;
-        let rows = std::array::from_fn(|i| std::array::from_fn(|j| matrix[i * 4 + j]));
-        let mat = Mat4(rows);
-        brepkit_operations::transform::transform_face(self.topo_mut(), face_id, &mat)?;
-        Ok(())
+        Ok(self.transform_face_impl(face, &matrix)?)
     }
 
     /// Copy a solid and apply a 4×4 row-major affine transform in one pass.
@@ -208,7 +137,8 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if the solid handle is invalid, the matrix doesn't
-    /// have 16 elements, or the matrix is singular.
+    /// have 16 elements, the matrix is singular, or the copy would pass the
+    /// size limit.
     #[wasm_bindgen(js_name = "copyAndTransformSolid")]
     #[allow(clippy::needless_pass_by_value)]
     pub fn copy_and_transform_solid(
@@ -216,31 +146,7 @@ impl BrepKernel {
         solid: u32,
         matrix: Vec<f64>,
     ) -> Result<u32, JsError> {
-        if matrix.len() != 16 {
-            return Err(WasmError::InvalidInput {
-                reason: format!(
-                    "transform matrix must have 16 elements, got {}",
-                    matrix.len()
-                ),
-            }
-            .into());
-        }
-
-        if let Some(pos) = matrix.iter().position(|v| !v.is_finite()) {
-            return Err(WasmError::InvalidInput {
-                reason: format!("matrix element at index {pos} is not finite"),
-            }
-            .into());
-        }
-
-        let solid_id = self.resolve_solid(solid)?;
-
-        let rows = std::array::from_fn(|i| std::array::from_fn(|j| matrix[i * 4 + j]));
-        let mat = Mat4(rows);
-
-        let copy =
-            brepkit_operations::copy::copy_and_transform_solid(self.topo_mut(), solid_id, &mat)?;
-        Ok(solid_id_to_u32(copy))
+        Ok(self.copy_and_transform_solid_impl(solid, &matrix)?)
     }
 
     /// Mirror a solid across a plane.
@@ -249,7 +155,8 @@ impl BrepKernel {
     ///
     /// # Errors
     ///
-    /// Returns an error if the solid handle is invalid or the normal is zero.
+    /// Returns an error if the solid handle is invalid, the normal is zero,
+    /// or a coordinate or the mirrored solid would pass the size limit.
     #[wasm_bindgen(js_name = "mirror")]
     #[allow(clippy::too_many_arguments)]
     pub fn mirror_solid(
@@ -262,20 +169,7 @@ impl BrepKernel {
         ny: f64,
         nz: f64,
     ) -> Result<u32, JsError> {
-        validate_finite(px, "px")?;
-        validate_finite(py, "py")?;
-        validate_finite(pz, "pz")?;
-        validate_finite(nx, "nx")?;
-        validate_finite(ny, "ny")?;
-        validate_finite(nz, "nz")?;
-        let solid_id = self.resolve_solid(solid)?;
-        let result = brepkit_operations::mirror::mirror(
-            self.topo_mut(),
-            solid_id,
-            Point3::new(px, py, pz),
-            Vec3::new(nx, ny, nz),
-        )?;
-        Ok(solid_id_to_u32(result))
+        Ok(self.mirror_impl(solid, Point3::new(px, py, pz), Vec3::new(nx, ny, nz))?)
     }
 
     /// Create a linear pattern of a solid.
@@ -284,8 +178,8 @@ impl BrepKernel {
     ///
     /// # Errors
     ///
-    /// Returns an error if inputs are invalid or `count` is more than
-    /// `MAX_COUNT`.
+    /// Returns an error if inputs are invalid, `count` is more than
+    /// `MAX_COUNT`, or the last copy would pass the size limit.
     #[wasm_bindgen(js_name = "linearPattern")]
     #[allow(clippy::too_many_arguments)]
     pub fn linear_pattern(
@@ -297,20 +191,7 @@ impl BrepKernel {
         spacing: f64,
         count: u32,
     ) -> Result<u32, JsError> {
-        validate_finite(dx, "dx")?;
-        validate_finite(dy, "dy")?;
-        validate_finite(dz, "dz")?;
-        validate_positive(spacing, "spacing")?;
-        validate_pattern_counts(&[count])?;
-        let solid_id = self.resolve_solid(solid)?;
-        let compound = brepkit_operations::pattern::linear_pattern(
-            self.topo_mut(),
-            solid_id,
-            Vec3::new(dx, dy, dz),
-            spacing,
-            count as usize,
-        )?;
-        Ok(compound_id_to_u32(compound))
+        Ok(self.linear_pattern_impl(solid, Vec3::new(dx, dy, dz), spacing, count)?)
     }
 
     // ── Grid Pattern ──────────────────────────────────────────────
@@ -321,8 +202,8 @@ impl BrepKernel {
     ///
     /// # Errors
     ///
-    /// Returns an error if inputs are invalid or the grid holds more than
-    /// `MAX_COUNT` copies.
+    /// Returns an error if inputs are invalid, the grid holds more than
+    /// `MAX_COUNT` copies, or a corner copy would pass the size limit.
     #[wasm_bindgen(js_name = "gridPattern")]
     #[allow(clippy::too_many_arguments)]
     pub fn grid_pattern(
@@ -339,27 +220,15 @@ impl BrepKernel {
         count_x: u32,
         count_y: u32,
     ) -> Result<u32, JsError> {
-        validate_finite(dir_x_x, "dir_x_x")?;
-        validate_finite(dir_x_y, "dir_x_y")?;
-        validate_finite(dir_x_z, "dir_x_z")?;
-        validate_finite(dir_y_x, "dir_y_x")?;
-        validate_finite(dir_y_y, "dir_y_y")?;
-        validate_finite(dir_y_z, "dir_y_z")?;
-        validate_positive(spacing_x, "spacing_x")?;
-        validate_positive(spacing_y, "spacing_y")?;
-        validate_pattern_counts(&[count_x, count_y])?;
-        let solid_id = self.resolve_solid(solid)?;
-        let compound = brepkit_operations::pattern::grid_pattern(
-            self.topo_mut(),
-            solid_id,
-            Vec3::new(dir_x_x, dir_x_y, dir_x_z),
-            Vec3::new(dir_y_x, dir_y_y, dir_y_z),
-            spacing_x,
-            spacing_y,
-            count_x as usize,
-            count_y as usize,
-        )?;
-        Ok(compound_id_to_u32(compound))
+        Ok(self.grid_pattern_impl(
+            solid,
+            [
+                Vec3::new(dir_x_x, dir_x_y, dir_x_z),
+                Vec3::new(dir_y_x, dir_y_y, dir_y_z),
+            ],
+            [spacing_x, spacing_y],
+            [count_x, count_y],
+        )?)
     }
 
     /// Create a circular pattern of a solid around an axis.
@@ -368,8 +237,9 @@ impl BrepKernel {
     ///
     /// # Errors
     ///
-    /// Returns an error if the solid handle is invalid or `count` is more
-    /// than `MAX_COUNT`.
+    /// Returns an error if the solid handle is invalid, the axis is not a
+    /// finite size, `count` is more than `MAX_COUNT`, or a turned copy would
+    /// pass the size limit.
     #[wasm_bindgen(js_name = "circularPattern")]
     pub fn circular_pattern(
         &mut self,
@@ -379,16 +249,7 @@ impl BrepKernel {
         az: f64,
         count: u32,
     ) -> Result<u32, JsError> {
-        validate_pattern_counts(&[count])?;
-        let solid_id = self.resolve_solid(solid)?;
-        let axis = Vec3::new(ax, ay, az);
-        let compound = brepkit_operations::pattern::circular_pattern(
-            self.topo_mut(),
-            solid_id,
-            axis,
-            count as usize,
-        )?;
-        Ok(compound_id_to_u32(compound))
+        Ok(self.circular_pattern_impl(solid, Vec3::new(ax, ay, az), count)?)
     }
 
     /// Merge coincident vertices in a solid.
@@ -400,6 +261,7 @@ impl BrepKernel {
         solid: u32,
         tolerance: f64,
     ) -> Result<u32, JsError> {
+        crate::error::validate_tolerance(tolerance, "tolerance")?;
         let solid_id = self.resolve_solid(solid)?;
         let count = brepkit_operations::heal::merge_coincident_vertices(
             self.topo_mut(),
@@ -408,6 +270,339 @@ impl BrepKernel {
         )?;
         #[allow(clippy::cast_possible_truncation)]
         Ok(count as u32)
+    }
+}
+
+/// A 4x4 matrix from sixteen row-major numbers from JS.
+fn matrix_from(matrix: &[f64]) -> Result<Mat4, WasmError> {
+    if matrix.len() != 16 {
+        return Err(WasmError::InvalidInput {
+            reason: format!(
+                "transform matrix must have 16 elements, got {}",
+                matrix.len()
+            ),
+        });
+    }
+    if let Some(pos) = matrix.iter().position(|v| !v.is_finite()) {
+        return Err(WasmError::InvalidInput {
+            reason: format!("matrix element at index {pos} is not finite"),
+        });
+    }
+    Ok(Mat4(std::array::from_fn(|i| {
+        std::array::from_fn(|j| matrix[i * 4 + j])
+    })))
+}
+
+/// The length of `v`, taken from `v` divided by its largest component, so
+/// that no square of a component past 1e154 overflows.
+pub fn scaled_length(v: Vec3) -> f64 {
+    let largest = v.x().abs().max(v.y().abs()).max(v.z().abs());
+    if largest > 0.0 && largest.is_finite() {
+        let unit = Vec3::new(v.x() / largest, v.y() / largest, v.z() / largest);
+        largest * unit.length()
+    } else {
+        largest
+    }
+}
+
+/// `v` scaled to unit length, by way of [`scaled_length`].
+pub fn scaled_unit(v: Vec3) -> Result<Vec3, WasmError> {
+    let largest = v.x().abs().max(v.y().abs()).max(v.z().abs());
+    if largest > 0.0 && largest.is_finite() {
+        Ok(Vec3::new(v.x() / largest, v.y() / largest, v.z() / largest).normalize()?)
+    } else {
+        Err(WasmError::InvalidInput {
+            reason: format!("a direction must be finite and not zero, got {v:?}"),
+        })
+    }
+}
+
+/// The points that hold a shape, kept for the checks a move must pass: the
+/// ends of its edges and the cube round each circle, ellipse, sphere or
+/// torus, and apart from them each spline's control points with its
+/// largest weight. A spline lies in the hull of its control points while
+/// its weights are positive; a plane, cylinder or cone face lies within its
+/// edges' hull.
+#[derive(Default)]
+pub struct Reach {
+    points: Vec<Point3>,
+    splines: Vec<(f64, Vec<Point3>)>,
+}
+
+impl Reach {
+    /// A reach of loose points alone, with no spline.
+    #[cfg(test)]
+    pub fn of_points(points: Vec<Point3>) -> Self {
+        Self {
+            points,
+            splines: Vec::new(),
+        }
+    }
+
+    /// The reach of every edge of `wires`.
+    pub fn of_wires(
+        topo: &brepkit_topology::Topology,
+        wires: impl IntoIterator<Item = brepkit_topology::wire::WireId>,
+    ) -> Result<Self, WasmError> {
+        let mut reach = Self::default();
+        for wire in wires {
+            reach.add_wire(topo, wire)?;
+        }
+        Ok(reach)
+    }
+
+    /// The reach of a face: its wires, and a surface that can bulge past
+    /// them.
+    pub fn of_face(
+        topo: &brepkit_topology::Topology,
+        face: brepkit_topology::face::FaceId,
+    ) -> Result<Self, WasmError> {
+        let mut reach = Self::default();
+        reach.add_face(topo, face)?;
+        Ok(reach)
+    }
+
+    fn add_cube(&mut self, center: Point3, r: f64) {
+        for k in 0..8 {
+            let side = |bit: i32| if k & bit == 0 { -r } else { r };
+            self.points
+                .push(center + Vec3::new(side(1), side(2), side(4)));
+        }
+    }
+
+    fn add_wire(
+        &mut self,
+        topo: &brepkit_topology::Topology,
+        wire: brepkit_topology::wire::WireId,
+    ) -> Result<(), WasmError> {
+        use brepkit_topology::edge::EdgeCurve;
+        for oe in topo.wire(wire)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            self.points.push(topo.vertex(edge.start())?.point());
+            self.points.push(topo.vertex(edge.end())?.point());
+            match edge.curve() {
+                EdgeCurve::Line => {}
+                EdgeCurve::Circle(c) => self.add_cube(c.center(), c.radius()),
+                EdgeCurve::Ellipse(e) => self.add_cube(e.center(), e.semi_major()),
+                EdgeCurve::NurbsCurve(n) => {
+                    let weight = n.weights().iter().fold(0.0_f64, |m, w| m.max(w.abs()));
+                    self.splines.push((weight, n.control_points().to_vec()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn add_face(
+        &mut self,
+        topo: &brepkit_topology::Topology,
+        face: brepkit_topology::face::FaceId,
+    ) -> Result<(), WasmError> {
+        use brepkit_topology::face::FaceSurface;
+        let face_data = topo.face(face)?;
+        for wire in
+            std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
+        {
+            self.add_wire(topo, wire)?;
+        }
+        match face_data.surface() {
+            FaceSurface::Nurbs(s) => {
+                let weight = s
+                    .weights()
+                    .iter()
+                    .flatten()
+                    .fold(0.0_f64, |m, w| m.max(w.abs()));
+                let controls = s.control_points().iter().flatten().copied().collect();
+                self.splines.push((weight, controls));
+            }
+            FaceSurface::Sphere(s) => self.add_cube(s.center(), s.radius()),
+            FaceSurface::Torus(t) => self.add_cube(t.center(), t.major_radius() + t.minor_radius()),
+            FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {}
+        }
+        Ok(())
+    }
+
+    /// Check each point and control point that `place` gives as the bound of
+    /// its image, and each spline's largest weight times its largest bound,
+    /// as the load checks do. Each is checked on its own: a box of them
+    /// would drop a coordinate that is not a number. A shape with no points,
+    /// as an empty solid, has nothing to check.
+    fn check_by(&self, place: impl Fn(Point3) -> Point3, what: &str) -> Result<(), WasmError> {
+        for &p in &self.points {
+            validate_point(place(p), what)?;
+        }
+        for (weight, controls) in &self.splines {
+            let mut largest = 1.0_f64;
+            for &p in controls {
+                let q = place(p);
+                validate_point(q, what)?;
+                largest = largest.max(q.x().abs()).max(q.y().abs()).max(q.z().abs());
+            }
+            if weight * largest > brepkit_math::nurbs::basis::WEIGHTED_LIMIT {
+                return Err(WasmError::InvalidInput {
+                    reason: format!(
+                        "{what}: a spline's largest weight {weight:e} times its largest \
+                         coordinate {largest:e} must be at most {:e}",
+                        brepkit_math::nurbs::basis::WEIGHTED_LIMIT
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Check the shape moved by `matrix`. An affine map takes a hull to the
+    /// hull of the moved points, so this bounds the moved shape.
+    pub fn check_moved(&self, matrix: &Mat4, what: &str) -> Result<(), WasmError> {
+        self.check_by(|p| matrix.mul_point(p), what)
+    }
+
+    /// Check the shape turned about any axis through `center`: a turn keeps
+    /// each point's distance from `center`, so the corner of the cube round
+    /// `center` out to that distance bounds the point's every coordinate.
+    pub fn check_turned(&self, center: Point3, what: &str) -> Result<(), WasmError> {
+        self.check_by(
+            |p| {
+                let r = scaled_length(p - center);
+                let out = |c: f64| if c < 0.0 { -r } else { r };
+                center + Vec3::new(out(center.x()), out(center.y()), out(center.z()))
+            },
+            what,
+        )
+    }
+}
+
+impl BrepKernel {
+    /// The checked body of `transformSolid` and the batch's `transform`.
+    pub(crate) fn transform_solid_impl(
+        &mut self,
+        solid: u32,
+        matrix: &[f64],
+    ) -> Result<(), WasmError> {
+        let mat = matrix_from(matrix)?;
+        let solid_id = self.resolve_solid(solid)?;
+        transform_solid(self.topo_mut(), solid_id, &mat)?;
+        Ok(())
+    }
+
+    /// The checked body of `copyAndTransformSolid`, in JS and in the batch.
+    pub(crate) fn copy_and_transform_solid_impl(
+        &mut self,
+        solid: u32,
+        matrix: &[f64],
+    ) -> Result<u32, WasmError> {
+        let mat = matrix_from(matrix)?;
+        let solid_id = self.resolve_solid(solid)?;
+        let copy =
+            brepkit_operations::copy::copy_and_transform_solid(self.topo_mut(), solid_id, &mat)?;
+        Ok(solid_id_to_u32(copy))
+    }
+
+    /// The checked body of `transformWire`, in JS and in the batch.
+    pub(crate) fn transform_wire_impl(
+        &mut self,
+        wire: u32,
+        matrix: &[f64],
+    ) -> Result<(), WasmError> {
+        let mat = matrix_from(matrix)?;
+        let wire_id = self.resolve_wire(wire)?;
+        brepkit_operations::transform::transform_wire(self.topo_mut(), wire_id, &mat)?;
+        Ok(())
+    }
+
+    /// The checked body of `transformFace`, in JS and in the batch.
+    pub(crate) fn transform_face_impl(
+        &mut self,
+        face: u32,
+        matrix: &[f64],
+    ) -> Result<(), WasmError> {
+        let mat = matrix_from(matrix)?;
+        let face_id = self.resolve_face(face)?;
+        brepkit_operations::transform::transform_face(self.topo_mut(), face_id, &mat)?;
+        Ok(())
+    }
+
+    /// The checked body of `mirror`, in JS and in the batch.
+    pub(crate) fn mirror_impl(
+        &mut self,
+        solid: u32,
+        point: Point3,
+        normal: Vec3,
+    ) -> Result<u32, WasmError> {
+        validate_point(point, "the mirror plane's point")?;
+        validate_vector(normal, "the mirror plane's normal")?;
+        let solid_id = self.resolve_solid(solid)?;
+        let result = brepkit_operations::mirror::mirror(self.topo_mut(), solid_id, point, normal)?;
+        Ok(solid_id_to_u32(result))
+    }
+
+    /// The checked body of `linearPattern`, in JS and in the batch.
+    pub(crate) fn linear_pattern_impl(
+        &mut self,
+        solid: u32,
+        direction: Vec3,
+        spacing: f64,
+        count: u32,
+    ) -> Result<u32, WasmError> {
+        validate_vector(direction, "the pattern's direction")?;
+        validate_positive(spacing, "spacing")?;
+        validate_pattern_counts(&[count])?;
+        let solid_id = self.resolve_solid(solid)?;
+        let compound = brepkit_operations::pattern::linear_pattern(
+            self.topo_mut(),
+            solid_id,
+            direction,
+            spacing,
+            count as usize,
+        )?;
+        Ok(compound_id_to_u32(compound))
+    }
+
+    /// The checked body of `gridPattern`, in JS and in the batch.
+    pub(crate) fn grid_pattern_impl(
+        &mut self,
+        solid: u32,
+        directions: [Vec3; 2],
+        spacings: [f64; 2],
+        counts: [u32; 2],
+    ) -> Result<u32, WasmError> {
+        validate_vector(directions[0], "the grid's first direction")?;
+        validate_vector(directions[1], "the grid's second direction")?;
+        validate_positive(spacings[0], "spacing_x")?;
+        validate_positive(spacings[1], "spacing_y")?;
+        validate_pattern_counts(&counts)?;
+        let solid_id = self.resolve_solid(solid)?;
+        let compound = brepkit_operations::pattern::grid_pattern(
+            self.topo_mut(),
+            solid_id,
+            directions[0],
+            directions[1],
+            spacings[0],
+            spacings[1],
+            counts[0] as usize,
+            counts[1] as usize,
+        )?;
+        Ok(compound_id_to_u32(compound))
+    }
+
+    /// The checked body of `circularPattern`, in JS and in the batch. Each
+    /// copy is the solid turned about the axis through the origin.
+    pub(crate) fn circular_pattern_impl(
+        &mut self,
+        solid: u32,
+        axis: Vec3,
+        count: u32,
+    ) -> Result<u32, WasmError> {
+        validate_vector(axis, "the pattern's axis")?;
+        validate_pattern_counts(&[count])?;
+        let solid_id = self.resolve_solid(solid)?;
+        let compound = brepkit_operations::pattern::circular_pattern(
+            self.topo_mut(),
+            solid_id,
+            axis,
+            count as usize,
+        )?;
+        Ok(compound_id_to_u32(compound))
     }
 }
 

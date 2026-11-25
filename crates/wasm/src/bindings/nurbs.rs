@@ -8,7 +8,10 @@ use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::Point3;
 
-use crate::error::WasmError;
+use crate::error::{
+    MAX_COUNT, MAX_FIT_DEGREE, MAX_GRID_SIDE, MAX_ITERATIONS, WasmError, validate_count,
+    validate_finite, validate_fit_cells, validate_tolerance,
+};
 use crate::handles::{edge_id_to_u32, face_id_to_u32};
 use crate::helpers::{parse_point_grid, parse_points};
 use crate::kernel::BrepKernel;
@@ -181,29 +184,7 @@ impl BrepKernel {
     #[wasm_bindgen(js_name = "interpolatePoints")]
     #[allow(clippy::needless_pass_by_value)]
     pub fn interpolate_points(&mut self, coords: Vec<f64>, degree: u32) -> Result<u32, JsError> {
-        if !coords.len().is_multiple_of(3) {
-            return Err(WasmError::InvalidInput {
-                reason: format!(
-                    "coordinate array length must be a multiple of 3, got {}",
-                    coords.len()
-                ),
-            }
-            .into());
-        }
-        let points: Vec<Point3> = coords
-            .chunks_exact(3)
-            .map(|c| Point3::new(c[0], c[1], c[2]))
-            .collect();
-        if points.len() < 2 {
-            return Err(WasmError::InvalidInput {
-                reason: format!("need at least 2 points, got {}", points.len()),
-            }
-            .into());
-        }
-
-        let deg = std::cmp::min(degree as usize, points.len() - 1);
-        let curve = brepkit_math::nurbs::fitting::interpolate(&points, deg)?;
-        Ok(edge_id_to_u32(self.nurbs_curve_to_edge(&points, curve)?))
+        Ok(self.interpolate_points_impl(&coords, degree)?)
     }
 
     /// Approximate a curve through points (least-squares).
@@ -217,17 +198,7 @@ impl BrepKernel {
         degree: u32,
         num_control_points: u32,
     ) -> Result<u32, JsError> {
-        let points = parse_points(&coords)?;
-        if points.len() < 2 {
-            return Err(WasmError::InvalidInput {
-                reason: format!("need at least 2 points, got {}", points.len()),
-            }
-            .into());
-        }
-        let deg = std::cmp::min(degree as usize, points.len() - 1);
-        let curve =
-            brepkit_math::nurbs::fitting::approximate(&points, deg, num_control_points as usize)?;
-        Ok(edge_id_to_u32(self.nurbs_curve_to_edge(&points, curve)?))
+        Ok(self.approximate_curve_impl(&coords, degree, num_control_points)?)
     }
 
     /// Approximate a curve through points using LSPIA (progressive iteration).
@@ -243,22 +214,13 @@ impl BrepKernel {
         tolerance: f64,
         max_iterations: u32,
     ) -> Result<u32, JsError> {
-        let points = parse_points(&coords)?;
-        if points.len() < 2 {
-            return Err(WasmError::InvalidInput {
-                reason: format!("need at least 2 points, got {}", points.len()),
-            }
-            .into());
-        }
-        let deg = std::cmp::min(degree as usize, points.len() - 1);
-        let curve = brepkit_math::nurbs::fitting::approximate_lspia(
-            &points,
-            deg,
-            num_control_points as usize,
+        Ok(self.approximate_curve_lspia_impl(
+            &coords,
+            degree,
+            num_control_points,
             tolerance,
-            max_iterations as usize,
-        )?;
-        Ok(edge_id_to_u32(self.nurbs_curve_to_edge(&points, curve)?))
+            max_iterations,
+        )?)
     }
 
     /// Interpolate a grid of points into a NURBS surface.
@@ -275,13 +237,7 @@ impl BrepKernel {
         degree_u: u32,
         degree_v: u32,
     ) -> Result<u32, JsError> {
-        let grid = parse_point_grid(&coords, rows as usize, cols as usize)?;
-        let surface = brepkit_math::nurbs::surface_fitting::interpolate_surface(
-            &grid,
-            degree_u as usize,
-            degree_v as usize,
-        )?;
-        Ok(face_id_to_u32(self.nurbs_surface_to_face(surface)?))
+        Ok(self.interpolate_surface_impl(&coords, [rows, cols], [degree_u, degree_v])?)
     }
 
     /// Approximate a grid of points into a NURBS surface using LSPIA.
@@ -301,17 +257,14 @@ impl BrepKernel {
         tolerance: f64,
         max_iterations: u32,
     ) -> Result<u32, JsError> {
-        let grid = parse_point_grid(&coords, rows as usize, cols as usize)?;
-        let surface = brepkit_math::nurbs::surface_fitting::approximate_surface_lspia(
-            &grid,
-            degree_u as usize,
-            degree_v as usize,
-            num_cps_u as usize,
-            num_cps_v as usize,
+        Ok(self.approximate_surface_lspia_impl(
+            &coords,
+            [rows, cols],
+            [degree_u, degree_v],
+            [num_cps_u, num_cps_v],
             tolerance,
-            max_iterations as usize,
-        )?;
-        Ok(face_id_to_u32(self.nurbs_surface_to_face(surface)?))
+            max_iterations,
+        )?)
     }
 
     /// Insert a knot into an edge's NURBS curve.
@@ -319,6 +272,7 @@ impl BrepKernel {
     /// Returns a new edge handle with the refined curve.
     #[wasm_bindgen(js_name = "curveKnotInsert")]
     pub fn curve_knot_insert(&mut self, edge: u32, knot: f64, times: u32) -> Result<u32, JsError> {
+        validate_finite(knot, "knot")?;
         let curve = self.extract_nurbs_curve(edge)?;
         let refined =
             brepkit_math::nurbs::knot_ops::curve_knot_insert(&curve, knot, times as usize)?;
@@ -446,6 +400,145 @@ impl BrepKernel {
         Ok(edge_id_to_u32(
             self.nurbs_curve_to_edge_from_curve(elevated)?,
         ))
+    }
+}
+
+/// The points of a curve fit, at least two.
+fn fit_points(coords: &[f64]) -> Result<Vec<Point3>, WasmError> {
+    let points = parse_points(coords)?;
+    if points.len() < 2 {
+        return Err(WasmError::InvalidInput {
+            reason: format!("need at least 2 points, got {}", points.len()),
+        });
+    }
+    Ok(points)
+}
+
+/// The cells an interpolation of `degree` holds for each point: its
+/// `degree + 1` basis values, and its row of the band of the solve, at most
+/// `degree` cells below the diagonal and `2 * degree` above.
+const fn interpolation_row(degree: usize) -> usize {
+    4 * degree + 2
+}
+
+impl BrepKernel {
+    /// The checked body of `interpolatePoints`.
+    pub(crate) fn interpolate_points_impl(
+        &mut self,
+        coords: &[f64],
+        degree: u32,
+    ) -> Result<u32, WasmError> {
+        let degree = validate_count(degree, "degree", MAX_FIT_DEGREE)?;
+        let points = fit_points(coords)?;
+        let degree = degree.min(points.len() - 1);
+        validate_fit_cells(points.len(), interpolation_row(degree), "interpolatePoints")?;
+        let curve = brepkit_math::nurbs::fitting::interpolate(&points, degree)?;
+        Ok(edge_id_to_u32(self.nurbs_curve_to_edge(&points, curve)?))
+    }
+
+    /// The checked body of `approximateCurve`. With fewer control points
+    /// than points it solves a dense least-squares system; with as many, it
+    /// interpolates.
+    pub(crate) fn approximate_curve_impl(
+        &mut self,
+        coords: &[f64],
+        degree: u32,
+        num_control_points: u32,
+    ) -> Result<u32, WasmError> {
+        let degree = validate_count(degree, "degree", MAX_FIT_DEGREE)?;
+        let points = fit_points(coords)?;
+        let degree = degree.min(points.len() - 1);
+        let controls = validate_count(num_control_points, "num_control_points", MAX_COUNT)?;
+        if controls < points.len() {
+            validate_fit_cells(points.len() + controls, controls, "approximateCurve")?;
+        } else {
+            validate_fit_cells(points.len(), interpolation_row(degree), "approximateCurve")?;
+        }
+        let curve = brepkit_math::nurbs::fitting::approximate(&points, degree, controls)?;
+        Ok(edge_id_to_u32(self.nurbs_curve_to_edge(&points, curve)?))
+    }
+
+    /// The checked body of `approximateCurveLspia`.
+    pub(crate) fn approximate_curve_lspia_impl(
+        &mut self,
+        coords: &[f64],
+        degree: u32,
+        num_control_points: u32,
+        tolerance: f64,
+        max_iterations: u32,
+    ) -> Result<u32, WasmError> {
+        let degree = validate_count(degree, "degree", MAX_FIT_DEGREE)?;
+        let points = fit_points(coords)?;
+        let degree = degree.min(points.len() - 1);
+        let controls = validate_count(num_control_points, "num_control_points", MAX_COUNT)?;
+        validate_tolerance(tolerance, "tolerance")?;
+        let max_iterations = validate_count(max_iterations, "max_iterations", MAX_ITERATIONS)?;
+        validate_fit_cells(points.len(), degree + 1, "approximateCurveLspia")?;
+        let curve = brepkit_math::nurbs::fitting::approximate_lspia(
+            &points,
+            degree,
+            controls,
+            tolerance,
+            max_iterations,
+        )?;
+        Ok(edge_id_to_u32(self.nurbs_curve_to_edge(&points, curve)?))
+    }
+
+    /// The checked body of `interpolateSurface`. Each row is interpolated
+    /// along v, then each column along u.
+    pub(crate) fn interpolate_surface_impl(
+        &mut self,
+        coords: &[f64],
+        [rows, cols]: [u32; 2],
+        [degree_u, degree_v]: [u32; 2],
+    ) -> Result<u32, WasmError> {
+        let degree_u = validate_count(degree_u, "degree_u", MAX_FIT_DEGREE)?;
+        let degree_v = validate_count(degree_v, "degree_v", MAX_FIT_DEGREE)?;
+        let grid = parse_point_grid(coords, rows as usize, cols as usize)?;
+        validate_fit_cells(
+            cols as usize,
+            interpolation_row(degree_v),
+            "interpolateSurface",
+        )?;
+        validate_fit_cells(
+            rows as usize,
+            interpolation_row(degree_u),
+            "interpolateSurface",
+        )?;
+        let surface =
+            brepkit_math::nurbs::surface_fitting::interpolate_surface(&grid, degree_u, degree_v)?;
+        Ok(face_id_to_u32(self.nurbs_surface_to_face(surface)?))
+    }
+
+    /// The checked body of `approximateSurfaceLspia`. Its arrays are each
+    /// side's basis values and the grid of control points, which the
+    /// bounded degrees and counts keep small beside the points.
+    pub(crate) fn approximate_surface_lspia_impl(
+        &mut self,
+        coords: &[f64],
+        [rows, cols]: [u32; 2],
+        [degree_u, degree_v]: [u32; 2],
+        [num_cps_u, num_cps_v]: [u32; 2],
+        tolerance: f64,
+        max_iterations: u32,
+    ) -> Result<u32, WasmError> {
+        let degree_u = validate_count(degree_u, "degree_u", MAX_FIT_DEGREE)?;
+        let degree_v = validate_count(degree_v, "degree_v", MAX_FIT_DEGREE)?;
+        let grid = parse_point_grid(coords, rows as usize, cols as usize)?;
+        let num_cps_u = validate_count(num_cps_u, "num_cps_u", MAX_GRID_SIDE)?;
+        let num_cps_v = validate_count(num_cps_v, "num_cps_v", MAX_GRID_SIDE)?;
+        validate_tolerance(tolerance, "tolerance")?;
+        let max_iterations = validate_count(max_iterations, "max_iterations", MAX_ITERATIONS)?;
+        let surface = brepkit_math::nurbs::surface_fitting::approximate_surface_lspia(
+            &grid,
+            degree_u,
+            degree_v,
+            num_cps_u,
+            num_cps_v,
+            tolerance,
+            max_iterations,
+        )?;
+        Ok(face_id_to_u32(self.nurbs_surface_to_face(surface)?))
     }
 }
 
@@ -1091,5 +1184,74 @@ mod tests {
                 assert!((r - radius).abs() < 1e-9, "cyl r={r}");
             }
         }
+    }
+
+    /// `n` points along a plane wave, as flat coordinates.
+    fn wave(n: usize) -> Vec<f64> {
+        (0..n)
+            .flat_map(|i| {
+                let t = i as f64 / n as f64;
+                [t, (3.0 * t).sin(), 0.0]
+            })
+            .collect()
+    }
+
+    fn refused(result: Result<u32, crate::error::WasmError>) -> String {
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("must be at most"), "{message}");
+        message
+    }
+
+    /// Each fit is refused before it allocates arrays past the fit limits.
+    /// Unchecked, the least-squares fit of 30,000 points with 20,000 control
+    /// points asks for a matrix of 4.8 GB, and the interpolation through
+    /// 25,000 points (or a surface with a side of 25,000) at degree 24,999
+    /// asks for a basis of 5 GB: each traps a 32-bit instance, from an input
+    /// of 1.2 MB at most.
+    #[test]
+    fn a_fit_past_its_degree_or_its_cells_is_refused_before_it_allocates() {
+        let mut k = BrepKernel::new();
+        refused(k.approximate_curve_impl(&wave(30_000), 3, 20_000));
+        refused(k.interpolate_points_impl(&wave(25_000), 24_999));
+        refused(k.interpolate_points_impl(&wave(40), 26));
+        refused(k.approximate_curve_lspia_impl(&wave(40), 26, 10, 1e-3, 10));
+        let mut grid = wave(25_000);
+        grid.extend(wave(25_000).chunks(3).flat_map(|c| [c[0], c[1], 1.0]));
+        refused(k.interpolate_surface_impl(&grid, [2, 25_000], [1, 24_999]));
+        refused(k.approximate_surface_lspia_impl(
+            &grid,
+            [2, 25_000],
+            [1, 24_999],
+            [2, 4],
+            1e-3,
+            10,
+        ));
+        // At degree 3 an interpolation holds 14 cells for each point, so
+        // 300,000 points need 4.2 million cells: past the limit of 2^22.
+        let message = refused(k.interpolate_points_impl(&wave(300_000), 3));
+        assert!(message.contains("300000 rows of 14 cells"), "{message}");
+    }
+
+    /// The largest fits in the tests pass the fit limits.
+    #[test]
+    fn the_largest_real_fits_pass_the_fit_limits() {
+        let mut k = BrepKernel::new();
+        assert!(k.interpolate_points_impl(&wave(1500), 3).is_ok());
+        assert!(k.approximate_curve_impl(&wave(100), 3, 8).is_ok());
+        assert!(k.approximate_curve_impl(&wave(8), 3, 8).is_ok());
+        assert!(
+            k.approximate_curve_lspia_impl(&wave(100), 3, 20, 1e-3, 200)
+                .is_ok()
+        );
+        let grid: Vec<f64> = (0..10)
+            .flat_map(|i| {
+                (0..10).flat_map(move |j| [f64::from(i), f64::from(j), 0.1 * f64::from(i * j)])
+            })
+            .collect();
+        assert!(k.interpolate_surface_impl(&grid, [10, 10], [3, 3]).is_ok());
+        assert!(
+            k.approximate_surface_lspia_impl(&grid, [10, 10], [3, 3], [6, 6], 1e-3, 100)
+                .is_ok()
+        );
     }
 }

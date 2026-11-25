@@ -7,6 +7,7 @@
 pub mod assembly;
 pub mod batch;
 pub mod booleans;
+pub mod checked;
 pub mod checkpoint;
 pub mod heal;
 #[cfg(feature = "io")]
@@ -24,5 +25,7 @@ pub mod transforms;
 
 #[cfg(test)]
 mod assembly_probe_tests;
+#[cfg(test)]
+mod batch_check_tests;
 #[cfg(test)]
 mod gridfinity_tests;
