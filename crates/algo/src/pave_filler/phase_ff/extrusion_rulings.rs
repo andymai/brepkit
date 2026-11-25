@@ -1496,4 +1496,151 @@ mod tests {
             }
         }
     }
+
+    /// The rational quadratic circle of radius `radius` about `centre`, in
+    /// quarters from angle `start`, with each joint knot `joint` times over
+    /// (2 or 3), as poles, knots and weights.
+    fn circle_profile(
+        centre: (f64, f64),
+        radius: f64,
+        start: f64,
+        joint: usize,
+    ) -> (Vec<Point3>, Vec<f64>, Vec<f64>) {
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        let at = |angle: f64, scale: f64| {
+            Point3::new(
+                centre.0 + scale * radius * angle.cos(),
+                centre.1 + scale * radius * angle.sin(),
+                0.0,
+            )
+        };
+        let quarter = std::f64::consts::FRAC_PI_2;
+        let (mut poles, mut weights) = (vec![at(start, 1.0)], vec![1.0]);
+        let mut knots = vec![0.0; 3];
+        for q in 0..4 {
+            let a = start + quarter * f64::from(q);
+            poles.push(at(a + 0.5 * quarter, std::f64::consts::SQRT_2));
+            poles.push(at(a + quarter, 1.0));
+            weights.extend([s, 1.0]);
+            let k = 0.25 * f64::from(q + 1);
+            if q < 3 {
+                knots.extend(std::iter::repeat_n(k, joint));
+                if joint == 3 {
+                    poles.push(at(a + quarter, 1.0));
+                    weights.push(1.0);
+                }
+            }
+        }
+        knots.extend([1.0; 3]);
+        (poles, knots, weights)
+    }
+
+    /// The extrusion by 4 along z of a closed profile, placed by `pose`.
+    fn closed_extrusion(
+        (poles, knots, weights): (Vec<Point3>, Vec<f64>, Vec<f64>),
+        pose: &Mat4,
+    ) -> NurbsSurface {
+        moved_profile(&poles, (2, knots), &weights, Vec3::new(0.0, 0.0, 4.0), pose)
+    }
+
+    /// That `lines` are exactly one ruling at each of `crossings`, in `z = 0`
+    /// before `pose`.
+    fn one_ruling_at_each(lines: &[RawCurve], crossings: &[(f64, f64)], pose: &Mat4, what: &str) {
+        assert_eq!(lines.len(), crossings.len(), "{what}");
+        for &(x, y) in crossings {
+            let at = pose.mul_point(Point3::new(x, y, 0.0));
+            let near = lines
+                .iter()
+                .filter(|l| (l.p_start - at).length() < 1e-9 || (l.p_end - at).length() < 1e-9)
+                .count();
+            assert_eq!(near, 1, "{what}: at ({x}, {y})");
+        }
+    }
+
+    /// A circle of radius 2.5 about (3, 5) crosses the rod at
+    /// (4.5625, 5 -/+ 1.9516), with its seam on the upper crossing, just
+    /// before or just after it by 1e-12 and 1e-9 in its parameter: one
+    /// ruling at each crossing.
+    #[test]
+    fn a_closed_profiles_seam_on_or_beside_a_crossing_gives_one_ruling_each() {
+        let (cx, cy, r): (f64, f64, f64) = (3.0, 5.0, 2.5);
+        let along: f64 = 1.5625;
+        let up = (r * r - along * along).sqrt();
+        let crossings = [(cx + along, cy - up), (cx + along, cy + up)];
+        let angle = up.atan2(along);
+        // The angle a standard circle profile reaches at parameter `t`.
+        let reached = |t: f64| {
+            let (poles, knots, weights) = circle_profile((0.0, 0.0), 1.0, 0.0, 2);
+            let curve = NurbsCurve::new(2, knots, poles, weights).unwrap();
+            let p = curve.evaluate(t);
+            p.y().atan2(p.x())
+        };
+        for (name, pose) in poses() {
+            for shift in [0.0_f64, 1e-12, 1e-9, -1e-12, -1e-9] {
+                let start = angle - reached(shift.rem_euclid(1.0));
+                let wall = closed_extrusion(circle_profile((cx, cy), r, start, 2), &pose);
+                let lines = rulings(&rod(&pose), &wall, &room(), &room()).unwrap();
+                one_ruling_at_each(
+                    &lines,
+                    &crossings,
+                    &pose,
+                    &format!("{name}, seam {shift:e}"),
+                );
+            }
+        }
+    }
+
+    /// A circle of radius 2.732 about (4, 4) crosses the rod at its seam,
+    /// (6.732, 4), and at its first quarter joint, (4, 6.732), whose knot
+    /// is three times over, so the profile there is two pieces that meet:
+    /// one ruling at each crossing.
+    #[test]
+    fn crossings_on_a_seam_and_a_knot_of_full_multiplicity_give_one_ruling_each() {
+        let alpha = -std::f64::consts::FRAC_PI_6;
+        let r = 2.0 * (alpha.cos() - alpha.sin());
+        let c = 5.0 + 2.0 * alpha.sin();
+        let crossings = [(c + r, c), (c, c + r)];
+        for (name, pose) in poses() {
+            for joint in [2, 3] {
+                let wall = closed_extrusion(circle_profile((c, c), r, 0.0, joint), &pose);
+                let lines = rulings(&rod(&pose), &wall, &room(), &room()).unwrap();
+                one_ruling_at_each(&lines, &crossings, &pose, &format!("{name}, joint {joint}"));
+            }
+        }
+    }
+
+    /// A closed polygon with its seam at a tip 1e-6 inside a unit circle,
+    /// whose sides cross the circle near y = -/+ 5e-7, ten tolerances
+    /// apart: one ruling at each crossing.
+    #[test]
+    fn a_seam_between_two_crossings_ten_tolerances_apart_gives_one_ruling_each() {
+        let tip = 1.0 - 1e-6;
+        let poles = [
+            (tip, 0.0),
+            (1.0 + 1e-6, 1e-6),
+            (3.0, 1e-6),
+            (3.0, -1e-6),
+            (1.0 + 1e-6, -1e-6),
+            (tip, 0.0),
+        ];
+        // Where each side from the tip meets the circle x^2 + y^2 = 1.
+        let meet = |sign: f64| {
+            let (dx, dy) = (1.0 + 1e-6 - tip, sign * 1e-6);
+            let (a, b, c) = (dx * dx + dy * dy, 2.0 * tip * dx, tip * tip - 1.0);
+            let s = (-b + (b * b - 4.0 * a * c).sqrt()) / (2.0 * a);
+            (tip + s * dx, s * dy)
+        };
+        for (name, pose) in poses() {
+            let wall = moved_profile(
+                &poles.map(|(x, y)| Point3::new(x, y, 0.0)),
+                (1, vec![0.0, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.0]),
+                &[1.0; 6],
+                Vec3::new(0.0, 0.0, 4.0),
+                &pose,
+            );
+            let rod = cylinder_about(0.0, 0.0, 1.0, &pose);
+            let lines = rulings(&rod, &wall, &room(), &room()).unwrap();
+            one_ruling_at_each(&lines, &[meet(1.0), meet(-1.0)], &pose, name);
+        }
+    }
 }
