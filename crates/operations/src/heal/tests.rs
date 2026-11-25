@@ -1026,3 +1026,129 @@ fn convert_to_elementary_idempotent_on_clean_solid() {
         "all-analytic solid shouldn't convert anything, got {count}"
     );
 }
+
+/// A 2 x 3 x 4 box, placed by `pose`, whose edge from the origin to
+/// `(2, 0, 0)` runs on a straight B-spline that ends `off` from its end
+/// vertex, out from the box's bottom face. Returns the solid and that
+/// vertex.
+fn box_with_curve_off_its_end(
+    topo: &mut Topology,
+    off: f64,
+    pose: &brepkit_math::mat::Mat4,
+) -> (SolidId, VertexId) {
+    let solid = crate::primitives::make_box(topo, 2.0, 3.0, 4.0).unwrap();
+    crate::transform::transform_solid(topo, solid, pose).unwrap();
+    let (a, b) = (
+        pose.mul_point(Point3::new(0.0, 0.0, 0.0)),
+        pose.mul_point(Point3::new(2.0, 0.0, 0.0)),
+    );
+    let edge = brepkit_topology::explorer::solid_edges(topo, solid)
+        .unwrap()
+        .into_iter()
+        .find(|&e| {
+            let edge = topo.edge(e).unwrap();
+            let p = topo.vertex(edge.start()).unwrap().point();
+            let q = topo.vertex(edge.end()).unwrap().point();
+            ((p - a).length() < 1e-12 && (q - b).length() < 1e-12)
+                || ((p - b).length() < 1e-12 && (q - a).length() < 1e-12)
+        })
+        .unwrap();
+    let data = topo.edge(edge).unwrap();
+    let (start, end) = (data.start(), data.end());
+    let below = pose.mul_point(Point3::new(2.0, 0.0, -off));
+    let (points, at_b) = if (topo.vertex(start).unwrap().point() - a).length() < 1e-12 {
+        (vec![a, below], end)
+    } else {
+        (vec![below, a], start)
+    };
+    let line =
+        brepkit_math::nurbs::NurbsCurve::new(1, vec![0.0, 0.0, 1.0, 1.0], points, vec![1.0; 2])
+            .unwrap();
+    topo.edge_mut(edge)
+        .unwrap()
+        .set_curve(EdgeCurve::NurbsCurve(line));
+    (solid, at_b)
+}
+
+fn curve_misses(topo: &Topology, solid: SolidId) -> usize {
+    crate::validate::validate_solid(topo, solid)
+        .unwrap()
+        .issues
+        .iter()
+        .filter(|issue| issue.description.contains("its curve misses"))
+        .count()
+}
+
+fn poses() -> Vec<(&'static str, brepkit_math::mat::Mat4)> {
+    use brepkit_math::mat::Mat4;
+    vec![
+        ("upright", Mat4::identity()),
+        (
+            "turned",
+            Mat4::translation(3.0, -2.0, 5.0)
+                * Mat4::rotation_x(0.4)
+                * Mat4::rotation_y(1.1)
+                * Mat4::rotation_z(0.3),
+        ),
+        ("mirrored", Mat4::scale(-1.0, 1.0, 1.0)),
+    ]
+}
+
+#[test]
+fn a_vertex_off_its_curve_s_end_takes_the_gap_as_its_tolerance() {
+    let off = 1e-3;
+    for (pose, at) in poses() {
+        let mut topo = Topology::new();
+        let (solid, vertex) = box_with_curve_off_its_end(&mut topo, off, &at);
+        assert_eq!(curve_misses(&topo, solid), 1, "{pose}");
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        assert_eq!(
+            cover_curve_end_gaps(&mut topo, &faces).unwrap(),
+            1,
+            "{pose}"
+        );
+        let tolerance = topo.vertex(vertex).unwrap().tolerance();
+        assert!(
+            (tolerance - (off + 1e-7)).abs() < 1e-12,
+            "{pose}: tolerance {tolerance}"
+        );
+        for v in brepkit_topology::explorer::solid_vertices(&topo, solid).unwrap() {
+            if v != vertex {
+                assert!(
+                    (topo.vertex(v).unwrap().tolerance() - 1e-7).abs() < 1e-20,
+                    "{pose}"
+                );
+            }
+        }
+        assert!(
+            crate::validate::validate_solid(&topo, solid)
+                .unwrap()
+                .is_valid(),
+            "{pose}"
+        );
+        // A second pass finds the gap covered.
+        assert_eq!(
+            cover_curve_end_gaps(&mut topo, &faces).unwrap(),
+            0,
+            "{pose}"
+        );
+    }
+}
+
+#[test]
+fn a_vertex_past_a_tenth_of_its_edge_off_its_curve_keeps_its_tolerance() {
+    // The box's edge is 2 long: a curve that ends 0.25 from its vertex
+    // does not end there.
+    for (pose, at) in poses() {
+        let mut topo = Topology::new();
+        let (solid, vertex) = box_with_curve_off_its_end(&mut topo, 0.25, &at);
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        assert_eq!(
+            cover_curve_end_gaps(&mut topo, &faces).unwrap(),
+            0,
+            "{pose}"
+        );
+        assert!((topo.vertex(vertex).unwrap().tolerance() - 1e-7).abs() < 1e-20);
+        assert_eq!(curve_misses(&topo, solid), 1, "{pose}");
+    }
+}

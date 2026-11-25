@@ -653,6 +653,74 @@ pub fn close_wire_gaps(
     Ok(gaps_closed)
 }
 
+/// Raises the tolerance of each vertex of `faces` that lies off the end of
+/// one of its edges' curves to that gap.
+///
+/// The gap is read as [`crate::validate::validate_solid`] reads it, at the
+/// end of the edge's span, and the new tolerance is the gap plus the linear
+/// tolerance. A file gives each vertex as a point and each curve as its own
+/// control points, so a curve can end off its vertex by more than the
+/// file's tolerance, and a file has no vertex tolerance to cover it.
+///
+/// A gap of a tenth of the distance between the edge's two vertices or more
+/// is not raised: such a vertex does not lie at its curve's end, and the
+/// edge is read on another part of its curve or is broken. A closed edge's
+/// gap is held to a tenth of the distance from its vertex to the middle of
+/// its curve.
+///
+/// Returns the number of vertices whose tolerance was raised.
+///
+/// # Errors
+/// Returns an error if a topology lookup fails.
+pub fn cover_curve_end_gaps(
+    topo: &mut Topology,
+    faces: &[FaceId],
+) -> Result<usize, crate::OperationsError> {
+    const PART_OF_EDGE: f64 = 0.1;
+    let linear = Tolerance::new().linear;
+    let mut seen = HashSet::new();
+    let mut gaps: HashMap<VertexId, f64> = HashMap::new();
+    for &face in faces {
+        for eid in brepkit_topology::explorer::face_edges(topo, face)? {
+            if !seen.insert(eid) {
+                continue;
+            }
+            let edge = topo.edge(eid)?;
+            if !edge.curve().is_well_formed() {
+                continue;
+            }
+            let (start, end) = (edge.start(), edge.end());
+            let (a, b) = (topo.vertex(start)?.point(), topo.vertex(end)?.point());
+            let (ends, reach) = if start == end {
+                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
+                let middle = edge
+                    .curve()
+                    .evaluate_with_endpoints(f64::midpoint(t0, t1), a, b);
+                (vec![start], (middle - a).length())
+            } else {
+                (vec![start, end], (b - a).length())
+            };
+            for vid in ends {
+                let found = brepkit_check::validate::check_vertex_on_curve(topo, vid, eid, 0.0)
+                    .map_err(|e| crate::OperationsError::InvalidInput {
+                        reason: e.to_string(),
+                    })?;
+                let Some(gap) = found.first().and_then(|issue| issue.deviation) else {
+                    continue;
+                };
+                if gap > topo.vertex(vid)?.tolerance() && gap < PART_OF_EDGE * reach {
+                    let entry = gaps.entry(vid).or_insert(0.0);
+                    *entry = entry.max(gap);
+                }
+            }
+        }
+    }
+    for (&vid, &gap) in &gaps {
+        topo.vertex_mut(vid)?.set_tolerance(gap + linear);
+    }
+    Ok(gaps.len())
+}
+
 /// The control hull of a NURBS curve over `[t0, t1]` alone: the curve is
 /// split to that span, and the span lies inside its control points.
 fn nurbs_span_hull(
