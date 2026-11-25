@@ -7739,6 +7739,50 @@ mod tests {
         }
     }
 
+    /// A square face whose bottom side runs up a step of 1e-6, its own edge,
+    /// and then back left at a slope of 1e-4, so it crosses the side it came
+    /// along 0.01 before the step: the thin region between them is wound
+    /// twice, and a parity read takes it off the face. The two sides leave
+    /// the step 0.006 degrees apart, from ends 1e-6 apart, so the loop takes
+    /// no trim, and a line through that region, 2.5e-7 from each side,
+    /// keeps its crossing, as one through the rest of the face does.
+    #[test]
+    fn sides_crossing_just_past_a_step_keep_their_crossings() {
+        let at = [
+            (0.1, 0.1),
+            (0.5, 0.1),
+            (0.5, 0.100_001),
+            (0.3, 0.099_981),
+            (0.3, 0.05),
+            (0.9, 0.05),
+            (0.9, 0.9),
+            (0.1, 0.9),
+        ];
+        let path = [0, 1, 2, 3, 4, 5, 6, 7, 0];
+        let tol = Tolerance::new();
+        for (x, y) in [(0.495, 0.100_000_25), (0.4, 0.5)] {
+            let mut topo = Topology::new();
+            let face = sheet_with_wire(&mut topo, &at, &path, false, 1.0);
+            let FaceSurface::Nurbs(sheet) = topo.face(face).unwrap().surface().clone() else {
+                unreachable!()
+            };
+            let reach = face_tolerance(&topo, face, tol).unwrap();
+            assert!(
+                super::super::nurbs_trim::NurbsFaceTrim::new(&topo, face, &sheet, tol, reach)
+                    .unwrap()
+                    .is_none()
+            );
+            let found = ef_vertices(
+                &mut topo,
+                face,
+                EdgeCurve::Line,
+                Point3::new(x, y, 0.31),
+                Some(Point3::new(x, y, -0.27)),
+            );
+            assert_eq!(found.len(), 1, "({x}, {y}): {found:?}");
+        }
+    }
+
     /// A flat sheet over `[0, 1]²` with `x = u` and `y = v`, its face the
     /// square `[0.1, 0.9]²` whose wire runs a slit from `(0.5, 0.1)` up to
     /// `(0.5, 0.5)` and back down it, one edge used twice: its loop is no

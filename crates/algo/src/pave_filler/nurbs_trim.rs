@@ -850,11 +850,13 @@ const ANGLE_SLACK: f64 = 1e-7;
 /// and the rest of the run, and no other. Two pieces that do not follow
 /// each other are apart where their boxes, grown by `slack`, keep apart,
 /// halved, the larger first, as far as needed. Two that follow each other
-/// each lie in a cone from their joint ([`cone2`]): where the cones meet
-/// only at the joint, the pieces meet only near it, within the joint's
-/// size over the angle between them; else they are halved, the halves at
-/// the joint read so again. Two ends of pieces within `2 slack` of each
-/// other away from a joint show the pieces meet. A loop of fewer than three
+/// at one point each lie in a cone from it ([`cone2`]): where the cones
+/// meet only there, the pieces do too; else they are halved, the halves at
+/// the joint read so again. Two that follow each other across a joint
+/// whose ends lie farther than `2 slack` apart are read as any two pieces
+/// are: a cone from each end does not bound the other's path, and the two
+/// can cross a little past the joint. Two ends of pieces within `2 slack`
+/// of each other away from a joint show the pieces meet. A loop of fewer than three
 /// pieces past its joints, more than [`MOST_LOOP_PAIRS`] pairs read, or a
 /// piece halved [`MOST_LOOP_DEPTH`] times reads as not simple: `None`. Else
 /// the boxes of the joints' parameters, inside which a joint can wind
@@ -974,10 +976,14 @@ fn loops_are_simple(
                 continue;
             }
             // Two parts past joints that follow each other, read from their
-            // joint.
-            if one_loop && !in_joint[x] && !in_joint[y] && after[x] == y {
+            // joint where they meet there: cones from two points apart do
+            // not bound each other's parts, which can cross a little past
+            // the joint.
+            let meet = |a: Point2, b: Point2| (a.x() - b.x()).hypot(a.y() - b.y()) <= 2.0 * slack;
+            let neighbours = one_loop && !in_joint[x] && !in_joint[y];
+            if neighbours && after[x] == y && meet(px.b, py.a) {
                 work.push((px.reversed(), py.clone(), true, 0));
-            } else if one_loop && !in_joint[x] && !in_joint[y] && after[y] == x {
+            } else if neighbours && after[y] == x && meet(py.b, px.a) {
                 work.push((py.reversed(), px.clone(), true, 0));
             } else {
                 work.push((px.clone(), py.clone(), false, 0));
