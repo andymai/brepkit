@@ -16,6 +16,8 @@ use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::edge::EdgeCurve;
 
 use super::{RawCurve, trim_t_range_to_aabb};
+use crate::builder::pcurve_compute::max_or_nan;
+use crate::pave_filler::phase_ee::power_of_two_near;
 
 /// Past this sine of the angle between them, the extrusion does not run
 /// along the cylinder's axis.
@@ -57,10 +59,10 @@ pub(super) fn cylinder_extrusion_rulings(
     let (profile, along, slack) = extrusion(surface)?;
     let length = along.length();
     let drift = along.cross(axis).length();
-    if length <= 0.0
-        || drift > PARALLEL_SIN * length
-        || drift + slack + 4.0 * f64::EPSILON * length > tol
-    {
+    let along_axis = length > 0.0
+        && drift <= PARALLEL_SIN * length
+        && drift + slack + 4.0 * f64::EPSILON * length <= tol;
+    if !along_axis {
         return None;
     }
     let section = CircleSection {
@@ -81,7 +83,8 @@ pub(super) fn cylinder_extrusion_rulings(
     let mut lines = Vec::with_capacity(roots.len());
     for t in roots {
         let (base, off) = section.foot(t)?;
-        if off > budget {
+        let placed = off <= budget;
+        if !placed {
             return None;
         }
         let boxed = trim_t_range_to_aabb(base, axis, bbox_a, bbox_b);
@@ -176,13 +179,14 @@ fn extrusion(surface: &NurbsSurface) -> Option<(NurbsCurve, Vec3, f64)> {
             rounding(a.y(), b.y(), start.y(), moved.y()),
             rounding(a.z(), b.z(), start.z(), moved.z()),
         );
-        most.max(((*b - *a) - along).length() + hidden.length())
+        max_or_nan(most, ((*b - *a) - along).length() + hidden.length())
     });
     let same_weights = first_w
         .iter()
         .zip(&second_w)
         .all(|(a, b)| (a - b).abs() <= 8.0 * f64::EPSILON * a.abs());
-    if !same_weights || first_w.iter().any(|w| *w <= 0.0) {
+    let positive = first_w.iter().all(|w| w.is_finite() && *w > 0.0);
+    if !same_weights || !positive || !slack.is_finite() {
         return None;
     }
     let profile = NurbsCurve::new(degree, knots, first, first_w).ok()?;
@@ -279,7 +283,8 @@ impl CircleSection<'_> {
         }
         let s = read.step;
         let reached = t + s;
-        if (t - t0).abs() > 1e-6 * (hi - lo) || !(lo..=hi).contains(&reached) {
+        let settled = (t - t0).abs() <= 1e-6 * (hi - lo) && (lo..=hi).contains(&reached);
+        if !settled {
             return None;
         }
         let point = read.point + read.slope * s;
@@ -303,17 +308,23 @@ impl CircleSection<'_> {
             shadow(self.profile.evaluate(b)),
         );
         let here = shadow(point);
-        if here < from.min(to) - slack || here > from.max(to) + slack {
+        let between = here >= from.min(to) - slack && here <= from.max(to) + slack;
+        if !between {
             return None;
         }
         let mut most: f64 = 0.0;
         for q in curve_bezier_between(self.profile, a, b).ok()? {
-            if q[3] <= 0.0 {
+            let positive = q[3] > 0.0;
+            if !positive {
                 return None;
             }
-            most = most.max(off_line(Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3])));
+            most = max_or_nan(
+                most,
+                off_line(Point3::new(q[0] / q[3], q[1] / q[3], q[2] / q[3])),
+            );
         }
-        Some((point, most + 2.0 * slack))
+        let bound = most + 2.0 * slack;
+        bound.is_finite().then_some((point, bound))
     }
 
     /// The profile's point at `t`, its derivative there, and the step in the
@@ -424,7 +435,8 @@ impl CircleSection<'_> {
     /// tolerance apart.
     fn middle(&self, run: Pieces, hull: Aabb3) -> Option<f64> {
         let ((a, b), (c, d)) = run;
-        if Self::spread(hull) > self.tol {
+        let narrow = Self::spread(hull) <= self.tol;
+        if !narrow {
             return None;
         }
         let half = 0.5 * ((b - a) + (d - c));
@@ -464,8 +476,17 @@ impl CircleSection<'_> {
     /// coefficients grow with the profile's size about the axis; the
     /// rounding of that subtraction grows with where the part sits.
     fn bernstein(&self, a: f64, b: f64) -> Option<Bernstein> {
-        let homogeneous = curve_bezier_between(self.profile, a, b).ok()?;
+        let mut homogeneous = curve_bezier_between(self.profile, a, b).ok()?;
         let p = homogeneous.len().checked_sub(1)?;
+        // The weights scaled alike to near one, which keeps the curve and
+        // the sign of each coefficient, so that their products neither
+        // underflow nor overflow: with every weight 1e-200, the product of
+        // two is nothing, and `most` would read 0 / 0.
+        let top = homogeneous.iter().map(|q| q[3]).fold(0.0, max_or_nan);
+        let scale = power_of_two_near(1.0 / top)?;
+        for q in &mut homogeneous {
+            *q = q.map(|x| x * scale);
+        }
         // Each control point across the axis, times its weight, and the
         // weight.
         let mut across = Vec::with_capacity(p + 1);
@@ -475,7 +496,8 @@ impl CircleSection<'_> {
         let mut points = Vec::with_capacity(p + 1);
         for q in &homogeneous {
             let w = q[3];
-            if w <= 0.0 {
+            let positive = w.is_finite() && w > 0.0;
+            if !positive {
                 return None;
             }
             let point = Point3::new(q[0] / w, q[1] / w, q[2] / w);
@@ -505,6 +527,10 @@ impl CircleSection<'_> {
             * max_w
             * reach.madd(place, reach.madd(reach, r2))
             * (n + 1) as f64;
+        let finite = band.is_finite() && min_w > 0.0 && c.iter().all(|x| x.is_finite());
+        if !finite {
+            return None;
+        }
         // With positive weights the profile over the interval lies in the
         // hull of its control points, so in their box, widened by what
         // rounding can move them by.
@@ -1258,7 +1284,7 @@ mod tests {
                     };
                     let what = format!("{name}, part at {part}, {} poles", points.len());
                     let found = read(1.0);
-                    for weight in [1e-3, 1e3] {
+                    for weight in [1e-3, 1e3, 1e-200, 1e200] {
                         assert_eq!(
                             read(weight).map(|l| l.len()),
                             found.as_ref().map(Vec::len),

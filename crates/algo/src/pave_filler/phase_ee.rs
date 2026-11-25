@@ -1474,7 +1474,9 @@ fn runs_along(
     let (start, end) = (ea.start_pos, ea.end_pos);
     let (s0, s1) = (foot(start), foot(end));
     let (q0, q1) = (at_b(s0), at_b(s1));
-    if (start - q0).length() > tol || (end - q1).length() > tol {
+    let bound_length = crate::builder::pcurve_compute::bound_length;
+    let ends_on_b = bound_length(start - q0) <= tol && bound_length(end - q1) <= tol;
+    if !ends_on_b {
         return false;
     }
     let Ok(line) = Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)) else {
@@ -1567,7 +1569,8 @@ fn touch_point(
         }
     };
     let (da, db) = (tan_a(ta), tan_b(tb));
-    if da.cross(db).length() > TOUCH_SIN * da.length() * db.length() {
+    let parallel = da.cross(db).length() <= TOUCH_SIN * da.length() * db.length();
+    if !parallel {
         return None;
     }
     let foot = |t: f64, s: f64| nearest_on((cb, eb), at_a(t), s, turn_b);
@@ -1681,7 +1684,9 @@ fn touch_point(
     let step = 1e-2 * (hi - lo);
     let rounding = 64.0 * f64::EPSILON * pa.x().abs().max(pa.y().abs()).max(pa.z().abs());
     let near = |t: f64| (at_a(t) - at_b(foot(t, s))).length();
-    if near((t - step).max(lo)) < gap - rounding || near((t + step).min(hi)) < gap - rounding {
+    let least =
+        near((t - step).max(lo)) >= gap - rounding && near((t + step).min(hi)) >= gap - rounding;
+    if !least {
         return None;
     }
     let (t, s) = (wrap(t, lo_a, turn_a), wrap(s, lo_b, turn_b));
@@ -1761,7 +1766,8 @@ fn proved_within(
     // Where the middle stands off by more, no halving proves the piece.
     let middle = ca.evaluate_with_endpoints(tm, ea.start_pos, ea.end_pos)
         - cb.evaluate_with_endpoints(sm, eb.start_pos, eb.end_pos);
-    if middle.length() > tol {
+    let middle_near = crate::builder::pcurve_compute::bound_length(middle) <= tol;
+    if !middle_near {
         return false;
     }
     proved_within(
@@ -1809,7 +1815,21 @@ fn bezier_piece((curve, data): (&EdgeCurve, &EdgeData), t0: f64, t1: f64) -> Opt
             ])
         }
         EdgeCurve::NurbsCurve(n) => {
-            brepkit_math::nurbs::decompose::curve_bezier_between(n, t0, t1).ok()
+            // Weights far from one are scaled alike first, which keeps the
+            // curve, so that a coordinate times a weight does not underflow.
+            let top = n.weights().iter().copied().fold(0.0, f64::max);
+            if (0.5..4.0).contains(&top) {
+                return brepkit_math::nurbs::decompose::curve_bezier_between(n, t0, t1).ok();
+            }
+            let scale = power_of_two_near(1.0 / top)?;
+            let scaled = brepkit_math::nurbs::curve::NurbsCurve::new(
+                n.degree(),
+                n.knots().to_vec(),
+                n.control_points().to_vec(),
+                n.weights().iter().map(|w| w * scale).collect(),
+            )
+            .ok()?;
+            brepkit_math::nurbs::decompose::curve_bezier_between(&scaled, t0, t1).ok()
         }
     }
 }
@@ -1819,15 +1839,18 @@ fn bezier_piece((curve, data): (&EdgeCurve, &EdgeData), t0: f64, t1: f64) -> Opt
 /// `(A wb - B wa) / (wa wb)`, the numerator a Bezier form of the summed
 /// degree bounded by its largest coefficient, the denominator no less than
 /// the smallest weights' product. Rounding of the coefficients is added.
-/// `None` where a weight is not positive.
+/// Each form is read with its weights scaled to near one first (see
+/// [`unit_weights`]), and each coefficient's length by `hypot`, so that
+/// neither the products nor the squares underflow. `None` where a weight is
+/// not positive, or a value is not finite.
 #[allow(clippy::cast_precision_loss)]
 fn separation_bound(pa: &[[f64; 4]], pb: &[[f64; 4]]) -> Option<f64> {
+    use crate::builder::pcurve_compute::{bound_length, max_or_nan};
     let (p, q) = (pa.len().checked_sub(1)?, pb.len().checked_sub(1)?);
+    let (pa, pb) = (unit_weights(pa)?, unit_weights(pb)?);
+    let (pa, pb) = (pa.as_slice(), pb.as_slice());
     let least = |points: &[[f64; 4]]| points.iter().map(|c| c[3]).fold(f64::INFINITY, f64::min);
     let (wa, wb) = (least(pa), least(pb));
-    if wa <= 0.0 || wb <= 0.0 {
-        return None;
-    }
     let binom = |n: usize, k: usize| -> f64 {
         (0..k).fold(1.0, |acc, i| acc * (n - i) as f64 / (i + 1) as f64)
     };
@@ -1838,16 +1861,49 @@ fn separation_bound(pa: &[[f64; 4]], pb: &[[f64; 4]]) -> Option<f64> {
             let share = binom(p, i) * binom(q, j) / binom(p + q, i + j);
             for k in 0..3 {
                 numerator[i + j][k] += share * (a[k] * b[3] - b[k] * a[3]);
-                size = size.max((a[k] * b[3]).abs()).max((b[k] * a[3]).abs());
+                size = max_or_nan(size, max_or_nan((a[k] * b[3]).abs(), (b[k] * a[3]).abs()));
             }
         }
     }
     let most = numerator
         .iter()
-        .map(|c| (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt())
-        .fold(0.0, f64::max);
+        .map(|c| bound_length(Vec3::new(c[0], c[1], c[2])))
+        .fold(0.0, max_or_nan);
     let rounding = 64.0 * f64::EPSILON * size * (p + q + 1) as f64;
-    Some((most + rounding) / (wa * wb))
+    let bound = (most + rounding) / (wa * wb);
+    bound.is_finite().then_some(bound)
+}
+
+/// A rational Bezier form's homogeneous points `[w x, w y, w z, w]`, all
+/// scaled by one power of two so that the largest weight lies near one: the
+/// same curve, whose weights' products neither underflow nor overflow (with
+/// every weight 1e-200 the product of two is nothing, and a bound divided by
+/// it is 0 / 0). `None` where a weight is not positive or a value is not
+/// finite.
+fn unit_weights(points: &[[f64; 4]]) -> Option<Vec<[f64; 4]>> {
+    let finite = points.iter().flatten().all(|x| x.is_finite());
+    let positive = points.iter().all(|c| c[3] > 0.0);
+    if !finite || !positive {
+        return None;
+    }
+    let top = points.iter().map(|c| c[3]).fold(0.0, f64::max);
+    let scale = power_of_two_near(1.0 / top)?;
+    Some(points.iter().map(|c| c.map(|x| x * scale)).collect())
+}
+
+/// The power of two at or below `x`, by its binary order of magnitude, so
+/// that a product with it is exact; `None` where that power is not a normal
+/// float.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap
+)]
+pub(super) fn power_of_two_near(x: f64) -> Option<f64> {
+    let exponent = x.log2().floor();
+    (-1022.0..=1023.0)
+        .contains(&exponent)
+        .then(|| f64::from_bits(((exponent as i64 + 1023) as u64) << 52))
 }
 
 /// Whether the curves, met within a thousandth of `tol` at `(ta, tb)`,
@@ -4500,6 +4556,95 @@ mod tests {
                         let hits = crossings(&topo, ea, eb);
                         assert!(hits.iter().any(|h| (h.2 - at).length() < 1e-9), "{hits:?}");
                     }
+                }
+            }
+        }
+    }
+    /// Two cubics ten tolerances apart, one the other moved square to its
+    /// plane, with every weight 1e-200, 1e-160 or 1e200, or with every
+    /// coordinate and the tolerance scaled by 1e-160: neither is proved
+    /// within the tolerance of the other, piece by piece or as a run along
+    /// it. Their weights' products and their gaps' squares fall out of the
+    /// floats' range there. A tenth of a tolerance apart, with any one of
+    /// those weights, the first is proved within it.
+    #[test]
+    fn curves_ten_tolerances_apart_are_not_proved_within_at_any_weight_or_scale() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let unit_tol = Tolerance::default().linear;
+        let poles = [
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0 / 3.0, 0.2, 0.0),
+            Point3::new(2.0 / 3.0, -0.1, 0.0),
+            Point3::new(1.0, 0.3, 0.0),
+        ];
+        let cases: [(f64, f64, f64, bool); 7] = [
+            (1.0, 1.0, 10.0, false),
+            (1e-200, 1.0, 10.0, false),
+            (1e-160, 1.0, 10.0, false),
+            (1e200, 1.0, 10.0, false),
+            (1.0, 1e-160, 10.0, false),
+            (1e-200, 1.0, 0.1, true),
+            (1e200, 1.0, 0.1, true),
+        ];
+        for pose in ee_poses() {
+            for (weight, scale, apart, proved) in cases {
+                let tol = unit_tol * scale;
+                let what = format!("weight {weight:e}, scale {scale:e}, {apart} tolerances");
+                let mut topo = Topology::new();
+                let mut edge = |shift: f64| {
+                    let placed: Vec<Point3> = poles
+                        .iter()
+                        .map(|p| {
+                            let q = pose.mul_point(*p + Vec3::new(0.0, 0.0, shift));
+                            Point3::new(q.x() * scale, q.y() * scale, q.z() * scale)
+                        })
+                        .collect();
+                    let curve = NurbsCurve::new(
+                        3,
+                        vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                        placed.clone(),
+                        vec![weight; 4],
+                    )
+                    .unwrap();
+                    add_edge(
+                        &mut topo,
+                        placed[0],
+                        placed[3],
+                        EdgeCurve::NurbsCurve(curve),
+                    )
+                };
+                let (a, b) = (edge(0.0), edge(apart * unit_tol));
+                let data = collect_edge_data(&topo, &[a, b]).unwrap();
+                let (ca, cb) = (
+                    topo.edge(a).unwrap().curve().clone(),
+                    topo.edge(b).unwrap().curve().clone(),
+                );
+                let (ea, eb) = (&data[0], &data[1]);
+                let pa = bezier_piece((&ca, ea), 0.0, 1.0).unwrap();
+                let pb = bezier_piece((&cb, eb), 0.0, 1.0).unwrap();
+                let bound = separation_bound(&pa, &pb);
+                assert_eq!(
+                    bound.is_some_and(|bound| bound <= tol),
+                    proved,
+                    "{what}: bound {bound:?}"
+                );
+                let at_a = |t: f64| ca.evaluate_with_endpoints(t, ea.start_pos, ea.end_pos);
+                let foot = |t: f64, s: f64| nearest_on((&cb, eb), at_a(t), s, false);
+                let mut budget = PROOF_PIECES;
+                assert_eq!(
+                    proved_within(
+                        ((&ca, ea), (&cb, eb)),
+                        ((0.0, 1.0), (0.0, 1.0)),
+                        tol,
+                        &foot,
+                        &mut budget
+                    ),
+                    proved,
+                    "{what}"
+                );
+                if !proved {
+                    assert!(!runs_along((&ca, ea), (&cb, eb), tol), "{what}");
+                    assert!(!runs_along((&cb, eb), (&ca, ea), tol), "{what}");
                 }
             }
         }
