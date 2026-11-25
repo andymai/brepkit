@@ -7506,16 +7506,17 @@ mod tests {
         }
     }
 
-    /// A flat sheet over `[0, 1]²` with `x = u` and `y = v`, its face bounded
-    /// by one wire of lines, each with its pcurve, through the points `at`
-    /// by their places in `path`, a line of the wire for each step. A step
-    /// back along a line already taken reuses that line's edge where
-    /// `twins`, else takes an edge of its own.
+    /// A flat sheet over `[0, 1]²` with `x = scale u` and `y = scale v`, its
+    /// face bounded by one wire of lines, each with its pcurve, through the
+    /// points `at` of the parameters by their places in `path`, a line of the
+    /// wire for each step. A step back along a line already taken reuses that
+    /// line's edge where `twins`, else takes an edge of its own.
     fn sheet_with_wire(
         topo: &mut Topology,
         at: &[(f64, f64)],
         path: &[usize],
         twins: bool,
+        scale: f64,
     ) -> FaceId {
         use brepkit_math::curves2d::{Curve2D, Line2D};
         use brepkit_math::nurbs::surface::NurbsSurface;
@@ -7524,16 +7525,21 @@ mod tests {
         use brepkit_topology::face::Face;
         use brepkit_topology::pcurve::PCurve;
         use brepkit_topology::wire::{OrientedEdge, Wire};
-        let rows = [0.0, 1.0]
+        let rows = [0.0, scale]
             .iter()
-            .map(|&x| [0.0, 1.0].iter().map(|&y| Point3::new(x, y, 0.0)).collect())
+            .map(|&x| {
+                [0.0, scale]
+                    .iter()
+                    .map(|&y| Point3::new(x, y, 0.0))
+                    .collect()
+            })
             .collect();
         let knots = vec![0.0, 0.0, 1.0, 1.0];
         let sheet =
             NurbsSurface::new(1, 1, knots.clone(), knots, rows, vec![vec![1.0; 2]; 2]).unwrap();
         let v: Vec<_> = at
             .iter()
-            .map(|&(x, y)| topo.add_vertex(Vertex::new(Point3::new(x, y, 0.0), 1e-7)))
+            .map(|&(x, y)| topo.add_vertex(Vertex::new(sheet.evaluate(x, y), 1e-7)))
             .collect();
         let mut made: Vec<(usize, usize, brepkit_topology::edge::EdgeId)> = Vec::new();
         let mut steps = Vec::new();
@@ -7589,7 +7595,7 @@ mod tests {
         let tol = Tolerance::new();
         for twins in [false, true] {
             let mut topo = Topology::new();
-            let face = sheet_with_wire(&mut topo, &at, &path, twins);
+            let face = sheet_with_wire(&mut topo, &at, &path, twins, 1.0);
             let FaceSurface::Nurbs(sheet) = topo.face(face).unwrap().surface().clone() else {
                 unreachable!()
             };
@@ -7697,6 +7703,39 @@ mod tests {
                 Some(Point3::new(x, y, -0.27)),
             );
             assert_eq!(found.len(), want, "round {round} at ({x}, {y}): {found:?}");
+        }
+    }
+
+    /// The sheet scaled by 1e6, its square's bottom side running round a
+    /// square of side 1e-6 in its parameters, 1 on the sheet, the way the
+    /// square turns: the small square is wound twice, and its middle lies
+    /// half a unit from its edges. Its pieces are small in the parameters,
+    /// so they are read as a joint, whose region the trim does not read by
+    /// parity: a line through the middle keeps its crossing.
+    #[test]
+    fn a_square_wound_twice_inside_a_joint_keeps_its_crossing() {
+        let at = [
+            (0.1, 0.1),
+            (0.5, 0.1),
+            (0.500_001, 0.1),
+            (0.500_001, 0.100_001),
+            (0.5, 0.100_001),
+            (0.9, 0.1),
+            (0.9, 0.9),
+            (0.1, 0.9),
+        ];
+        let path = [0, 1, 2, 3, 4, 1, 5, 6, 7, 0];
+        for (x, y) in [(500_000.5, 100_000.5), (500_000.0, 500_000.0)] {
+            let mut topo = Topology::new();
+            let face = sheet_with_wire(&mut topo, &at, &path, false, 1e6);
+            let found = ef_vertices(
+                &mut topo,
+                face,
+                EdgeCurve::Line,
+                Point3::new(x, y, 0.31),
+                Some(Point3::new(x, y, -0.27)),
+            );
+            assert_eq!(found.len(), 1, "({x}, {y}): {found:?}");
         }
     }
 

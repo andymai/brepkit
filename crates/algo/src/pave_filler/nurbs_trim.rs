@@ -1,6 +1,7 @@
 //! A NURBS face's pcurves read in its surface's parameters: on which side of
 //! the face's wires a point of the surface lies.
 
+use brepkit_math::aabb::Aabb3;
 use brepkit_math::curves2d::Curve2D;
 use brepkit_math::madd::Madd;
 use brepkit_math::nurbs::surface::NurbsSurface;
@@ -256,6 +257,10 @@ pub(super) struct NurbsFaceTrim {
     /// The box of the loops' parameters, which holds the parameters of every
     /// point of the face.
     bounds: Box2,
+    /// A box holding the surface over each joint of the loops, where a joint
+    /// of small pieces can wind round its own region and the parity read is
+    /// not proved ([`loops_are_simple`]).
+    joints: Vec<Aabb3>,
 }
 
 /// An edge of a face read by its trim.
@@ -381,9 +386,21 @@ impl NurbsFaceTrim {
         let slack = roundings * f64::EPSILON * size.max(f64::MIN_POSITIVE);
         let ((u0, u1), (v0, v1)) = (surface.domain_u(), surface.domain_v());
         let joint = 2e-6 * ((u1 - u0) + (v1 - v0)) + 4.0 * slack;
-        if !loops_are_simple(&pieces, &spans, slack, joint) {
-            return None;
-        }
+        let rounding = super::helpers::net_rounding(surface);
+        let joints = loops_are_simple(&pieces, &spans, slack, joint)?
+            .into_iter()
+            .filter_map(|b| {
+                let wider = |x: f64| 4.0 * f64::EPSILON * (1.0 + x.abs());
+                let range = [
+                    b.lo[0] - wider(b.lo[0]),
+                    b.hi[0] + wider(b.hi[0]),
+                    b.lo[1] - wider(b.lo[1]),
+                    b.hi[1] + wider(b.hi[1]),
+                ];
+                let points = super::helpers::cut_net_points(surface, range)?;
+                Some(Aabb3::try_from_points(points)?.expanded(rounding))
+            })
+            .collect();
         let bounds = pieces
             .iter()
             .map(|piece| piece.bounds(slack))
@@ -398,6 +415,7 @@ impl NurbsFaceTrim {
             edges,
             image_reaches: std::cell::OnceCell::new(),
             bounds,
+            joints,
         })
     }
 
@@ -434,6 +452,15 @@ impl NurbsFaceTrim {
             if super::phase_ef::near_the_edge(&edge.curve, (edge.start, edge.end), p, reach, tol)? {
                 return None;
             }
+        }
+        let around =
+            tol.linear + off + 64.0 * f64::EPSILON * (p.x().abs() + p.y().abs() + p.z().abs());
+        if self
+            .joints
+            .iter()
+            .any(|j| j.expanded(around).contains_point(p))
+        {
+            return None;
         }
         self.clear_of(p, tol.linear + off).then_some(false)
     }
@@ -829,10 +856,18 @@ const ANGLE_SLACK: f64 = 1e-7;
 /// the joint read so again. Two ends of pieces within `2 slack` of each
 /// other away from a joint show the pieces meet. A loop of fewer than three
 /// pieces past its joints, more than [`MOST_LOOP_PAIRS`] pairs read, or a
-/// piece halved [`MOST_LOOP_DEPTH`] times reads as not simple.
+/// piece halved [`MOST_LOOP_DEPTH`] times reads as not simple: `None`. Else
+/// the boxes of the joints' parameters, inside which a joint can wind
+/// round its own small region; a parity read there is not proved.
 #[allow(clippy::too_many_lines)]
-fn loops_are_simple(pieces: &[Piece], spans: &[(usize, usize)], slack: f64, joint: f64) -> bool {
+fn loops_are_simple(
+    pieces: &[Piece],
+    spans: &[(usize, usize)],
+    slack: f64,
+    joint: f64,
+) -> Option<Vec<Box2>> {
     let mut budget = MOST_LOOP_PAIRS;
+    let mut joints: Vec<Box2> = Vec::new();
     // The loops' pieces, each running one way, and each loop's range.
     let mut parts: Vec<Piece> = Vec::new();
     let mut loops: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
@@ -840,7 +875,7 @@ fn loops_are_simple(pieces: &[Piece], spans: &[(usize, usize)], slack: f64, join
         let start = parts.len();
         for piece in &pieces[first..end] {
             if !one_way(piece.clone(), slack, 0, &mut budget, &mut parts) {
-                return false;
+                return None;
             }
         }
         loops.push((start, parts.len()));
@@ -877,6 +912,9 @@ fn loops_are_simple(pieces: &[Piece], spans: &[(usize, usize)], slack: f64, join
                     lo: [x.lo[0].min(y.lo[0]), x.lo[1].min(y.lo[1])],
                     hi: [x.hi[0].max(y.hi[0]), x.hi[1].max(y.hi[1])],
                 });
+            if let Some(b) = held.filter(|&b| size(b) <= joint) {
+                joints.push(b);
+            }
             for slot in &mut run_box[k..=stop] {
                 *slot = held;
             }
@@ -888,7 +926,7 @@ fn loops_are_simple(pieces: &[Piece], spans: &[(usize, usize)], slack: f64, join
             .map(|m| small[m] && run_box[m].is_some_and(|b| size(b) <= joint))
             .collect();
         if joint_at.iter().filter(|&&j| !j).count() < 3 {
-            return false;
+            return None;
         }
         for m in 0..n {
             loop_of[start + m] = l;
@@ -913,7 +951,7 @@ fn loops_are_simple(pieces: &[Piece], spans: &[(usize, usize)], slack: f64, join
     for (place, &x) in order.iter().enumerate() {
         for &y in &order[place + 1..] {
             if budget == 0 {
-                return false;
+                return None;
             }
             budget -= 1;
             if boxes[y].lo[0] > boxes[x].hi[0] {
@@ -948,7 +986,7 @@ fn loops_are_simple(pieces: &[Piece], spans: &[(usize, usize)], slack: f64, join
     }
     while let Some((x, y, corner, depth)) = work.pop() {
         if budget == 0 {
-            return false;
+            return None;
         }
         budget -= 1;
         let (bx, by) = (x.bounds(slack), y.bounds(slack));
@@ -962,7 +1000,7 @@ fn loops_are_simple(pieces: &[Piece], spans: &[(usize, usize)], slack: f64, join
         let meet = |p: Point2, q: Point2| (p.x() - q.x()).hypot(p.y() - q.y()) <= 2.0 * slack;
         let ends_meet = [x.a, x.b].into_iter().any(|p| meet(p, y.a) || meet(p, y.b));
         if (!corner && ends_meet) || depth >= MOST_LOOP_DEPTH {
-            return false;
+            return None;
         }
         let (cut_x, cut_y) = (
             corner || size(bx) >= size(by),
@@ -991,7 +1029,7 @@ fn loops_are_simple(pieces: &[Piece], spans: &[(usize, usize)], slack: f64, join
             }
         }
     }
-    true
+    Some(joints)
 }
 
 /// Adds `piece` to `out` in parts that each run one way: a line, or a
