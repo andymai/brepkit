@@ -48,6 +48,27 @@ const SCALE_UP: f64 = f64::from_bits(1623 << 52);
 /// changes no digit of a component large enough to count in its length.
 const SCALE_DOWN: f64 = f64::from_bits(423 << 52);
 
+/// The least part of a vector square to an axis, over the vector's length,
+/// that [`Vector::square_part`] takes for a direction. A vector along the
+/// axis leaves a part of a few units of rounding, far under it.
+const SQUARE_PART_LOW: f64 = 1e-12;
+
+/// A power of two by which a vector whose largest component is `size` comes
+/// near one in size.
+///
+/// The scaled size is from 2^-74 to 2^24, so that a product of two of its
+/// components neither overflows nor underflows. The scale is exact. It is
+/// one for a size that is zero or not finite.
+#[must_use]
+pub fn unit_scale(size: f64) -> f64 {
+    if !(size.is_finite() && size > 0.0) {
+        return 1.0;
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let exponent = size.log2().floor().clamp(-1000.0, 1000.0) as i32;
+    2.0_f64.powi(-exponent)
+}
+
 impl<const N: usize> Vector<N> {
     /// Squared Euclidean length (avoids a sqrt).
     #[must_use]
@@ -91,6 +112,22 @@ impl<const N: usize> Vector<N> {
             (SCALE_UP, SCALE_DOWN)
         };
         Some((Self(std::array::from_fn(|i| self.0[i] * by)), back))
+    }
+
+    /// The largest of the absolute values of the components.
+    #[must_use]
+    pub fn largest_component(self) -> f64 {
+        self.0.iter().fold(0.0_f64, |m, c| m.max(c.abs()))
+    }
+
+    /// The vector scaled by [`unit_scale`] of its largest component: the
+    /// same direction, with no product of two components out of range.
+    /// Two vectors so scaled give the sign of their dot or cross product,
+    /// and the angle between them, as they are.
+    #[must_use]
+    pub fn at_unit_size(self) -> Self {
+        let by = unit_scale(self.largest_component());
+        Self(std::array::from_fn(|i| self.0[i] * by))
     }
 
     /// Return a unit-length vector in the same direction. A vector of any
@@ -190,6 +227,24 @@ impl Vector<3> {
             self.0[2].madd(rhs.0[0], -(self.0[0] * rhs.0[2])),
             self.0[0].madd(rhs.0[1], -(self.0[1] * rhs.0[0])),
         ])
+    }
+
+    /// The direction of the part of the vector square to the unit vector
+    /// `axis`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MathError::ZeroVector`] if the vector is zero or not
+    /// finite, or lies so nearly along `axis` that its square part, under
+    /// 1e-12 of its length, is rounding. A test of the part's length alone
+    /// takes the rounding of a vector along the axis for a direction.
+    pub fn square_part(self, axis: Self) -> Result<Self, MathError> {
+        let part = self - axis * self.dot(axis);
+        if part.length() > SQUARE_PART_LOW * self.length() {
+            part.normalize()
+        } else {
+            Err(MathError::ZeroVector)
+        }
     }
 }
 

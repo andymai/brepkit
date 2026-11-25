@@ -2079,8 +2079,9 @@ fn sample_face_interior(
         Point3::new(sum.x() / n as f64, sum.y() / n as f64, sum.z() / n as f64)
     };
     let toward = centroid - mid_pt;
-    let lean = offset.dot(toward);
-    if lean.abs() > 0.1 * offset.length() * toward.length() {
+    let (unit_offset, unit_toward) = (offset.at_unit_size(), toward.at_unit_size());
+    let lean = unit_offset.dot(unit_toward);
+    if lean.abs() > 0.1 * unit_offset.length() * unit_toward.length() {
         if lean < 0.0 {
             offset = offset * -1.0;
         }

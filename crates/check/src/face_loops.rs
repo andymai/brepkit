@@ -623,6 +623,9 @@ fn small_turn(a: Vec2, b: Vec2) -> Option<f64> {
     if !(a.length() > 0.0 && b.length() > 0.0) {
         return None;
     }
+    // At a unit size the products below keep their digits, which those of
+    // points 1e-200 from the origin would not.
+    let (a, b) = (a.at_unit_size(), b.at_unit_size());
     let cross = a.x().madd(b.y(), -(a.y() * b.x()));
     let dot = a.x().madd(b.x(), a.y() * b.y());
     Some(cross.atan2(dot) / TAU)
@@ -2070,6 +2073,26 @@ mod tests {
     use brepkit_topology::face::Face;
     use brepkit_topology::vertex::Vertex;
     use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// Points 1e-200 or 1e200 from the origin turn round it as they do at
+    /// size 1: a quarter turn from (s, 0) to (0, s), and a wedge of three
+    /// points half a radian apart spans one radian.
+    #[test]
+    fn a_turn_round_the_origin_holds_at_any_size() {
+        for s in [1.0, 1e-200, 1e200] {
+            let turn = small_turn(Vec2::new(s, 0.0), Vec2::new(0.0, s)).unwrap();
+            assert!((turn - 0.25).abs() < 1e-15, "size {s}: {turn}");
+            let points: Vec<Vec2> = [0.0_f64, 0.5, 1.0]
+                .iter()
+                .map(|&t| Vec2::new(s * t.cos(), s * t.sin()))
+                .collect();
+            let (last, _, half) = wedge(&points).unwrap();
+            assert!(
+                (last * TAU - 1.0).abs() < 1e-12 && (half - 0.5).abs() < 1e-12,
+                "size {s}: {last} {half}"
+            );
+        }
+    }
 
     #[test]
     fn a_range_of_copies_too_long_or_unbounded_reads_nothing() {

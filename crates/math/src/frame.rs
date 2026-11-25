@@ -55,8 +55,7 @@ impl Frame3 {
         ref_dir: Vec3,
     ) -> Result<Self, MathError> {
         let z = normal.normalize()?;
-        let ref_proj = ref_dir - z * ref_dir.dot(z);
-        let x = if let Ok(v) = ref_proj.normalize() {
+        let x = if let Ok(v) = ref_dir.square_part(z) {
             v
         } else {
             // ref_dir is parallel to z — fall back to arbitrary choice.
@@ -95,6 +94,25 @@ mod tests {
         assert!(f.x.dot(f.y).abs() < 1e-14);
         assert!(f.x.dot(f.z).abs() < 1e-14);
         assert!(f.y.dot(f.z).abs() < 1e-14);
+    }
+
+    /// A reference along the normal, at any size, has no part square to it
+    /// but rounding: the frame takes its fallback axes, square to each other
+    /// and to the normal, as it does for a reference of size 1.
+    #[test]
+    fn a_reference_along_the_normal_at_any_size_takes_the_fallback_axes() {
+        let normal = Vec3::new(1.0, 1.0, 1.0);
+        for s in [1.0, 1e-200, 1e200, 3.0] {
+            let f =
+                Frame3::from_normal_and_ref(Point3::new(0.0, 0.0, 0.0), normal, Vec3::new(s, s, s))
+                    .unwrap();
+            for (a, b) in [(f.x, f.y), (f.x, f.z), (f.y, f.z)] {
+                assert!(a.dot(b).abs() < 1e-12, "size {s}: {f:?}");
+            }
+            for axis in [f.x, f.y, f.z] {
+                assert!((axis.length() - 1.0).abs() < 1e-12, "size {s}: {f:?}");
+            }
+        }
     }
 
     #[test]

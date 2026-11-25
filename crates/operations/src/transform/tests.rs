@@ -1506,3 +1506,42 @@ fn a_box_scaled_by_1e200_or_1e_minus_200_keeps_its_faces_and_volume() {
         }
     }
 }
+
+/// A unit ball under a shear with rows (s, 0, 0.6 s), (0, s, 0) and
+/// (0, 0, 0.8 s), for s of 1e200 and 1e-200: the columns are equally long,
+/// but the first and the third are not square, so the image is no ball. The
+/// point (1, 0, 1)/sqrt(2) of the ball goes to 1.2649 s from the centre. The
+/// transform is either refused or gives faces that hold that image point;
+/// a ball of radius s does not.
+#[test]
+fn a_sheared_ball_at_an_extreme_scale_is_no_ball_of_the_wrong_radius() {
+    use brepkit_math::vec::Point3;
+    for s in [1e200, 1e-200] {
+        let mut topo = Topology::new();
+        let ball = crate::primitives::make_sphere(&mut topo, 1.0, 16).unwrap();
+        let m = Mat4([
+            [s, 0.0, 0.6 * s, 0.0],
+            [0.0, s, 0.0, 0.0],
+            [0.0, 0.0, 0.8 * s, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]);
+        if transform_solid(&mut topo, ball, &m).is_err() {
+            continue;
+        }
+        let image = m.mul_point(Point3::new(
+            std::f64::consts::FRAC_1_SQRT_2,
+            0.0,
+            std::f64::consts::FRAC_1_SQRT_2,
+        ));
+        for fid in brepkit_topology::explorer::solid_faces(&topo, ball).unwrap() {
+            if let FaceSurface::Sphere(sph) = topo.face(fid).unwrap().surface() {
+                let reach = (image - sph.center()).length();
+                assert!(
+                    (reach / sph.radius() - 1.0).abs() < 1e-9,
+                    "scale {s}: a ball of radius {} holds no point {reach} from its centre",
+                    sph.radius()
+                );
+            }
+        }
+    }
+}
