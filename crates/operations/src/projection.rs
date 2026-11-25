@@ -78,8 +78,8 @@ pub fn project_solids_edges(
             reason: "projection direction must be non-zero".into(),
         })?;
     // In-plane orthonormal basis: x re-orthonormalized against the view, y = x × view.
-    let x = (x_axis - view * view.dot(x_axis))
-        .normalize()
+    let x = x_axis
+        .square_part(view)
         .map_err(|_| crate::OperationsError::InvalidInput {
             reason: "projection x_axis is parallel to the direction".into(),
         })?;

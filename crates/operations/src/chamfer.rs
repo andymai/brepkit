@@ -294,7 +294,7 @@ fn join_picked_pieces(
             let shared = [ea.start(), ea.end()]
                 .iter()
                 .any(|v| *v == eb.start() || *v == eb.end());
-            let (da, db) = (a1 - a0, b1 - b0);
+            let (da, db) = ((a1 - a0).at_unit_size(), (b1 - b0).at_unit_size());
             let collinear = da.cross(db).length() <= 1e-9 * da.length() * db.length();
             if shared && collinear && faces_of(a) == faces_of(b) {
                 pieces = true;
