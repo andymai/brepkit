@@ -462,12 +462,14 @@ fn unit_form(curve: &EdgeCurve) -> Option<(std::borrow::Cow<'_, EdgeCurve>, f64)
 }
 
 /// A block read for [`block_lies_on_block`]: its curve, its span on that
-/// curve, and its two ends.
+/// curve, its two ends, and the widest gap at a join of the pieces of a cut
+/// B-spline.
 type BlockRead = Option<(
     EdgeCurve,
     (f64, f64),
     brepkit_math::vec::Point3,
     brepkit_math::vec::Point3,
+    f64,
 )>;
 
 /// Whether the parts of their edges' curves that two blocks cover are one
@@ -481,7 +483,9 @@ type BlockRead = Option<(
 /// ([`crate::builder::face_splitter::conic_spans_one_curve`] where either
 /// is a conic, else [`crate::builder::face_splitter::curves_one_curve`]):
 /// two B-splines that agree at any number of places may part between them.
-/// A pair no bound holds together is two curves.
+/// A pair no bound holds together is two curves. Where the pieces of a cut
+/// B-spline part at a join, twice the widest gap counts against the
+/// tolerance: the cut moves the curve by up to that gap.
 fn block_lies_on_block(
     topo: &Topology,
     arena: &GfaArena,
@@ -502,34 +506,44 @@ fn block_lies_on_block(
         let (from, to) = (block.start.parameter, block.end.parameter);
         let (from, to) = if from <= to { (from, to) } else { (to, from) };
         if let EdgeCurve::NurbsCurve(curve) = edge.curve() {
-            let Some(piece) = b_spline_between(curve, from, to) else {
+            let Some((piece, gap)) = b_spline_between(curve, from, to) else {
                 return Ok(None);
             };
             let (d0, d1) = piece.domain();
             let (a, b) = (piece.evaluate(d0), piece.evaluate(d1));
-            return Ok(Some((EdgeCurve::NurbsCurve(piece), (d0, d1), a, b)));
+            return Ok(Some((EdgeCurve::NurbsCurve(piece), (d0, d1), a, b, gap)));
         }
         let at = |t: f64| edge.curve().evaluate_with_endpoints(t, ends.0, ends.1);
-        Ok(Some((edge.curve().clone(), (from, to), at(from), at(to))))
+        Ok(Some((
+            edge.curve().clone(),
+            (from, to),
+            at(from),
+            at(to),
+            0.0,
+        )))
     };
     let (Some(i), Some(j)) = (read(block_i)?, read(block_j)?) else {
         return Ok(false);
     };
+    let room = tol.linear - 2.0 * (i.4 + j.4);
+    if room.is_nan() || room <= 0.0 {
+        return Ok(false);
+    }
     if let Some(one) =
-        crate::builder::face_splitter::conic_spans_one_curve((&i.0, i.1), (&j.0, j.1), tol.linear)
+        crate::builder::face_splitter::conic_spans_one_curve((&i.0, i.1), (&j.0, j.1), room)
     {
         return Ok(one);
     }
     Ok(crate::builder::face_splitter::curves_one_curve(
         (&i.0, i.2, i.3),
         (&j.0, j.2, j.3),
-        tol.linear,
+        room,
     ))
 }
 
 /// B-spline `curve` cut to `[from, to]`, or `curve` itself where that is its
-/// whole domain; `None` where a piece fails, the span is empty, or the cut
-/// crosses a break of the curve.
+/// whole domain, with the widest gap at a join of its pieces; `None` where a
+/// piece fails, the span is empty, or the cut crosses a break of the curve.
 ///
 /// The cut is read span by span: the Bezier piece of each knot span the
 /// block covers, from the curve's own de Boor points about its first control
@@ -538,18 +552,20 @@ fn block_lies_on_block(
 /// and drops a stretch between. At a knot of full multiplicity two pieces
 /// need not meet; where they part by more than the rounding of the curve's
 /// own size, the cut is refused, as joining them would change the curve.
+/// A narrower gap is closed: the later piece starts where the earlier ends,
+/// which moves the curve by up to the gap.
 fn b_spline_between(
     curve: &brepkit_math::nurbs::curve::NurbsCurve,
     from: f64,
     to: f64,
-) -> Option<brepkit_math::nurbs::curve::NurbsCurve> {
+) -> Option<(brepkit_math::nurbs::curve::NurbsCurve, f64)> {
     use brepkit_math::vec::{Point3, Vec3};
     let (d0, d1) = curve.domain();
     if from.is_nan() || to.is_nan() || from < d0 || to > d1 || from >= to {
         return None;
     }
     if from.to_bits() == d0.to_bits() && to.to_bits() == d1.to_bits() {
-        return Some(curve.clone());
+        return Some((curve.clone(), 0.0));
     }
     let p = curve.degree();
     let &first = curve.control_points().first()?;
@@ -575,6 +591,7 @@ fn b_spline_between(
     breaks.push(to);
     let (mut points, mut weights, mut knots) =
         (Vec::<Point3>::new(), Vec::<f64>::new(), vec![from; p + 1]);
+    let mut widest = 0.0f64;
     for (n, span) in breaks.windows(2).enumerate() {
         let piece =
             brepkit_math::nurbs::decompose::curve_bezier_between(&local, span[0], span[1]).ok()?;
@@ -602,6 +619,7 @@ fn b_spline_between(
                 if gap.is_nan() || gap > 64.0 * f64::EPSILON * size {
                     return None;
                 }
+                widest = widest.max(gap);
                 continue;
             }
             points.push(point);
@@ -610,13 +628,14 @@ fn b_spline_between(
         let joint = if n + 2 == breaks.len() { p + 1 } else { p };
         knots.extend(std::iter::repeat_n(span[1], joint));
     }
-    brepkit_math::nurbs::curve::NurbsCurve::new(
+    let cut = brepkit_math::nurbs::curve::NurbsCurve::new(
         p,
         knots,
         points.into_iter().map(|q| q + offset).collect(),
         weights,
     )
-    .ok()
+    .ok()?;
+    Some((cut, widest))
 }
 
 #[cfg(test)]
@@ -1057,6 +1076,77 @@ mod tests {
             span_edge(&mut topo, &mut arena, &broken, (0.5, 2.5));
             span_edge(&mut topo, &mut arena, &segment, (0.5, 2.5));
             assert_eq!(common_blocks(&topo, &mut arena), 0, "{name}");
+        }
+    }
+
+    /// A polyline of degree one whose last pole lies 1e9 off, so the joins
+    /// of its pieces may part by up to the rounding of that size, cut over
+    /// [0.5, 1.5] across a full knot at 1 where its pieces part by `gap`,
+    /// against the polyline of one piece fewer through the cut's own poles.
+    /// Pieces that part by 1.5e-7 put the two that far apart at the join,
+    /// past the tolerance of 1e-7, so they share no block. Pieces that part
+    /// by 1e-12 share it. Upright, turned and mirrored.
+    #[test]
+    fn a_join_gap_of_a_cut_b_spline_counts_against_the_tolerance() {
+        let axis = Vec3::new(1.0, 2.0, 3.0).normalize().unwrap();
+        let (sin, cos) = 0.7f64.sin_cos();
+        let turn = |e: Vec3| e * cos + axis.cross(e) * sin + axis * (axis.dot(e) * (1.0 - cos));
+        let mirror = |e: Vec3| Vec3::new(-e.x(), e.y(), e.z());
+        let o = Point3::new(3.0, -2.0, 5.0);
+        let (x, y) = (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
+        let poses: [(&str, Point3, Vec3, Vec3); 3] = [
+            ("upright", Point3::new(0.0, 0.0, 0.0), x, y),
+            ("turned", o, turn(x), turn(y)),
+            (
+                "mirrored",
+                Point3::new(-o.x(), o.y(), o.z()),
+                mirror(turn(x)),
+                mirror(turn(y)),
+            ),
+        ];
+        for (name, origin, u, v) in poses {
+            let at = |a: f64, b: f64| origin + u * a + v * b;
+            for (gap, common) in [(1.5e-7, 0), (1e-12, 1)] {
+                let parted = NurbsCurve::new(
+                    1,
+                    vec![0.0, 0.0, 1.0, 1.0, 2.0, 3.0, 3.0],
+                    vec![
+                        at(0.0, 0.0),
+                        at(1.0, 0.0),
+                        at(1.0, gap),
+                        at(2.0, gap),
+                        at(1e9, 0.0),
+                    ],
+                    vec![1.0; 5],
+                )
+                .unwrap();
+                let joined = NurbsCurve::new(
+                    1,
+                    vec![0.0, 0.0, 1.0, 2.0, 3.0, 3.0],
+                    vec![at(0.0, 0.0), at(1.0, 0.0), at(2.0, 2.0 * gap), at(1e9, 0.0)],
+                    vec![1.0; 4],
+                )
+                .unwrap();
+                let mut topo = Topology::new();
+                let mut arena = GfaArena::new();
+                span_edge(
+                    &mut topo,
+                    &mut arena,
+                    &EdgeCurve::NurbsCurve(parted),
+                    (0.5, 1.5),
+                );
+                span_edge(
+                    &mut topo,
+                    &mut arena,
+                    &EdgeCurve::NurbsCurve(joined),
+                    (0.5, 1.5),
+                );
+                assert_eq!(
+                    common_blocks(&topo, &mut arena),
+                    common,
+                    "{name}, gap {gap}"
+                );
+            }
         }
     }
 
