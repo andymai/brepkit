@@ -239,6 +239,156 @@ pub(super) fn check_reach(topo: &Topology, face: FaceId) -> Result<(), crate::Op
     }
 }
 
+/// The most samples the mesher takes in one grid across a face.
+///
+/// A sample costs about a hundred bytes of mesh and working space, so a
+/// grid at the limit holds about a gigabyte, near what a 32-bit wasm
+/// instance can address. Over the operations and io tests, the largest face
+/// mesh holds 2.2e5 samples and the largest solid mesh 2.0e5: the limit is
+/// 45 times the largest face.
+const MAX_SAMPLES: f64 = 1e7;
+
+/// The most samples the mesher takes along one edge, one path across a
+/// face, or one direction of a face's grid.
+///
+/// A face's boundary samples are triangulated together before its interior
+/// grid is sized, so this bounds that work too. Over the operations and io
+/// tests no edge asks for more than 6.6e3 samples: the limit is 150 times
+/// that.
+const MAX_EDGE_SAMPLES: f64 = 1e6;
+
+/// The refusal of `what`, which would take `samples` samples at
+/// `deflection`, past `limit`.
+fn too_many_samples(
+    what: &str,
+    samples: f64,
+    limit: f64,
+    deflection: f64,
+) -> crate::OperationsError {
+    crate::OperationsError::TooManySamples {
+        what: what.to_string(),
+        samples,
+        limit,
+        deflection,
+    }
+}
+
+/// Whether `error` refuses a mesh for too many samples.
+pub(super) fn is_sample_limit(error: &crate::OperationsError) -> bool {
+    matches!(error, crate::OperationsError::TooManySamples { .. })
+}
+
+/// `result`, unless it refuses a mesh for too many samples: that refusal is
+/// returned as the error, so a fallback passes it on instead of trying
+/// another mesher on the same face.
+pub(super) fn pass_on_sample_limit<T>(
+    result: Result<T, crate::OperationsError>,
+) -> Result<Result<T, crate::OperationsError>, crate::OperationsError> {
+    match result {
+        Err(e) if is_sample_limit(&e) => Err(e),
+        other => Ok(other),
+    }
+}
+
+/// The refusal of `what`, whose samples a halving can no longer part: the
+/// middle of a span reads as one of its ends, so no count reaches the
+/// deflection.
+pub(super) fn endless_samples(what: &str, deflection: f64) -> crate::OperationsError {
+    too_many_samples(what, f64::INFINITY, MAX_EDGE_SAMPLES, deflection)
+}
+
+/// Refuses `count` samples along one line of a face past
+/// [`MAX_EDGE_SAMPLES`], before a mesher allocates them.
+pub(super) fn check_count(
+    what: &str,
+    count: usize,
+    deflection: f64,
+) -> Result<(), crate::OperationsError> {
+    let samples = count as f64;
+    if samples <= MAX_EDGE_SAMPLES {
+        Ok(())
+    } else {
+        Err(too_many_samples(
+            what,
+            samples,
+            MAX_EDGE_SAMPLES,
+            deflection,
+        ))
+    }
+}
+
+/// Refuses a grid of `columns` by `rows` samples, before a mesher allocates
+/// it, past [`MAX_EDGE_SAMPLES`] in either direction or [`MAX_SAMPLES`] in
+/// all: a row is sampled like an edge.
+pub(super) fn check_grid(
+    columns: usize,
+    rows: usize,
+    deflection: f64,
+) -> Result<(), crate::OperationsError> {
+    check_count("a face grid's columns", columns, deflection)?;
+    check_count("a face grid's rows", rows, deflection)?;
+    let samples = columns as f64 * rows as f64;
+    if samples <= MAX_SAMPLES {
+        Ok(())
+    } else {
+        Err(too_many_samples(
+            "a face's grid",
+            samples,
+            MAX_SAMPLES,
+            deflection,
+        ))
+    }
+}
+
+/// Refuses `samples` samples over one face past [`MAX_SAMPLES`], counted as
+/// a mesher will place them, before it allocates them.
+pub(super) fn check_total(
+    what: &str,
+    samples: u64,
+    deflection: f64,
+) -> Result<(), crate::OperationsError> {
+    let samples = samples as f64;
+    if samples <= MAX_SAMPLES {
+        Ok(())
+    } else {
+        Err(too_many_samples(what, samples, MAX_SAMPLES, deflection))
+    }
+}
+
+/// Refuses a face, before any of its samples is allocated, when one of its
+/// circle or ellipse edges would take more than [`MAX_EDGE_SAMPLES`]
+/// samples at `deflection`, counted as the meshers count it over the edge's
+/// own span ([`edge_sampling::edge_sample_count`], with `circle_floor`). A
+/// NURBS edge, a direction across a face and a grid are each checked where
+/// a mesher counts them, from the part of the curve or surface it covers.
+pub(super) fn check_samples(
+    topo: &Topology,
+    face: FaceId,
+    deflection: f64,
+    angular_tol: f64,
+    circle_floor: bool,
+) -> Result<(), crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
+    let face_data = topo.face(face)?;
+    for wire in
+        std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
+    {
+        for oe in topo.wire(wire)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            if matches!(edge.curve(), EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) {
+                edge_sampling::edge_sample_count(
+                    topo,
+                    edge,
+                    deflection,
+                    angular_tol,
+                    circle_floor,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// A deflection the meshers can refine down to: a zero or negative one
 /// subdivides without end.
 pub(super) fn check_deflection(deflection: f64) -> Result<(), crate::OperationsError> {

@@ -48,9 +48,11 @@ pub fn segments_for_chord_deviation(radius: f64, arc_range: f64, deflection: f64
 /// - `θ_minsize = min(min_len/radius, π/2)` (when `min_len > 0`) floors the
 ///   step so a vanishingly small radius cannot demand sub-`min_len` edges.
 ///
-/// The segment count is `ceil(arc_range / θ_step)`, kept at least 4.
-/// For degenerate inputs (non-positive radius, deflection, or arc range)
-/// returns 8 as a safe default. A non-positive `angular_tol` is treated as
+/// The segment count is `ceil(arc_range / θ_step)`, kept at least 4. A count
+/// past what a `usize` holds, or a step that is not positive, gives
+/// `usize::MAX`, for the caller to refuse. For degenerate inputs
+/// (non-positive radius, deflection, or arc range) returns 8 as a safe
+/// default. A non-positive `angular_tol` is treated as
 /// "no angular cap" (linear-only behaviour).
 ///
 /// `apply_curvature_floor` gates the legacy curvature floor `n_min`. For a
@@ -76,6 +78,14 @@ pub fn segments_for_chord_deviation_with_angle(
     }
 
     let theta_lin = 2.0 * (1.0 - deflection / radius).clamp(0.0, 1.0).acos();
+    // Below about 1e-16 of the radius, `1 - deflection / radius` rounds to 1
+    // and the angle to 0; `acos(1 - x) = 2 asin(sqrt(x / 2))` keeps it. The
+    // roots are taken first: the ratio itself can underflow to 0.
+    let theta_lin = if theta_lin > 0.0 {
+        theta_lin
+    } else {
+        4.0 * (deflection.sqrt() / (2.0 * radius).sqrt()).asin()
+    };
 
     let mut theta_step = if angular_tol > 0.0 {
         theta_lin.min(angular_tol)
@@ -88,8 +98,8 @@ pub fn segments_for_chord_deviation_with_angle(
         theta_step = theta_step.max(theta_minsize);
     }
 
-    if theta_step <= 0.0 {
-        return 8;
+    if theta_step.is_nan() || theta_step <= 0.0 {
+        return usize::MAX;
     }
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -122,6 +132,25 @@ mod tests {
         assert_eq!(segments_for_chord_deviation(1.0, 0.0, 0.01), 8);
         assert_eq!(segments_for_chord_deviation(1.0, TAU, 0.0), 8);
         assert_eq!(segments_for_chord_deviation(-1.0, TAU, 0.01), 8);
+    }
+
+    /// A deflection below a float's resolution of the radius still asks for
+    /// the segments it needs, far more than any mesh takes, and not the
+    /// fallback for degenerate inputs.
+    #[test]
+    fn a_deflection_below_float_resolution_still_counts_its_segments() {
+        for deflection in [1e-17, 1e-300] {
+            let n = segments_for_chord_deviation_with_angle(1.0, TAU, deflection, 0.35, 0.0, false);
+            assert!(n > 100_000_000, "{deflection}: {n}");
+        }
+        // `deflection / radius` underflows to zero here, and a subnormal
+        // deflection is the smallest a float holds: the count passes what a
+        // `usize` holds, and is given as `usize::MAX`, not the fallback.
+        for (radius, deflection) in [(1e10, 1e-315), (1.0, f64::from_bits(1)), (1e300, 1e-320)] {
+            let n =
+                segments_for_chord_deviation_with_angle(radius, TAU, deflection, 0.35, 0.0, false);
+            assert_eq!(n, usize::MAX, "{radius} {deflection}");
+        }
     }
 
     #[test]

@@ -1241,6 +1241,7 @@ pub(super) fn tessellate_solid_core(
     let all_faces = explorer::solid_faces(topo, solid)?;
     for &face in &all_faces {
         super::check_reach(topo, face)?;
+        super::check_samples(topo, face, deflection, angular_tol, circle_floor)?;
     }
     let edge_face_map = explorer::edge_to_face_map(topo, solid)?;
     let mut phase_t = PhaseTimer::start();
@@ -1337,9 +1338,8 @@ pub(super) fn tessellate_solid_core(
                     let v_range =
                         compute_v_param_range(topo, face_data, |p| cone.project_point(p).1);
                     let u_range = compute_angular_range(topo, face_data, |p| cone.project_point(p));
-                    let max_radius = cone.radius_at(v_range.1.abs().max(v_range.0.abs()));
                     segments_for_chord_deviation_a(
-                        max_radius.max(0.01),
+                        super::nurbs::cone_column_radius(cone, v_range),
                         u_range.1 - u_range.0,
                         deflection,
                         angular_tol,
@@ -1358,7 +1358,8 @@ pub(super) fn tessellate_solid_core(
                 }
                 _ => continue,
             };
-            let expected_count = face_nu + 1;
+            let expected_count = face_nu.saturating_add(1);
+            super::check_count("a face's rim", expected_count, deflection)?;
 
             let mut wire_ids = vec![face_data.outer_wire()];
             wire_ids.extend_from_slice(face_data.inner_wires());
@@ -1471,7 +1472,8 @@ pub(super) fn tessellate_solid_core(
                 .clamp(-1.0, 1.0)
                 .acos();
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let needed = ((0.5 * span / half_step).ceil() as usize).min(4096);
+            let needed = (0.5 * span / half_step).ceil() as usize;
+            super::check_count("a rim beside a hole", needed.saturating_add(1), deflection)?;
             if needed > segments {
                 let finer =
                     brepkit_geometry::sampling::sample_uniform(circle, t_start, t_end, needed + 1);
@@ -2084,6 +2086,11 @@ pub(super) fn tessellate_solid_core(
             &mut merged,
             &mut point_to_global,
         ) {
+            // A face skipped for too many samples would leave a hole where
+            // the caller asked for a mesh finer than any the limit allows.
+            if super::is_sample_limit(&e) {
+                return Err(e);
+            }
             log::warn!("skipping face during tessellation: {e}");
         }
         // Attribute every triangle appended by this face (even partial output
@@ -2509,7 +2516,7 @@ pub(super) fn tessellate_face_with_shared_edges(
         }
     } else if matches!(face_data.surface(), FaceSurface::Nurbs(_)) {
         let triangles_before = merged.indices.len();
-        let cdt_ok = tessellate_nonplanar_cdt(
+        let cdt_ok = super::pass_on_sample_limit(tessellate_nonplanar_cdt(
             topo,
             face_id,
             face_data,
@@ -2519,7 +2526,7 @@ pub(super) fn tessellate_face_with_shared_edges(
             edge_global_indices,
             merged,
             point_to_global,
-        );
+        ))?;
         // A boundary that encloses nothing in (u, v), such as a whole torus's
         // seam pair collapsed onto one vertex, leaves the CDT without
         // triangles: the snap mesher covers the surface's whole domain.
@@ -2592,7 +2599,7 @@ pub(super) fn tessellate_face_with_shared_edges(
                 let pos_save = merged.positions.len();
                 let nrm_save = merged.normals.len();
                 let idx_save = merged.indices.len();
-                let cdt_ok = tessellate_nonplanar_cdt(
+                let cdt_ok = super::pass_on_sample_limit(tessellate_nonplanar_cdt(
                     topo,
                     face_id,
                     face_data,
@@ -2602,7 +2609,7 @@ pub(super) fn tessellate_face_with_shared_edges(
                     edge_global_indices,
                     merged,
                     point_to_global,
-                );
+                ))?;
                 if cdt_ok.is_err() || merged.indices.len() == idx_save {
                     merged.positions.truncate(pos_save);
                     merged.normals.truncate(nrm_save);
@@ -2632,7 +2639,7 @@ pub(super) fn tessellate_face_with_shared_edges(
             let pos_save = merged.positions.len();
             let nrm_save = merged.normals.len();
             let idx_save = merged.indices.len();
-            let cdt_ok = tessellate_nonplanar_cdt(
+            let cdt_ok = super::pass_on_sample_limit(tessellate_nonplanar_cdt(
                 topo,
                 face_id,
                 face_data,
@@ -2642,7 +2649,7 @@ pub(super) fn tessellate_face_with_shared_edges(
                 edge_global_indices,
                 merged,
                 point_to_global,
-            );
+            ))?;
             if cdt_ok.is_err() || merged.indices.len() == idx_save {
                 merged.positions.truncate(pos_save);
                 merged.normals.truncate(nrm_save);
@@ -2731,7 +2738,7 @@ pub(super) fn tessellate_face_with_shared_edges(
             let idx_save = merged.indices.len();
             let ptg_count_save = point_to_global.len();
 
-            let cdt_ok = tessellate_nonplanar_cdt(
+            let cdt_ok = super::pass_on_sample_limit(tessellate_nonplanar_cdt(
                 topo,
                 face_id,
                 face_data,
@@ -2741,7 +2748,7 @@ pub(super) fn tessellate_face_with_shared_edges(
                 edge_global_indices,
                 merged,
                 point_to_global,
-            );
+            ))?;
             let cdt_produced_tris = cdt_ok.is_ok() && merged.indices.len() > idx_save;
             if tess_trace() {
                 log::debug!(

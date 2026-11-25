@@ -33,6 +33,18 @@ const MAX_CREASE_LINES: usize = 16;
 /// on many crease-lined roots.
 const MAX_CELLS: usize = 200_000;
 
+/// The radius a cone face's columns are counted at: the radius at the end of
+/// `v_range` (its distances from the apex along a generator, as
+/// [`compute_v_param_range`] gives them) farther from the apex, and at least
+/// 0.01. The face and solid meshers both count with it.
+pub(super) fn cone_column_radius(
+    cone: &brepkit_math::surfaces::ConicalSurface,
+    v_range: (f64, f64),
+) -> f64 {
+    cone.radius_at(v_range.1.abs().max(v_range.0.abs()))
+        .max(0.01)
+}
+
 /// Compute the v-parameter range for a surface by projecting boundary vertices.
 ///
 /// `project_v` maps a 3D point to its v-parameter on the surface.

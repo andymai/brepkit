@@ -92,6 +92,7 @@ pub(crate) fn maybe_split_closed_wire_with(
             }
         } else if edge.start() == edge.end() {
             let n = closed_edge_segments(edge.curve(), deflection);
+            crate::tessellate::check_count("a closed edge's chords", n, deflection)?;
             let mut split_edges = split_closed_edge(topo, oe.edge(), n, tol)?;
             if !oe.is_forward() {
                 split_edges.reverse();

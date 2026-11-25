@@ -415,6 +415,42 @@ fn revolution_empty_input_error() {
     );
 }
 
+/// `evaluate` walks the segment between two neighbouring profile points, so
+/// a profile of one point has none to walk. A radius below zero is no
+/// distance from the axis, and a radius or height that is not finite or is
+/// past the size limit gives points that may not be finite. Each is
+/// refused; a profile through the axis, with a radius of zero, is built.
+#[test]
+fn revolution_refuses_a_profile_it_cannot_walk() {
+    use crate::curves::SIZE_LIMIT;
+    let rev = |radii: Vec<f64>, heights: Vec<f64>| {
+        RevolutionSurface::new(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            radii,
+            heights,
+        )
+    };
+    assert!(rev(vec![0.0, 2.0, 0.0], vec![-1.0, 0.0, 1.0]).is_ok());
+    assert!(rev(vec![SIZE_LIMIT, 1.0], vec![-SIZE_LIMIT, SIZE_LIMIT]).is_ok());
+    assert!(rev(vec![1.0], vec![0.0]).is_err());
+    for bad in [-1.0, f64::NAN, f64::INFINITY, SIZE_LIMIT * 2.0] {
+        assert!(rev(vec![1.0, bad], vec![0.0, 1.0]).is_err(), "radius {bad}");
+    }
+    for bad in [f64::NAN, f64::NEG_INFINITY, -SIZE_LIMIT * 2.0] {
+        assert!(rev(vec![1.0, 1.0], vec![0.0, bad]).is_err(), "height {bad}");
+    }
+}
+
+/// A spindle torus, its minor radius past its major one, is a surface the
+/// constructor builds: fillets make them and the projection reads them.
+#[test]
+fn torus_new_builds_a_spindle_torus() {
+    let t = ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0, 2.0).unwrap();
+    assert!(approx_eq(t.evaluate(0.0, PI).x(), -1.0));
+    assert!(ToroidalSurface::new(Point3::new(0.0, 0.0, 0.0), 1.0, f64::NAN).is_err());
+}
+
 #[test]
 fn revolution_mismatched_lengths_error() {
     assert!(

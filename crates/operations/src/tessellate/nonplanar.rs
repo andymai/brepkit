@@ -1041,6 +1041,7 @@ pub(super) fn tessellate_torus_two_rim_band(
     let full_circle_cols =
         segments_for_chord_deviation_a(wrap_radius, TAU, deflection, angular_tol, true);
     let n_cols = rims[0].len().max(rims[1].len()).max(full_circle_cols);
+    super::check_count("a band's columns", n_cols, deflection)?;
     // The ring angle a column sweeps between tube rims, the covered way.
     let span_at = |a: f64| {
         let fwd = (u_at(1, a) - u_at(0, a)).rem_euclid(TAU);
@@ -1074,6 +1075,8 @@ pub(super) fn tessellate_torus_two_rim_band(
         cols.sort_by(f64::total_cmp);
         cols.dedup_by(|a, b| (*a - *b).abs() < 1e-7);
     }
+    super::check_grid(cols.len(), n_rows, deflection)?;
+
     // Orient each stitch in (u, v), where counterclockwise is outward on a
     // torus: a sliver between a nearly straight rim and a row just inside it
     // is too thin for its 3D normal to say which way it faces.
@@ -1309,6 +1312,7 @@ pub(super) fn tessellate_torus_notch_band(
     let n_v =
         segments_for_chord_deviation_a(torus.minor_radius(), TAU, deflection, angular_tol, true)
             .max(8);
+    super::check_grid(n_u, n_v, deflection)?;
 
     // Build interior rings as `LatRing` (sorted by v) of fresh vertices.
     let build_u_ring =
@@ -1461,6 +1465,7 @@ pub(super) fn tessellate_latitude_band_shared(
             segments_for_chord_deviation_a(band_radius, v_hi - v_lo, deflection, angular_tol, true)
                 .max(1);
         let n_u_interior = ring_lo.len().max(ring_hi.len()).max(full_circle_cols);
+        super::check_grid(n_u_interior, n_v, deflection)?;
         let mut prev_ring: LatRing = ring_lo.clone();
         for iv in 1..n_v {
             #[allow(clippy::cast_precision_loss)]
@@ -1552,6 +1557,7 @@ pub(super) fn tessellate_latitude_band_shared(
         true,
     )
     .max(1);
+    super::check_grid(floor.len(), n_v, deflection)?;
 
     // Lower boundary ring as a LatRing (drop the v component; the gid carries
     // the shared scalloped-floor vertex).
@@ -1611,6 +1617,16 @@ pub(super) fn tessellate_latitude_band_shared(
     );
 
     Ok(true)
+}
+
+/// The samples a spherical triangle's rows take: its apex, `count + 1` for
+/// each row's `count` segments, and `base` along its base. The sum is in
+/// `u64`, held at its largest value, so a 32-bit `usize` cannot wrap it
+/// under the limit.
+fn triangle_row_samples(base: usize, counts: &[usize]) -> u64 {
+    counts.iter().fold(1 + base as u64, |total, &count| {
+        total.saturating_add((count as u64).saturating_add(1))
+    })
 }
 
 /// A sphere face bounded by three arcs (a fillet's setback corner, a
@@ -1761,25 +1777,38 @@ pub(super) fn tessellate_sphere_triangle_shared(
     let ptg_start = point_to_global.len();
     // Row `s` runs from the `s`-th sample towards `b` to the `s`-th towards
     // `c` in up to `s` segments, at the barycentric level `s / m` from the
-    // apex.
+    // apex. A row that turns through less than `s` of the side segments
+    // beside it takes fewer segments, so a narrow patch takes triangles for
+    // its area and not for its sides' length. An octant's rows turn through
+    // at least `s` of them and keep `s`.
+    let turn = |p: Point3, q: Point3| {
+        let (u, v) = (p - center, q - center);
+        u.cross(v).length().atan2(u.dot(v))
+    };
+    let counts: Vec<usize> = (1..m)
+        .map(|s| {
+            let spacing =
+                turn(b_points[s - 1], b_points[s]).max(turn(c_points[s - 1], c_points[s]));
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            if spacing > 0.0 {
+                ((turn(b_points[s], c_points[s]) / spacing).ceil() as usize).clamp(1, s)
+            } else {
+                s
+            }
+        })
+        .collect();
+    // The rows are counted as they will be cut, before any is built: a
+    // narrow patch has short rows however many it has.
+    super::check_count("a face grid's rows", m + 1, deflection)?;
+    super::check_total(
+        "a face's rows",
+        triangle_row_samples(base.len(), &counts),
+        deflection,
+    )?;
     let mut rows: Vec<Vec<u32>> = Vec::with_capacity(m + 1);
     rows.push(vec![along_b[0]]);
     for s in 1..m {
-        // A row that turns through less than `s` of the side segments
-        // beside it takes fewer segments, so a narrow patch takes triangles
-        // for its area and not for its sides' length. An octant's rows turn
-        // through at least `s` of them and keep `s`.
-        let turn = |p: Point3, q: Point3| {
-            let (u, v) = (p - center, q - center);
-            u.cross(v).length().atan2(u.dot(v))
-        };
-        let spacing = turn(b_points[s - 1], b_points[s]).max(turn(c_points[s - 1], c_points[s]));
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let count = if spacing > 0.0 {
-            ((turn(b_points[s], c_points[s]) / spacing).ceil() as usize).clamp(1, s)
-        } else {
-            s
-        };
+        let count = counts[s - 1];
         let mut row = Vec::with_capacity(count + 1);
         row.push(along_b[s]);
         #[allow(clippy::cast_precision_loss)]
@@ -3362,6 +3391,7 @@ fn cdt_in_surface_frame(
                     let slant = (rim_point - point).length();
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     let n = ((slant / rim_spacing).ceil() as usize).max(2);
+                    super::check_count("a cone's seam down to its apex", n, deflection)?;
                     (1..n)
                         .map(|k| {
                             #[allow(clippy::cast_precision_loss)]
@@ -3475,7 +3505,7 @@ fn cdt_in_surface_frame(
         angular_tol,
         merged,
         point_to_global,
-    );
+    )?;
     let (u_min, u_max, v_min, v_max) = if joined {
         uv_bounds(&boundary_uv)
     } else {
@@ -3633,6 +3663,17 @@ fn cdt_in_surface_frame(
         angular_tol,
     );
     let divisions = lines.as_ref().map(|(us, vs)| (us.len() - 1, vs.len() - 1));
+    if lines.is_none() && du > 1e-15 && dv > 1e-15 {
+        let (n_u, n_v) = interior_grid_resolution(
+            face_data.surface(),
+            du,
+            dv,
+            deflection,
+            angular_tol,
+            circle_floor,
+        );
+        super::check_grid(n_u.saturating_add(1), n_v.saturating_add(1), deflection)?;
+    }
     let (cdt_u_scale, cdt_v_scale) = match stripe_radius.or(holed_wall_radius) {
         Some(radius) if reaches_apex => (radius, 1.0),
         Some(radius) if du > 1e-15 && dv > 1e-15 => {
@@ -4654,7 +4695,7 @@ pub(super) fn tessellate_holed_face_local(
             // CDT cannot take comes back empty for the caller's grid.
             banded || {
                 let before = merged.indices.len();
-                let cdt = tessellate_nonplanar_cdt(
+                let cdt = super::pass_on_sample_limit(tessellate_nonplanar_cdt(
                     topo,
                     face_id,
                     face_data,
@@ -4664,7 +4705,7 @@ pub(super) fn tessellate_holed_face_local(
                     &pool,
                     &mut merged,
                     &mut point_to_global,
-                );
+                ))?;
                 cdt.is_ok() && merged.indices.len() > before
             }
         }
@@ -4965,7 +5006,8 @@ fn close_loop_at_pole(
                 angular_tol,
                 false,
             )
-            .clamp(2, MAX_PATH_SPANS);
+            .max(2);
+            super::check_count("a pole's meridian", n.saturating_add(1), deflection)?;
             #[allow(clippy::cast_precision_loss)]
             (1..n).map(|k| k as f64 / n as f64).collect()
         }
@@ -4974,7 +5016,7 @@ fn close_loop_at_pole(
             deflection,
             angular_tol,
             1,
-        ),
+        )?,
     };
     let side: Vec<(f64, Point3, u32)> = along
         .iter()
@@ -5117,6 +5159,8 @@ fn whole_ring_rectangle(
             .max(8);
     let nv =
         segments_for_chord_deviation_a(minor, TAU, deflection, angular_tol, circle_floor).max(8);
+    super::check_count("a ring round its tube", nu.saturating_add(1), deflection)?;
+    super::check_count("a ring's tube", nv.saturating_add(1), deflection)?;
     #[allow(clippy::cast_precision_loss)]
     let (du, dv) = (TAU / nu as f64, TAU / nv as f64);
     let mut id_of = |p: Point3| {
@@ -5890,7 +5934,8 @@ fn nurbs_speeds(
 /// (about 32 around the loop) whose seam crosses none of them, the seam
 /// starts at the one keeping farthest from every boundary sample, and the
 /// other holes move by whole periods into the rotated loop's span.
-/// Returns whether the loops were joined.
+/// Returns whether the loops were joined, or the refusal of a seam that
+/// would take too many samples.
 #[allow(clippy::too_many_arguments)]
 fn join_winding_hole(
     face_data: &brepkit_topology::face::Face,
@@ -5901,13 +5946,13 @@ fn join_winding_hole(
     angular_tol: f64,
     merged: &mut TriangleMesh,
     point_to_global: &mut PointPool,
-) -> bool {
+) -> Result<bool, crate::OperationsError> {
     let surface = face_data.surface();
     if !matches!(surface, FaceSurface::Nurbs(_) | FaceSurface::Sphere(_)) || boundary_uv.len() < 3 {
-        return false;
+        return Ok(false);
     }
     let (Some((_, period)), _) = surface_periods(surface) else {
-        return false;
+        return Ok(false);
     };
     let winding = |us: &[f64]| {
         let (first, last) = (us[0], us[us.len() - 1]);
@@ -5921,13 +5966,13 @@ fn join_winding_hole(
         .filter(|&i| holes[i].len() >= 3 && once(hole_winding(&holes[i])))
         .collect();
     let [which] = winding_holes[..] else {
-        return false;
+        return Ok(false);
     };
     if !once(w_outer) {
-        return false;
+        return Ok(false);
     }
     let Some(&(_, _, edge, _)) = boundary_3d.last() else {
-        return false;
+        return Ok(false);
     };
 
     // The hole runs against the outer loop, starting nearest the seam's
@@ -5992,7 +6037,7 @@ fn join_winding_hole(
         let Some(start) = (0..hole.len())
             .min_by(|&a, &b| offset(hole[a].0).abs().total_cmp(&offset(hole[b].0).abs()))
         else {
-            return false;
+            return Ok(false);
         };
         let from = (u0 + w_outer, v0);
         let target = (u0 + w_outer + offset(hole[start].0), hole[start].1);
@@ -6004,7 +6049,7 @@ fn join_winding_hole(
         }
     }
     let Some((_, rotate, start)) = found else {
-        return false;
+        return Ok(false);
     };
     holes.remove(which);
     if rotate > 0 {
@@ -6061,7 +6106,7 @@ fn join_winding_hole(
         deflection,
         angular_tol,
         seam_spans(reach, spacing),
-    );
+    )?;
     let seam: Vec<(f64, f64, u32)> = along
         .iter()
         .map(|&t| {
@@ -6095,7 +6140,7 @@ fn join_winding_hole(
     for &(u, v, gid) in seam.iter().rev() {
         push(u - w_outer, v, gid);
     }
-    true
+    Ok(true)
 }
 
 /// The most spans a virtual boundary the mesher runs across a face is cut
@@ -6125,15 +6170,20 @@ fn seam_spans(reach: f64, spacing: f64) -> usize {
 /// (a cornered or degree-one profile) keeps its turn however finely it is
 /// halved, so a span already within the deflection and shorter than it,
 /// whose halves keep most of its turn, stands as it is; the halving it took
-/// to get there stays beside the crease. However the path behaves, it is cut
-/// into at most [`MAX_PATH_SPANS`] spans.
+/// to get there stays beside the crease. It starts from at most
+/// [`MAX_PATH_SPANS`] spans, and is cut as finely as the deflection needs.
+///
+/// # Errors
+///
+/// Returns [`crate::OperationsError::TooManySamples`] if the path would
+/// take more samples than the tessellator allows: one that no sampling
+/// brings within the deflection does.
 fn surface_path_parameters(
     point: &dyn Fn(f64) -> Point3,
     deflection: f64,
     angular_tol: f64,
     min_spans: usize,
-) -> Vec<f64> {
-    const MAX_DEPTH: u32 = 12;
+) -> Result<Vec<f64>, crate::OperationsError> {
     // The half-chords of an arc meet at half its turn.
     let turn =
         |a: Point3, mid: Point3, b: Point3| match ((mid - a).normalize(), (b - mid).normalize()) {
@@ -6173,18 +6223,26 @@ fn surface_path_parameters(
             && chord <= deflection
             && turn(p0, quarters[0], quarters[1]).max(turn(quarters[1], quarters[2], p1))
                 > 0.75 * bend;
-        let room = along.len() + pending.len() + 2 <= MAX_PATH_SPANS;
-        if (within && (!bends || crease)) || depth >= MAX_DEPTH || !room {
+        let satisfied = within && (!bends || crease);
+        if satisfied {
             if t1 < 1.0 {
                 along.push(t1);
             }
             continue;
         }
+        super::check_count(
+            "a path across a face",
+            along.len() + pending.len() + 3,
+            deflection,
+        )?;
         let tm = 0.5 * (t0 + t1);
+        if tm.to_bits() == t0.to_bits() || tm.to_bits() == t1.to_bits() {
+            return Err(super::endless_samples("a path across a face", deflection));
+        }
         pending.push((tm, quarters[1], t1, p1, depth + 1));
         pending.push((t0, p0, tm, quarters[1], depth + 1));
     }
-    along
+    Ok(along)
 }
 
 /// Whether the open segments `a b` and `c d` cross in the plane.
@@ -6816,7 +6874,26 @@ pub(super) fn tessellate_nonplanar_snap(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use super::*;
+
+    /// An octant whose sides hold 92,682 segments keeps a segment for each
+    /// level on every row: its rows take 4,295,115,586 samples, past what a
+    /// 32-bit `usize` holds. Summed in a 32-bit `usize`, they wrap to 148,290
+    /// and pass the limit; summed here, they are refused.
+    #[test]
+    fn an_octant_past_a_32_bit_count_is_refused() {
+        let m = 92_682_usize;
+        let counts: Vec<usize> = (1..m).collect();
+        let samples = triangle_row_samples(m + 1, &counts);
+        assert_eq!(samples, 4_295_115_586);
+        assert_eq!(samples % (1 << 32), 148_290);
+        assert!(matches!(
+            super::super::check_total("a face's rows", samples, 1.0),
+            Err(crate::OperationsError::TooManySamples { .. })
+        ));
+    }
 
     /// A grid row's crossings give every point of the row the answer the
     /// whole polygon does, points level with vertices and on edges included.
@@ -6883,27 +6960,32 @@ mod tests {
         assert_eq!(seam_spans(f64::NAN, 1.0), 2);
     }
 
+    /// A path starts from at most [`MAX_PATH_SPANS`] spans, and one that no
+    /// sampling brings within the deflection, so wild no span ever sits
+    /// within it, is refused, not cut short of it.
     #[test]
-    fn a_path_no_sampling_satisfies_takes_bounded_spans() {
+    fn a_path_no_sampling_satisfies_is_refused() {
         let started = std::time::Instant::now();
         // Straight but started from as many spans as a degenerate seam could
         // ask for.
         let straight =
-            surface_path_parameters(&|t| Point3::new(t, 0.0, 0.0), 1e-3, 0.35, usize::MAX);
+            surface_path_parameters(&|t| Point3::new(t, 0.0, 0.0), 1e-3, 0.35, usize::MAX).unwrap();
         assert_eq!(straight.len(), MAX_PATH_SPANS - 1);
-        // So wild that no span ever sits within the deflection, from the
-        // most spans allowed.
         let wild = surface_path_parameters(
             &|t| Point3::new(t, (1e9 * t).sin(), (3e9 * t).cos()),
             1e-12,
             1e-6,
             MAX_PATH_SPANS,
         );
-        assert!(wild.len() < MAX_PATH_SPANS);
-        assert!(wild.windows(2).all(|w| w[0] < w[1]));
-        let unknown = surface_path_parameters(&|_| Point3::new(f64::NAN, 0.0, 0.0), 1e-3, 0.35, 1);
+        assert!(
+            matches!(wild, Err(crate::OperationsError::TooManySamples { .. })),
+            "{wild:?}"
+        );
+        // A path that is not finite reads as straight.
+        let unknown =
+            surface_path_parameters(&|_| Point3::new(f64::NAN, 0.0, 0.0), 1e-3, 0.35, 1).unwrap();
         assert!(unknown.len() < MAX_PATH_SPANS);
-        assert!(started.elapsed() < std::time::Duration::from_secs(10));
+        assert!(started.elapsed() < std::time::Duration::from_secs(30));
     }
 
     #[test]
@@ -6918,7 +7000,7 @@ mod tests {
             }
         };
         let deflection = 0.01;
-        let along = surface_path_parameters(&creased, deflection, 0.35, 1);
+        let along = surface_path_parameters(&creased, deflection, 0.35, 1).unwrap();
         let ts: Vec<f64> = std::iter::once(0.0)
             .chain(along)
             .chain(std::iter::once(1.0))

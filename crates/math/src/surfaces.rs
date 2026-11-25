@@ -794,8 +794,12 @@ pub struct ToroidalSurface {
 impl ToroidalSurface {
     /// Creates a new toroidal surface.
     ///
+    /// A minor radius larger than the major one is allowed: it gives a
+    /// spindle torus, whose tube crosses the axis. Fillets build such tori,
+    /// and the projection and the classifiers read them.
+    ///
     /// # Errors
-    /// Returns an error if either radius is not finite and positive or `minor_radius > major_radius`.
+    /// Returns an error if either radius is not finite and positive.
     pub fn new(center: Point3, major_radius: f64, minor_radius: f64) -> Result<Self, MathError> {
         if !(major_radius > 0.0 && major_radius.is_finite()) {
             return Err(MathError::ParameterOutOfRange {
@@ -1227,16 +1231,21 @@ pub struct RevolutionSurface {
 impl RevolutionSurface {
     /// Creates a surface of revolution from a set of meridian profile points.
     ///
-    /// Each point `(radius, height)` defines the generatrix in the rotation plane.
+    /// Each point `(radius, height)` defines the generatrix in the rotation
+    /// plane, and [`Self::evaluate`] walks the segments between neighbours.
     ///
     /// # Errors
-    /// Returns an error if the profile is empty or the axis is zero.
+    /// Returns an error if the profile is empty or has one point, the radii
+    /// and heights differ in count, a radius is negative, a radius or height
+    /// is not finite or is past [`SIZE_LIMIT`](crate::curves::SIZE_LIMIT)
+    /// in magnitude, or the axis is zero.
     pub fn new(
         origin: Point3,
         axis: Vec3,
         radii: Vec<f64>,
         heights: Vec<f64>,
     ) -> Result<Self, MathError> {
+        use crate::curves::SIZE_LIMIT;
         if radii.is_empty() || heights.is_empty() {
             return Err(MathError::EmptyInput);
         }
@@ -1244,6 +1253,30 @@ impl RevolutionSurface {
             return Err(MathError::InvalidWeights {
                 expected: radii.len(),
                 got: heights.len(),
+            });
+        }
+        if radii.len() < 2 {
+            return Err(MathError::ParameterOutOfRange {
+                value: 1.0,
+                min: 2.0,
+                max: f64::MAX,
+            });
+        }
+        if let Some(&r) = radii.iter().find(|r| !(0.0..=SIZE_LIMIT).contains(*r)) {
+            return Err(MathError::ParameterOutOfRange {
+                value: r,
+                min: 0.0,
+                max: SIZE_LIMIT,
+            });
+        }
+        if let Some(&h) = heights
+            .iter()
+            .find(|h| !(-SIZE_LIMIT..=SIZE_LIMIT).contains(*h))
+        {
+            return Err(MathError::ParameterOutOfRange {
+                value: h,
+                min: -SIZE_LIMIT,
+                max: SIZE_LIMIT,
             });
         }
         let f = Frame3::from_normal(origin, axis)?;

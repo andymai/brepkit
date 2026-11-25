@@ -10,7 +10,7 @@ use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{Face, FaceSurface};
 
-use crate::error::{WasmError, validate_finite};
+use crate::error::{MAX_COUNT, WasmError, validate_count, validate_finite};
 use crate::handles::{
     edge_id_to_u32, face_id_to_u32, shell_id_to_u32, solid_id_to_u32, vertex_id_to_u32,
     wire_id_to_u32,
@@ -1038,50 +1038,17 @@ impl BrepKernel {
     /// Tessellate an edge curve into polyline segments.
     ///
     /// For line edges, returns just start and end points.
-    /// For NURBS edges, samples at `num_points` along the curve.
+    /// For other edges, samples at `num_points` along the curve.
     ///
     /// Returns flattened `[x, y, z, x, y, z, ...]` array.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the edge handle is invalid or `num_points` is
+    /// more than `MAX_COUNT`.
     #[wasm_bindgen(js_name = "tessellateEdge")]
     pub fn tessellate_edge(&self, edge: u32, num_points: u32) -> Result<Vec<f64>, JsError> {
-        let edge_id = self.resolve_edge(edge)?;
-        let edge_data = self.topo.edge(edge_id)?;
-
-        match edge_data.curve() {
-            EdgeCurve::Line => {
-                let start = self.topo.vertex(edge_data.start())?.point();
-                let end = self.topo.vertex(edge_data.end())?.point();
-                Ok(vec![
-                    start.x(),
-                    start.y(),
-                    start.z(),
-                    end.x(),
-                    end.y(),
-                    end.z(),
-                ])
-            }
-            EdgeCurve::NurbsCurve(curve) => {
-                let (u0, u1) = curve.domain();
-                let n = std::cmp::max(2, num_points as usize);
-                let mut result = Vec::with_capacity(n * 3);
-                for i in 0..n {
-                    #[allow(clippy::cast_precision_loss)]
-                    let t = u0 + (u1 - u0) * (i as f64) / ((n - 1) as f64);
-                    let p = curve.evaluate(t);
-                    result.push(p.x());
-                    result.push(p.y());
-                    result.push(p.z());
-                }
-                Ok(result)
-            }
-            EdgeCurve::Circle(circle) => {
-                let n = std::cmp::max(2, num_points as usize);
-                Ok(sample_full_period_curve(n, |t| circle.evaluate(t)))
-            }
-            EdgeCurve::Ellipse(ellipse) => {
-                let n = std::cmp::max(2, num_points as usize);
-                Ok(sample_full_period_curve(n, |t| ellipse.evaluate(t)))
-            }
-        }
+        Ok(self.tessellate_edge_impl(edge, num_points)?)
     }
 
     /// Check if an edge is forward-oriented in a given wire.
@@ -1502,6 +1469,49 @@ impl BrepKernel {
             }),
         };
         Ok(json.to_string())
+    }
+}
+
+impl BrepKernel {
+    /// Body of `tessellate_edge`.
+    pub(crate) fn tessellate_edge_impl(
+        &self,
+        edge: u32,
+        num_points: u32,
+    ) -> Result<Vec<f64>, WasmError> {
+        let n = validate_count(num_points, "num_points", MAX_COUNT)?.max(2);
+        let edge_id = self.resolve_edge(edge)?;
+        let edge_data = self.topo.edge(edge_id)?;
+
+        match edge_data.curve() {
+            EdgeCurve::Line => {
+                let start = self.topo.vertex(edge_data.start())?.point();
+                let end = self.topo.vertex(edge_data.end())?.point();
+                Ok(vec![
+                    start.x(),
+                    start.y(),
+                    start.z(),
+                    end.x(),
+                    end.y(),
+                    end.z(),
+                ])
+            }
+            EdgeCurve::NurbsCurve(curve) => {
+                let (u0, u1) = curve.domain();
+                let mut result = Vec::with_capacity(n * 3);
+                for i in 0..n {
+                    #[allow(clippy::cast_precision_loss)]
+                    let t = u0 + (u1 - u0) * (i as f64) / ((n - 1) as f64);
+                    let p = curve.evaluate(t);
+                    result.push(p.x());
+                    result.push(p.y());
+                    result.push(p.z());
+                }
+                Ok(result)
+            }
+            EdgeCurve::Circle(circle) => Ok(sample_full_period_curve(n, |t| circle.evaluate(t))),
+            EdgeCurve::Ellipse(ellipse) => Ok(sample_full_period_curve(n, |t| ellipse.evaluate(t))),
+        }
     }
 }
 
