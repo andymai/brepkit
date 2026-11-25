@@ -19062,6 +19062,42 @@ mod tests {
         }
     }
 
+    /// Two segments from about (1e10, 1e10) one unit along each axis, the
+    /// second one unit of rounding off the first in its largest coordinate,
+    /// about 1e-6 apart: they never meet, in each frame.
+    #[test]
+    fn segments_far_off_a_unit_of_rounding_apart_never_meet() {
+        for (pose, o, u, v) in plate_frames() {
+            let at = |x: f64, y: f64| o + u * x + v * y;
+            let (p0, p1) = (at(1e10, 1e10), at(1e10 + 1.0, 1e10 + 1.0));
+            let axis = [p0.x(), p0.y(), p0.z()]
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+                .map_or(0, |(k, _)| k);
+            let bump = |p: Point3| {
+                let mut c = [p.x(), p.y(), p.z()];
+                c[axis] = c[axis].next_up();
+                Point3::new(c[0], c[1], c[2])
+            };
+            let line = EdgeCurve::Line;
+            let (a, b) = (
+                edge_splitting::SectionSpan {
+                    curve: &line,
+                    start: p0,
+                    end: p1,
+                },
+                edge_splitting::SectionSpan {
+                    curve: &line,
+                    start: bump(p0),
+                    end: bump(p1),
+                },
+            );
+            let found = edge_splitting::segments_meet((&a, 0.0), (&b, 0.0), 1e-7);
+            assert!(!matches!(found, Ok(Some(_))), "{pose}: {found:?}");
+        }
+    }
+
     /// An arc in the plane square to the plate along the chord from (3, 5)
     /// to (7, 5), which is its shadow on the plate, and a line square to the
     /// arc's plane from (6, 7) to the chord at (6, 5), a hair off square to

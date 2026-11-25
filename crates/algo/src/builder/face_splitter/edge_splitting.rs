@@ -3347,21 +3347,28 @@ fn chord_bound(e: &SectionSpan<'_>, tol: f64) -> Option<f64> {
 /// convex function allows, and read from points of both, so the nearest
 /// found is an upper bound; the true least lies no lower than it less the
 /// rounding and the first segment's length times the last third.
-fn segments_meet(
+pub(super) fn segments_meet(
     (first, chord_a): (&SectionSpan<'_>, f64),
     (second, chord_b): (&SectionSpan<'_>, f64),
     tol: f64,
 ) -> Result<Option<Meeting>, UnsettledMeeting> {
-    let (p0, d1) = (first.start, first.end - first.start);
-    let (q0, d2) = (second.start, second.end - second.start);
+    // Read from the first segment's start, as steps of stored coordinates,
+    // each within a rounding of its own size: the coordinates themselves
+    // may be far larger than the gap between the segments.
+    let p0 = first.start;
+    let (d1, w0, d2) = (
+        first.end - first.start,
+        second.start - first.start,
+        second.end - second.start,
+    );
     let near = |s: f64| {
-        let x = p0 + d1 * s;
+        let x = d1 * s;
         let l = if d2.dot(d2) > 0.0 {
-            ((x - q0).dot(d2) / d2.dot(d2)).clamp(0.0, 1.0)
+            ((x - w0).dot(d2) / d2.dot(d2)).clamp(0.0, 1.0)
         } else {
             0.0
         };
-        let f = q0 + d2 * l;
+        let f = w0 + d2 * l;
         ((x - f).length(), x, f)
     };
     let (mut lo, mut hi) = (0.0f64, 1.0f64);
@@ -3377,20 +3384,21 @@ fn segments_meet(
         }
     }
     let (d, x, f) = near(0.5 * (lo + hi));
-    let rounding = 16.0 * f64::EPSILON * ((q0 - p0).length() + d1.length() + d2.length());
+    let rounding = 16.0 * f64::EPSILON * (w0.length() + d1.length() + d2.length());
     let bounds = chord_a + chord_b;
     let least = d - 2.0 * rounding - d1.length() * (hi - lo);
     if least > tol + bounds {
         return Ok(None);
     }
-    let apart = d + rounding + bounds;
+    // The witness points lie off their place by the rounding of adding the
+    // start back.
+    let at = p0 + (x + (f - x) * 0.5);
+    let placed = 2.0 * f64::EPSILON * ((p0 - Point3::new(0.0, 0.0, 0.0)).length() + x.length());
+    let apart = d + rounding + bounds + placed;
     if apart > tol || apart.is_nan() {
         return Err(UnsettledMeeting);
     }
-    Ok(Some(Meeting {
-        at: x + (f - x) * 0.5,
-        apart,
-    }))
+    Ok(Some(Meeting { at, apart }))
 }
 
 /// The point of a circle or ellipse near the parameter `t`, to twice the
