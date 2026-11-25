@@ -14346,16 +14346,9 @@ fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
 }
 
 /// A bound on how far apart the trims `ma` of B-spline `m` and `na` of
-/// `n` lie, each read at even steps and between them by its speed bound
-/// ([`nurbs_speed_bound`]), so the two can trace one path at different
-/// paces; NaN where the steps that `budget` needs run past a cap.
-///
-/// A point of one trim lies within its distance from the other's polygon
-/// of steps plus half a step of the other's speed, and a point between two
-/// of its own steps within half a step of its speed of one of them, so the
-/// largest such distance, read both ways, holds every point of each trim
-/// near the other. The polygon is searched about the last nearest segment,
-/// and a poor search only loosens the bound.
+/// `n` lie, along a matching of their parameters, so the two can trace one
+/// path at different paces; NaN where no matching found holds within
+/// `budget` before [`PATHS_WORK_CAP`] pieces are compared.
 fn nurbs_paths_apart(
     m: &brepkit_math::nurbs::curve::NurbsCurve,
     ma: (f64, f64),
@@ -14363,72 +14356,274 @@ fn nurbs_paths_apart(
     na: (f64, f64),
     budget: f64,
 ) -> f64 {
-    const CAP: f64 = 100_000.0;
-    let (Some(lm), Some(ln)) = (nurbs_speed_bound(m), nurbs_speed_bound(n)) else {
-        return f64::NAN;
+    nurbs_paths_apart_counted(m, ma, n, na, budget).0
+}
+
+/// How many pairs of pieces [`nurbs_paths_apart`] compares at most.
+const PATHS_WORK_CAP: usize = 4096;
+
+/// [`nurbs_paths_apart`], with the number of pairs of pieces it compared.
+///
+/// Each trim is cut at matched parameters: its own knots, and the other's
+/// knots read across, so each piece is one polynomial span of its curve.
+/// Where the knots of the two inside their trims lie at one affine image of
+/// each other, a knot is read across by that map; elsewhere, and at each
+/// cut made later, by a few Newton steps toward the nearest point. A matching need
+/// not be the nearest: any monotone one gives a bound, and a poor one only
+/// loosens it. Each pair of pieces is raised to one degree and bounded by
+/// [`bezier_pieces_apart`], which holds each point of one piece within the
+/// bound of the other's point at the same local parameter, so every point
+/// of each trim lies near the other. A pair whose bound passes `budget` is
+/// cut in two at its middle, until the work cap.
+fn nurbs_paths_apart_counted(
+    m: &brepkit_math::nurbs::curve::NurbsCurve,
+    (m0, m1): (f64, f64),
+    n: &brepkit_math::nurbs::curve::NurbsCurve,
+    (n0, n1): (f64, f64),
+    budget: f64,
+) -> (f64, usize) {
+    let same = |a: f64, b: f64| a.to_bits() == b.to_bits();
+    if budget.is_nan() || budget <= 0.0 || same(m0, m1) || same(n0, n1) {
+        return (f64::NAN, 0);
+    }
+    // A trim's end a rounding away from a knot is that knot, so the first
+    // and last pieces lie in one span each.
+    let snap = |curve: &brepkit_math::nurbs::curve::NurbsCurve, t: f64| {
+        curve
+            .knots()
+            .iter()
+            .copied()
+            .find(|&k| rounding_apart(k, t))
+            .unwrap_or(t)
     };
-    // Points at even steps over `(lo, hi)` of a curve of speed at most `l`,
-    // each step moving at most a quarter of the budget, and how far one
-    // step moves at most.
-    let read = |c: &brepkit_math::nurbs::curve::NurbsCurve, (lo, hi): (f64, f64), l: f64| {
-        let count = (4.0 * l * (hi - lo).abs() / budget).ceil().max(1.0);
-        if count.is_nan() || count > CAP {
-            return None;
-        }
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let steps = count as usize;
-        #[allow(clippy::cast_precision_loss)]
-        let points = (0..=steps)
-            .map(|k| c.evaluate((hi - lo).madd(k as f64 / count, lo)))
-            .collect::<Vec<_>>();
-        Some((points, l * (hi - lo).abs() / count))
+    let (m0, m1, n0, n1) = (snap(m, m0), snap(m, m1), snap(n, n0), snap(n, n1));
+    // `n`'s trim read from the end that meets `m`'s start.
+    let start = m.evaluate(m0);
+    let (n0, n1) = if (n.evaluate(n0) - start).length() <= (n.evaluate(n1) - start).length() {
+        (n0, n1)
+    } else {
+        (n1, n0)
     };
-    let (Some((pm, sm)), Some((pn, sn))) = (read(m, ma, lm), read(n, na, ln)) else {
-        return f64::NAN;
-    };
-    // The largest distance from the points `from` to the polygon `to`.
-    let one_way = |from: &[Point3], to: &[Point3]| -> f64 {
-        let seg = |p: Point3, j: usize| {
-            let (a, b) = (to[j], to[j + 1]);
-            let d = b - a;
-            let len2 = d.dot(d);
-            let f = if len2 > 0.0 {
-                ((p - a).dot(d) / len2).clamp(0.0, 1.0)
-            } else {
-                0.0
+    // The affine guess from `m`'s parameter to `n`'s, and back.
+    let across = |t: f64| (n1 - n0).madd((t - m0) / (m1 - m0), n0);
+    let back = |s: f64| (m1 - m0).madd((s - n0) / (n1 - n0), m0);
+    let inside = |k: f64, a: f64, b: f64| k > a.min(b) && k < a.max(b);
+    let m_knots: Vec<f64> = dedup_sorted(m.knots().iter().copied().filter(|&k| inside(k, m0, m1)));
+    let n_knots: Vec<f64> = dedup_sorted(n.knots().iter().copied().filter(|&k| inside(k, n0, n1)));
+    // The knots map onto each other where each of `m`'s, read across, is
+    // one of `n`'s to rounding.
+    let aligned = m_knots.len() == n_knots.len()
+        && m_knots.iter().all(|&k| {
+            let s = across(k);
+            n_knots
+                .iter()
+                .any(|&x| (x - s).abs() <= 1e-12 * (n1 - n0).abs().max(1.0))
+        });
+    let near = |curve: &brepkit_math::nurbs::curve::NurbsCurve,
+                x: Point3,
+                guess: f64,
+                (a, b): (f64, f64)| {
+        let (lo, hi) = (a.min(b), a.max(b));
+        let mut s = guess.clamp(lo, hi);
+        for _ in 0..8 {
+            let d = curve.derivatives(s, 2);
+            let (Some(c), Some(c1), Some(c2)) = (d.first(), d.get(1), d.get(2)) else {
+                break;
             };
-            (p - (a + d * f)).length()
-        };
-        if to.len() < 2 {
-            return f64::NAN;
+            let off = Vec3::new(c.x() - x.x(), c.y() - x.y(), c.z() - x.z());
+            let slope = c1.dot(*c1) + off.dot(*c2);
+            if slope.is_nan() || slope <= 0.0 {
+                break;
+            }
+            let next = (s - off.dot(*c1) / slope).clamp(lo, hi);
+            if (next - s).abs() <= 1e-15 * (hi - lo) {
+                s = next;
+                break;
+            }
+            s = next;
         }
-        let last = to.len() - 2;
-        let mut at = (0..=last)
-            .map(|j| (j, seg(from[0], j)))
-            .min_by(|x, y| x.1.total_cmp(&y.1))
-            .map_or(0, |(j, _)| j);
-        let mut worst = 0.0f64;
-        for &p in from {
-            let (lo, hi) = (at.saturating_sub(8), (at + 8).min(last));
-            let (j, d) = (lo..=hi)
-                .map(|j| (j, seg(p, j)))
-                .min_by(|x, y| x.1.total_cmp(&y.1))
-                .unwrap_or((at, f64::INFINITY));
-            at = j;
-            worst = worst.max(d);
-        }
-        worst
+        s
     };
-    let reach = pm
-        .iter()
-        .chain(&pn)
-        .map(|p| p.x().abs().max(p.y().abs()).max(p.z().abs()))
-        .fold(0.0f64, f64::max);
-    let there = one_way(&pm, &pn) + 0.5 * (sm + sn);
-    let back = one_way(&pn, &pm) + 0.5 * (sm + sn);
-    there
-        .max(back)
-        .madd(1.0 + 8.0 * f64::EPSILON, 64.0 * f64::EPSILON * reach)
+    let match_t = |t: f64| {
+        if aligned {
+            across(t)
+        } else {
+            near(n, m.evaluate(t), across(t), (n0, n1))
+        }
+    };
+    let mut cuts: Vec<(f64, f64)> = vec![(m0, n0), (m1, n1)];
+    for &k in &m_knots {
+        cuts.push((k, match_t(k)));
+    }
+    for &k in &n_knots {
+        let t = if aligned {
+            back(k)
+        } else {
+            near(m, n.evaluate(k), back(k), (m0, m1))
+        };
+        cuts.push((t, k));
+    }
+    let forward_m = m1 > m0;
+    cuts.sort_by(|x, y| {
+        if forward_m {
+            x.0.total_cmp(&y.0)
+        } else {
+            y.0.total_cmp(&x.0)
+        }
+    });
+    // Two cuts at one parameter of `m` are one only where they read one
+    // parameter of `n` to rounding; else a piece of `n` would go unread.
+    if cuts
+        .windows(2)
+        .any(|w| same(w[0].0, w[1].0) && !rounding_apart(w[0].1, w[1].1))
+    {
+        return (f64::NAN, 0);
+    }
+    cuts.dedup_by(|x, y| same(x.0, y.0));
+    let rising_n = n1 > n0;
+    if cuts.windows(2).any(|w| {
+        if rising_n {
+            w[1].1 < w[0].1
+        } else {
+            w[1].1 > w[0].1
+        }
+    }) {
+        return (f64::NAN, 0);
+    }
+    let mut stack: Vec<((f64, f64), (f64, f64))> = cuts
+        .windows(2)
+        .map(|w| ((w[0].0, w[1].0), (w[0].1, w[1].1)))
+        .rev()
+        .collect();
+    let (mut worst, mut work) = (0.0_f64, 0_usize);
+    while let Some(((ta, tb), (sa, sb))) = stack.pop() {
+        if same(ta, tb) && same(sa, sb) {
+            continue;
+        }
+        work += 1;
+        if work > PATHS_WORK_CAP {
+            return (f64::NAN, work);
+        }
+        let (Ok(p), Ok(q)) = (
+            brepkit_math::nurbs::decompose::curve_bezier_between(m, ta, tb),
+            brepkit_math::nurbs::decompose::curve_bezier_between(n, sa, sb),
+        ) else {
+            return (f64::NAN, work);
+        };
+        let bound = bezier_pieces_apart(p, q);
+        if !bound.is_nan() && bound <= budget {
+            worst = worst.max(bound);
+            continue;
+        }
+        let tm = 0.5 * (ta + tb);
+        let guess = if aligned { across(tm) } else { 0.5 * (sa + sb) };
+        let sm = near(n, m.evaluate(tm), guess, (sa, sb));
+        if !(inside(tm, ta, tb) && inside(sm, sa, sb)) {
+            return (f64::NAN, work);
+        }
+        stack.push(((tm, tb), (sm, sb)));
+        stack.push(((ta, tm), (sa, sm)));
+    }
+    (worst, work)
+}
+
+/// Whether two parameters lie within a few units of rounding of each
+/// other.
+fn rounding_apart(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 8.0 * f64::EPSILON * a.abs().max(b.abs()).max(1.0)
+}
+
+/// `values` sorted, with repeats dropped.
+fn dedup_sorted(values: impl Iterator<Item = f64>) -> Vec<f64> {
+    let mut v: Vec<f64> = values.collect();
+    v.sort_by(f64::total_cmp);
+    v.dedup();
+    v
+}
+
+/// A bound on how far apart two Bezier pieces lie at each local parameter,
+/// each given by its control points in homogeneous form `[w x, w y, w z,
+/// w]`; NaN where a weight is not positive or the weights part too far.
+///
+/// The lower degree is raised to the higher, so both read on one Bernstein
+/// basis, and the second is read at the pace whose end weights stand as the
+/// first's do (each weight times one factor to its index, which keeps the
+/// piece and changes only its pace). Each point is then the mean of its
+/// control points under the
+/// shares `B_i w_i`; with the second's weights a common scale times
+/// `w_i (1 + e_i)`, `|e_i| <= d`, each share moves by at most `2d / (1 - d)`
+/// of itself, so the second lies within `max |Q_i - P_i| + 2d / (1 - d)
+/// max |P_i - P_0|` of the first, grown by its rounding.
+fn bezier_pieces_apart(mut p: Vec<[f64; 4]>, mut q: Vec<[f64; 4]>) -> f64 {
+    let raise = |c: &[[f64; 4]]| -> Vec<[f64; 4]> {
+        let k = c.len();
+        #[allow(clippy::cast_precision_loss)]
+        let degree = k as f64;
+        let mut out = Vec::with_capacity(k + 1);
+        for i in 0..=k {
+            #[allow(clippy::cast_precision_loss)]
+            let a = i as f64 / degree;
+            let mut point = [0.0; 4];
+            for (j, slot) in point.iter_mut().enumerate() {
+                let before = if i > 0 { c[i - 1][j] } else { 0.0 };
+                let here = if i < k { c[i][j] } else { 0.0 };
+                *slot = a.madd(before, (1.0 - a) * here);
+            }
+            out.push(point);
+        }
+        out
+    };
+    if p.is_empty() || q.is_empty() {
+        return f64::NAN;
+    }
+    while p.len() < q.len() {
+        p = raise(&p);
+    }
+    while q.len() < p.len() {
+        q = raise(&q);
+    }
+    // Weights times `lambda` to their index trace the same piece at another
+    // pace; `q` is read at the pace whose end weights stand to each other as
+    // `p`'s do.
+    let last = q.len() - 1;
+    if last > 0 {
+        let ends = (p[last][3] / p[0][3]) / (q[last][3] / q[0][3]);
+        #[allow(clippy::cast_precision_loss)]
+        let lambda = ends.powf(1.0 / last as f64);
+        if lambda.is_finite() && lambda > 0.0 {
+            let mut scale = 1.0;
+            for point in &mut q {
+                for x in point.iter_mut() {
+                    *x *= scale;
+                }
+                scale *= lambda;
+            }
+        }
+    }
+    let read = |c: &[[f64; 4]]| -> Option<Vec<(Point3, f64)>> {
+        c.iter()
+            .map(|h| {
+                (h[3] > 0.0).then(|| (Point3::new(h[0] / h[3], h[1] / h[3], h[2] / h[3]), h[3]))
+            })
+            .collect()
+    };
+    let (Some(p), Some(q)) = (read(&p), read(&q)) else {
+        return f64::NAN;
+    };
+    let top = |c: &[(Point3, f64)]| c.iter().map(|x| x.1).fold(0.0_f64, f64::max);
+    let (top_p, top_q) = (top(&p), top(&q));
+    let (mut moved, mut ratio, mut reach, mut size) = (0.0_f64, 0.0_f64, 0.0_f64, 0.0_f64);
+    for (&(a, wa), &(b, wb)) in p.iter().zip(&q) {
+        moved = moved.max((b - a).length());
+        ratio = ratio.max(((wb / top_q) / (wa / top_p) - 1.0).abs());
+        reach = reach.max((a - p[0].0).length());
+        size = size.max(a.x().abs().max(a.y().abs()).max(a.z().abs()));
+    }
+    if ratio.is_nan() || ratio >= 0.5 {
+        return f64::NAN;
+    }
+    let bound = (2.0 * ratio / (1.0 - ratio)).madd(reach, moved);
+    bound.madd(1.0 + 8.0 * f64::EPSILON, 64.0 * f64::EPSILON * size)
 }
 
 /// Circle `c` as the ellipse of two semi-axes its radius long on its axes,
@@ -21407,5 +21602,68 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    /// A quadratic B-spline over 32 even spans that weaves 0.2 about a line,
+    /// against its copy on knots twice as far apart: the knots map onto each
+    /// other, so the bound compares each span once, 32 pairs, and holds the
+    /// two within 1e-9. A quarter circle as a rational quadratic, weights 1,
+    /// root 2 / 2 and 1, against the same arc with each weight times 2 to
+    /// its index (one arc at another pace): one curve at 1e-6 in fewer than
+    /// 4096 pairs, where steps at that tolerance would need millions. The
+    /// weave and the polyline through its knots stay two curves.
+    #[test]
+    fn b_splines_at_other_paces_are_proved_one_curve_in_few_pieces() {
+        use brepkit_math::nurbs::NurbsCurve;
+        let mut points = vec![Point3::new(0.0, 5.0, 0.0)];
+        for i in 1..=32_i32 {
+            let side = if i % 2 == 0 { 0.2 } else { -0.2 };
+            points.push(Point3::new(f64::from(i) - 0.5, 5.0 + side, 0.0));
+        }
+        points.push(Point3::new(32.0, 5.0, 0.0));
+        let mut knots = vec![0.0, 0.0];
+        knots.extend((0..=32).map(f64::from));
+        knots.extend([32.0, 32.0]);
+        let weave = NurbsCurve::new(2, knots.clone(), points.clone(), vec![1.0; 34]).unwrap();
+        let slow = NurbsCurve::new(
+            2,
+            knots.iter().map(|k| 2.0 * k).collect(),
+            points,
+            vec![1.0; 34],
+        )
+        .unwrap();
+        let (bound, work) =
+            nurbs_paths_apart_counted(&weave, (0.0, 32.0), &slow, (0.0, 64.0), 1e-9);
+        assert!(bound <= 1e-9, "the copies part by {bound:e}");
+        assert_eq!(work, 32);
+        let backward = nurbs_paths_apart_counted(&weave, (0.0, 32.0), &slow, (64.0, 0.0), 1e-9);
+        assert!(backward.0 <= 1e-9 && backward.1 == 32, "{backward:?}");
+
+        let corner = [
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(0.0, 1.0, 0.0),
+        ];
+        let half = std::f64::consts::FRAC_1_SQRT_2;
+        let arc = |weights: Vec<f64>| {
+            NurbsCurve::new(
+                2,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                corner.to_vec(),
+                weights,
+            )
+            .unwrap()
+        };
+        let (even, paced) = (arc(vec![1.0, half, 1.0]), arc(vec![1.0, 2.0 * half, 4.0]));
+        assert!((even.evaluate(0.5) - paced.evaluate(0.5)).length() > 0.1);
+        let (bound, work) = nurbs_paths_apart_counted(&even, (0.0, 1.0), &paced, (0.0, 1.0), 1e-6);
+        assert!(
+            bound <= 1e-6,
+            "the arcs part by {bound:e} after {work} pairs"
+        );
+        assert!(work < PATHS_WORK_CAP, "{work} pairs");
+        let at = |c: &NurbsCurve| (EdgeCurve::NurbsCurve(c.clone()), corner[0], corner[2]);
+        let ((ce, se, ee), (cp, sp, ep)) = (at(&even), at(&paced));
+        assert!(curves_one_curve((&ce, se, ee), (&cp, sp, ep), 1e-5));
     }
 }
