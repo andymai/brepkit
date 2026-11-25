@@ -528,7 +528,12 @@ fn block_lies_on_block(
 }
 
 /// B-spline `curve` cut to `[from, to]`, or `curve` itself where that is its
-/// whole domain; `None` where a cut fails or the span is empty.
+/// whole domain; `None` where a piece fails or the span is empty.
+///
+/// The cut is read span by span: the Bezier piece of each knot span the
+/// block covers, from the curve's own de Boor points, joined end to start at
+/// knots of multiplicity one less than the degree's. No knot is inserted,
+/// so no knot close to a cut merges with it and drops a stretch between.
 fn b_spline_between(
     curve: &brepkit_math::nurbs::curve::NurbsCurve,
     from: f64,
@@ -538,16 +543,40 @@ fn b_spline_between(
     if from.is_nan() || to.is_nan() || from < d0 || to > d1 || from >= to {
         return None;
     }
-    let tail = if from > d0 {
-        brepkit_math::nurbs::curve_split(curve, from).ok()?.1
-    } else {
-        curve.clone()
-    };
-    if to < d1 {
-        Some(brepkit_math::nurbs::curve_split(&tail, to).ok()?.0)
-    } else {
-        Some(tail)
+    if from.to_bits() == d0.to_bits() && to.to_bits() == d1.to_bits() {
+        return Some(curve.clone());
     }
+    let p = curve.degree();
+    let mut breaks = vec![from];
+    for &k in curve.knots() {
+        if k > from && k < to && breaks.last().is_some_and(|&last| k > last) {
+            breaks.push(k);
+        }
+    }
+    breaks.push(to);
+    let (mut points, mut weights, mut knots) = (Vec::new(), Vec::new(), vec![from; p + 1]);
+    for (n, span) in breaks.windows(2).enumerate() {
+        let piece =
+            brepkit_math::nurbs::decompose::curve_bezier_between(curve, span[0], span[1]).ok()?;
+        for (k, q) in piece.iter().enumerate() {
+            // A piece starts where the last ended: that point is kept once.
+            if n > 0 && k == 0 {
+                continue;
+            }
+            if q[3].is_nan() || q[3] <= 0.0 {
+                return None;
+            }
+            points.push(brepkit_math::vec::Point3::new(
+                q[0] / q[3],
+                q[1] / q[3],
+                q[2] / q[3],
+            ));
+            weights.push(q[3]);
+        }
+        let joint = if n + 2 == breaks.len() { p + 1 } else { p };
+        knots.extend(std::iter::repeat_n(span[1], joint));
+    }
+    brepkit_math::nurbs::curve::NurbsCurve::new(p, knots, points, weights).ok()
 }
 
 #[cfg(test)]
@@ -873,6 +902,50 @@ mod tests {
         let mut arena = GfaArena::new();
         span_edge(&mut topo, &mut arena, &circle, (0.0, 5e-10));
         span_edge(&mut topo, &mut arena, &round, (5e-10, TAU));
+        assert_eq!(common_blocks(&topo, &mut arena), 0);
+    }
+
+    /// Two quadratics on knots [a, a, a, 0.5, 0.5, 1, 1, 1], `a` 2^-48
+    /// short of 0.5, one with the `y` control coordinates 224, -16, 0, 0, 0
+    /// and one flat: over blocks from 2^-51 short of 0.5 to 1 they meet at
+    /// both ends, but the first dips to y = -1 between its block's start and
+    /// 0.5, so they share no block.
+    #[test]
+    fn blocks_that_part_just_past_a_knot_are_not_common() {
+        let a = 0.5 - 2f64.powi(-48);
+        let from = 0.5 - 2f64.powi(-51);
+        let knots = vec![a, a, a, 0.5, 0.5, 1.0, 1.0, 1.0];
+        let quadratic = |ys: [f64; 5]| {
+            EdgeCurve::NurbsCurve(
+                NurbsCurve::new(
+                    2,
+                    knots.clone(),
+                    ys.iter()
+                        .enumerate()
+                        .map(|(i, &y)| Point3::new(f64::from(u8::try_from(i).unwrap()), y, 0.0))
+                        .collect(),
+                    vec![1.0; 5],
+                )
+                .unwrap(),
+            )
+        };
+        let (dipped, flat) = (
+            quadratic([224.0, -16.0, 0.0, 0.0, 0.0]),
+            quadratic([0.0; 5]),
+        );
+        let at = |c: &EdgeCurve, t: f64| match c {
+            EdgeCurve::NurbsCurve(n) => n.evaluate(t),
+            _ => unreachable!("a quadratic"),
+        };
+        assert!((at(&dipped, from) - at(&flat, from)).length() < 1e-9);
+        let low = (0..=64)
+            .map(|k| at(&dipped, from + (0.5 - from) * f64::from(k) / 64.0).y())
+            .fold(f64::INFINITY, f64::min);
+        assert!(low < -0.9, "the dip reaches {low}");
+        let mut topo = Topology::new();
+        let mut arena = GfaArena::new();
+        span_edge(&mut topo, &mut arena, &dipped, (from, 1.0));
+        span_edge(&mut topo, &mut arena, &flat, (from, 1.0));
         assert_eq!(common_blocks(&topo, &mut arena), 0);
     }
 
