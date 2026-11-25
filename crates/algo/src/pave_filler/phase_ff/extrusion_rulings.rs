@@ -30,8 +30,15 @@ const NARROWEST: f64 = 1e-12;
 const MOST_INTERVALS: usize = 4096;
 
 /// A crossing that rounding hides lies within a run of parameters whose
-/// points spread no wider than this, or it is left to the marcher.
+/// points spread no wider than this, or it is left to the marcher. A run
+/// with one side at both ends holds no crossing that counts where its
+/// points spread no wider, or keep this near the circle.
 const SPREAD: f64 = brepkit_math::tolerance::Tolerance::new().linear;
+
+/// The most an extrusion may drift across the cylinder's axis over its
+/// length, rounding included: past it, a ruling along the axis strays
+/// from the extrusion's far end.
+const DRIFT: f64 = brepkit_math::tolerance::Tolerance::new().linear;
 
 /// A profile within rounding of the circle over more of its knot span than
 /// this runs along the cylinder, and the section is left to the marcher.
@@ -39,9 +46,9 @@ const WIDEST_GRAZE: f64 = 1e-3;
 
 /// The rulings where `cylinder` crosses the B-spline extrusion `surface`,
 /// trimmed to both faces' boxes and to the extrusion's height. `None` where
-/// `surface` is not an extrusion along the cylinder's axis, or where its
-/// profile runs along the circle, so the section is not a set of isolated
-/// lines.
+/// `surface` is not an extrusion along the cylinder's axis to within
+/// [`DRIFT`] over its length, or where its profile runs along the circle,
+/// so the section is not a set of isolated lines.
 ///
 /// A ruling where the circle only touches the profile is left out, as a
 /// graze splits neither face. A crossing so shallow that rounding hides the
@@ -56,7 +63,9 @@ pub(super) fn cylinder_extrusion_rulings(
     let axis = cylinder.axis().normalize().ok()?;
     let (profile, along) = extrusion(surface)?;
     let length = along.length();
-    if length <= 0.0 || along.cross(axis).length() > PARALLEL_SIN * length {
+    let drift = along.cross(axis).length();
+    if length <= 0.0 || drift > PARALLEL_SIN * length || drift + 4.0 * f64::EPSILON * length > DRIFT
+    {
         return None;
     }
     let section = CircleSection {
@@ -180,17 +189,18 @@ impl CircleSection<'_> {
     /// The profile's parameters where it crosses the circle, in order.
     /// `None` when the crossings are not isolated within
     /// [`MOST_INTERVALS`] intervals, where the profile runs within rounding
-    /// of the circle over more than [`WIDEST_GRAZE`] of a span, or where a
-    /// crossing hidden by rounding is not placed within [`SPREAD`].
+    /// of the circle over more than [`WIDEST_GRAZE`] of a span, where a
+    /// crossing hidden by rounding is not placed within [`SPREAD`], or where
+    /// a run with no crossing found may hide some (see [`Self::quiet`]).
     ///
     /// The intervals are read in order. One with no root, or with one,
     /// proves the profile's side of the circle at its ends. The intervals
     /// where rounding hides the side make runs: a run between two sides
     /// that differ holds a crossing, read at its middle; between two sides
-    /// alike, a touch. A closed profile's last run goes on into its first.
-    /// An open profile's run at either end gives no ruling: the line there
-    /// is the extrusion's own boundary edge, which the edge and face phase
-    /// meets on the cylinder.
+    /// alike, a touch, where the run is quiet. A closed profile's last run
+    /// goes on into its first. An open profile's quiet run at either end
+    /// gives no ruling: the line there is the extrusion's own boundary
+    /// edge, which the edge and face phase meets on the cylinder.
     fn crossings(&self) -> Option<Vec<f64>> {
         let (d0, d1) = self.profile.domain();
         let mut cuts: Vec<f64> = std::iter::once(d0)
@@ -215,10 +225,10 @@ impl CircleSection<'_> {
                 let read = self.bernstein(a, b)?;
                 match read.reading() {
                     Reading::Apart => {
-                        walk.arrive(read.side_at_start()?, |run| self.middle(run), &mut roots)?;
+                        walk.arrive(read.side_at_start()?, self, &mut roots)?;
                     }
                     Reading::Crossing => {
-                        walk.arrive(read.side_at_start()?, |run| self.middle(run), &mut roots)?;
+                        walk.arrive(read.side_at_start()?, self, &mut roots)?;
                         roots.push(self.bisect(a, b));
                         walk.last = Some(read.side_at_end()?);
                     }
@@ -228,30 +238,30 @@ impl CircleSection<'_> {
                         pending.push((m, b));
                         pending.push((a, m));
                     }
-                    Reading::Graze | Reading::Unsettled => walk.unknown(a, b),
+                    Reading::Graze | Reading::Unsettled => walk.unknown(a, b, read.most()),
                 }
             }
         }
         let poles = self.profile.control_points();
         let closed = (*poles.first()? - *poles.last()?).length() <= SPREAD;
-        walk.finish(
-            closed,
-            |run| self.middle(run),
-            |(from, to)| self.middle(((from, d1), (d0, to))),
-            &mut roots,
-        )?;
+        walk.finish(closed, self, &mut roots)?;
         roots.sort_by(f64::total_cmp);
         Some(roots)
     }
 
-    /// The middle of a run of parameters, given as one or two pieces, the
-    /// second on from the first across a closed profile's seam. `None` where
-    /// the run's points spread wider than [`SPREAD`] apart.
-    fn middle(&self, run: ((f64, f64), (f64, f64))) -> Option<f64> {
-        let ((a, b), (c, d)) = run;
+    /// How far apart the points of a run of parameters spread, given as one
+    /// or two pieces, the second on from the first across a closed
+    /// profile's seam.
+    fn spread(&self, ((a, b), (c, d)): Pieces) -> f64 {
         let at = |t: f64| self.profile.evaluate(t);
-        let spread = (at(b) - at(a)).length() + (at(d) - at(c)).length();
-        if spread > SPREAD {
+        (at(b) - at(a)).length() + (at(d) - at(c)).length()
+    }
+
+    /// The middle of a run of parameters, given as one or two pieces. `None`
+    /// where the run's points spread wider than [`SPREAD`] apart.
+    fn middle(&self, run: Pieces) -> Option<f64> {
+        let ((a, b), (c, d)) = run;
+        if self.spread(run) > SPREAD {
             return None;
         }
         let half = 0.5 * ((b - a) + (d - c));
@@ -260,6 +270,19 @@ impl CircleSection<'_> {
         } else {
             c + (half - (b - a))
         })
+    }
+
+    /// Whether a run with one side at both ends, where `most` bounds
+    /// `reach`, holds no crossing that counts: its points spread no wider
+    /// than [`SPREAD`], so any crossings in it lie that near each other, or
+    /// the profile keeps within [`SPREAD`] of the circle all along it, so
+    /// any lens between crossings is thinner than that.
+    fn quiet(&self, run: Pieces, most: f64) -> bool {
+        let r2 = self.radius * self.radius;
+        // How far `reach` within `most` of zero lets the profile stand off
+        // the circle, read so that it does not cancel.
+        let off = most / (self.radius + (r2 - most).max(0.0).sqrt());
+        self.spread(run) <= SPREAD || off <= SPREAD
     }
 
     /// The Bernstein coefficients over `[a, b]` of `reach` in the profile's
@@ -327,70 +350,106 @@ impl CircleSection<'_> {
     }
 }
 
+/// A run of parameters as one or two pieces, the second on from the first
+/// across a closed profile's seam.
+type Pieces = ((f64, f64), (f64, f64));
+
+/// A run of parameters where rounding hides the profile's side of the
+/// circle, and a bound on `reach` over it.
+#[derive(Clone, Copy)]
+struct Run {
+    from: f64,
+    to: f64,
+    most: f64,
+}
+
+impl Run {
+    /// The run as one piece and an empty second piece.
+    const fn pieces(self) -> Pieces {
+        ((self.from, self.to), (self.to, self.to))
+    }
+}
+
 /// A walk along the profile: the sides of the circle it is known to lie on,
 /// outside (`true`) or inside, and the runs between where rounding hides
 /// the side.
 #[derive(Default)]
 struct Walk {
     /// The first side known, and the run before it, if any.
-    first: Option<(bool, Option<(f64, f64)>)>,
+    first: Option<(bool, Option<Run>)>,
     /// The side last known.
     last: Option<bool>,
     /// The run since the side last known, or since the start.
-    run: Option<(f64, f64)>,
-}
-
-/// A run, as one piece and an empty second piece.
-const fn piece(run: (f64, f64)) -> ((f64, f64), (f64, f64)) {
-    (run, (run.1, run.1))
+    run: Option<Run>,
 }
 
 impl Walk {
-    /// The side over `[a, b]` is not known.
-    fn unknown(&mut self, a: f64, b: f64) {
-        self.run = Some(self.run.map_or((a, b), |(from, _)| (from, b)));
+    /// The side over `[a, b]` is not known, and `most` bounds `reach` there.
+    fn unknown(&mut self, a: f64, b: f64, most: f64) {
+        self.run = Some(self.run.map_or(
+            Run {
+                from: a,
+                to: b,
+                most,
+            },
+            |run| Run {
+                to: b,
+                most: run.most.max(most),
+                ..run
+            },
+        ));
     }
 
     /// The profile is known to lie on `side` again: add to `roots` the
     /// crossing in the run since the side last known, where that side
     /// differs. `None` where the sides differ and no run is between, or
-    /// `middle` does not place the crossing.
+    /// the crossing is not placed, or where they are alike and the run is
+    /// not quiet. A run before the first side known waits for
+    /// [`Self::finish`].
     fn arrive(
         &mut self,
         side: bool,
-        middle: impl Fn(((f64, f64), (f64, f64))) -> Option<f64>,
+        section: &CircleSection<'_>,
         roots: &mut Vec<f64>,
     ) -> Option<()> {
         let run = self.run.take();
-        match self.last {
-            None => self.first = Some((side, run)),
-            Some(before) if before != side => roots.push(middle(piece(run?))?),
-            Some(_) => {}
+        match (self.last, run) {
+            (None, _) => self.first = Some((side, run)),
+            (Some(before), _) if before != side => roots.push(section.middle(run?.pieces())?),
+            (Some(_), Some(run)) if !section.quiet(run.pieces(), run.most) => return None,
+            (Some(_), _) => {}
         }
         self.last = Some(side);
         Some(())
     }
 
-    /// Add to `roots` the crossing in the run left at the end of a closed
-    /// profile's walk, across its seam. `None` where no side is known, or
-    /// where the sides differ across the seam and `middle` or `across` does
-    /// not place the crossing there.
-    fn finish(
-        self,
-        closed: bool,
-        middle: impl Fn(((f64, f64), (f64, f64))) -> Option<f64>,
-        across: impl Fn((f64, f64)) -> Option<f64>,
-        roots: &mut Vec<f64>,
-    ) -> Option<()> {
+    /// Settle the runs left at the ends of the walk. On a closed profile the
+    /// last run goes on into the first: add to `roots` the crossing across
+    /// the seam where the sides there differ. `None` where no side is
+    /// known, where that crossing is not placed, or where a run at an end,
+    /// or across the seam between sides alike, is not quiet.
+    fn finish(self, closed: bool, section: &CircleSection<'_>, roots: &mut Vec<f64>) -> Option<()> {
         let (first, lead) = self.first?;
         let last = self.last?;
-        if closed && first != last {
-            roots.push(match (self.run, lead) {
-                (None, None) => return None,
-                (Some(run), None) | (None, Some(run)) => middle(piece(run))?,
-                (Some(trail), Some(lead)) => across((trail.0, lead.1))?,
-            });
+        let (d0, d1) = section.profile.domain();
+        if !closed {
+            return [lead, self.run]
+                .into_iter()
+                .flatten()
+                .all(|run| section.quiet(run.pieces(), run.most))
+                .then_some(());
         }
+        let (pieces, most) = match (self.run, lead) {
+            (None, None) => return (first == last).then_some(()),
+            (Some(run), None) | (None, Some(run)) => (run.pieces(), run.most),
+            (Some(trail), Some(lead)) => {
+                (((trail.from, d1), (d0, lead.to)), trail.most.max(lead.most))
+            }
+        };
+        if first == last {
+            return section.quiet(pieces, most).then_some(());
+        }
+        roots.push(section.middle(pieces)?);
         Some(())
     }
 }
@@ -416,6 +475,12 @@ impl Bernstein {
 
     fn side(&self, value: f64) -> Option<bool> {
         (value.abs() > self.band).then_some(value > 0.0)
+    }
+
+    /// A bound on `reach` over the interval: the coefficients bound it,
+    /// each within the band.
+    fn most(&self) -> f64 {
+        self.c.iter().fold(0.0, |m: f64, x| m.max(x.abs())) + self.band
     }
 
     /// What the coefficients prove, which bound `reach` and whose
@@ -767,6 +832,105 @@ mod tests {
                 &room(),
             );
             assert!(lines.is_some_and(|l| l.is_empty()), "{name}");
+        }
+    }
+
+    /// A degree-1 profile through `points` in `z = height`, moved by `along`,
+    /// placed by `pose`.
+    fn moved_polyline(
+        points: &[(f64, f64)],
+        knots: Vec<f64>,
+        height: f64,
+        along: Vec3,
+        pose: &Mat4,
+    ) -> NurbsSurface {
+        let row = |shift: Vec3| -> Vec<Point3> {
+            points
+                .iter()
+                .map(|&(x, y)| pose.mul_point(Point3::new(x, y, height) + shift))
+                .collect()
+        };
+        NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            knots,
+            vec![row(Vec3::new(0.0, 0.0, 0.0)), row(along)],
+            vec![vec![1.0; points.len()]; 2],
+        )
+        .unwrap()
+    }
+
+    /// An extrusion 1e8 long that leans 5e-13 off the axis drifts 5e-5
+    /// across it over its length: a ruling along the axis strays from its
+    /// far end, and the section is left to the marcher.
+    #[test]
+    fn a_long_extrusion_that_drifts_off_the_axis_is_left_to_the_marcher() {
+        for (name, pose) in poses() {
+            let wall = moved_polyline(
+                &[(0.5, -2.0), (0.5, 2.0)],
+                vec![0.0, 0.0, 1.0, 1.0],
+                0.0,
+                Vec3::new(5e-5, 0.0, 1e8),
+                &pose,
+            );
+            let rod = cylinder_about(0.0, 0.0, 1.0, &pose);
+            assert!(
+                cylinder_extrusion_rulings(&rod, &wall, &room(), &room()).is_none(),
+                "{name}"
+            );
+        }
+    }
+
+    /// The line x = 0.99999 crosses a unit circle a thousand million from
+    /// the origin at y = -/+ 0.004472, where the profile keeps within 2e-5
+    /// of the circle: rounding there hides the side, and the run between
+    /// the crossings has the same side at both ends. Either both crossings
+    /// are found or the section is left to the marcher, for the line and
+    /// for a closed profile whose seam lies between them.
+    #[test]
+    fn crossings_hidden_in_a_run_with_one_side_at_both_ends_are_not_lost() {
+        type Profile<'a> = (&'a [(f64, f64)], Vec<f64>);
+        let far = 1e9;
+        let x: f64 = 0.99999;
+        let y = (1.0 - x * x).sqrt();
+        let profiles: [Profile<'_>; 2] = [
+            (&[(x, -100.0), (x, 100.0)], vec![0.0, 0.0, 1.0, 1.0]),
+            (
+                &[
+                    (x, 0.0),
+                    (x, 100.0),
+                    (200.0, 100.0),
+                    (200.0, -100.0),
+                    (x, -100.0),
+                    (x, 0.0),
+                ],
+                vec![0.0, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.0],
+            ),
+        ];
+        for (name, pose) in poses() {
+            let pose = pose * Mat4::translation(0.0, 0.0, far);
+            for (points, knots) in &profiles {
+                let wall =
+                    moved_polyline(points, knots.clone(), 0.0, Vec3::new(0.0, 0.0, 4.0), &pose);
+                let rod = cylinder_about(0.0, 0.0, 1.0, &pose);
+                let room = Aabb3 {
+                    min: Point3::new(-1e10, -1e10, -1e10),
+                    max: Point3::new(1e10, 1e10, 1e10),
+                };
+                let Some(lines) = cylinder_extrusion_rulings(&rod, &wall, &room, &room) else {
+                    continue;
+                };
+                assert_eq!(lines.len(), 2, "{name}: {} poles", points.len());
+                for y in [-y, y] {
+                    let crossing = pose.mul_point(Point3::new(x, y, 0.0));
+                    assert!(
+                        lines.iter().any(|l| (l.p_start - crossing).length() < 1e-6
+                            || (l.p_end - crossing).length() < 1e-6),
+                        "{name}: no ruling at {y}"
+                    );
+                }
+            }
         }
     }
 }
