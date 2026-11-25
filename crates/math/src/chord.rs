@@ -76,6 +76,13 @@ pub fn segments_for_chord_deviation_with_angle(
     }
 
     let theta_lin = 2.0 * (1.0 - deflection / radius).clamp(0.0, 1.0).acos();
+    // Below about 1e-16 of the radius, `1 - deflection / radius` rounds to 1
+    // and the angle to 0; `acos(1 - x) = 2 asin(sqrt(x / 2))` keeps it.
+    let theta_lin = if theta_lin > 0.0 {
+        theta_lin
+    } else {
+        4.0 * (0.5 * deflection / radius).sqrt().asin()
+    };
 
     let mut theta_step = if angular_tol > 0.0 {
         theta_lin.min(angular_tol)
@@ -122,6 +129,17 @@ mod tests {
         assert_eq!(segments_for_chord_deviation(1.0, 0.0, 0.01), 8);
         assert_eq!(segments_for_chord_deviation(1.0, TAU, 0.0), 8);
         assert_eq!(segments_for_chord_deviation(-1.0, TAU, 0.01), 8);
+    }
+
+    /// A deflection below a float's resolution of the radius still asks for
+    /// the segments it needs, far more than any mesh takes, and not the
+    /// fallback for degenerate inputs.
+    #[test]
+    fn a_deflection_below_float_resolution_still_counts_its_segments() {
+        for deflection in [1e-17, 1e-300] {
+            let n = segments_for_chord_deviation_with_angle(1.0, TAU, deflection, 0.35, 0.0, false);
+            assert!(n > 100_000_000, "{deflection}: {n}");
+        }
     }
 
     #[test]
