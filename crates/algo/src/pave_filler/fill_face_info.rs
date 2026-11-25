@@ -36,6 +36,10 @@ const ON_SURFACE_BAND_FACTOR: f64 = 100.0;
 /// bands cannot separate the two classes.
 const IN_FACE_MAX_DEVIATION_RATIO: f64 = 0.2;
 
+/// How near the nearest point of a B-spline surface is proved for the EF-IN
+/// gate: a tenth of its weld band.
+const NURBS_PROOF: f64 = 0.1 * ON_SURFACE_BAND_FACTOR * 1e-7;
+
 /// The sine of the largest angle at which a circle or ellipse leaf leaving a
 /// plane still grazes it rather than crosses it.
 const CONIC_GRAZE_SIN: f64 = 1e-3;
@@ -179,10 +183,9 @@ fn fill_section_sc(arena: &mut GfaArena) {
 
 /// Distance from `p` to the face's underlying surface (infinite extent).
 ///
-/// Returns `None` when the measurement is not trustworthy: NURBS
-/// projection can silently fall back to a domain-midpoint guess on
-/// convergence failure, which would read as a huge distance and falsely
-/// reject a leaf that genuinely hugs the surface.
+/// A B-spline surface's distance is read short by the slack of the proof
+/// of its nearest point, so that a leaf is dropped only where it is proved
+/// off the surface. `None` where the measurement is not proved.
 fn dist_to_surface(
     surface: &brepkit_topology::face::FaceSurface,
     p: brepkit_math::vec::Point3,
@@ -192,7 +195,11 @@ fn dist_to_surface(
         FaceSurface::Plane { normal, d } => {
             Some((normal.dot(brepkit_math::vec::Vec3::new(p.x(), p.y(), p.z())) - d).abs())
         }
-        FaceSurface::Nurbs(_) => None,
+        FaceSurface::Nurbs(n) => {
+            brepkit_math::nurbs::projection::distance_to_surface_at_least(n, p, NURBS_PROOF)
+                .ok()
+                .flatten()
+        }
         other => other
             .project_point(p)
             .and_then(|(u, v)| other.evaluate(u, v))
@@ -476,10 +483,8 @@ fn fill_ef_in(topo: &Topology, arena: &mut GfaArena) {
                         match dist_to_surface(&surface, p) {
                             Some(d) if k < 2 => ends = ends.max(d),
                             Some(d) => middle = middle.max(d),
-                            // Untrustworthy measurement (NURBS projection can
-                            // silently return a wrong foot): keep the leaf —
-                            // the pre-gate behavior — rather than risk a
-                            // false drop.
+                            // A measurement that does not settle keeps the
+                            // leaf rather than risk a false drop.
                             None => return true,
                         }
                     }
