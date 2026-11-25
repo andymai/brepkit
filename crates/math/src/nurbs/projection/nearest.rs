@@ -222,6 +222,18 @@ impl Search {
     }
 }
 
+/// How much nearer than the result of [`nearest`] a point of `surface` may
+/// lie to `point`: `tolerance`, or the share of the size of the model that
+/// rounding can move a distance by, whichever is larger.
+pub(super) fn slack(surface: &NurbsSurface, point: Point3, tolerance: f64) -> f64 {
+    let hull = surface.aabb();
+    let size = [hull.min, hull.max, point]
+        .iter()
+        .flat_map(|c| [c.x(), c.y(), c.z()])
+        .fold(0.0, |m: f64, c| m.max(c.abs()));
+    tolerance.max(ROUNDING * size)
+}
+
 /// The nearest point of `surface` to `point`, from `start`: no point of the
 /// surface is nearer than the result by more than `tolerance`, or than a
 /// share of the size of the model that rounding can move a distance by.
@@ -239,12 +251,7 @@ pub(super) fn nearest(
     tolerance: f64,
     start: SurfaceProjection,
 ) -> Result<SurfaceProjection, MathError> {
-    let hull = surface.aabb();
-    let size = [hull.min, hull.max, point]
-        .iter()
-        .flat_map(|c| [c.x(), c.y(), c.z()])
-        .fold(0.0, |m: f64, c| m.max(c.abs()));
-    let slack = tolerance.max(ROUNDING * size);
+    let slack = slack(surface, point, tolerance);
     let mut best = start;
     if best.distance <= slack {
         return Ok(best);
