@@ -33,8 +33,10 @@ impl Bvh {
     /// is empty, returns an empty BVH.
     ///
     /// A box with a coordinate that is not a number holds all of space
-    /// here: each query returns its primitive, and the boxes above it are
-    /// numbers, so no other primitive is lost.
+    /// here: each query returns its primitive. Such a box, and any other
+    /// with no centre (one infinite both ways along an axis), goes in a
+    /// subtree of its own beside the rest under the root, so the split of
+    /// the boxes with a centre is as it would be without them.
     #[must_use]
     pub fn build(aabbs: &[(usize, Aabb3)]) -> Self {
         if aabbs.is_empty() {
@@ -45,9 +47,29 @@ impl Bvh {
             .iter()
             .map(|&(id, b)| (id, if b.is_number() { b } else { Aabb3::WHOLE }))
             .collect();
-        let mut indices: Vec<usize> = (0..aabbs.len()).collect();
-        let mut nodes = Vec::with_capacity(2 * aabbs.len());
-        build_recursive(&aabbs, &mut indices, &mut nodes);
+        let (mut centred, mut unplaced): (Vec<usize>, Vec<usize>) =
+            (0..aabbs.len()).partition(|&i| has_centre(aabbs[i].1));
+        let mut nodes = Vec::with_capacity(2 * aabbs.len() + 1);
+        if unplaced.is_empty() {
+            build_recursive(&aabbs, &mut centred, &mut nodes);
+        } else if centred.is_empty() {
+            build_recursive(&aabbs, &mut unplaced, &mut nodes);
+        } else {
+            nodes.push(BvhNode {
+                aabb: Aabb3::WHOLE,
+                primitive: usize::MAX,
+                left: 0,
+                right: 0,
+            });
+            let left = build_recursive(&aabbs, &mut centred, &mut nodes);
+            let right = build_recursive(&aabbs, &mut unplaced, &mut nodes);
+            nodes[0] = BvhNode {
+                aabb: nodes[left].aabb.union(nodes[right].aabb),
+                primitive: usize::MAX,
+                left,
+                right,
+            };
+        }
         Self { nodes }
     }
 
@@ -292,7 +314,7 @@ fn build_recursive(
         indices.sort_by(|&a, &b| {
             let ca = centroid_axis(aabbs[a].1, axis);
             let cb = centroid_axis(aabbs[b].1, axis);
-            ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
+            ca.total_cmp(&cb)
         });
 
         let n = indices.len();
@@ -325,7 +347,7 @@ fn build_recursive(
     indices.sort_by(|&a, &b| {
         let ca = centroid_axis(aabbs[a].1, best_axis);
         let cb = centroid_axis(aabbs[b].1, best_axis);
-        ca.partial_cmp(&cb).unwrap_or(std::cmp::Ordering::Equal)
+        ca.total_cmp(&cb)
     });
 
     // Allocate internal node.
@@ -343,6 +365,11 @@ fn build_recursive(
     nodes[node_idx].right = right;
 
     node_idx
+}
+
+/// Whether each coordinate of a box's centre is a number.
+fn has_centre(aabb: Aabb3) -> bool {
+    !aabb.center().0.iter().any(|c| c.is_nan())
 }
 
 /// Get the centroid coordinate along a specific axis.
@@ -388,6 +415,57 @@ mod tests {
         let mut along = bvh.query_ray(Point3::new(-5.0, 0.5, 0.5), Vec3::new(1.0, 0.0, 0.0));
         along.sort_unstable();
         assert_eq!(along, (0..9).collect::<Vec<_>>());
+    }
+
+    /// A thousand boxes on a grid, every seventh one with a coordinate that
+    /// is not a number, interleaved: the tree builds (a sort of the centres
+    /// with a NaN among them broke the sort's order), and a query at each
+    /// finite box finds that box and each of the others, and no finite box
+    /// it misses. The closest query and the ray query lose no finite box
+    /// either.
+    #[test]
+    fn a_thousand_boxes_with_every_seventh_not_a_number_build_and_query() {
+        let bad = |i: usize| i % 7 == 3;
+        let boxes: Vec<(usize, Aabb3)> = (0..1000)
+            .map(|i| {
+                if bad(i) {
+                    (
+                        i,
+                        Aabb3::from_points([Point3::new(f64::NAN, i as f64, 0.0)]),
+                    )
+                } else {
+                    let (x, y) = ((i % 25) as f64 * 3.0, (i / 25) as f64 * 3.0);
+                    make_box(i, x, y, (i % 3) as f64, 1.0)
+                }
+            })
+            .collect();
+        let bvh = Bvh::build(&boxes);
+        // The finite boxes keep a subtree of their own, split by their
+        // centres alone.
+        assert!(bvh.nodes[bvh.nodes[0].left].aabb.is_finite());
+        let unknown: Vec<usize> = (0..1000).filter(|&i| bad(i)).collect();
+        for &(i, b) in boxes.iter().filter(|(i, _)| !bad(*i)) {
+            let mut hits = bvh.query_overlap(&Aabb3::from_points([b.center()]));
+            hits.sort_unstable();
+            let mut want = unknown.clone();
+            want.push(i);
+            want.sort_unstable();
+            assert_eq!(hits, want, "box {i}");
+            let mut along = bvh.query_ray(
+                b.center() - Vec3::new(0.0, 0.0, 10.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            );
+            along.sort_unstable();
+            assert!(along.binary_search(&i).is_ok(), "box {i} on its ray");
+            let seen = bvh.query_closest_with_distance(b.center(), &|j| {
+                if bad(j) {
+                    f64::INFINITY
+                } else {
+                    (boxes[j].1.center() - b.center()).length_squared()
+                }
+            });
+            assert_eq!(seen, Some(i), "box {i} nearest");
+        }
     }
 
     #[test]
