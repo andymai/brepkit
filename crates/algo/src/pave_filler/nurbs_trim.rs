@@ -719,14 +719,17 @@ const MOST_LOOP_DEPTH: u32 = 40;
 const ANGLE_SLACK: f64 = 1e-7;
 
 /// Whether each of the loops (`spans`, ranges of `pieces`) is a simple
-/// curve and no two meet: no two pieces meet, but two that follow each
-/// other in a loop, at their joint. A parity read of loops that are each
-/// simple reads every point inside the outer loop and no hole as inside,
-/// whatever the holes do; a loop that runs round a region twice reads it
-/// outside.
+/// curve and no two meet: no piece crosses itself, and no two pieces meet
+/// but two that follow each other in a loop, at their joint. A parity read
+/// of loops that are each simple reads every point inside the outer loop
+/// and no hole as inside, whatever the holes do; a loop that runs round a
+/// region twice reads it outside.
 ///
-/// A piece whose box lies within `joint` of a point is read as part of the
-/// joint of the pieces on either side of it. Two pieces that do not follow
+/// A Bezier piece is halved until each part runs one way ([`one_way`]): a
+/// line or a conic arc of under half a turn already does. A run of pieces
+/// whose box lies within `joint` of a point is read as the joint of the
+/// pieces on either side of it: each piece of the run may meet those two
+/// and the rest of the run, and no other. Two pieces that do not follow
 /// each other are apart where their boxes, grown by `slack`, keep apart,
 /// halved, the larger first, as far as needed. Two that follow each other
 /// each lie in a cone from their joint ([`cone2`]): where the cones meet
@@ -734,49 +737,118 @@ const ANGLE_SLACK: f64 = 1e-7;
 /// size over the angle between them; else they are halved, the halves at
 /// the joint read so again. Two ends of pieces within `2 slack` of each
 /// other away from a joint show the pieces meet. A loop of fewer than three
-/// pieces, more than [`MOST_LOOP_PAIRS`] pairs read, or a piece halved
-/// [`MOST_LOOP_DEPTH`] times reads as not simple.
+/// pieces past its joints, more than [`MOST_LOOP_PAIRS`] pairs read, or a
+/// piece halved [`MOST_LOOP_DEPTH`] times reads as not simple.
+#[allow(clippy::too_many_lines)]
 fn loops_are_simple(pieces: &[Piece], spans: &[(usize, usize)], slack: f64, joint: f64) -> bool {
-    // The pieces each loop runs through past its joints, by their places,
-    // and the place that follows each.
-    let mut proper: Vec<usize> = Vec::new();
-    let mut next: Vec<usize> = Vec::new();
+    let mut budget = MOST_LOOP_PAIRS;
+    // The loops' pieces, each running one way, and each loop's range.
+    let mut parts: Vec<Piece> = Vec::new();
+    let mut loops: Vec<(usize, usize)> = Vec::with_capacity(spans.len());
     for &(first, end) in spans {
-        let start = proper.len();
-        for k in first..end {
-            let b = pieces[k].bounds(0.0);
-            if (b.hi[0] - b.lo[0]).hypot(b.hi[1] - b.lo[1]) > joint {
-                proper.push(k);
+        let start = parts.len();
+        for piece in &pieces[first..end] {
+            if !one_way(piece.clone(), slack, 0, &mut budget, &mut parts) {
+                return false;
             }
         }
-        let count = proper.len() - start;
-        if count < 3 {
+        loops.push((start, parts.len()));
+    }
+    let size = |b: Box2| (b.hi[0] - b.lo[0]).hypot(b.hi[1] - b.lo[1]);
+    // Each part's loop, whether it lies in a joint, and the parts past its
+    // joint before and after it: for a part of a joint, those its joint
+    // lies between; for any other, its neighbours past their joints.
+    let count = parts.len();
+    let mut loop_of = vec![0_usize; count];
+    let mut in_joint = vec![false; count];
+    let mut before = vec![0_usize; count];
+    let mut after = vec![0_usize; count];
+    for (l, &(start, end)) in loops.iter().enumerate() {
+        let n = end - start;
+        let small: Vec<bool> = (start..end)
+            .map(|k| size(parts[k].bounds(0.0)) <= joint)
+            .collect();
+        // A run of small parts is a joint where its whole box is small too.
+        let mut run_box: Vec<Option<Box2>> = vec![None; n];
+        let mut k = 0;
+        while k < n {
+            if !small[k] {
+                k += 1;
+                continue;
+            }
+            let mut stop = k;
+            while stop + 1 < n && small[stop + 1] {
+                stop += 1;
+            }
+            let held = (k..=stop)
+                .map(|m| parts[start + m].bounds(0.0))
+                .reduce(|x, y| Box2 {
+                    lo: [x.lo[0].min(y.lo[0]), x.lo[1].min(y.lo[1])],
+                    hi: [x.hi[0].max(y.hi[0]), x.hi[1].max(y.hi[1])],
+                });
+            for slot in &mut run_box[k..=stop] {
+                *slot = held;
+            }
+            k = stop + 1;
+        }
+        // A run that wraps past the loop's start is read in two halves,
+        // each of which must be small.
+        let joint_at: Vec<bool> = (0..n)
+            .map(|m| small[m] && run_box[m].is_some_and(|b| size(b) <= joint))
+            .collect();
+        if joint_at.iter().filter(|&&j| !j).count() < 3 {
             return false;
         }
-        next.extend((start..proper.len()).map(|i| start + (i - start + 1) % count));
+        for m in 0..n {
+            loop_of[start + m] = l;
+            in_joint[start + m] = joint_at[m];
+            // The nearest parts past joints before and after `m`.
+            let prev = (1..=n)
+                .map(|d| (m + n - d) % n)
+                .find(|&q| !joint_at[q])
+                .unwrap_or(m);
+            let next = (1..=n)
+                .map(|d| (m + d) % n)
+                .find(|&q| !joint_at[q])
+                .unwrap_or(m);
+            before[start + m] = start + prev;
+            after[start + m] = start + next;
+        }
     }
-    let boxes: Vec<Box2> = proper.iter().map(|&k| pieces[k].bounds(slack)).collect();
-    let mut order: Vec<usize> = (0..proper.len()).collect();
+    let boxes: Vec<Box2> = parts.iter().map(|piece| piece.bounds(slack)).collect();
+    let mut order: Vec<usize> = (0..count).collect();
     order.sort_by(|&x, &y| boxes[x].lo[0].total_cmp(&boxes[y].lo[0]));
-    let mut read = 0_usize;
     let mut work: Vec<(Piece, Piece, bool, u32)> = Vec::new();
     for (place, &x) in order.iter().enumerate() {
         for &y in &order[place + 1..] {
-            read += 1;
-            if read > MOST_LOOP_PAIRS {
+            if budget == 0 {
                 return false;
             }
+            budget -= 1;
             if boxes[y].lo[0] > boxes[x].hi[0] {
                 break;
             }
             if boxes[y].lo[1] > boxes[x].hi[1] || boxes[y].hi[1] < boxes[x].lo[1] {
                 continue;
             }
-            let (px, py) = (&pieces[proper[x]], &pieces[proper[y]]);
-            // Two pieces that follow each other, read from their joint.
-            if next[x] == y {
+            let (px, py) = (&parts[x], &parts[y]);
+            let one_loop = loop_of[x] == loop_of[y];
+            // A part of a joint may meet the rest of its joint and the two
+            // parts it lies between.
+            let joined = |j: usize, o: usize| {
+                in_joint[j]
+                    && (o == before[j]
+                        || o == after[j]
+                        || (in_joint[o] && before[o] == before[j] && after[o] == after[j]))
+            };
+            if one_loop && (joined(x, y) || joined(y, x)) {
+                continue;
+            }
+            // Two parts past joints that follow each other, read from their
+            // joint.
+            if one_loop && !in_joint[x] && !in_joint[y] && after[x] == y {
                 work.push((px.reversed(), py.clone(), true, 0));
-            } else if next[y] == x {
+            } else if one_loop && !in_joint[x] && !in_joint[y] && after[y] == x {
                 work.push((py.reversed(), px.clone(), true, 0));
             } else {
                 work.push((px.clone(), py.clone(), false, 0));
@@ -784,10 +856,10 @@ fn loops_are_simple(pieces: &[Piece], spans: &[(usize, usize)], slack: f64, join
         }
     }
     while let Some((x, y, corner, depth)) = work.pop() {
-        read += 1;
-        if read > MOST_LOOP_PAIRS {
+        if budget == 0 {
             return false;
         }
+        budget -= 1;
         let (bx, by) = (x.bounds(slack), y.bounds(slack));
         let parted = bx.lo[0] > by.hi[0]
             || by.lo[0] > bx.hi[0]
@@ -801,7 +873,6 @@ fn loops_are_simple(pieces: &[Piece], spans: &[(usize, usize)], slack: f64, join
         if (!corner && ends_meet) || depth >= MOST_LOOP_DEPTH {
             return false;
         }
-        let size = |b: Box2| (b.hi[0] - b.lo[0]).hypot(b.hi[1] - b.lo[1]);
         let (cut_x, cut_y) = (
             corner || size(bx) >= size(by),
             corner || size(by) > size(bx),
@@ -830,6 +901,66 @@ fn loops_are_simple(pieces: &[Piece], spans: &[(usize, usize)], slack: f64, join
         }
     }
     true
+}
+
+/// Adds `piece` to `out` in parts that each run one way: a line, or a
+/// conic arc of under half a turn, whole; a Bezier piece whole where the
+/// directions between its control points, each from one to a later one,
+/// lie in a cone of half-angle under a right angle, else halved. Its
+/// derivative is a blend of those directions with weights that are not
+/// negative, where its weights are positive, so it moves along the cone's
+/// axis all along and cannot cross itself. Each halving takes one of
+/// `budget`; `false` where it runs out, a part is halved
+/// [`MOST_LOOP_DEPTH`] times, or a direction is too short to read.
+fn one_way(piece: Piece, slack: f64, depth: u32, budget: &mut usize, out: &mut Vec<Piece>) -> bool {
+    let Hull::Bezier(net) = &piece.hull else {
+        out.push(piece);
+        return true;
+    };
+    let points: Vec<(f64, f64)> = net.iter().map(|q| (q[0] / q[2], q[1] / q[2])).collect();
+    let mut directions = Vec::new();
+    for (i, p) in points.iter().enumerate() {
+        for q in &points[i + 1..] {
+            directions.push((q.0 - p.0, q.1 - p.1));
+        }
+    }
+    if narrow_cone(&directions, slack).is_some() {
+        out.push(piece);
+        return true;
+    }
+    if depth >= MOST_LOOP_DEPTH || *budget == 0 {
+        return false;
+    }
+    *budget -= 1;
+    let (left, right) = piece.halves();
+    one_way(left, slack, depth + 1, budget, out) && one_way(right, slack, depth + 1, budget, out)
+}
+
+/// The axis and half-angle of a cone that holds `directions`, each read to
+/// an angle of its rounding over its length. `None` where a direction is no
+/// longer than a few `slack`, or the half-angle reaches a right angle.
+fn narrow_cone(directions: &[(f64, f64)], slack: f64) -> Option<((f64, f64), f64)> {
+    let units: Vec<((f64, f64), f64)> = directions
+        .iter()
+        .map(|&(x, y)| {
+            let length = x.hypot(y);
+            (length > 4.0 * slack && length.is_finite())
+                .then(|| ((x / length, y / length), 4.0 * slack / length))
+        })
+        .collect::<Option<_>>()?;
+    let sum = units
+        .iter()
+        .fold((0.0, 0.0), |s, ((x, y), _)| (s.0 + x, s.1 + y));
+    let length = sum.0.hypot(sum.1);
+    if units.is_empty() || length.is_nan() || length <= 0.0 {
+        return None;
+    }
+    let axis = (sum.0 / length, sum.1 / length);
+    let half = units
+        .iter()
+        .map(|((x, y), err)| x.madd(axis.0, y * axis.1).clamp(-1.0, 1.0).acos() + err)
+        .fold(0.0_f64, f64::max);
+    (half < std::f64::consts::FRAC_PI_2).then_some((axis, half))
 }
 
 /// The axis and half-angle of a cone from a piece's start that holds the
@@ -1237,5 +1368,97 @@ mod tests {
         assert!(!trimmed(&[eight]));
         assert!(!trimmed(&[outer, across]));
         assert!(trimmed(&[outer, inside]));
+    }
+
+    /// The trim of loops of the given pieces, each a line between two
+    /// points or a cubic B-spline over `[0, 1]` by its four control points,
+    /// on the unit sheet.
+    fn trim_of_pieces(wires: &[Vec<Vec<(f64, f64)>>]) -> Option<NurbsFaceTrim> {
+        let curves: Vec<Vec<(Curve2D, (f64, f64))>> = wires
+            .iter()
+            .map(|wire| {
+                wire.iter()
+                    .map(|points| {
+                        let at = |k: usize| Point2::new(points[k].0, points[k].1);
+                        if points.len() == 2 {
+                            let along = at(1) - at(0);
+                            let line = Line2D::new(at(0), along).unwrap();
+                            (Curve2D::Line(line), (0.0, along.length()))
+                        } else {
+                            let cubic = NurbsCurve2D::new(
+                                3,
+                                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                                (0..4).map(at).collect(),
+                                vec![1.0; 4],
+                            )
+                            .unwrap();
+                            (Curve2D::Nurbs(cubic), (0.0, 1.0))
+                        }
+                    })
+                    .collect()
+            })
+            .collect();
+        let loops: Vec<Vec<Run<'_>>> = curves
+            .iter()
+            .map(|w| w.iter().map(|(c, run)| (c, *run, 0)).collect())
+            .collect();
+        NurbsFaceTrim::of_runs(&sheet(), &loops, Vec::new())
+    }
+
+    /// A loop whose cubic curls once round itself the way the square round
+    /// it turns: the point `(0.5, 0.47)` inside the curl is wound twice, so a
+    /// parity read of the loop reads it outside. The cubic's control points'
+    /// directions span more than half a turn, and its halves that run one
+    /// way cross each other, so the loop takes no trim. The cubic opened out
+    /// so it does not curl, peaking at `(0.5, 0.5)`, takes one, which reads
+    /// the points above the peak inside and below it outside.
+    #[test]
+    fn a_loop_whose_cubic_curls_round_itself_takes_no_trim() {
+        let square = |cubic: Vec<(f64, f64)>| {
+            vec![vec![
+                cubic,
+                vec![(0.8, 0.2), (0.9, 0.2)],
+                vec![(0.9, 0.2), (0.9, 0.9)],
+                vec![(0.9, 0.9), (0.1, 0.9)],
+                vec![(0.1, 0.9), (0.1, 0.2)],
+                vec![(0.1, 0.2), (0.2, 0.2)],
+            ]]
+        };
+        let curl = square(vec![(0.2, 0.2), (0.9, 0.6), (0.1, 0.6), (0.8, 0.2)]);
+        assert!(trim_of_pieces(&curl).is_none());
+        let open = square(vec![(0.2, 0.2), (0.4, 0.6), (0.6, 0.6), (0.8, 0.2)]);
+        let trim = trim_of_pieces(&open).unwrap();
+        assert_eq!(trim.holds_parameters(Point2::new(0.5, 0.6)), Some(true));
+        assert_eq!(trim.holds_parameters(Point2::new(0.5, 0.4)), Some(false));
+    }
+
+    /// An outer square whose bottom side runs through four pieces of 5e-7,
+    /// read as one joint, and a thin hole whose two long sides cross that
+    /// side only there: the loops cross, so they take no trim. The hole
+    /// moved a thousandth clear of the bottom side takes one.
+    #[test]
+    fn a_loop_crossing_through_a_run_of_tiny_pieces_takes_no_trim() {
+        let mut outer = vec![vec![(0.1, 0.1), (0.5, 0.1)]];
+        for k in 0..4 {
+            let x = 0.5 + 5e-7 * f64::from(k);
+            outer.push(vec![(x, 0.1), (x + 5e-7, 0.1)]);
+        }
+        outer.extend([
+            vec![(0.500_002, 0.1), (0.9, 0.1)],
+            vec![(0.9, 0.1), (0.9, 0.9)],
+            vec![(0.9, 0.9), (0.1, 0.9)],
+            vec![(0.1, 0.9), (0.1, 0.1)],
+        ]);
+        let hole = |low: f64| {
+            vec![
+                vec![(0.500_000_5, low), (0.500_001, 0.3)],
+                vec![(0.500_001, 0.3), (0.500_001_5, low)],
+                vec![(0.500_001_5, low), (0.7, low - 0.03)],
+                vec![(0.7, low - 0.03), (0.3, low - 0.03)],
+                vec![(0.3, low - 0.03), (0.500_000_5, low)],
+            ]
+        };
+        assert!(trim_of_pieces(&[outer.clone(), hole(0.05)]).is_none());
+        assert!(trim_of_pieces(&[outer, hole(0.15)]).is_some());
     }
 }
