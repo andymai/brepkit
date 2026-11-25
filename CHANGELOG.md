@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.11.54](https://github.com/andymai/brepkit/compare/v4.11.53...v4.11.54) (2026-11-25)
+
+
+### Bug Fixes
+
+* **algo:** prove a NURBS surface's sides apart, and keep a crossing of a NURBS face only inside its pcurves ([#2841](https://github.com/andymai/brepkit/issues/2841)) ([57892c6](https://github.com/andymai/brepkit/commit/57892c62e05fa7194200065b865b6452e9a2ffe3))
+* **operations:** refuse a chamfer chain that no chamfer fits, for its cause ([#2865](https://github.com/andymai/brepkit/issues/2865)) ([017e343](https://github.com/andymai/brepkit/commit/017e343384437f71e1cc3cc340b336cc29335039))
+
 ## [4.11.53](https://github.com/andymai/brepkit/compare/v4.11.52...v4.11.53) (2026-11-25)
 
 
