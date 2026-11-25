@@ -4867,6 +4867,26 @@ fn project_angle_on_curve(curve: &brepkit_topology::edge::EdgeCurve, p: Point3) 
     }
 }
 
+/// An edge's middle and size, as `merge_duplicate_edges` compares copies.
+type EdgeMiddle = Option<(Point3, f64, u64)>;
+
+/// A fitted curve's identity: its control points, weights and knots, so
+/// edges cut from one curve key alike (never 0, which marks an exact curve).
+fn nurbs_key(nc: &brepkit_math::nurbs::curve::NurbsCurve) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for p in nc.control_points() {
+        [p.x(), p.y(), p.z()].map(f64::to_bits).hash(&mut h);
+    }
+    for w in nc.weights() {
+        w.to_bits().hash(&mut h);
+    }
+    for k in nc.knots() {
+        k.to_bits().hash(&mut h);
+    }
+    h.finish().max(1)
+}
+
 /// Merge duplicate edges across selected faces by quantized endpoint position.
 ///
 /// For each group of edges with the same quantized start/end positions,
@@ -4973,58 +4993,77 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
             continue; // Only one unique edge — no merge needed
         }
 
-        // Edges sharing both ends are one edge only where they are proved
-        // one curve along their whole length: a hole's arc and the straight
-        // edge across it (a box's top crossing the hole) join the same two
-        // points, and merged they give the arc's wall and the box's strip
-        // one edge set, which then reads as a doubled face and drops both;
-        // a circle's and an ellipse's arcs through the same ends and middle
-        // are two edges too. Copies of one edge lie within a ten-thousandth
-        // of the edge's size of each other; a set that still lacks a partner
-        // joins one within a quarter of it.
-        let size = |e: EdgeId| -> Result<(&EdgeCurve, Point3, Point3, f64), AlgoError> {
+        // Edges sharing both ends are one edge only when they also run
+        // through the same middle: a hole's arc and the straight edge across
+        // it (a box's top crossing the hole) join the same two points, and
+        // merged they give the arc's wall and the box's strip one edge set,
+        // which then reads as a doubled face and drops both.
+        // The middle of an edge, with the edge's size and, for a fitted
+        // curve, its curve (0 for an exact one); `None` where it cannot be
+        // trusted: a closed edge's middle hangs on its own parameter origin,
+        // and a fitted curve's span may resolve to its whole parent curve.
+        // Those keep matching by their ends alone. Fitted edges compare
+        // middles only on the very same curve, where two pieces between the
+        // same two points (a closed section's two halves) are two edges; two
+        // fits of one section, one per face, read their spans each its own
+        // way and still match by their ends.
+        let middle = |e: EdgeId| -> Result<EdgeMiddle, AlgoError> {
             let edge = topo.edge(e)?;
             let sp = topo.vertex(edge.start())?.point();
             let ep = topo.vertex(edge.end())?.point();
+            if quantize_point(sp, tol) == quantize_point(ep, tol) {
+                return Ok(None);
+            }
             let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            let curve_key = if let EdgeCurve::NurbsCurve(nc) = edge.curve() {
+                let (d0, d1) = nc.domain();
+                if (t1 - t0).abs() >= (d1 - d0) * (1.0 - 1e-9) {
+                    return Ok(None);
+                }
+                nurbs_key(nc)
+            } else {
+                0
+            };
             let mid = edge
                 .curve()
                 .evaluate_with_endpoints(0.5 * (t0 + t1), sp, ep);
-            Ok((
-                edge.curve(),
-                sp,
-                ep,
+            Ok(Some((
+                mid,
                 (ep - sp).length().max((mid - sp).length()),
-            ))
+                curve_key,
+            )))
         };
-        let one = |a: EdgeId, b: EdgeId, share: f64| -> Result<bool, AlgoError> {
-            let ((ca, sa, ea, za), (cb, sb, eb, zb)) = (size(a)?, size(b)?);
-            Ok(super::face_splitter::curves_one_curve(
-                (ca, sa, ea),
-                (cb, sb, eb),
-                share.madd(za.max(zb), 10.0 * tol),
-            ))
+        // How far apart two copies' middles may lie: a quarter of the edge's
+        // size, so a faceted ball's chord still joins the exact arc it stands
+        // for (2.5% apart at 32 segments), while an arc over a hole and the
+        // straight edge across it (98%) stay apart.
+        let alongside = |a: EdgeMiddle, b: EdgeMiddle| match (a, b) {
+            (Some((ma, sa, ka)), Some((mb, sb, kb))) if ka == kb => {
+                (ma - mb).length() <= 0.25 * sa.max(sb) + 10.0 * tol
+            }
+            _ => true,
+        };
+        // Copies of one edge share their middle outright.
+        let same = |a: EdgeMiddle, b: EdgeMiddle| match (a, b) {
+            (Some((ma, sa, ka)), Some((mb, sb, kb))) if ka == kb => {
+                (ma - mb).length() <= 1e-4 * sa.max(sb) + 10.0 * tol
+            }
+            _ => true,
         };
         // Copies first; then a set of copies that still lacks a partner (an
         // odd number of uses) joins one alongside it that lacks one too. Two
         // sets each already paired are two edges: a hole's short rim arc and
         // a box edge's chord across the opening, each shared by its own two
         // faces, would otherwise weld into one edge of four faces.
-        let mut sets: Vec<(EdgeId, Vec<EdgeId>, usize)> = Vec::new();
+        let mut sets: Vec<(EdgeId, EdgeMiddle, Vec<EdgeId>, usize)> = Vec::new();
         for &e in &unique {
+            let mid = middle(e)?;
             let n = uses.get(&e).copied().unwrap_or(0);
-            let mut into = None;
-            for (k, set) in sets.iter().enumerate() {
-                if one(e, set.0, 1e-4)? {
-                    into = Some(k);
-                    break;
-                }
-            }
-            if let Some(k) = into {
-                sets[k].1.push(e);
-                sets[k].2 += n;
+            if let Some(set) = sets.iter_mut().find(|set| same(mid, set.1)) {
+                set.2.push(e);
+                set.3 += n;
             } else {
-                sets.push((e, vec![e], n));
+                sets.push((e, mid, vec![e], n));
             }
         }
         // The arc a ball's equator chords stand for is the canonical edge,
@@ -5037,25 +5076,23 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
         if chords_of_arc {
             sets.sort_by_key(|set| !is_arc(set.0));
         }
-        let mut canonicals: Vec<(EdgeId, usize)> = Vec::new();
+        let mut canonicals: Vec<(EdgeId, EdgeMiddle, usize)> = Vec::new();
         let mut joins: Vec<(EdgeId, EdgeId)> = Vec::new();
-        for (head, members, n) in sets {
-            let mut into = None;
-            if chords_of_arc {
-                into = (!canonicals.is_empty()).then_some(0);
+        for (head, mid, members, n) in sets {
+            let into = if chords_of_arc {
+                canonicals.first_mut()
             } else if n % 2 == 1 {
-                for (k, (c, cn)) in canonicals.iter().enumerate() {
-                    if *cn % 2 == 1 && one(head, *c, 0.25)? {
-                        into = Some(k);
-                        break;
-                    }
-                }
-            }
-            let canonical = if let Some(k) = into {
-                canonicals[k].1 += n;
-                canonicals[k].0
+                canonicals
+                    .iter_mut()
+                    .find(|(_, cm, cn)| *cn % 2 == 1 && alongside(mid, *cm))
             } else {
-                canonicals.push((head, n));
+                None
+            };
+            let canonical = if let Some(c) = into {
+                c.2 += n;
+                c.0
+            } else {
+                canonicals.push((head, mid, n));
                 head
             };
             joins.extend(
