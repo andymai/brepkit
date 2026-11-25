@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795645579983,
+  "lastUpdate": 1795648785976,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -79109,6 +79109,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 26096720,
             "range": "± 344289",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0c57ee0dd53b934eaebe75f39a4c1850ddd8ff62",
+          "message": "fix(math): give every finite non-zero vector a length and a direction, at any scale (#2904)\n\n## Summary\n\n#2885 reported that `transform_solid` refuses any uniform scale above\nabout 1e154. The cause is in `Vector::length` and `Vector::normalize`,\nwhich square the raw components. On main, `Vec3::new(1e200, 0,\n0).length()` is infinite, and `Vec3::new(1e-200, 0, 0).length()` is 0,\nso `normalize` returns `ZeroVector` for both. A transform maps each\nplane normal through the inverse transpose, whose entries are near\n1e-200 for a scale of 1e200. So a box of size 2 scaled by 1e200 fails\nwith `Math(ZeroVector)`. So do a linear pattern along (1e200, 0, 0) and\na mirror across a plane with that normal.\n\nWith this change, every finite non-zero vector has a length and a\ndirection. The pose sweep and the truth audit give the same output as\nmain.\n\nFixes #2885.\n\n## The change\n\n- **Length and direction.** Where the sum of squares overflows or falls\nbelow 2^-1000, `length` and `normalize` first scale the vector by 2^-600\nor 2^600. That changes no digit. A vector whose squares are in range\ntakes the same steps as before.\n- **Failure cases.** `normalize` now fails only for a zero vector or a\ncomponent that is not finite. `length` is infinite only for a true\nlength past `f64::MAX`.\n- **Callers.** `length_squared` still returns the raw square, for\ncallers that compare squares.\n- **Directions and angles at a unit size.** Some callers relied on\n`normalize` failing to reject a degenerate input. Others took raw\nproducts of vectors far from unit size. They now take their operands at\na unit size, by an exact power of two:\n- the transform's orthogonality test and its conic axes, so a shear at\n1e200 is not read as a ball;\n- the winding of a face's loops, so a tiny quarter turn is not read as\nnone;\n- `Frame3::from_normal_and_ref` and the parabola and hyperbola frames,\nwhich refuse a reference along the normal at any size.\n- **Square parts.** `square_part` takes a vector at a unit size and\nrefuses only a part that rounding alone could produce, by a derived\nbound. A short part is projected twice, so the result is square to the\naxis within a few ulps. A reference 1e-9 or 1e-15 off the normal with an\nexact part still resolves, as on main.\n- **IGES.** The reader now reads a plane whose normal is (1e300, 1e300,\n1e300) as the unit normal (1, 1, 1)/√3, where before it refused it.\n\n## Tests\n\n- `a_vector_of_any_finite_size_has_a_length_and_a_direction` covers\nsizes from 1e-310 to 1.7e308 for `Vec3` and `Vec2`, with bit-exact\nlengths.\n- `a_box_scaled_by_1e200_or_1e_minus_200_keeps_its_faces_and_volume`\nruns in 3 poses. It checks each vertex at its image and each plane\nnormal's length, then moves the box back, where it measures 8 and is\nvalid.\n- `a_pattern_along_a_direction_of_any_finite_size_builds` covers linear,\ngrid and circular patterns, and\n`a_mirror_across_a_normal_of_any_finite_size_builds` covers the mirror,\nat 1e200 and 1e-200.\n- These four fail on main. So do the tests for a sheared ball at 1e200,\na tiny turn, and a frame whose reference lies along its normal.\n- `a_square_part_near_the_axis_is_square_to_it_or_refused` and\n`an_ellipse_keeps_the_major_axis_of_a_reference_near_its_normal` cover\nreferences from 1e-15 to 0.3 off the axis, at sizes 1e-200, 1 and 1e200.\n- brepkit-math (800) and brepkit-check (196) pass, and so do all\nbrepkit-operations and brepkit-io tests (3374, 28 skipped).\n\n## Still open\n\n- The IGES reader refuses a plane whose normal is shorter than an\nabsolute 1e-10, such as one with coefficients (1e-200, 0, 0, D) (#2903).",
+          "timestamp": "2026-11-25T23:15:16Z",
+          "tree_id": "5a44f99138f2200e14ebcc5bd2986cd2e0fed16e",
+          "url": "https://github.com/andymai/brepkit/commit/0c57ee0dd53b934eaebe75f39a4c1850ddd8ff62"
+        },
+        "date": 1795648771398,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1239411,
+            "range": "± 3610",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1316181,
+            "range": "± 12499",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14684,
+            "range": "± 216",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 771901,
+            "range": "± 3118",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28283439,
+            "range": "± 195748",
             "unit": "ns/iter"
           }
         ]
