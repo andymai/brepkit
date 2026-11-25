@@ -3661,7 +3661,7 @@ fn cdt_in_surface_frame(
         (v_min, dv),
         deflection,
         angular_tol,
-    );
+    )?;
     let divisions = lines.as_ref().map(|(us, vs)| (us.len() - 1, vs.len() - 1));
     if lines.is_none() && du > 1e-15 && dv > 1e-15 {
         let (n_u, n_v) = interior_grid_resolution(
@@ -3807,10 +3807,7 @@ fn cdt_in_surface_frame(
         // A NURBS face's grid lines follow its surface; the others are even.
         let (us, vs) = if let Some((mut us, mut vs)) = lines.take() {
             let surface = face_data.surface();
-            // Capped first: the twist pass reads every cell, and keeps to
-            // the same budget itself.
-            super::nurbs::cap_lines(&mut us, &mut vs, super::nurbs::GRID_MAX_CELLS);
-            untwist_grid_lines(surface, &mut us, &mut vs, deflection);
+            untwist_grid_lines(surface, &mut us, &mut vs, deflection)?;
             (us, vs)
         } else {
             let (n_u, n_v) = interior_grid_resolution(
@@ -5803,8 +5800,9 @@ fn extrusion_metric(
             (v_span, u_span),
             deflection,
             angular_tol,
-            1024,
+            (1024, super::MAX_DIVISIONS),
         )
+        .ok()?
         .max(1);
         let cell = speed_v * dv / divisions as f64;
         Some((cell / du, speed_v))
@@ -5816,8 +5814,9 @@ fn extrusion_metric(
             (u_span, v_span),
             deflection,
             angular_tol,
-            1024,
+            (1024, super::MAX_DIVISIONS),
         )
+        .ok()?
         .max(1);
         let cell = speed_u * du / divisions as f64;
         Some((speed_u, cell / dv))
@@ -5843,21 +5842,28 @@ fn ruled_metric(
     }
 }
 
-pub(super) const NURBS_MAX_DIVISIONS: usize = 1024;
+/// A face's grid lines, `u` then `v`.
+type GridLines = (Vec<f64>, Vec<f64>);
 
 /// The grid lines of a NURBS face across its parameter box, `u` then `v`:
 /// each direction's spans keep the chords of the face's own iso-lines within
 /// half the deflection and the angular tolerance, so the lines stand close
-/// where the surface turns and far apart where it runs straight.
+/// where the surface turns and far apart where it runs straight. `None` for a
+/// face on another surface.
+///
+/// # Errors
+///
+/// Returns [`crate::OperationsError::TooManySamples`] if a direction needs
+/// more lines than the sample limit, or the grid more cells.
 fn nurbs_grid_lines(
     surface: &FaceSurface,
     (u_min, du): (f64, f64),
     (v_min, dv): (f64, f64),
     deflection: f64,
     angular_tol: f64,
-) -> Option<(Vec<f64>, Vec<f64>)> {
+) -> Result<Option<GridLines>, crate::OperationsError> {
     let FaceSurface::Nurbs(nurbs) = surface else {
-        return None;
+        return Ok(None);
     };
     let at = |u: f64, v: f64| eval_surface_point(surface, u, v);
     let normal_at = |u: f64, v: f64| {
@@ -5874,25 +5880,32 @@ fn nurbs_grid_lines(
             knots,
             deflection,
             angular_tol,
-            NURBS_MAX_DIVISIONS,
+            super::MAX_DIVISIONS,
         )
     };
-    Some((
-        along(true, (u_span, v_span), nurbs.knots_u()),
-        along(false, (v_span, u_span), nurbs.knots_v()),
-    ))
+    let (us, vs) = (
+        along(true, (u_span, v_span), nurbs.knots_u())?,
+        along(false, (v_span, u_span), nurbs.knots_v())?,
+    );
+    super::check_grid(us.len(), vs.len(), deflection)?;
+    Ok(Some((us, vs)))
 }
 
 /// Cuts a NURBS face's grid lines where a cell between them is twisted
 /// ([`super::nurbs::untwist_lines`]).
+///
+/// # Errors
+///
+/// Returns [`crate::OperationsError::TooManySamples`] if the cut grid is
+/// past the sample limit.
 fn untwist_grid_lines(
     surface: &FaceSurface,
     us: &mut Vec<f64>,
     vs: &mut Vec<f64>,
     deflection: f64,
-) {
+) -> Result<(), crate::OperationsError> {
     let at = |u: f64, v: f64| eval_surface_point(surface, u, v);
-    super::nurbs::untwist_lines(&at, us, vs, deflection);
+    super::nurbs::untwist_lines(&at, us, vs, deflection)
 }
 
 fn nurbs_speeds(

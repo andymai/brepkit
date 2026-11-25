@@ -257,9 +257,14 @@ const MAX_SAMPLES: f64 = 1e7;
 /// that.
 const MAX_EDGE_SAMPLES: f64 = 1e6;
 
+/// The most divisions a mesher takes along one direction of a face, one
+/// fewer than its samples there ([`MAX_EDGE_SAMPLES`]).
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub(super) const MAX_DIVISIONS: usize = MAX_EDGE_SAMPLES as usize - 1;
+
 /// The refusal of `what`, which would take `samples` samples at
 /// `deflection`, past `limit`.
-fn too_many_samples(
+pub(super) fn too_many_samples(
     what: &str,
     samples: f64,
     limit: f64,
