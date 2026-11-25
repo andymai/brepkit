@@ -1211,3 +1211,32 @@ fn constructors_refuse_sizes_that_are_not_finite_and_in_range() {
     assert!(Hyperbola3D::new(o, z, 2.0, 1.0).is_ok());
     assert!(Line3D::new(o, x).is_ok());
 }
+
+/// An ellipse of semi-axes 2 and 1 about the normal (0, 0, 1), with the
+/// reference (1e-9, 0, 1): the reference's part square to the normal is
+/// (1e-9, 0, 0), exact, so the major axis lies along x. Turned two ways,
+/// the major axis turns with it.
+#[test]
+fn an_ellipse_keeps_the_major_axis_of_a_reference_near_its_normal() {
+    use crate::mat::Mat4;
+    let turn = |m: &Mat4, v: Vec3| {
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        m.mul_point(origin + v) - m.mul_point(origin)
+    };
+    for pose in [
+        Mat4::identity(),
+        Mat4::rotation_x(0.7) * Mat4::rotation_z(-1.3),
+        Mat4::rotation_y(2.1) * Mat4::rotation_x(0.4),
+    ] {
+        let normal = turn(&pose, Vec3::new(0.0, 0.0, 1.0));
+        let reference = turn(&pose, Vec3::new(1e-9, 0.0, 1.0));
+        let e = Ellipse3D::new_with_ref(Point3::new(0.0, 0.0, 0.0), normal, 2.0, 1.0, reference)
+            .unwrap();
+        let want = turn(&pose, Vec3::new(1.0, 0.0, 0.0));
+        assert!(
+            (e.u_axis() - want).length() < 1e-6,
+            "{:?} for {want:?}",
+            e.u_axis()
+        );
+    }
+}
