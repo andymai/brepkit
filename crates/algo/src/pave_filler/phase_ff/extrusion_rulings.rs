@@ -397,7 +397,9 @@ impl CircleSection<'_> {
                         pending.push((m, b));
                         pending.push((a, m));
                     }
-                    Reading::Graze | Reading::Unsettled => walk.unknown(a, b, read.most()),
+                    Reading::Graze | Reading::Unsettled => {
+                        walk.unknown(a, b, read.most(), read.hull);
+                    }
                 }
             }
         }
@@ -409,19 +411,20 @@ impl CircleSection<'_> {
         Some(roots)
     }
 
-    /// How far apart the points of a run of parameters spread, given as one
-    /// or two pieces, the second on from the first across a closed
-    /// profile's seam.
-    fn spread(&self, ((a, b), (c, d)): Pieces) -> f64 {
-        let at = |t: f64| self.profile.evaluate(t);
-        (at(b) - at(a)).length() + (at(d) - at(c)).length()
+    /// A bound on how far apart a run's points spread: the diagonal of
+    /// `hull`, the box that holds the profile over the whole run. The
+    /// distance between the run's end points does not bound it, as the
+    /// profile can bow out and back between them.
+    fn spread(hull: Aabb3) -> f64 {
+        (hull.max - hull.min).length()
     }
 
-    /// The middle of a run of parameters, given as one or two pieces. `None`
-    /// where the run's points spread wider than the tolerance apart.
-    fn middle(&self, run: Pieces) -> Option<f64> {
+    /// The middle of a run of parameters, given as one or two pieces, which
+    /// `hull` holds. `None` where the run's points can spread wider than the
+    /// tolerance apart.
+    fn middle(&self, run: Pieces, hull: Aabb3) -> Option<f64> {
         let ((a, b), (c, d)) = run;
-        if self.spread(run) > self.tol {
+        if Self::spread(hull) > self.tol {
             return None;
         }
         let half = 0.5 * ((b - a) + (d - c));
@@ -433,12 +436,12 @@ impl CircleSection<'_> {
     }
 
     /// Whether a run with one side at both ends, where `most` bounds
-    /// `reach`, holds no crossing that counts, so that it may be read as a
-    /// touch. Crossings are merged into a touch only here, and only where
-    /// one of two bounds holds:
+    /// `reach` and `hull` holds the profile, holds no crossing that counts,
+    /// so that it may be read as a touch. Crossings are merged into a touch
+    /// only here, and only where one of two bounds holds:
     ///
-    /// - the run's points spread no wider than the tolerance, so any crossings
-    ///   in it lie within the tolerance of each other;
+    /// - the box `hull` spreads no wider than the tolerance, so any
+    ///   crossings in the run lie within the tolerance of each other;
     /// - `|reach| <= most` all along the run keeps the profile within
     ///   `most / (r + sqrt(r^2 - most))` of the circle, and that is no more
     ///   than the tolerance, so any lens between crossings in it is thinner
@@ -446,12 +449,12 @@ impl CircleSection<'_> {
     ///
     /// Two crossings around a lens deeper than the tolerance fail both, and
     /// the section is left to the marcher unless they are found apart.
-    fn quiet(&self, run: Pieces, most: f64) -> bool {
+    fn quiet(&self, hull: Aabb3, most: f64) -> bool {
         let r2 = self.radius * self.radius;
         // How far `reach` within `most` of zero lets the profile stand off
         // the circle, read so that it does not cancel.
         let off = most / (self.radius + (r2 - most).max(0.0).sqrt());
-        self.spread(run) <= self.tol || off <= self.tol
+        Self::spread(hull) <= self.tol || off <= self.tol
     }
 
     /// The Bernstein coefficients over `[a, b]` of `reach` times the weight
@@ -469,12 +472,14 @@ impl CircleSection<'_> {
         let origin = self.origin;
         let mut place = origin.x().abs().max(origin.y().abs()).max(origin.z().abs());
         let mut reach: f64 = self.radius;
+        let mut points = Vec::with_capacity(p + 1);
         for q in &homogeneous {
             let w = q[3];
             if w <= 0.0 {
                 return None;
             }
             let point = Point3::new(q[0] / w, q[1] / w, q[2] / w);
+            points.push(point);
             place = place
                 .max(point.x().abs())
                 .max(point.y().abs())
@@ -500,10 +505,19 @@ impl CircleSection<'_> {
             * max_w
             * reach.madd(place, reach.madd(reach, r2))
             * (n + 1) as f64;
+        // With positive weights the profile over the interval lies in the
+        // hull of its control points, so in their box, widened by what
+        // rounding can move them by.
+        let size = points
+            .iter()
+            .flat_map(|p| [p.x(), p.y(), p.z()])
+            .fold(0.0, |m: f64, x| m.max(x.abs()));
+        let hull = Aabb3::try_from_points(points)?.expanded(64.0 * f64::EPSILON * size);
         Some(Bernstein {
             c,
             band,
             least_w2: min_w * min_w,
+            hull,
         })
     }
     /// The root of `reach` in `[a, b]`, where it is monotone and changes
@@ -530,12 +544,14 @@ impl CircleSection<'_> {
 type Pieces = ((f64, f64), (f64, f64));
 
 /// A run of parameters where rounding hides the profile's side of the
-/// circle, and a bound on `reach` over it.
+/// circle, a bound on `reach` over it, and a box that holds the profile
+/// over it.
 #[derive(Clone, Copy)]
 struct Run {
     from: f64,
     to: f64,
     most: f64,
+    hull: Aabb3,
 }
 
 impl Run {
@@ -559,17 +575,20 @@ struct Walk {
 }
 
 impl Walk {
-    /// The side over `[a, b]` is not known, and `most` bounds `reach` there.
-    fn unknown(&mut self, a: f64, b: f64, most: f64) {
+    /// The side over `[a, b]` is not known, `most` bounds `reach` there,
+    /// and `hull` holds the profile there.
+    fn unknown(&mut self, a: f64, b: f64, most: f64, hull: Aabb3) {
         self.run = Some(self.run.map_or(
             Run {
                 from: a,
                 to: b,
                 most,
+                hull,
             },
             |run| Run {
                 to: b,
                 most: run.most.max(most),
+                hull: run.hull.union(hull),
                 ..run
             },
         ));
@@ -590,8 +609,11 @@ impl Walk {
         let run = self.run.take();
         match (self.last, run) {
             (None, _) => self.first = Some((side, run)),
-            (Some(before), _) if before != side => roots.push(section.middle(run?.pieces())?),
-            (Some(_), Some(run)) if !section.quiet(run.pieces(), run.most) => return None,
+            (Some(before), _) if before != side => {
+                let run = run?;
+                roots.push(section.middle(run.pieces(), run.hull)?);
+            }
+            (Some(_), Some(run)) if !section.quiet(run.hull, run.most) => return None,
             (Some(_), _) => {}
         }
         self.last = Some(side);
@@ -611,20 +633,22 @@ impl Walk {
             return [lead, self.run]
                 .into_iter()
                 .flatten()
-                .all(|run| section.quiet(run.pieces(), run.most))
+                .all(|run| section.quiet(run.hull, run.most))
                 .then_some(());
         }
-        let (pieces, most) = match (self.run, lead) {
+        let (pieces, most, hull) = match (self.run, lead) {
             (None, None) => return (first == last).then_some(()),
-            (Some(run), None) | (None, Some(run)) => (run.pieces(), run.most),
-            (Some(trail), Some(lead)) => {
-                (((trail.from, d1), (d0, lead.to)), trail.most.max(lead.most))
-            }
+            (Some(run), None) | (None, Some(run)) => (run.pieces(), run.most, run.hull),
+            (Some(trail), Some(lead)) => (
+                ((trail.from, d1), (d0, lead.to)),
+                trail.most.max(lead.most),
+                trail.hull.union(lead.hull),
+            ),
         };
         if first == last {
-            return section.quiet(pieces, most).then_some(());
+            return section.quiet(hull, most).then_some(());
         }
-        roots.push(section.middle(pieces)?);
+        roots.push(section.middle(pieces, hull)?);
         Some(())
     }
 }
@@ -637,6 +661,8 @@ struct Bernstein {
     c: Vec<f64>,
     band: f64,
     least_w2: f64,
+    /// A box that holds the profile over the interval.
+    hull: Aabb3,
 }
 
 impl Bernstein {
@@ -1251,6 +1277,62 @@ mod tests {
                             "{what}: no ruling at {y}"
                         );
                     }
+                }
+            }
+        }
+    }
+
+    /// A profile pokes a needle ten tolerances into a unit cylinder whose
+    /// origin lies 1e9 along its axis, where rounding hides the profile's
+    /// side over the needle. The run that hides it has the outside at both
+    /// ends, and its ends lie within the tolerance of each other, but the
+    /// profile crosses the circle twice between them. Both crossings are
+    /// rulings or the section is left to the marcher, never a touch, for an
+    /// open profile and for a closed one.
+    #[test]
+    fn a_needle_ten_tolerances_deep_in_a_run_whose_ends_meet_is_not_a_touch() {
+        type Profile<'a> = (&'a [(f64, f64)], Vec<f64>);
+        let tol = brepkit_math::tolerance::Tolerance::new().linear;
+        let tip = 1.0 - 10.0 * tol;
+        let profiles: [Profile<'_>; 2] = [
+            (
+                &[(1.5, 0.0), (tip, 0.0), (1.5, 1e-3)],
+                vec![0.0, 0.0, 0.5, 1.0, 1.0],
+            ),
+            (
+                &[
+                    (1.5, 0.0),
+                    (tip, 0.0),
+                    (1.5, 1e-3),
+                    (3.0, 1e-3),
+                    (3.0, 0.0),
+                    (1.5, 0.0),
+                ],
+                vec![0.0, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.0],
+            ),
+        ];
+        for (name, pose) in poses() {
+            let rod = CylindricalSurface::new(
+                pose.mul_point(Point3::new(0.0, 0.0, 1e9)),
+                direction(&pose, Vec3::new(0.0, 0.0, 1.0)),
+                1.0,
+            )
+            .unwrap();
+            for (points, knots) in &profiles {
+                let what = format!("{name}, {} poles", points.len());
+                let wall = polyline_extrusion(points, knots.clone(), &pose);
+                let Some(lines) = rulings(&rod, &wall, &room(), &room()) else {
+                    continue;
+                };
+                assert_eq!(lines.len(), 2, "{what}");
+                let crossing = pose.mul_point(Point3::new(1.0, 0.0, -1.0));
+                for line in &lines {
+                    assert!(
+                        (line.p_start - crossing).length() < 1e-6
+                            || (line.p_end - crossing).length() < 1e-6,
+                        "{what}: {:?}",
+                        line.p_start
+                    );
                 }
             }
         }
