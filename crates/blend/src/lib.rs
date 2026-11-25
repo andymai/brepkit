@@ -24,6 +24,7 @@ pub(crate) mod signed_volume;
 pub(crate) mod spherical_triangle;
 pub mod spine;
 pub(crate) mod stripe;
+pub(crate) mod tight_tip;
 pub(crate) mod trimmer;
 pub(crate) mod walker;
 

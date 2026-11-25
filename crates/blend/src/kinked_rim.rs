@@ -35,14 +35,14 @@ use crate::trimmer::{self, SplitScope};
 /// Angle between two tangents, in radians, past which the curves meet in a
 /// corner rather than running on: a closed walk across a kink of `a` misses
 /// its start by about `r a`, past any closing tolerance long before this.
-const KINK: f64 = 1e-3;
+pub const KINK: f64 = 1e-3;
 
 /// How far, relative to the part's size, a point may stand off a curve, or a
 /// ruling off its chord, and still be on it.
-const ON: f64 = 1e-7;
+pub const ON: f64 = 1e-7;
 
 /// The angle between the end and start tangents of a closed B-spline edge.
-fn closure_kink(topo: &Topology, edge: EdgeId) -> Option<f64> {
+pub fn closure_kink(topo: &Topology, edge: EdgeId) -> Option<f64> {
     // An edge the topology does not hold fails on its own later.
     let Ok(data) = topo.edge(edge) else {
         return None;
@@ -64,7 +64,11 @@ fn closure_kink(topo: &Topology, edge: EdgeId) -> Option<f64> {
 }
 
 /// The faces of `solid`'s outer shell whose outer wire uses `edge`.
-fn faces_using(topo: &Topology, solid: SolidId, edge: EdgeId) -> Result<Vec<FaceId>, BlendError> {
+pub fn faces_using(
+    topo: &Topology,
+    solid: SolidId,
+    edge: EdgeId,
+) -> Result<Vec<FaceId>, BlendError> {
     let shell = topo.shell(topo.solid(solid)?.outer_shell())?;
     let mut found = Vec::new();
     for &face_id in shell.faces() {
@@ -77,9 +81,9 @@ fn faces_using(topo: &Topology, solid: SolidId, edge: EdgeId) -> Result<Vec<Face
 }
 
 /// The straight ruling of a wall across its rim at a point.
-struct Ruling {
+pub struct Ruling {
     /// Where it ends across the face.
-    far: Point3,
+    pub far: Point3,
     /// Whether the rim runs along the surface's u (the ruling along v).
     rim_along_u: bool,
     /// The rim's parameter of the ruling.
@@ -89,7 +93,7 @@ struct Ruling {
 /// The ruling of `surface` through `point`, on the rim that also runs
 /// through `along`: the parameter line across the rim's, which must be
 /// straight.
-fn ruling(surface: &FaceSurface, point: Point3, along: Point3) -> Option<Ruling> {
+pub fn ruling(surface: &FaceSurface, point: Point3, along: Point3) -> Option<Ruling> {
     let FaceSurface::Nurbs(nurbs) = surface else {
         return None;
     };
@@ -207,12 +211,12 @@ fn split_surface(
 }
 
 /// An edge cut in two, and its two pieces.
-type Cut = (EdgeId, [EdgeId; 2]);
+pub type Cut = (EdgeId, [EdgeId; 2]);
 
 /// The vertex of `face`'s outer wire at `point`, splitting the line or
 /// B-spline edge of the wire it lies on there when it is no vertex yet (the
 /// edge cut is returned too).
-fn vertex_on_wire(
+pub fn vertex_on_wire(
     topo: &mut Topology,
     scope: &SplitScope,
     face: FaceId,

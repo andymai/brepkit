@@ -201,11 +201,10 @@ impl<'a> FilletBuilder<'a> {
 
     #[allow(clippy::too_many_lines)]
     fn build_in_place_with_forced_postassembly_failure(
-        mut self,
+        self,
         force_postassembly_failure: bool,
     ) -> Result<BlendResult, BlendError> {
         let scope = trimmer::SplitScope::of_solid(self.topo, self.solid)?;
-        crate::kinked_rim::split_kinked_rims(self.topo, &scope, self.solid, &mut self.edge_sets)?;
         // Build the immutable plan before any result topology is allocated.
         // Every valid request is represented by one ordered contour; the
         // contour spine is then used for one coherent stripe computation.
@@ -4382,14 +4381,21 @@ fn contact_forward_for_spine(
 fn build_in_place(
     topo: &mut Topology,
     solid: SolidId,
-    edge_sets: Vec<(Vec<EdgeId>, RadiusLaw)>,
+    mut edge_sets: Vec<(Vec<EdgeId>, RadiusLaw)>,
 ) -> Result<BlendResult, BlendError> {
-    FilletBuilder {
+    let scope = trimmer::SplitScope::of_solid(topo, solid)?;
+    crate::kinked_rim::split_kinked_rims(topo, &scope, solid, &mut edge_sets)?;
+    let tips = crate::tight_tip::split_tight_rims(topo, &scope, solid, &mut edge_sets)?;
+    let result = FilletBuilder {
         topo,
         solid,
         edge_sets,
     }
-    .build_in_place()
+    .build_in_place()?;
+    if !tips.is_empty() && result.failed.is_empty() {
+        crate::tight_tip::round_tips(topo, result.solid, &tips)?;
+    }
+    Ok(result)
 }
 
 /// The fillet of `shared` built in place on `solid` after `join` edits its
