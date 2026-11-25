@@ -1619,6 +1619,16 @@ pub(super) fn tessellate_latitude_band_shared(
     Ok(true)
 }
 
+/// The samples a spherical triangle's rows take: its apex, `count + 1` for
+/// each row's `count` segments, and `base` along its base. The sum is in
+/// `u64`, held at its largest value, so a 32-bit `usize` cannot wrap it
+/// under the limit.
+fn triangle_row_samples(base: usize, counts: &[usize]) -> u64 {
+    counts.iter().fold(1 + base as u64, |total, &count| {
+        total.saturating_add((count as u64).saturating_add(1))
+    })
+}
+
 /// A sphere face bounded by three arcs (a fillet's setback corner, a
 /// sphere's octant), two of which the shared samples split into the same
 /// number `m` of segments, is meshed in rows from the corner between those
@@ -1790,8 +1800,11 @@ pub(super) fn tessellate_sphere_triangle_shared(
     // The rows are counted as they will be cut, before any is built: a
     // narrow patch has short rows however many it has.
     super::check_count("a face grid's rows", m + 1, deflection)?;
-    let samples = 1 + base.len() + counts.iter().map(|&count| count + 1).sum::<usize>();
-    super::check_total("a face's rows", samples, deflection)?;
+    super::check_total(
+        "a face's rows",
+        triangle_row_samples(base.len(), &counts),
+        deflection,
+    )?;
     let mut rows: Vec<Vec<u32>> = Vec::with_capacity(m + 1);
     rows.push(vec![along_b[0]]);
     for s in 1..m {
@@ -6864,6 +6877,23 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::*;
+
+    /// An octant whose sides hold 92,682 segments keeps a segment for each
+    /// level on every row: its rows take 4,295,115,586 samples, past what a
+    /// 32-bit `usize` holds. Summed in a 32-bit `usize`, they wrap to 148,290
+    /// and pass the limit; summed here, they are refused.
+    #[test]
+    fn an_octant_past_a_32_bit_count_is_refused() {
+        let m = 92_682_usize;
+        let counts: Vec<usize> = (1..m).collect();
+        let samples = triangle_row_samples(m + 1, &counts);
+        assert_eq!(samples, 4_295_115_586);
+        assert_eq!(samples % (1 << 32), 148_290);
+        assert!(matches!(
+            super::super::check_total("a face's rows", samples, 1.0),
+            Err(crate::OperationsError::TooManySamples { .. })
+        ));
+    }
 
     /// A grid row's crossings give every point of the row the answer the
     /// whole polygon does, points level with vertices and on edges included.

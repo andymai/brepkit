@@ -344,7 +344,7 @@ pub(super) fn check_grid(
 /// a mesher will place them, before it allocates them.
 pub(super) fn check_total(
     what: &str,
-    samples: usize,
+    samples: u64,
     deflection: f64,
 ) -> Result<(), crate::OperationsError> {
     let samples = samples as f64;
