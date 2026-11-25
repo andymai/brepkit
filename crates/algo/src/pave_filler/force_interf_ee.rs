@@ -461,9 +461,11 @@ fn unit_form(curve: &EdgeCurve) -> Option<(std::borrow::Cow<'_, EdgeCurve>, f64)
     Some((std::borrow::Cow::Owned(form.into_owned()), gap + moved))
 }
 
-/// A block read for [`block_lies_on_block`]: its curve and its two ends.
+/// A block read for [`block_lies_on_block`]: its curve, its span on that
+/// curve, and its two ends.
 type BlockRead = Option<(
     EdgeCurve,
+    (f64, f64),
     brepkit_math::vec::Point3,
     brepkit_math::vec::Point3,
 )>;
@@ -471,14 +473,15 @@ type BlockRead = Option<(
 /// Whether the parts of their edges' curves that two blocks cover are one
 /// curve, within tolerance. The two blocks share their ends already.
 ///
-/// Each block is read over its own parameters: a B-spline cut to the
-/// block's span, so neither a short block nor half of a closed curve is
-/// read back from its ends as some other trim, and a line, circle or
-/// ellipse from its point at the block's start to its point at the block's
-/// end. The two must be proved one curve along their whole length
-/// ([`crate::builder::face_splitter::curves_one_curve`]): two B-splines that
-/// agree at any number of places may part between them. A pair no bound
-/// holds together is two curves.
+/// Each block is read over its own parameters, never back from its ends: a
+/// B-spline cut to the block's span, so neither a short block nor half of a
+/// closed curve reads as some other trim, and a circle or an ellipse over
+/// the block's span, so a short arc whose ends lie close does not read as
+/// a whole turn. The two must be proved one curve along their whole length
+/// ([`crate::builder::face_splitter::conic_spans_one_curve`] where either
+/// is a conic, else [`crate::builder::face_splitter::curves_one_curve`]):
+/// two B-splines that agree at any number of places may part between them.
+/// A pair no bound holds together is two curves.
 fn block_lies_on_block(
     topo: &Topology,
     arena: &GfaArena,
@@ -504,17 +507,22 @@ fn block_lies_on_block(
             };
             let (d0, d1) = piece.domain();
             let (a, b) = (piece.evaluate(d0), piece.evaluate(d1));
-            return Ok(Some((EdgeCurve::NurbsCurve(piece), a, b)));
+            return Ok(Some((EdgeCurve::NurbsCurve(piece), (d0, d1), a, b)));
         }
         let at = |t: f64| edge.curve().evaluate_with_endpoints(t, ends.0, ends.1);
-        Ok(Some((edge.curve().clone(), at(from), at(to))))
+        Ok(Some((edge.curve().clone(), (from, to), at(from), at(to))))
     };
     let (Some(i), Some(j)) = (read(block_i)?, read(block_j)?) else {
         return Ok(false);
     };
+    if let Some(one) =
+        crate::builder::face_splitter::conic_spans_one_curve((&i.0, i.1), (&j.0, j.1), tol.linear)
+    {
+        return Ok(one);
+    }
     Ok(crate::builder::face_splitter::curves_one_curve(
-        (&i.0, i.1, i.2),
-        (&j.0, j.1, j.2),
+        (&i.0, i.2, i.3),
+        (&j.0, j.2, j.3),
         tol.linear,
     ))
 }
@@ -844,6 +852,28 @@ mod tests {
             );
             assert_eq!(common_blocks(&topo, &mut arena), 1, "{turns} quarters");
         }
+    }
+
+    /// A block of the unit circle over [0, 5e-10] and a block of the same
+    /// circle as an ellipse of equal semi-axes over [5e-10, 2 pi]: their
+    /// ends lie 5e-10 apart, but one is a sliver of arc and the other the
+    /// rest of the turn, so they share no block.
+    #[test]
+    fn a_short_arc_and_the_rest_of_its_circle_are_not_common() {
+        use brepkit_math::curves::Ellipse3D;
+        let (o, x, y, z) = (
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let circle = EdgeCurve::Circle(Circle3D::new_with_ref(o, z, 1.0, x).unwrap());
+        let round = EdgeCurve::Ellipse(Ellipse3D::with_axes(o, z, 1.0, 1.0, x, y).unwrap());
+        let mut topo = Topology::new();
+        let mut arena = GfaArena::new();
+        span_edge(&mut topo, &mut arena, &circle, (0.0, 5e-10));
+        span_edge(&mut topo, &mut arena, &round, (5e-10, TAU));
+        assert_eq!(common_blocks(&topo, &mut arena), 0);
     }
 
     /// A quarter circle and the same quarter as a rational quadratic share
