@@ -180,14 +180,11 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId) -> Result<Aabb3, AlgoErro
         }
     }
 
-    if points.is_empty() {
-        Ok(Aabb3 {
-            min: Point3::new(0.0, 0.0, 0.0),
-            max: Point3::new(0.0, 0.0, 0.0),
-        })
-    } else {
-        Ok(Aabb3::from_points(points))
-    }
+    Aabb3::try_from_points(points).ok_or_else(|| {
+        AlgoError::IntersectionFailed(format!(
+            "face {face_id:?} has no boundary point, or one that is not finite"
+        ))
+    })
 }
 
 /// Whether a section on the face the piece must split already runs from

@@ -745,7 +745,13 @@ impl Plan {
         } else if let (1, WallSide::Ruling { cylinder, turn }) = (side, &piece.wall_side) {
             margin += cylinder.radius() * (1.0 - (0.5 * turn).cos());
         }
-        Ok(Aabb3::from_points(corners).expanded(margin))
+        Aabb3::try_from_points(corners)
+            .map(|b| b.expanded(margin))
+            .ok_or_else(|| OperationsError::InvalidInput {
+                reason: format!(
+                    "the chamfer strip of piece {index} has a corner that is not finite"
+                ),
+            })
     }
 }
 

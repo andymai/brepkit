@@ -94,6 +94,17 @@ pub fn mesh_boolean(
         });
     }
 
+    for (which, mesh) in [("first", mesh_a), ("second", mesh_b)] {
+        check_operand(mesh, which)?;
+    }
+    if !(tolerance.is_finite() && tolerance >= 0.0) {
+        return Err(OperationsError::InvalidInput {
+            reason: format!(
+                "mesh boolean tolerance must be finite and not below zero, got {tolerance}"
+            ),
+        });
+    }
+
     // Step 1: BVH broad-phase
     let bvh_a = build_triangle_bvh(mesh_a);
     let bvh_b = build_triangle_bvh(mesh_b);
@@ -170,6 +181,31 @@ fn welded_health(mesh: &TriangleMesh, grid: f64) -> (usize, usize) {
     let bnd = occ.values().filter(|&&c| c == 1).count();
     let nm = occ.values().filter(|&&c| c > 2).count();
     (bnd, nm)
+}
+
+/// Check that each vertex of a mesh boolean operand is finite and each
+/// index names a vertex, before its triangles are read and boxed.
+fn check_operand(mesh: &TriangleMesh, which: &str) -> Result<(), OperationsError> {
+    if let Some(p) = mesh
+        .positions
+        .iter()
+        .find(|p| !(p.x().is_finite() && p.y().is_finite() && p.z().is_finite()))
+    {
+        return Err(OperationsError::InvalidInput {
+            reason: format!(
+                "the {which} mesh boolean operand has a vertex that is not finite: {p:?}"
+            ),
+        });
+    }
+    let count = mesh.positions.len();
+    if let Some(&index) = mesh.indices.iter().find(|&&i| i as usize >= count) {
+        return Err(OperationsError::InvalidInput {
+            reason: format!(
+                "the {which} mesh boolean operand has index {index}, past its {count} vertices"
+            ),
+        });
+    }
+    Ok(())
 }
 
 /// Build a BVH over a mesh's triangles.
@@ -1785,6 +1821,33 @@ mod tests {
             format!("{err}").contains("too large"),
             "expected a budget rejection, got: {err}"
         );
+    }
+
+    /// A vertex that is not finite, or an index past the vertices, is
+    /// refused before the mesh's triangles are boxed. Vertex 1 of the first
+    /// mesh is the second corner of its first triangle, so a box that skips
+    /// a coordinate that is not a number after the first corner drops it.
+    #[test]
+    fn a_mesh_with_a_vertex_that_is_not_finite_or_an_index_past_its_vertices_is_refused() {
+        let b = tetrahedron_mesh(Point3::new(0.5, 0.0, 0.0), 1.0);
+        for bad in [f64::NAN, f64::INFINITY] {
+            let mut a = tetrahedron_mesh(Point3::new(0.0, 0.0, 0.0), 1.0);
+            a.positions[1] = Point3::new(1.0, bad, -1.0);
+            for (first, second) in [(&a, &b), (&b, &a)] {
+                let err = mesh_boolean(first, second, BooleanOp::Fuse, 1e-7)
+                    .expect_err("a vertex that is not finite must be refused");
+                assert!(format!("{err}").contains("not finite"), "{err}");
+            }
+        }
+        let mut a = tetrahedron_mesh(Point3::new(0.0, 0.0, 0.0), 1.0);
+        a.indices[4] = u32::try_from(a.positions.len()).unwrap();
+        let err = mesh_boolean(&a, &b, BooleanOp::Fuse, 1e-7)
+            .expect_err("an index past the vertices must be refused");
+        assert!(format!("{err}").contains("past"), "{err}");
+        let a = tetrahedron_mesh(Point3::new(0.0, 0.0, 0.0), 1.0);
+        for tolerance in [f64::NAN, -1.0] {
+            assert!(mesh_boolean(&a, &b, BooleanOp::Fuse, tolerance).is_err());
+        }
     }
 
     /// Create a tetrahedron mesh centered at a point.
