@@ -331,26 +331,27 @@ fn edge_samples(
     }
 }
 
-/// The samples the mesher takes along each curved direction of `surface`,
-/// at most: the chord formula's segments over a whole turn. `cone_height` is
-/// the largest distance of the face's wires from a cone's apex along its
-/// axis. A plane has no curved direction, and a NURBS face's grid is capped
-/// where it is chosen.
+/// The samples the mesher takes along each curved direction of a face on
+/// `surface`, at most: the chord formula's segments over a whole turn. A
+/// cone's columns are counted at the radius its meshers count them at,
+/// from the face's wires ([`nurbs::cone_column_radius`]). A plane has no
+/// curved direction, and a NURBS face's grid is capped where it is chosen.
 fn direction_samples(
-    surface: &brepkit_topology::face::FaceSurface,
-    cone_height: f64,
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
     deflection: f64,
     angular_tol: f64,
 ) -> [f64; 2] {
     use brepkit_topology::face::FaceSurface;
     use std::f64::consts::TAU;
     let arc = |radius: f64| arc_segments(radius, TAU, deflection, angular_tol);
-    match surface {
+    match face_data.surface() {
         FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => [0.0, 0.0],
         FaceSurface::Cylinder(c) => [arc(c.radius()), 0.0],
-        // The half angle is measured from the plane across the axis, so the
-        // radius at a height is the height over its tangent.
-        FaceSurface::Cone(c) => [arc(cone_height / c.half_angle().tan()), 0.0],
+        FaceSurface::Cone(c) => {
+            let v_range = nurbs::compute_v_param_range(topo, face_data, |p| c.project_point(p).1);
+            [arc(nurbs::cone_column_radius(c, v_range)), 0.0]
+        }
         FaceSurface::Sphere(s) => [arc(s.radius()), 0.0],
         FaceSurface::Torus(t) => [
             arc(t.major_radius() + t.minor_radius()),
@@ -370,30 +371,15 @@ pub(super) fn check_samples(
     deflection: f64,
     angular_tol: f64,
 ) -> Result<(), crate::OperationsError> {
-    use brepkit_topology::face::FaceSurface;
     let face_data = topo.face(face)?;
-    let mut cone_height: f64 = 0.0;
     for wire in
         std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
     {
         for oe in topo.wire(wire)?.edges() {
-            let edge = topo.edge(oe.edge())?;
-            check_edge_samples(edge.curve(), deflection, angular_tol)?;
-            if let FaceSurface::Cone(c) = face_data.surface() {
-                let ends = [
-                    topo.vertex(edge.start())?.point(),
-                    topo.vertex(edge.end())?.point(),
-                ];
-                cone_height = largest([
-                    cone_height,
-                    c.axis().dot(ends[0] - c.apex()),
-                    c.axis().dot(ends[1] - c.apex()),
-                    curve_extent_along(edge.curve(), c.apex(), c.axis()),
-                ]);
-            }
+            check_edge_samples(topo.edge(oe.edge())?.curve(), deflection, angular_tol)?;
         }
     }
-    let directions = direction_samples(face_data.surface(), cone_height, deflection, angular_tol);
+    let directions = direction_samples(topo, face_data, deflection, angular_tol);
     match directions.into_iter().find(|&n| n > MAX_EDGE_SAMPLES) {
         None => Ok(()),
         Some(samples) => Err(too_many_samples(

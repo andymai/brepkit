@@ -412,9 +412,8 @@ pub(super) fn tessellate_with_uvs_floor(
                     let v_range =
                         compute_v_param_range(topo, face_data, |p| cone.project_point(p).1);
                     let u_range = compute_angular_range(topo, face_data, |p| cone.project_point(p));
-                    let max_radius = cone.radius_at(v_range.1.abs().max(v_range.0.abs()));
                     let nu = segments_for_chord_deviation_a(
-                        max_radius.max(0.01),
+                        super::nurbs::cone_column_radius(cone, v_range),
                         u_range.1 - u_range.0,
                         deflection,
                         angular_tol,

@@ -6906,3 +6906,52 @@ fn a_face_or_edge_past_the_sample_limit_is_refused() {
     let drawn = sample_solid_edges(&topo, rod, 1e-3).map(|lines| lines.positions.len());
     assert!(refused(&drawn, "an edge"), "{drawn:?}");
 }
+
+/// The cone meshers count a face's columns at a radius of at least 0.01,
+/// however small the cone. A cone 1e-6 across meshed to 1e-15 has edges of
+/// 2e5 samples, but its meshers would count 2e7 columns at that floor: the
+/// face and solid meshers refuse it before they sample. At 1e-9 it meshes
+/// closed.
+#[test]
+fn a_small_cone_counted_at_the_meshers_radius_floor_is_refused() {
+    let mut topo = Topology::new();
+    let cone = crate::primitives::make_cone(&mut topo, 1e-6, 0.0, 1e-6).unwrap();
+    let refused = |found: &Result<usize, crate::OperationsError>| {
+        matches!(found, Err(crate::OperationsError::InvalidInput { reason })
+            if reason.contains("mesh samples"))
+    };
+    let side = brepkit_topology::explorer::solid_faces(&topo, cone)
+        .unwrap()
+        .into_iter()
+        .find(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cone(_)))
+        .unwrap();
+    let face = tessellate(&topo, side, 1e-15).map(|m| m.positions.len());
+    assert!(refused(&face), "{face:?}");
+    let solid = tessellate_solid(&topo, cone, 1e-15).map(|m| m.positions.len());
+    assert!(refused(&solid), "{solid:?}");
+    let mesh = tessellate_solid(&topo, cone, 1e-9).unwrap();
+    assert!(is_watertight(&mesh));
+}
+
+/// A torus band whose rims are joined from several arcs takes a column at
+/// each rim sample as well as its even columns. A torus notched by a box and
+/// meshed to 3e-5 has 1987 even columns over 3725 rows, within the limit,
+/// but samples 3005 columns, past it: the band mesher refuses the grid it
+/// would sample, before it samples a row.
+#[test]
+fn a_band_grid_is_checked_on_the_columns_it_samples() {
+    use brepkit_math::mat::Mat4;
+
+    let mut topo = Topology::new();
+    let tor = crate::primitives::make_torus(&mut topo, 10.0, 3.0, 32).unwrap();
+    let bx = crate::primitives::make_box(&mut topo, 8.0, 8.0, 8.0).unwrap();
+    crate::transform::transform_solid(&mut topo, bx, &Mat4::translation(6.0, -4.0, -4.0)).unwrap();
+    let notched =
+        crate::boolean::boolean(&mut topo, crate::boolean::BooleanOp::Cut, tor, bx).unwrap();
+    let found = tessellate_solid(&topo, notched, 3e-5).map(|m| m.positions.len());
+    assert!(
+        matches!(&found, Err(crate::OperationsError::InvalidInput { reason })
+            if reason.contains("a face's grid would take about 1.1e7 mesh samples")),
+        "{found:?}"
+    );
+}

@@ -1059,7 +1059,6 @@ pub(super) fn tessellate_torus_two_rim_band(
     };
     let n_rows =
         segments_for_chord_deviation_a(sweep_radius, widest, deflection, angular_tol, true).max(1);
-    super::check_grid(n_cols, n_rows, deflection)?;
 
     // Rims joined from several arcs turn corners where the arcs meet, and can
     // run nearly along a latitude near one (a lobe near its pinch). A row
@@ -1075,6 +1074,8 @@ pub(super) fn tessellate_torus_two_rim_band(
         cols.sort_by(f64::total_cmp);
         cols.dedup_by(|a, b| (*a - *b).abs() < 1e-7);
     }
+    super::check_grid(cols.len(), n_rows, deflection)?;
+
     // Orient each stitch in (u, v), where counterclockwise is outward on a
     // torus: a sliver between a nearly straight rim and a row just inside it
     // is too thin for its 3D normal to say which way it faces.
