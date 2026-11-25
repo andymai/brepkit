@@ -14056,8 +14056,16 @@ pub fn circle_arcs_apart(
     let turn = |e: Vec3| e * cos + w.cross(e) + w * (w.dot(e) / (1.0 + cos));
     // `|n1 - n2|` is `2 sin(angle / 2)`, read from the components with no
     // cancellation, where `sqrt(2 - 2 cos)` loses a small turn to rounding;
-    // a few units of rounding cover normals unit only within it.
-    let tilt = 8.0f64.madd(f64::EPSILON, (n1 - n2).length());
+    // a few units of rounding cover normals unit only within it. Normals
+    // alike to the bit make `w` nothing, and the turn moves no point.
+    let alike = [(n1.x(), n2.x()), (n1.y(), n2.y()), (n1.z(), n2.z())]
+        .iter()
+        .all(|&(a, b)| (a + 0.0).to_bits() == (b + 0.0).to_bits());
+    let tilt = if alike {
+        0.0
+    } else {
+        8.0f64.madd(f64::EPSILON, (n1 - n2).length())
+    };
     let moved =
         (p.center() - q.center()).length() + (p.radius() - q.radius()).abs() + p.radius() * tilt;
     let (s, c) = q0.sin_cos();
@@ -14074,8 +14082,13 @@ pub fn circle_arcs_apart(
 /// (`cos t = su cos t2`, `sin t = sv sin t2`), so it stands within
 /// `|c_p - c_q| + sqrt(|a_q su U_q - a_p U_p|^2 + |b_q sv V_q - b_p V_p|^2)` of
 /// `p`'s point at `t`. The arc of `p` over the matching span then lies within
-/// `a_p` times the span gap ([`spans_apart`]) of `p`'s own arc. The least
-/// bound over the four sign pairs stands.
+/// `a_p` times the span gap ([`spans_apart`]) of `p`'s own arc.
+///
+/// A second bound reads each ellipse as the circle on its axes whose radius
+/// is its mean semi-axis. At each parameter the ellipse lies within half the
+/// gap between its semi-axes of that circle, so [`circle_arcs_apart`] between
+/// the circles plus both half gaps bounds the ellipses too. It reads two round
+/// ellipses on turned axes as one. The least bound stands.
 pub fn ellipse_arcs_apart(
     p: &brepkit_math::curves::Ellipse3D,
     pa: (f64, f64),
@@ -14095,6 +14108,25 @@ pub fn ellipse_arcs_apart(
             return f64::NAN;
         }
         best = best.min(bound);
+    }
+    let round = |e: &brepkit_math::curves::Ellipse3D| {
+        let radius = 0.5 * (e.semi_major() + e.semi_minor());
+        let off = (0.5 * (e.semi_major() - e.semi_minor())).abs() + f64::EPSILON * radius;
+        brepkit_math::curves::Circle3D::with_axes(
+            e.center(),
+            e.normal(),
+            radius,
+            e.u_axis(),
+            e.v_axis(),
+        )
+        .ok()
+        .map(|circle| (circle, off))
+    };
+    if let (Some((cp, off_p)), Some((cq, off_q))) = (round(p), round(q)) {
+        let bound = circle_arcs_apart(&cp, pa, &cq, (q0, qd)) + off_p + off_q;
+        if !bound.is_nan() {
+            best = best.min(bound);
+        }
     }
     best
 }
