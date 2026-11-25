@@ -354,7 +354,7 @@ fn one_block_as_stored(
 
 /// A bound on how far apart the arc of circle or ellipse `a` over `span_a`
 /// and the arc of `b` over `span_b` lie along their whole length, each read
-/// on its form with unit, square axes, that form's gap added.
+/// on its form with unit, square axes ([`unit_form`]), that form's gap added.
 ///
 /// Two whole turns are each the whole curve, so `a`'s is read from the
 /// parameter of `b`'s start, found from the start's offset from `b`'s centre:
@@ -365,11 +365,11 @@ fn one_block_as_stored(
 /// where no bound holds.
 fn arcs_apart(a: &EdgeCurve, span_a: (f64, f64), b: &EdgeCurve, span_b: (f64, f64)) -> Option<f64> {
     use crate::builder::face_splitter::{circle_arcs_apart, ellipse_arcs_apart};
-    use crate::builder::pcurve_compute::{unit_conic, unit_conic_arc_gap};
+    use crate::builder::pcurve_compute::unit_conic_arc_gap;
     use brepkit_math::madd::Madd;
     use std::f64::consts::TAU;
-    let (unit_a, gap_a) = unit_conic(a)?;
-    let (unit_b, gap_b) = unit_conic(b)?;
+    let (unit_a, gap_a) = unit_form(a)?;
+    let (unit_b, gap_b) = unit_form(b)?;
     let sweep = |(t0, t1): (f64, f64)| (t0, t1 - t0);
     // A span stored as `(t0, t0 + TAU)` reads its sweep a turn within an
     // ulp or two of its larger end.
@@ -411,6 +411,41 @@ fn arcs_apart(a: &EdgeCurve, span_a: (f64, f64), b: &EdgeCurve, span_b: (f64, f6
     };
     let bound = bound + unit_conic_arc_gap(gap_a) + unit_conic_arc_gap(gap_b);
     (!bound.is_nan()).then_some(bound)
+}
+
+/// [`unit_conic`] of `curve`. An ellipse whose minor semi-axis reads longer
+/// than its major on unit axes (a round ellipse on a second axis a hair over
+/// a unit) has none; it is read as the ellipse with its minor semi-axis cut
+/// to just under its major's reading, the cut times its second axis's length
+/// added to the gap, as the two lie that far apart at each parameter.
+///
+/// [`unit_conic`]: crate::builder::pcurve_compute::unit_conic
+fn unit_form(curve: &EdgeCurve) -> Option<(std::borrow::Cow<'_, EdgeCurve>, f64)> {
+    use crate::builder::pcurve_compute::unit_conic;
+    if let Some(form) = unit_conic(curve) {
+        return Some(form);
+    }
+    let EdgeCurve::Ellipse(e) = curve else {
+        return None;
+    };
+    let (lu, lv) = (e.u_axis().length(), e.v_axis().length());
+    let minor = e.semi_major() * (lu / lv) * (1.0 - 8.0 * f64::EPSILON);
+    if !(minor > 0.0 && minor < e.semi_minor()) {
+        return None;
+    }
+    let cut = brepkit_math::curves::Ellipse3D::with_axes(
+        e.center(),
+        e.normal(),
+        e.semi_major(),
+        minor,
+        e.u_axis(),
+        e.v_axis(),
+    )
+    .ok()?;
+    let moved = (e.semi_minor() - minor) * lv * (1.0 + 4.0 * f64::EPSILON);
+    let cut = EdgeCurve::Ellipse(cut);
+    let (form, gap) = unit_conic(&cut)?;
+    Some((std::borrow::Cow::Owned(form.into_owned()), gap + moved))
 }
 
 /// Whether the parts of their edges' curves that two blocks cover are one
@@ -795,9 +830,9 @@ mod tests {
     }
 
     /// An ellipse of semi-axes 1 and 1 whose second axis is a hair longer
-    /// than a unit, `(1 + 2^-50) Y`: its form with unit axes has its minor
-    /// axis longer than its major, so no bound reads it. Two copies over one
-    /// span, either way round, are one block; the arc and the rest are not.
+    /// than a unit, `(1 + 2^-50) Y`: on unit axes its minor semi-axis reads
+    /// longer than its major. Two copies over one span, either way round,
+    /// are one block; the arc and the rest are not.
     #[test]
     fn copies_of_an_ellipse_no_bound_reads_share_their_block() {
         use brepkit_math::curves::Ellipse3D;
@@ -937,5 +972,49 @@ mod tests {
         let d = 5e-10;
         assert!(one(&up, (0.0, TAU - d), &down, (d, TAU)));
         assert!(!one(&up, (0.0, TAU - d), &down, (0.0, d)));
+    }
+
+    /// Ellipses of semi-axes 2 and 1, and 1 and 1 on a second axis a hair
+    /// over a unit, about a centre near the origin and one 1e4 off, in each
+    /// frame. An arc over a radian from each of 20 starts, and the same arc
+    /// stored about the reversed normal (normal and second axis negated) from
+    /// its end, with each span read from its ends as the pave filler reads
+    /// it, are one block. The arc and the rest of the ellipse are not.
+    #[test]
+    fn an_ellipse_arc_and_its_copy_about_the_reversed_normal_share_their_block() {
+        use brepkit_math::curves::Ellipse3D;
+        for (frame, o, u, v) in frames() {
+            let n = u.cross(v);
+            for (major, minor, second) in [(2.0, 1.0, v), (1.0, 1.0, v * (1.0 + 2.0f64.powi(-50)))]
+            {
+                for shift in [0.0, 1e4] {
+                    let centre = o + u * shift + v * (0.5 * shift);
+                    let up = Ellipse3D::with_axes(centre, n, major, minor, u, second).unwrap();
+                    let down = Ellipse3D::with_axes(centre, -n, major, minor, u, -second).unwrap();
+                    for k in 0..20 {
+                        let a = 0.1 + 0.3 * f64::from(k);
+                        let (p, q) = (up.evaluate(a), up.evaluate(a + 1.0));
+                        for (rest, common) in [(false, 1), (true, 0)] {
+                            let mut topo = Topology::new();
+                            let mut arena = GfaArena::new();
+                            let (from, to) = if rest { (p, q) } else { (q, p) };
+                            whole_edge(&mut topo, &mut arena, p, q, EdgeCurve::Ellipse(up.clone()));
+                            whole_edge(
+                                &mut topo,
+                                &mut arena,
+                                from,
+                                to,
+                                EdgeCurve::Ellipse(down.clone()),
+                            );
+                            assert_eq!(
+                                common_blocks(&topo, &mut arena),
+                                common,
+                                "{frame}, semi-axes {major} and {minor}, centre off {shift}, start {a}, rest {rest}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 }
