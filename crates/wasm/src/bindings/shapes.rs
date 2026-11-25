@@ -11,7 +11,9 @@ use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire};
 use wasm_bindgen::prelude::*;
 
-use crate::error::{WasmError, validate_finite, validate_positive, validate_size};
+use crate::error::{
+    MAX_COUNT, WasmError, validate_count, validate_finite, validate_positive, validate_size,
+};
 use crate::handles::{
     edge_id_to_u32, face_id_to_u32, solid_id_to_u32, vertex_id_to_u32, wire_id_to_u32,
 };
@@ -102,27 +104,11 @@ impl BrepKernel {
     ///
     /// # Errors
     ///
-    /// Returns an error if fewer than 3 segments are specified.
+    /// Returns an error if fewer than 3 or more than `MAX_COUNT` segments
+    /// are specified.
     #[wasm_bindgen(js_name = "makeCircle")]
     pub fn make_circle(&mut self, radius: f64, segments: u32) -> Result<u32, JsError> {
-        validate_positive(radius, "radius")?;
-        if segments < 3 {
-            return Err(WasmError::InvalidInput {
-                reason: format!("circle requires at least 3 segments, got {segments}"),
-            }
-            .into());
-        }
-
-        let n = segments as usize;
-        let mut points = Vec::with_capacity(n);
-        for i in 0..n {
-            #[allow(clippy::cast_precision_loss)]
-            let angle = 2.0 * PI * (i as f64) / (n as f64);
-            points.push(Point3::new(radius * angle.cos(), radius * angle.sin(), 0.0));
-        }
-
-        let face_id = self.make_planar_face(&points)?;
-        Ok(face_id_to_u32(face_id))
+        Ok(self.make_circle_impl(radius, segments)?)
     }
 
     // ── Shape construction (low-level) ────────────────────────────
@@ -832,42 +818,81 @@ impl BrepKernel {
     /// Create a regular polygon wire on the XY plane.
     ///
     /// Returns a wire handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `n_sides` is less than 3 or more than
+    /// `MAX_COUNT`.
     #[wasm_bindgen(js_name = "makeRegularPolygonWire")]
     pub fn make_regular_polygon_wire(&mut self, radius: f64, n_sides: u32) -> Result<u32, JsError> {
-        validate_positive(radius, "radius")?;
-        if n_sides < 3 {
-            return Err(WasmError::InvalidInput {
-                reason: format!("polygon needs at least 3 sides, got {n_sides}"),
-            }
-            .into());
-        }
-        let wid = brepkit_topology::builder::make_regular_polygon_wire(
-            self.topo_mut(),
-            radius,
-            n_sides as usize,
-            TOL,
-        )?;
-        Ok(wire_id_to_u32(wid))
+        Ok(self.make_regular_polygon_wire_impl(radius, n_sides)?)
     }
 
     /// Create a circular face on the XY plane (using NURBS arcs).
     ///
     /// Returns a face handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `segments` is less than 3 or more than
+    /// `MAX_COUNT`.
     #[wasm_bindgen(js_name = "makeCircleFace")]
     pub fn make_circle_face(&mut self, radius: f64, segments: u32) -> Result<u32, JsError> {
-        validate_positive(radius, "radius")?;
-        if segments < 3 {
+        Ok(self.make_circle_face_impl(radius, segments)?)
+    }
+}
+
+/// Bodies of the bindings that take a count, shared with their batch arms
+/// so the count is checked the same way on both paths.
+impl BrepKernel {
+    /// The caller's count of polygon sides or segments, at least 3 and at
+    /// most [`MAX_COUNT`].
+    fn polygon_count(count: u32, what: &str) -> Result<usize, WasmError> {
+        if count < 3 {
             return Err(WasmError::InvalidInput {
-                reason: format!("circle face needs at least 3 segments, got {segments}"),
-            }
-            .into());
+                reason: format!("{what} needs at least 3, got {count}"),
+            });
         }
-        let fid = brepkit_topology::builder::make_circle_face(
-            self.topo_mut(),
-            radius,
-            segments as usize,
-            TOL,
-        )?;
+        validate_count(count, what, MAX_COUNT)
+    }
+
+    pub(crate) fn make_circle_impl(
+        &mut self,
+        radius: f64,
+        segments: u32,
+    ) -> Result<u32, WasmError> {
+        validate_positive(radius, "radius")?;
+        let n = Self::polygon_count(segments, "circle segments")?;
+        let mut points = Vec::with_capacity(n);
+        for i in 0..n {
+            #[allow(clippy::cast_precision_loss)]
+            let angle = 2.0 * PI * (i as f64) / (n as f64);
+            points.push(Point3::new(radius * angle.cos(), radius * angle.sin(), 0.0));
+        }
+        let face_id = self.make_planar_face(&points)?;
+        Ok(face_id_to_u32(face_id))
+    }
+
+    pub(crate) fn make_regular_polygon_wire_impl(
+        &mut self,
+        radius: f64,
+        n_sides: u32,
+    ) -> Result<u32, WasmError> {
+        validate_positive(radius, "radius")?;
+        let n = Self::polygon_count(n_sides, "polygon sides")?;
+        let wid =
+            brepkit_topology::builder::make_regular_polygon_wire(self.topo_mut(), radius, n, TOL)?;
+        Ok(wire_id_to_u32(wid))
+    }
+
+    pub(crate) fn make_circle_face_impl(
+        &mut self,
+        radius: f64,
+        segments: u32,
+    ) -> Result<u32, WasmError> {
+        validate_positive(radius, "radius")?;
+        let n = Self::polygon_count(segments, "circle face segments")?;
+        let fid = brepkit_topology::builder::make_circle_face(self.topo_mut(), radius, n, TOL)?;
         Ok(face_id_to_u32(fid))
     }
 }

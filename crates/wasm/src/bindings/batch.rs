@@ -16,7 +16,7 @@ use brepkit_operations::sweep::sweep;
 use brepkit_operations::transform::transform_solid;
 use brepkit_topology::edge::EdgeCurve;
 
-use crate::error::{WasmError, validate_size};
+use crate::error::{WasmError, validate_pattern_counts, validate_size};
 use crate::handles::{
     compound_id_to_u32, edge_id_to_u32, face_id_to_u32, shell_id_to_u32, solid_id_to_u32,
     wire_id_to_u32,
@@ -408,6 +408,54 @@ impl BrepKernel {
                     )
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(edge))
+            }
+            "makeCircle" | "makeCircleFace" | "makeRegularPolygonWire" => {
+                let radius = get_f64(args, "radius")?;
+                let made = match op {
+                    "makeCircle" => self.make_circle_impl(radius, get_u32(args, "segments")?),
+                    "makeCircleFace" => {
+                        self.make_circle_face_impl(radius, get_u32(args, "segments")?)
+                    }
+                    _ => self.make_regular_polygon_wire_impl(radius, get_u32(args, "nSides")?),
+                };
+                Ok(serde_json::json!(made.map_err(|e| e.to_string())?))
+            }
+            "sweepWithOptions" => {
+                let scale_values = args["scaleValues"]
+                    .as_array()
+                    .map(|values| {
+                        values
+                            .iter()
+                            .enumerate()
+                            .map(|(i, v)| {
+                                v.as_f64()
+                                    .ok_or_else(|| format!("scaleValues[{i}] is not a number"))
+                            })
+                            .collect::<Result<Vec<f64>, String>>()
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                let solid = self
+                    .sweep_with_options_impl(
+                        get_u32(args, "profile")?,
+                        get_u32(args, "pathEdge")?,
+                        args["contactMode"].as_str().unwrap_or("rmf"),
+                        &scale_values,
+                        get_u32(args, "segments").unwrap_or(0),
+                        args["cornerMode"].as_str().unwrap_or("smooth"),
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid))
+            }
+            "untrimFace" => {
+                let face = self
+                    .untrim_face_impl(
+                        get_u32(args, "face")?,
+                        get_u32(args, "samplesPerCurve")?,
+                        get_u32(args, "interiorSamples")?,
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(face))
             }
             "fuse" | "cut" | "intersect" => {
                 let bool_op = match op {
@@ -1295,6 +1343,7 @@ impl BrepKernel {
                 let ay = get_f64(args, "ay").unwrap_or(0.0);
                 let az = get_f64(args, "az").unwrap_or(1.0);
                 let count = get_u32(args, "count")?;
+                validate_pattern_counts(&[count]).map_err(|e| e.to_string())?;
                 let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
                 let axis = Vec3::new(ax, ay, az);
                 let compound = brepkit_operations::pattern::circular_pattern(
@@ -1318,6 +1367,7 @@ impl BrepKernel {
                 let sy = get_f64(args, "spacingY")?;
                 let cx = get_u32(args, "countX")?;
                 let cy = get_u32(args, "countY")?;
+                validate_pattern_counts(&[cx, cy]).map_err(|e| e.to_string())?;
                 let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
                 let compound = brepkit_operations::pattern::grid_pattern(
                     self.topo_mut(),
@@ -1425,19 +1475,14 @@ impl BrepKernel {
                 Ok(serde_json::json!(null))
             }
             "offsetFace" => {
-                let f = get_u32(args, "face")?;
-                let dist = get_f64(args, "distance")?;
-                validate_size(dist, "distance").map_err(|e| e.to_string())?;
-                let samples = get_u32(args, "samples").unwrap_or(16);
-                let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
-                let result = brepkit_operations::offset_face::offset_face(
-                    self.topo_mut(),
-                    face_id,
-                    dist,
-                    samples as usize,
-                )
-                .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(face_id_to_u32(result)))
+                let face = self
+                    .offset_face_impl(
+                        get_u32(args, "face")?,
+                        get_f64(args, "distance")?,
+                        get_u32(args, "samples").unwrap_or(16),
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(face))
             }
             "offsetSolid" => {
                 let s = get_u32(args, "solid")?;
@@ -1585,6 +1630,7 @@ impl BrepKernel {
                 let dz = get_f64(args, "dz").unwrap_or(0.0);
                 let spacing = get_f64(args, "spacing")?;
                 let count = get_u32(args, "count")?;
+                validate_pattern_counts(&[count]).map_err(|e| e.to_string())?;
                 let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
                 let compound = brepkit_operations::pattern::linear_pattern(
                     self.topo_mut(),

@@ -13,7 +13,10 @@ use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::edge::Edge;
 use brepkit_topology::face::{Face, FaceSurface};
 
-use crate::error::{WasmError, validate_finite, validate_positive, validate_size};
+use crate::error::{
+    MAX_COUNT, MAX_GRID_SIDE, WasmError, validate_count, validate_finite, validate_positive,
+    validate_size,
+};
 use crate::handles::{
     edge_id_to_u32, face_id_to_u32, shell_id_to_u32, solid_id_to_u32, wire_id_to_u32,
 };
@@ -625,18 +628,12 @@ impl BrepKernel {
     ///
     /// # Errors
     ///
-    /// Returns an error if the face handle is invalid or the operation fails.
+    /// Returns an error if the face handle is invalid, `samples` (the side
+    /// of the grid a NURBS face is sampled on) is more than
+    /// `MAX_GRID_SIDE`, or the operation fails.
     #[wasm_bindgen(js_name = "offsetFace")]
     pub fn offset_face(&mut self, face: u32, distance: f64, samples: u32) -> Result<u32, JsError> {
-        validate_size(distance, "distance")?;
-        let face_id = self.resolve_face(face)?;
-        let result = brepkit_operations::offset_face::offset_face(
-            self.topo_mut(),
-            face_id,
-            distance,
-            samples as usize,
-        )?;
-        Ok(face_id_to_u32(result))
+        Ok(self.offset_face_impl(face, distance, samples)?)
     }
 
     // ── Helical Sweep ───────────────────────────────────────────
@@ -1025,6 +1022,11 @@ impl BrepKernel {
     /// `scale_values`: flat `[t0,s0,t1,s1,...]` pairs for piecewise-linear scale law.
     /// `corner_mode`: "smooth" (default), "miter", or "round"
     /// Returns a solid handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if a handle is invalid, `segments` is more than
+    /// `MAX_COUNT`, or the sweep fails.
     #[wasm_bindgen(js_name = "sweepWithOptions")]
     #[allow(clippy::needless_pass_by_value)]
     pub fn sweep_with_options(
@@ -1036,75 +1038,14 @@ impl BrepKernel {
         segments: u32,
         corner_mode: &str,
     ) -> Result<u32, JsError> {
-        use brepkit_operations::sweep::{SweepContactMode, SweepCornerMode, SweepOptions};
-
-        let face_id = self.resolve_face(profile)?;
-        let path_curve = self.extract_nurbs_curve(path_edge)?;
-
-        let mode = if contact_mode == "fixed" {
-            SweepContactMode::Fixed
-        } else if let Some(rest) = contact_mode.strip_prefix("constantNormal:") {
-            let parts: Vec<f64> = rest
-                .split(',')
-                .filter_map(|s| s.trim().parse().ok())
-                .collect();
-            if parts.len() >= 3 {
-                SweepContactMode::ConstantNormal(Vec3::new(parts[0], parts[1], parts[2]))
-            } else {
-                SweepContactMode::RotationMinimizing
-            }
-        } else {
-            SweepContactMode::RotationMinimizing
-        };
-
-        let scale_law: Option<Box<dyn Fn(f64) -> f64 + Send + Sync>> =
-            if scale_values.len() >= 4 && scale_values.len().is_multiple_of(2) {
-                let pairs: Vec<(f64, f64)> =
-                    scale_values.chunks_exact(2).map(|c| (c[0], c[1])).collect();
-                Some(Box::new(move |t: f64| -> f64 {
-                    // Piecewise-linear interpolation
-                    if pairs.is_empty() {
-                        return 1.0;
-                    }
-                    if t <= pairs[0].0 {
-                        return pairs[0].1;
-                    }
-                    if t >= pairs[pairs.len() - 1].0 {
-                        return pairs[pairs.len() - 1].1;
-                    }
-                    for w in pairs.windows(2) {
-                        if t >= w[0].0 && t <= w[1].0 {
-                            let frac = (t - w[0].0) / (w[1].0 - w[0].0);
-                            return w[0].1 + frac * (w[1].1 - w[0].1);
-                        }
-                    }
-                    1.0
-                }))
-            } else {
-                None
-            };
-
-        let cm = match corner_mode {
-            "miter" => SweepCornerMode::Miter,
-            "round" => SweepCornerMode::Round,
-            _ => SweepCornerMode::Smooth,
-        };
-
-        let options = SweepOptions {
-            contact_mode: mode,
-            corner_mode: cm,
-            scale_law,
-            segments: segments as usize,
-            aux_spine: None,
-        };
-
-        let result = brepkit_operations::sweep::sweep_with_options(
-            self.topo_mut(),
-            face_id,
-            &path_curve,
-            &options,
-        )?;
-        Ok(solid_id_to_u32(result))
+        Ok(self.sweep_with_options_impl(
+            profile,
+            path_edge,
+            contact_mode,
+            &scale_values,
+            segments,
+            corner_mode,
+        )?)
     }
 
     /// Guided (two-rail) sweep: sweep `face` along a spine, orienting the
@@ -1506,6 +1447,12 @@ impl BrepKernel {
     /// Untrim a NURBS face by fitting a new surface to the trimmed region.
     ///
     /// Returns a new face handle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the face is not NURBS, `samples_per_curve` is
+    /// more than `MAX_COUNT`, `interior_samples` (the side of the sampled
+    /// grid) is more than `MAX_GRID_SIDE`, or the fit fails.
     #[wasm_bindgen(js_name = "untrimFace")]
     pub fn untrim_face(
         &mut self,
@@ -1513,41 +1460,7 @@ impl BrepKernel {
         samples_per_curve: u32,
         interior_samples: u32,
     ) -> Result<u32, JsError> {
-        let face_id = self.resolve_face(face)?;
-        let face_data = self.topo.face(face_id)?;
-        let surface = match face_data.surface() {
-            FaceSurface::Nurbs(s) => s.clone(),
-            _ => {
-                return Err(WasmError::InvalidInput {
-                    reason: "untrim only works on NURBS faces".into(),
-                }
-                .into());
-            }
-        };
-        // Build trim curves from wire edges projected to UV space
-        let wire_id = face_data.outer_wire();
-        let wire = self.topo.wire(wire_id)?;
-        let mut trim_curves = Vec::new();
-        for oe in wire.edges() {
-            let edge = self.topo.edge(oe.edge())?;
-            let v_start = self.topo.vertex(edge.start())?;
-            let v_end = self.topo.vertex(edge.end())?;
-            // Project endpoints to UV
-            let proj_start = point_to_nurbs_surface(v_start.point(), &surface);
-            let uv_start = brepkit_math::vec::Point2::new(proj_start.u, proj_start.v);
-            let proj_end = point_to_nurbs_surface(v_end.point(), &surface);
-            let uv_end = brepkit_math::vec::Point2::new(proj_end.u, proj_end.v);
-            trim_curves.push(brepkit_operations::untrim::TrimCurve {
-                curve: vec![uv_start, uv_end],
-            });
-        }
-        let new_surface = brepkit_operations::untrim::untrim_face(
-            &surface,
-            &trim_curves,
-            samples_per_curve as usize,
-            interior_samples as usize,
-        )?;
-        Ok(face_id_to_u32(self.nurbs_surface_to_face(new_surface)?))
+        Ok(self.untrim_face_impl(face, samples_per_curve, interior_samples)?)
     }
 
     /// Offset a wire on a planar face.
@@ -1861,6 +1774,153 @@ impl BrepKernel {
 }
 
 impl BrepKernel {
+    /// Body of `offset_face`, shared with its batch arm.
+    pub(crate) fn offset_face_impl(
+        &mut self,
+        face: u32,
+        distance: f64,
+        samples: u32,
+    ) -> Result<u32, WasmError> {
+        validate_size(distance, "distance")?;
+        let samples = validate_count(samples, "samples", MAX_GRID_SIDE)?;
+        let face_id = self.resolve_face(face)?;
+        let result = brepkit_operations::offset_face::offset_face(
+            self.topo_mut(),
+            face_id,
+            distance,
+            samples,
+        )?;
+        Ok(face_id_to_u32(result))
+    }
+
+    /// Body of `sweep_with_options`, shared with its batch arm.
+    pub(crate) fn sweep_with_options_impl(
+        &mut self,
+        profile: u32,
+        path_edge: u32,
+        contact_mode: &str,
+        scale_values: &[f64],
+        segments: u32,
+        corner_mode: &str,
+    ) -> Result<u32, WasmError> {
+        use brepkit_operations::sweep::{SweepContactMode, SweepCornerMode, SweepOptions};
+
+        let segments = validate_count(segments, "segments", MAX_COUNT)?;
+
+        let face_id = self.resolve_face(profile)?;
+        let path_curve = self.extract_nurbs_curve(path_edge)?;
+
+        let mode = if contact_mode == "fixed" {
+            SweepContactMode::Fixed
+        } else if let Some(rest) = contact_mode.strip_prefix("constantNormal:") {
+            let parts: Vec<f64> = rest
+                .split(',')
+                .filter_map(|s| s.trim().parse().ok())
+                .collect();
+            if parts.len() >= 3 {
+                SweepContactMode::ConstantNormal(Vec3::new(parts[0], parts[1], parts[2]))
+            } else {
+                SweepContactMode::RotationMinimizing
+            }
+        } else {
+            SweepContactMode::RotationMinimizing
+        };
+
+        let scale_law: Option<Box<dyn Fn(f64) -> f64 + Send + Sync>> =
+            if scale_values.len() >= 4 && scale_values.len().is_multiple_of(2) {
+                let pairs: Vec<(f64, f64)> =
+                    scale_values.chunks_exact(2).map(|c| (c[0], c[1])).collect();
+                Some(Box::new(move |t: f64| -> f64 {
+                    // Piecewise-linear interpolation
+                    if pairs.is_empty() {
+                        return 1.0;
+                    }
+                    if t <= pairs[0].0 {
+                        return pairs[0].1;
+                    }
+                    if t >= pairs[pairs.len() - 1].0 {
+                        return pairs[pairs.len() - 1].1;
+                    }
+                    for w in pairs.windows(2) {
+                        if t >= w[0].0 && t <= w[1].0 {
+                            let frac = (t - w[0].0) / (w[1].0 - w[0].0);
+                            return w[0].1 + frac * (w[1].1 - w[0].1);
+                        }
+                    }
+                    1.0
+                }))
+            } else {
+                None
+            };
+
+        let cm = match corner_mode {
+            "miter" => SweepCornerMode::Miter,
+            "round" => SweepCornerMode::Round,
+            _ => SweepCornerMode::Smooth,
+        };
+
+        let options = SweepOptions {
+            contact_mode: mode,
+            corner_mode: cm,
+            scale_law,
+            segments,
+            aux_spine: None,
+        };
+
+        let result = brepkit_operations::sweep::sweep_with_options(
+            self.topo_mut(),
+            face_id,
+            &path_curve,
+            &options,
+        )?;
+        Ok(solid_id_to_u32(result))
+    }
+
+    /// Body of `untrim_face`, shared with its batch arm.
+    pub(crate) fn untrim_face_impl(
+        &mut self,
+        face: u32,
+        samples_per_curve: u32,
+        interior_samples: u32,
+    ) -> Result<u32, WasmError> {
+        let samples_per_curve = validate_count(samples_per_curve, "samples_per_curve", MAX_COUNT)?;
+        let interior_samples = validate_count(interior_samples, "interior_samples", MAX_GRID_SIDE)?;
+        let face_id = self.resolve_face(face)?;
+        let face_data = self.topo.face(face_id)?;
+        let surface = match face_data.surface() {
+            FaceSurface::Nurbs(s) => s.clone(),
+            _ => {
+                return Err(WasmError::InvalidInput {
+                    reason: "untrim only works on NURBS faces".into(),
+                });
+            }
+        };
+        // Build trim curves from wire edges projected to UV space
+        let wire_id = face_data.outer_wire();
+        let wire = self.topo.wire(wire_id)?;
+        let mut trim_curves = Vec::new();
+        for oe in wire.edges() {
+            let edge = self.topo.edge(oe.edge())?;
+            let v_start = self.topo.vertex(edge.start())?;
+            let v_end = self.topo.vertex(edge.end())?;
+            // Project endpoints to UV
+            let proj_start = point_to_nurbs_surface(v_start.point(), &surface);
+            let uv_start = brepkit_math::vec::Point2::new(proj_start.u, proj_start.v);
+            let proj_end = point_to_nurbs_surface(v_end.point(), &surface);
+            let uv_end = brepkit_math::vec::Point2::new(proj_end.u, proj_end.v);
+            trim_curves.push(brepkit_operations::untrim::TrimCurve {
+                curve: vec![uv_start, uv_end],
+            });
+        }
+        let new_surface = brepkit_operations::untrim::untrim_face(
+            &surface,
+            &trim_curves,
+            samples_per_curve,
+            interior_samples,
+        )?;
+        Ok(face_id_to_u32(self.nurbs_surface_to_face(new_surface)?))
+    }
+
     /// Inner implementation for `sweep_face`.
     #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
     pub(crate) fn sweep_face_impl(

@@ -87,6 +87,60 @@ pub fn validate_positive(value: f64, name: &str) -> Result<(), WasmError> {
         })
 }
 
+/// The largest count a binding takes from JS for the points, segments or
+/// sides along one curve, polygon or sweep, or the copies of a pattern.
+///
+/// A count sizes an array before anything is built, so a count of
+/// `u32::MAX` traps the instance when the allocation fails. The counts in
+/// the tests and in brepjs are at most 32; this limit is two thousand times
+/// that.
+pub const MAX_COUNT: u32 = 1 << 16;
+
+/// The largest side of a square grid of samples a binding takes from JS.
+///
+/// Such a grid holds [`MAX_COUNT`] samples. The sides in the tests and in
+/// brepjs are at most 16.
+pub const MAX_GRID_SIDE: u32 = 1 << 8;
+
+/// Validate a count from JS against its limit `max` before it sizes an
+/// allocation, and give it as a `usize`.
+///
+/// # Errors
+///
+/// Returns [`WasmError::InvalidInput`] if `value` is larger than `max`.
+pub fn validate_count(value: u32, name: &str, max: u32) -> Result<usize, WasmError> {
+    if value > max {
+        return Err(WasmError::InvalidInput {
+            reason: format!("{name} must be at most {max}, got {value}"),
+        });
+    }
+    usize::try_from(value).map_err(|_| WasmError::InvalidInput {
+        reason: format!("{name} {value} does not fit this target"),
+    })
+}
+
+/// Validate the counts of a pattern from JS.
+///
+/// The copies it makes, the product of its counts, are at most
+/// [`MAX_COUNT`]. Each copy is a whole solid, and the copies' handles are
+/// gathered in one array first.
+///
+/// # Errors
+///
+/// Returns [`WasmError::InvalidInput`] if the product of `counts` is larger
+/// than [`MAX_COUNT`].
+pub fn validate_pattern_counts(counts: &[u32]) -> Result<(), WasmError> {
+    let copies = counts
+        .iter()
+        .try_fold(1_u64, |acc, &c| acc.checked_mul(u64::from(c)));
+    match copies {
+        Some(n) if n <= u64::from(MAX_COUNT) => Ok(()),
+        _ => Err(WasmError::InvalidInput {
+            reason: format!("a pattern makes at most {MAX_COUNT} copies, got counts {counts:?}"),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
