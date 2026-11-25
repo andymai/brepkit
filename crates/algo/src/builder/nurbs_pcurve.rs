@@ -223,7 +223,7 @@ impl<'a> Run<'a> {
     fn spline_parameter(n: &NurbsCurve, t0: f64, t1: f64, s: f64) -> f64 {
         let t = Self::parameter(t0, t1, s);
         let near = 2.0 * f64::EPSILON * (t0.abs() + t1.abs());
-        n.knots()
+        domain_knots(n.knots(), n.degree())
             .iter()
             .copied()
             .filter(|k| (k - t).abs() <= near)
@@ -319,7 +319,7 @@ impl<'a> Run<'a> {
             return Vec::new();
         };
         let span = t1 - t0;
-        n.knots()
+        domain_knots(n.knots(), n.degree())
             .iter()
             .map(|&k| (k - t0) / span)
             .filter(|s| *s > 1e-9 && *s < 1.0 - 1e-9)
@@ -479,9 +479,10 @@ impl<'a> Jets<'a> {
                 .unwrap_or(x)
         };
         let [u0, u1, v0, v1] = self.domain;
+        let s = self.surface;
         Point2::new(
-            onto(uv.x(), self.surface.knots_u(), (u0, u1)),
-            onto(uv.y(), self.surface.knots_v(), (v0, v1)),
+            onto(uv.x(), domain_knots(s.knots_u(), s.degree_u()), (u0, u1)),
+            onto(uv.y(), domain_knots(s.knots_v(), s.degree_v()), (v0, v1)),
         )
     }
 
@@ -676,17 +677,21 @@ fn multilinear(m: &Table, slots: &[(f64, f64)]) -> f64 {
 /// interior knot strictly inside, `p - m` for a knot of multiplicity `m`,
 /// and [`ORDER`] where none lies inside. Nothing where it breaks inside or
 /// at an end of `[a, b]`, `a < b`: its value at that knot is the one beyond
-/// it.
+/// it. Only the knots of the domain are read: a sound knot vector may
+/// hold an unused first or last knot out of order.
+#[allow(clippy::float_cmp)]
 fn smooth_order(knots: &[f64], p: usize, a: f64, b: f64) -> usize {
-    let (lo, hi) = (knots[p], knots[knots.len() - p - 1]);
+    let knots = domain_knots(knots, p);
+    let (Some(&lo), Some(&hi)) = (knots.first(), knots.last()) else {
+        return 0;
+    };
     let mut order = ORDER;
     let mut i = 0;
     while i < knots.len() {
         let k = knots[i];
         let mut m = 1;
-        // The knots do not fall, so the next is the same knot where it is
-        // not above this one: `-0.0` and `0.0` are one knot.
-        while i + m < knots.len() && knots[i + m] <= k {
+        // Equal knots make one knot, `-0.0` and `0.0` among them.
+        while i + m < knots.len() && knots[i + m] == k {
             m += 1;
         }
         if k > lo && k < hi {
@@ -699,6 +704,13 @@ fn smooth_order(knots: &[f64], p: usize, a: f64, b: f64) -> usize {
         i += m;
     }
     order
+}
+
+/// The knots of a B-spline of degree `p` from the start of its domain to
+/// its end, `knots[p]` to `knots[n]` for `n` control points: those its
+/// basis functions read there, which do not fall.
+fn domain_knots(knots: &[f64], p: usize) -> &[f64] {
+    knots.get(p..knots.len().saturating_sub(p)).unwrap_or(&[])
 }
 
 /// The knot span of a B-spline of degree `p` with `count` control points
@@ -1713,5 +1725,46 @@ mod tests {
                 "fold {fold}"
             );
         }
+    }
+
+    /// A sound knot vector may hold an unused first or last knot out of
+    /// order: degree one on `[2, 0, 0.1, 0.2, 0.3, 1, 1]` turns at each of
+    /// its three inner knots. A sheet linear by pieces on those knots, with
+    /// a bump at `u = 0.2` that a straight line along `u` leaves 5 below,
+    /// gets no pcurve for that line, nor one that strays from it.
+    #[test]
+    fn an_unused_knot_out_of_order_hides_no_turn() {
+        let knots = [2.0, 0.0, 0.1, 0.2, 0.3, 1.0, 1.0];
+        let points = [0.0, 0.1, 0.2, 0.3, 1.0]
+            .iter()
+            .zip([0.0, 0.0, 5.0, 0.0, 0.0])
+            .map(|(&u, z)| {
+                vec![
+                    Point3::new(100.0 * u, 0.0, z),
+                    Point3::new(100.0 * u, 10.0, z),
+                ]
+            })
+            .collect();
+        let sheet = NurbsSurface::new(
+            1,
+            1,
+            knots.to_vec(),
+            vec![0.0, 0.0, 1.0, 1.0],
+            points,
+            vec![vec![1.0; 2]; 5],
+        )
+        .unwrap();
+        let (a, b) = (Point3::new(0.0, 5.0, 0.0), Point3::new(100.0, 5.0, 0.0));
+        let line = EdgeCurve::Line;
+        let pcurve = proved_nurbs_pcurve(&line, a, b, &sheet, 1e-7);
+        if let Some(pcurve) = &pcurve {
+            let far = stray(pcurve, &line, a, b, &sheet);
+            assert!(far <= 1e-7, "{far:e}");
+        }
+        assert!(pcurve.is_none());
+        for (a, b) in [(0.05, 0.15), (0.15, 0.25), (0.25, 0.35), (0.0, 1.0)] {
+            assert_eq!(smooth_order(&knots, 1, a, b), 1, "({a}, {b})");
+        }
+        assert_eq!(smooth_order(&knots, 1, 0.31, 0.9), ORDER);
     }
 }
