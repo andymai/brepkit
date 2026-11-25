@@ -4864,6 +4864,43 @@ fn project_angle_on_curve(curve: &brepkit_topology::edge::EdgeCurve, p: Point3) 
 /// An edge's middle and size, as `merge_duplicate_edges` compares copies.
 type EdgeMiddle = Option<(Point3, f64, u64)>;
 
+/// Whether edges `a` and `b`, which share their ends, are proved one curve
+/// within `tol` along their whole length (see
+/// [`crate::builder::face_splitter::same_section_curve`]).
+fn proved_one_curve(
+    topo: &Topology,
+    a: brepkit_topology::edge::EdgeId,
+    b: brepkit_topology::edge::EdgeId,
+    tol: f64,
+) -> bool {
+    use crate::builder::split_types::SectionEdge;
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use brepkit_math::vec::{Point2, Vec2};
+    let Ok(line) = Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)) else {
+        return false;
+    };
+    let section = |e: brepkit_topology::edge::EdgeId| -> Option<SectionEdge> {
+        let edge = topo.edge(e).ok()?;
+        Some(SectionEdge {
+            curve_3d: edge.curve().clone(),
+            pcurve_a: Curve2D::Line(line.clone()),
+            pcurve_b: Curve2D::Line(line.clone()),
+            start: topo.vertex(edge.start()).ok()?.point(),
+            end: topo.vertex(edge.end()).ok()?.point(),
+            start_uv_a: None,
+            end_uv_a: None,
+            start_uv_b: None,
+            end_uv_b: None,
+            target_face: None,
+            pave_block_id: None,
+        })
+    };
+    match (section(a), section(b)) {
+        (Some(a), Some(b)) => crate::builder::face_splitter::same_section_curve(&a, &b, tol),
+        _ => false,
+    }
+}
+
 /// A fitted curve's identity: its control points, weights and knots, so
 /// edges cut from one curve key alike (never 0, which marks an exact curve).
 fn nurbs_key(nc: &brepkit_math::nurbs::curve::NurbsCurve) -> u64 {
@@ -5049,11 +5086,26 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
         // sets each already paired are two edges: a hole's short rim arc and
         // a box edge's chord across the opening, each shared by its own two
         // faces, would otherwise weld into one edge of four faces.
+        // An exact curve and a fitted one are copies of one edge only where
+        // proved one curve: their middles read on two curves, and a section
+        // fitted between a rim's two vertices (a cap's section from a
+        // crossing to a touch on the rim) shares both its ends with the rim's
+        // arc, 0.02 off it, and would trace the wall along the rim.
+        let fitted = |e: EdgeId| {
+            topo.edge(e)
+                .is_ok_and(|edge| matches!(edge.curve(), EdgeCurve::NurbsCurve(_)))
+        };
+        let one_kind = |x: EdgeId, y: EdgeId| {
+            fitted(x) == fitted(y) || proved_one_curve(topo, x, y, 100.0 * tol)
+        };
         let mut sets: Vec<(EdgeId, EdgeMiddle, Vec<EdgeId>, usize)> = Vec::new();
         for &e in &unique {
             let mid = middle(e)?;
             let n = uses.get(&e).copied().unwrap_or(0);
-            if let Some(set) = sets.iter_mut().find(|set| same(mid, set.1)) {
+            if let Some(set) = sets
+                .iter_mut()
+                .find(|set| same(mid, set.1) && one_kind(e, set.0))
+            {
                 set.2.push(e);
                 set.3 += n;
             } else {
@@ -5078,7 +5130,7 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
             } else if n % 2 == 1 {
                 canonicals
                     .iter_mut()
-                    .find(|(_, cm, cn)| *cn % 2 == 1 && alongside(mid, *cm))
+                    .find(|(c, cm, cn)| *cn % 2 == 1 && alongside(mid, *cm) && one_kind(head, *c))
             } else {
                 None
             };

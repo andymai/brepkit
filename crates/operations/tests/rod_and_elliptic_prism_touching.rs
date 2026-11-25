@@ -508,22 +508,16 @@ mod tests {
     /// sliver of an arc there, 2e-7 or 2e-6 long, across the crossing: each
     /// boolean with the prism is exact or refused, never wrong. The plane
     /// caps' sections end where they cross the rims, read on the rims
-    /// themselves, a vertex there or not.
+    /// themselves, a vertex there or not; a cap's section from a crossing to
+    /// the touch, which shares both ends with the rim's arc there, stays
+    /// apart from it.
     #[test]
     fn a_rod_whose_rim_has_a_vertex_or_a_sliver_at_a_crossing_is_exact_or_refused() {
         let third = PI / 3.0;
         let all = [BooleanOp::Fuse, BooleanOp::Cut, BooleanOp::Intersect];
         let rims: [(&str, Vec<f64>, &[BooleanOp]); 5] = [
-            (
-                "seam on the upper crossing",
-                vec![third],
-                &[BooleanOp::Cut, BooleanOp::Intersect],
-            ),
-            (
-                "seam on the lower crossing",
-                vec![-third],
-                &[BooleanOp::Cut, BooleanOp::Intersect],
-            ),
+            ("seam on the upper crossing", vec![third], &all),
+            ("seam on the lower crossing", vec![-third], &all),
             (
                 "a vertex on each crossing",
                 vec![2.0, 2.0 * PI - third, 2.0 * PI + third],
@@ -542,22 +536,6 @@ mod tests {
         ];
         for (rim, cuts, ops) in &rims {
             rod_with_rims_against_the_prism(rim, cuts, ops);
-        }
-    }
-
-    /// The fuse of the shorter rod and the prism with the rod's seam on a
-    /// crossing: the lens between the lower crossing and the touch is lost,
-    /// its cap pieces dropped and the prism's wall bounded by the rod's rim
-    /// there.
-    #[test]
-    #[ignore = "the fuse loses the lens between the lower crossing and the touch"]
-    fn a_rod_with_its_seam_on_a_crossing_fuses_exactly_or_is_refused() {
-        let third = PI / 3.0;
-        for (rim, seam) in [
-            ("seam on the upper crossing", third),
-            ("seam on the lower crossing", -third),
-        ] {
-            rod_with_rims_against_the_prism(rim, &[seam], &[BooleanOp::Fuse]);
         }
     }
 
