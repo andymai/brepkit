@@ -1895,6 +1895,11 @@ enum FaceExtent {
         margin: f64,
         /// Every boundary edge is a line, so the polygons are the face.
         exact: bool,
+        /// The face's own region in the frame, its arcs read as arcs. A
+        /// sampled arc's polygon cuts across the face by its sag, a band a
+        /// thin section near the arc can run along (a lens between a rod's
+        /// rim and a wall that touches it).
+        region: Option<brepkit_topology::planar::PlanarRegion>,
     },
     /// Analytic lateral face (cylinder/cone/sphere/torus): bound by the
     /// axial `v` parameter range of the face and, for a partial-arc patch
@@ -2041,12 +2046,27 @@ impl FaceExtent {
                     topo.edge(oe.edge())
                         .is_ok_and(|e| matches!(e.curve(), EdgeCurve::Line))
                 });
+            let region = if exact {
+                None
+            } else {
+                brepkit_topology::planar::face_region_2d(
+                    topo,
+                    face_id,
+                    frame.origin(),
+                    frame.u_axis(),
+                    frame.v_axis(),
+                    tol.linear,
+                )
+                .ok()
+                .flatten()
+            };
             Some(Self::Plane {
                 frame,
                 poly,
                 holes,
                 margin: (smaller * 0.01).max(tol.linear),
                 exact,
+                region,
             })
         } else {
             // A whole, untrimmed torus has no `v_range` (its boundary is the
@@ -2218,12 +2238,13 @@ impl FaceExtent {
     }
 
     /// Whether the strict test reads the face itself rather than a sampled
-    /// stand-in for a curved boundary: a plane bounded by lines, a cylinder
-    /// or cone band between rulings and coaxial circles, or a face whose
+    /// stand-in for a curved boundary: a plane bounded by lines or read by
+    /// its region, a cylinder or cone band between rulings and coaxial
+    /// circles, or a face whose
     /// sampled `(u, v)` boundary sags off its edges by no more than 1e-6.
     fn is_exact(&self) -> bool {
         match self {
-            Self::Plane { exact, .. } => *exact,
+            Self::Plane { exact, region, .. } => *exact || region.is_some(),
             Self::Analytic {
                 exact_window,
                 uv_poly,
@@ -2264,6 +2285,11 @@ impl FaceExtent {
     /// rides the margin band along a boundary (a tangency graze).
     fn contains_strict(&self, p: Point3, depth: f64) -> bool {
         match self {
+            Self::Plane {
+                frame,
+                region: Some(region),
+                ..
+            } => region.contains_clear(frame.project(p), depth),
             Self::Plane {
                 frame, poly, holes, ..
             } => {

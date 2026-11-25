@@ -328,6 +328,55 @@ mod tests {
         }
     }
 
+    /// The rod from z = 0 to 2 only, and the prism from z = -1 to 3: the rod
+    /// lies in the prism but for the two thin lenses beside the touch, so
+    /// neither holds the other. The fuse, the prism less the rod and their
+    /// common part are exact, with the seams on the touch and away from it.
+    #[test]
+    fn a_shorter_rod_in_the_prism_but_for_two_lenses_is_not_held_in_it() {
+        let ellipse = PI * 3.0 * 5.4_f64.sqrt();
+        let union = union_area();
+        let common = 4.0 * PI + ellipse - union;
+        for (seams, seam) in SEAMS {
+            for (name, pose) in poses() {
+                for (op, volume) in [
+                    (BooleanOp::Fuse, 4.0 * ellipse + 2.0 * (union - ellipse)),
+                    (BooleanOp::Cut, 4.0 * ellipse - 2.0 * common),
+                    (BooleanOp::Intersect, 2.0 * common),
+                ] {
+                    let mut topo = Topology::new();
+                    let [_, _, prism] = parts(&mut topo, seam, &pose);
+                    let rod = make_cylinder(&mut topo, 2.0, 2.0).unwrap();
+                    transform_solid(
+                        &mut topo,
+                        rod,
+                        &(pose * Mat4::translation(5.0, 5.0, 0.0) * Mat4::rotation_z(seam)),
+                    )
+                    .unwrap();
+                    let what = format!("{op:?}, {seams}, {name}");
+                    let (a, b) = if op == BooleanOp::Cut {
+                        (prism, rod)
+                    } else {
+                        (rod, prism)
+                    };
+                    let result = boolean_with_options(&mut topo, op, a, b, exact()).unwrap();
+                    let lens = Point3::new(6.72, 6.0, 1.0);
+                    let (inside, outside): (Vec<Point3>, Vec<Point3>) = match op {
+                        BooleanOp::Fuse => (
+                            vec![lens, BY_TOUCH],
+                            vec![PAST_LENS, Point3::new(6.72, 6.0, 2.5)],
+                        ),
+                        BooleanOp::Cut => (vec![Point3::new(1.5, 5.0, 1.0)], vec![lens, BY_TOUCH]),
+                        BooleanOp::Intersect => {
+                            (vec![BY_TOUCH], vec![lens, Point3::new(1.5, 5.0, 1.0)])
+                        }
+                    };
+                    assert_exact(&topo, result, volume, (&inside, &outside), &pose, &what);
+                }
+            }
+        }
+    }
+
     /// A rod of radius 2 about (6.5, 5) from z = 0 to 2, and the prism from
     /// z = -1 to 3: their walls cross at x = 10.25 - sqrt(19.9375), along
     /// rulings that run only over the rod's height, and the fuse is exact.

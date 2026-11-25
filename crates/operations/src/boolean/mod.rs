@@ -3220,6 +3220,7 @@ fn detect_trivial_relation(
     let b_in_a = !hollow(a)
         && (b_vertex_term || (ca.is_none() && aabb_strictly_contains(&aabb_b, &aabb_a)))
         && nurbs_faces_proved_inside(topo, b, a, tol)
+        && outer_nurbs_faces_clear(topo, aabb_b, a, tol)
         && !center_outside(topo, b, a, &aabb_b)
         && !boundary_probe_outside(topo, b, a, &aabb_b)
         && !axis_outside(topo, b, ca, &aabb_b)
@@ -3229,6 +3230,7 @@ fn detect_trivial_relation(
     let a_in_b = !hollow(b)
         && (a_vertex_term || (cb.is_none() && aabb_strictly_contains(&aabb_a, &aabb_b)))
         && nurbs_faces_proved_inside(topo, a, b, tol)
+        && outer_nurbs_faces_clear(topo, aabb_a, b, tol)
         && !center_outside(topo, a, b, &aabb_a)
         && !boundary_probe_outside(topo, a, b, &aabb_a)
         && !axis_outside(topo, a, cb, &aabb_a)
@@ -3425,6 +3427,45 @@ fn nurbs_faces_proved_inside(
                     .iter()
                     .all(|&(n, offset)| n.dot(p - origin) - offset <= tol.linear)
             })
+    })
+}
+
+/// Whether every NURBS face of `outer` lies clear of the box `inner` of the
+/// other solid: the hull of the face's control points, which holds a surface
+/// with positive weights, stands off that box by more than the tolerance.
+/// An inner solid near such a face can poke out past it between every
+/// vertex and probe, and no bound here holds it in, so a containment near
+/// one is not proved, and the full boolean decides.
+fn outer_nurbs_faces_clear(
+    topo: &Topology,
+    inner: Option<(Point3, Point3)>,
+    outer: SolidId,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> bool {
+    let Ok(faces) = brepkit_topology::explorer::solid_faces(topo, outer) else {
+        return false;
+    };
+    faces.into_iter().all(|fid| {
+        let Ok(face) = topo.face(fid) else {
+            return false;
+        };
+        let FaceSurface::Nurbs(surface) = face.surface() else {
+            return true;
+        };
+        let Some((lo, hi)) = inner else {
+            return false;
+        };
+        if !surface.weights().iter().flatten().all(|&w| w > 0.0) {
+            return false;
+        }
+        let hull = surface.aabb();
+        let margin = tol.linear;
+        hull.max.x() < lo.x() - margin
+            || hull.min.x() > hi.x() + margin
+            || hull.max.y() < lo.y() - margin
+            || hull.min.y() > hi.y() + margin
+            || hull.max.z() < lo.z() - margin
+            || hull.min.z() > hi.z() + margin
     })
 }
 
