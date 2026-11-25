@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.52](https://github.com/andymai/brepkit/compare/v4.11.51...v4.11.52) (2026-11-25)
+
+
+### Bug Fixes
+
+* **algo,operations:** prove pcurves for B-spline faces in each GFA store, so phase EF boxes a piece by the piece ([#2852](https://github.com/andymai/brepkit/issues/2852)) ([5169f0d](https://github.com/andymai/brepkit/commit/5169f0d00a226c1df66471a4dfe69cc35575c54b))
+
 ## [4.11.51](https://github.com/andymai/brepkit/compare/v4.11.50...v4.11.51) (2026-11-25)
 
 
