@@ -6904,7 +6904,17 @@ fn a_face_or_edge_past_the_sample_limit_is_refused() {
 
     let rod = crate::primitives::make_cylinder(&mut topo, 1e11, 1.0).unwrap();
     let drawn = sample_solid_edges(&topo, rod, 1e-3).map(|lines| lines.positions.len());
-    assert!(refused(&drawn, "an edge"), "{drawn:?}");
+    assert!(refused(&drawn, "edge"), "{drawn:?}");
+
+    // A deflection so fine its chord count passes the largest `usize` is
+    // refused, not wrapped round to a small count.
+    let pin = crate::primitives::make_cylinder(&mut topo, 1.0, 1.0).unwrap();
+    let solid = tessellate_solid(&topo, pin, 1e-300).map(|m| m.positions.len());
+    assert!(refused(&solid, ""), "{solid:?}");
+    for face in brepkit_topology::explorer::solid_faces(&topo, pin).unwrap() {
+        let found = tessellate(&topo, face, 1e-300).map(|m| m.positions.len());
+        assert!(refused(&found, ""), "{found:?}");
+    }
 }
 
 /// The cone meshers count a face's columns at a radius of at least 0.01,
@@ -7038,34 +7048,159 @@ fn a_ruling_past_the_sample_limit_is_refused() {
     assert!(tessellate(&topo, wall, 1e-2).is_ok());
 }
 
-/// The meshers sample an ellipse at most 4096 segments however eccentric it
-/// is, and the sample check counts it the same way. A prism on an ellipse
-/// with semi-axes 1e4 and 1e-2, drawn and meshed to 0.01, asks the chord
-/// formula for 6e6 segments round it, and takes 4096.
+/// An ellipse is sampled as finely as its deflection needs, with no cap on
+/// its segments. One of equal semi-axes 1e6 drawn to a deflection of 0.1
+/// takes 19,870 segments and keeps each chord within 0.1 of it, where a cap
+/// of 4096 left chords 0.29 off. A face bounded by it is meshed alike. An
+/// ellipse with semi-axes 1e4 and 1e-2 asks for 6.3e6 segments at 0.01, past
+/// the limit for one edge: the wireframe and the face meshers refuse it.
 #[test]
-fn an_eccentric_ellipse_is_counted_at_the_meshers_cap() {
+fn an_ellipse_is_sampled_as_finely_as_its_deflection_needs() {
+    let ellipse_face = |topo: &mut Topology, a: f64, b: f64| {
+        let rim = brepkit_topology::builder::make_ellipse_edge(
+            topo,
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            a,
+            b,
+            1e-7,
+        )
+        .unwrap();
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+        (
+            rim,
+            brepkit_topology::builder::make_face_from_wire(topo, wire).unwrap(),
+        )
+    };
     let mut topo = Topology::new();
-    let rim = brepkit_topology::builder::make_ellipse_edge(
-        &mut topo,
-        Point3::new(0.0, 0.0, 0.0),
-        Vec3::new(0.0, 0.0, 1.0),
-        1e4,
-        1e-2,
-        1e-7,
+    let (rim, disc) = ellipse_face(&mut topo, 1e6, 1e6);
+    let EdgeCurve::Ellipse(ellipse) = topo.edge(rim).unwrap().curve().clone() else {
+        unreachable!("make_ellipse_edge gives an ellipse");
+    };
+    let points = super::edge_sampling::sample_edge(
+        &topo,
+        topo.edge(rim).unwrap(),
+        0.1,
+        brepkit_math::chord::DEFAULT_ANGULAR_TOL,
+        false,
     )
     .unwrap();
-    let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
-    let base = brepkit_topology::builder::make_face_from_wire(&mut topo, wire).unwrap();
-    let prism = crate::extrude::extrude(&mut topo, base, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
-    let lines = sample_solid_edges(&topo, prism, 0.01).unwrap();
-    let longest = lines
-        .offsets
-        .iter()
-        .zip(lines.offsets.iter().skip(1).chain([&lines.positions.len()]))
-        .map(|(a, b)| b - a)
-        .max()
-        .unwrap();
-    assert!(longest <= 4097, "{longest}");
-    let cap = tessellate(&topo, base, 0.01).map(|m| m.positions.len());
-    assert!(matches!(cap, Ok(n) if n <= 4097 * 2), "{cap:?}");
+    assert!(points.len() > 4097, "{}", points.len());
+    let off = points
+        .windows(2)
+        .map(|w| {
+            let mid = w[0] + (w[1] - w[0]) * 0.5;
+            (ellipse.evaluate(ellipse.project(mid)) - mid).length()
+        })
+        .fold(0.0_f64, f64::max);
+    assert!(off <= 0.1, "{off}");
+    let mesh = tessellate(&topo, disc, 0.1).unwrap();
+    assert!(mesh.positions.len() > 4097, "{}", mesh.positions.len());
+
+    let (_, sliver) = ellipse_face(&mut topo, 1e4, 1e-2);
+    let prism = crate::extrude::extrude(&mut topo, sliver, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+    let drawn = sample_solid_edges(&topo, prism, 0.01).map(|lines| lines.positions.len());
+    assert!(
+        matches!(drawn, Err(crate::OperationsError::TooManySamples { .. })),
+        "{drawn:?}"
+    );
+    let cap = tessellate(&topo, sliver, 0.01).map(|m| m.positions.len());
+    assert!(
+        matches!(cap, Err(crate::OperationsError::TooManySamples { .. })),
+        "{cap:?}"
+    );
+}
+
+/// A circle arc and a sphere patch are counted over their own spans, not
+/// over a whole turn. A plate bounded by an arc of radius 1e10 across 1e-4
+/// of a turn, and a patch 2e-7 across of a ball of radius 1e10, meshed to
+/// 0.01, take a few dozen samples each: a whole turn of either would ask
+/// for 6e6, past the limit for one edge, but neither mesher samples one.
+#[test]
+fn an_arc_and_a_patch_of_a_huge_circle_and_ball_are_counted_over_their_span() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::SphericalSurface;
+
+    let r = 1e10;
+    let mut topo = Topology::new();
+    let half = 5e-5_f64;
+    let at = |t: f64| Point3::new(r * t.cos(), r * t.sin(), 0.0);
+    let (v0, v1) = (
+        topo.add_vertex(Vertex::new(at(-half), 1e-7)),
+        topo.add_vertex(Vertex::new(at(half), 1e-7)),
+    );
+    let arc = Circle3D::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r).unwrap();
+    let rim = topo.add_edge(Edge::new(v0, v1, EdgeCurve::Circle(arc)));
+    let chord = topo.add_edge(Edge::new(v1, v0, EdgeCurve::Line));
+    let wire = topo.add_wire(
+        Wire::new(
+            vec![OrientedEdge::new(rim, true), OrientedEdge::new(chord, true)],
+            true,
+        )
+        .unwrap(),
+    );
+    let plate = topo.add_face(Face::new(
+        wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    let mesh = tessellate(&topo, plate, 0.01).unwrap();
+    assert!(mesh.positions.len() < 100, "{}", mesh.positions.len());
+
+    let d = 1e-7_f64;
+    let corner =
+        |u: f64, v: f64| Point3::new(r * v.cos() * u.cos(), r * v.cos() * u.sin(), r * v.sin());
+    let vs = [(-d, -d), (d, -d), (d, d), (-d, d)]
+        .map(|(u, v)| topo.add_vertex(Vertex::new(corner(u, v), 1e-7)));
+    let latitude = |v: f64| {
+        EdgeCurve::Circle(
+            Circle3D::with_axes(
+                Point3::new(0.0, 0.0, r * v.sin()),
+                Vec3::new(0.0, 0.0, 1.0),
+                r * v.cos(),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            )
+            .unwrap(),
+        )
+    };
+    let meridian = |u: f64| {
+        EdgeCurve::Circle(
+            Circle3D::with_axes(
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(u.sin(), -u.cos(), 0.0),
+                r,
+                Vec3::new(u.cos(), u.sin(), 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+            )
+            .unwrap(),
+        )
+    };
+    let bottom = topo.add_edge(Edge::new(vs[0], vs[1], latitude(-d)));
+    let right = topo.add_edge(Edge::new(vs[1], vs[2], meridian(d)));
+    let top = topo.add_edge(Edge::new(vs[3], vs[2], latitude(d)));
+    let left = topo.add_edge(Edge::new(vs[0], vs[3], meridian(-d)));
+    let wire = topo.add_wire(
+        Wire::new(
+            vec![
+                OrientedEdge::new(bottom, true),
+                OrientedEdge::new(right, true),
+                OrientedEdge::new(top, false),
+                OrientedEdge::new(left, false),
+            ],
+            true,
+        )
+        .unwrap(),
+    );
+    let ball = SphericalSurface::new(Point3::new(0.0, 0.0, 0.0), r).unwrap();
+    let patch = topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(ball)));
+    let mesh = tessellate(&topo, patch, 0.01).unwrap();
+    assert!(
+        !mesh.indices.is_empty() && mesh.positions.len() < 1000,
+        "{}",
+        mesh.positions.len()
+    );
 }

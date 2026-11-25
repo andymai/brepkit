@@ -36,7 +36,7 @@ const MAX_CELLS: usize = 200_000;
 /// The radius a cone face's columns are counted at: the radius at the end of
 /// `v_range` (its distances from the apex along a generator, as
 /// [`compute_v_param_range`] gives them) farther from the apex, and at least
-/// 0.01. The face and solid meshers and the sample check all count with it.
+/// 0.01. The face and solid meshers both count with it.
 pub(super) fn cone_column_radius(
     cone: &brepkit_math::surfaces::ConicalSurface,
     v_range: (f64, f64),

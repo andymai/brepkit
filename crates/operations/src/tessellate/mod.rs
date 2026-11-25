@@ -248,8 +248,8 @@ pub(super) fn check_reach(topo: &Topology, face: FaceId) -> Result<(), crate::Op
 /// 45 times the largest face.
 const MAX_SAMPLES: f64 = 1e7;
 
-/// The most samples the mesher takes along one edge, or along one curved
-/// direction across a face over a whole turn.
+/// The most samples the mesher takes along one edge, one path across a
+/// face, or one direction of a face's grid.
 ///
 /// A face's boundary samples are triangulated together before its interior
 /// grid is sized, so this bounds that work too. Over the operations and io
@@ -330,111 +330,38 @@ pub(super) fn check_grid(
     }
 }
 
-/// The segments the chord formula gives an arc of `radius` over `span`
-/// with the curvature floor: the most any mesher takes along such an arc.
-fn arc_segments(radius: f64, span: f64, deflection: f64, angular_tol: f64) -> f64 {
-    edge_sampling::segments_for_chord_deviation_a(radius, span, deflection, angular_tol, true)
-        as f64
-}
-
-/// The samples the mesher takes along an edge on `curve`, at most. An
-/// ellipse is counted as its meshers count it; a NURBS edge's samples are
-/// capped at 4096 spans where they are chosen.
-fn edge_samples(
-    curve: &brepkit_topology::edge::EdgeCurve,
-    deflection: f64,
-    angular_tol: f64,
-) -> f64 {
-    use brepkit_topology::edge::EdgeCurve;
-    use std::f64::consts::TAU;
-    match curve {
-        EdgeCurve::Line => 2.0,
-        EdgeCurve::Circle(c) => arc_segments(c.radius(), TAU, deflection, angular_tol) + 1.0,
-        EdgeCurve::Ellipse(e) => {
-            edge_sampling::ellipse_segments(e, TAU, deflection, angular_tol) as f64 + 1.0
-        }
-        EdgeCurve::NurbsCurve(_) => 4097.0,
-    }
-}
-
-/// The samples the mesher takes along each curved direction of a face on
-/// `surface`, at most: the chord formula's segments over a whole turn. A
-/// cone's columns are counted at the radius its meshers count them at,
-/// from the face's wires ([`nurbs::cone_column_radius`]). A plane has no
-/// curved direction, and a NURBS face's grid is capped where it is chosen.
-fn direction_samples(
-    topo: &Topology,
-    face_data: &brepkit_topology::face::Face,
-    deflection: f64,
-    angular_tol: f64,
-) -> [f64; 2] {
-    use brepkit_topology::face::FaceSurface;
-    use std::f64::consts::TAU;
-    let arc = |radius: f64| arc_segments(radius, TAU, deflection, angular_tol);
-    match face_data.surface() {
-        FaceSurface::Plane { .. } | FaceSurface::Nurbs(_) => [0.0, 0.0],
-        FaceSurface::Cylinder(c) => [arc(c.radius()), 0.0],
-        FaceSurface::Cone(c) => {
-            let v_range = nurbs::compute_v_param_range(topo, face_data, |p| c.project_point(p).1);
-            [arc(nurbs::cone_column_radius(c, v_range)), 0.0]
-        }
-        FaceSurface::Sphere(s) => [arc(s.radius()), 0.0],
-        FaceSurface::Torus(t) => [
-            arc(t.major_radius() + t.minor_radius()),
-            arc(t.minor_radius()),
-        ],
-    }
-}
-
 /// Refuses a face, before any of its samples is allocated, when one of its
-/// edges or one direction across it would take more than
-/// [`MAX_EDGE_SAMPLES`] samples at `deflection`. A grid across both
-/// directions of a sphere or a torus is checked by the mesher that sizes it
-/// from the part of the surface the face covers ([`check_grid`]).
+/// circle or ellipse edges would take more than [`MAX_EDGE_SAMPLES`]
+/// samples at `deflection`, counted as the meshers count it over the edge's
+/// own span ([`edge_sampling::edge_sample_count`], with `circle_floor`). A
+/// NURBS edge, a direction across a face and a grid are each checked where
+/// a mesher counts them, from the part of the curve or surface it covers.
 pub(super) fn check_samples(
     topo: &Topology,
     face: FaceId,
     deflection: f64,
     angular_tol: f64,
+    circle_floor: bool,
 ) -> Result<(), crate::OperationsError> {
+    use brepkit_topology::edge::EdgeCurve;
     let face_data = topo.face(face)?;
     for wire in
         std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
     {
         for oe in topo.wire(wire)?.edges() {
-            check_edge_samples(topo.edge(oe.edge())?.curve(), deflection, angular_tol)?;
+            let edge = topo.edge(oe.edge())?;
+            if matches!(edge.curve(), EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_)) {
+                edge_sampling::edge_sample_count(
+                    topo,
+                    edge,
+                    deflection,
+                    angular_tol,
+                    circle_floor,
+                )?;
+            }
         }
     }
-    let directions = direction_samples(topo, face_data, deflection, angular_tol);
-    match directions.into_iter().find(|&n| n > MAX_EDGE_SAMPLES) {
-        None => Ok(()),
-        Some(samples) => Err(too_many_samples(
-            &format!("face {}", face.index()),
-            samples,
-            MAX_EDGE_SAMPLES,
-            deflection,
-        )),
-    }
-}
-
-/// Refuses an edge on `curve` whose mesh would take more than
-/// [`MAX_EDGE_SAMPLES`] samples at `deflection`.
-pub(super) fn check_edge_samples(
-    curve: &brepkit_topology::edge::EdgeCurve,
-    deflection: f64,
-    angular_tol: f64,
-) -> Result<(), crate::OperationsError> {
-    let samples = edge_samples(curve, deflection, angular_tol);
-    if samples <= MAX_EDGE_SAMPLES {
-        Ok(())
-    } else {
-        Err(too_many_samples(
-            "an edge",
-            samples,
-            MAX_EDGE_SAMPLES,
-            deflection,
-        ))
-    }
+    Ok(())
 }
 
 /// A deflection the meshers can refine down to: a zero or negative one

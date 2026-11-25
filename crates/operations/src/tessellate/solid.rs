@@ -1241,7 +1241,7 @@ pub(super) fn tessellate_solid_core(
     let all_faces = explorer::solid_faces(topo, solid)?;
     for &face in &all_faces {
         super::check_reach(topo, face)?;
-        super::check_samples(topo, face, deflection, angular_tol)?;
+        super::check_samples(topo, face, deflection, angular_tol, circle_floor)?;
     }
     let edge_face_map = explorer::edge_to_face_map(topo, solid)?;
     let mut phase_t = PhaseTimer::start();
@@ -1358,7 +1358,8 @@ pub(super) fn tessellate_solid_core(
                 }
                 _ => continue,
             };
-            let expected_count = face_nu + 1;
+            let expected_count = face_nu.saturating_add(1);
+            super::check_count("a face's rim", expected_count, deflection)?;
 
             let mut wire_ids = vec![face_data.outer_wire()];
             wire_ids.extend_from_slice(face_data.inner_wires());
@@ -1471,7 +1472,8 @@ pub(super) fn tessellate_solid_core(
                 .clamp(-1.0, 1.0)
                 .acos();
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let needed = ((0.5 * span / half_step).ceil() as usize).min(4096);
+            let needed = (0.5 * span / half_step).ceil() as usize;
+            super::check_count("a rim beside a hole", needed.saturating_add(1), deflection)?;
             if needed > segments {
                 let finer =
                     brepkit_geometry::sampling::sample_uniform(circle, t_start, t_end, needed + 1);

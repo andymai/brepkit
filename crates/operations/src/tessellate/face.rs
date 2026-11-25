@@ -194,7 +194,7 @@ fn bounded_by_domain(
             topo.vertex(edge.end())?.point(),
         );
         let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
-        let samples = 2 * edge_sample_count(topo, edge, deflection, angular_tol, false).max(4);
+        let samples = 2 * edge_sample_count(topo, edge, deflection, angular_tol, false)?.max(4);
         for k in 0..=samples {
             #[allow(clippy::cast_precision_loss)]
             let t = t0 + (t1 - t0) * (k as f64) / (samples as f64);
@@ -229,7 +229,7 @@ pub(super) fn tessellate_with_uvs_floor(
 ) -> Result<TriangleMeshUV, crate::OperationsError> {
     super::check_deflection(deflection)?;
     super::check_reach(topo, face)?;
-    super::check_samples(topo, face, deflection, angular_tol)?;
+    super::check_samples(topo, face, deflection, angular_tol, curvature_floor)?;
     let face_data = topo.face(face)?;
     let is_reversed = face_data.is_reversed();
 
@@ -374,6 +374,7 @@ pub(super) fn tessellate_with_uvs_floor(
                         false,
                     );
                     let nv = 1;
+                    super::check_grid(nu.saturating_add(1), nv + 1, deflection)?;
                     let cyl = cyl.clone();
                     Ok(tessellate_analytic(
                         |u, v| cyl.evaluate(u, v),
@@ -420,6 +421,7 @@ pub(super) fn tessellate_with_uvs_floor(
                         false,
                     );
                     let nv = 1;
+                    super::check_grid(nu.saturating_add(1), nv + 1, deflection)?;
                     let kind = if v_range.0.abs() < 1e-10 {
                         AnalyticKind::ConeApex
                     } else {
@@ -465,7 +467,7 @@ pub(super) fn tessellate_with_uvs_floor(
                     angular_tol * ang_shrink,
                     curvature_floor,
                 );
-                super::check_grid(nu + 1, nv + 1, deflection)?;
+                super::check_grid(nu.saturating_add(1), nv.saturating_add(1), deflection)?;
                 let kind = sphere_analytic_kind(v_range);
                 let sphere = sphere.clone();
                 Ok(tessellate_analytic(
@@ -495,7 +497,7 @@ pub(super) fn tessellate_with_uvs_floor(
                     angular_tol,
                     true,
                 );
-                super::check_grid(nu + 1, nv + 1, deflection)?;
+                super::check_grid(nu.saturating_add(1), nv.saturating_add(1), deflection)?;
                 let torus = torus.clone();
                 Ok(tessellate_analytic(
                     |u, v| torus.evaluate(u, v),

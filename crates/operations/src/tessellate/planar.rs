@@ -5,7 +5,7 @@ use brepkit_math::madd::Madd;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 
-use super::edge_sampling::{sample_edge, sample_wire_positions, segments_for_chord_deviation_a};
+use super::edge_sampling::{sample_edge, sample_wire_positions};
 use super::{AnalyticKind, MERGE_GRID, PointPool, TriangleMesh, TriangleMeshUV, point_merge_key};
 
 /// Tessellate a cylindrical face using its actual boundary polygon (CDT-based).
@@ -319,14 +319,13 @@ pub(super) fn tessellate_planar(
                     let ep = topo.vertex(edge.end())?.point();
                     edge.curve().domain_with_endpoints(sp, ep)
                 };
-                let arc_range = (t_end - t_start).abs();
-                let n_samples = segments_for_chord_deviation_a(
+                let n_samples = super::edge_sampling::circle_segments(
                     circle.radius(),
-                    arc_range,
+                    (t_end - t_start).abs(),
                     deflection,
                     angular_tol,
                     false,
-                );
+                )?;
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve(
                     &|t| circle.evaluate(t),
@@ -356,7 +355,7 @@ pub(super) fn tessellate_planar(
                     t_end - t_start,
                     deflection,
                     angular_tol,
-                );
+                )?;
                 #[allow(clippy::cast_precision_loss)]
                 sample_curve(
                     &|t| ellipse.evaluate(t),
@@ -377,8 +376,13 @@ pub(super) fn tessellate_planar(
                 let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
                 let (u0, u1) = nurbs.domain();
                 let is_subspan = (t0 - u0).abs() > 1e-12 || (t1 - u1).abs() > 1e-12;
-                let breaks =
-                    super::edge_sampling::nurbs_edge_breaks(nurbs, t0, t1, deflection, angular_tol);
+                let breaks = super::edge_sampling::nurbs_edge_breaks(
+                    nurbs,
+                    t0,
+                    t1,
+                    deflection,
+                    angular_tol,
+                )?;
                 let n_samples = breaks.len() - 1;
                 // A sub-span is already endpoint-ordered (start→end); only a
                 // full-domain curve may run end→start.
