@@ -203,17 +203,20 @@ pub fn blend_surface_options(
         }
     };
     let mut options = BlendSurfaceOptions::new(continuity);
-    match &args["weights"] {
-        serde_json::Value::Null => {}
-        serde_json::Value::Array(weights) => {
+    match args.get("weights") {
+        None => {}
+        Some(serde_json::Value::Array(weights)) => {
             let read: Option<Vec<f64>> = weights.iter().map(serde_json::Value::as_f64).collect();
             let Some(&[a, b]) = read.as_deref() else {
                 return Err("a blend's weights must be two numbers".into());
             };
+            for w in [a, b] {
+                crate::error::validate_size(w, "a blend's weight").map_err(|e| e.to_string())?;
+            }
             options.weight_a = a;
             options.weight_b = b;
         }
-        _ => return Err("a blend's weights must be two numbers".into()),
+        Some(_) => return Err("a blend's weights must be two numbers".into()),
     }
     Ok(options)
 }

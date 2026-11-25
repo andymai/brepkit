@@ -295,36 +295,115 @@ fn matrix_from(matrix: &[f64]) -> Result<Mat4, WasmError> {
     })))
 }
 
-/// A box that holds every edge of `wires`: the ends of each edge, a circle
-/// or ellipse out to its radius in every direction, a spline's control
-/// points.
+/// The length of `v`, taken from `v` divided by its largest component, so
+/// that no square of a component past 1e154 overflows.
+pub fn scaled_length(v: Vec3) -> f64 {
+    let largest = v.x().abs().max(v.y().abs()).max(v.z().abs());
+    if largest > 0.0 && largest.is_finite() {
+        let unit = Vec3::new(v.x() / largest, v.y() / largest, v.z() / largest);
+        largest * unit.length()
+    } else {
+        largest
+    }
+}
+
+/// `v` scaled to unit length, by way of [`scaled_length`].
+pub fn scaled_unit(v: Vec3) -> Result<Vec3, WasmError> {
+    let largest = v.x().abs().max(v.y().abs()).max(v.z().abs());
+    if largest > 0.0 && largest.is_finite() {
+        Ok(Vec3::new(v.x() / largest, v.y() / largest, v.z() / largest).normalize()?)
+    } else {
+        Err(WasmError::InvalidInput {
+            reason: format!("a direction must be finite and not zero, got {v:?}"),
+        })
+    }
+}
+
+/// Push the eight corners of the cube about `center` with half side `r`.
+fn push_cube(points: &mut Vec<Point3>, center: Point3, r: f64) {
+    for k in 0..8 {
+        let side = |bit: i32| if k & bit == 0 { -r } else { r };
+        points.push(center + Vec3::new(side(1), side(2), side(4)));
+    }
+}
+
+/// Push points whose hull holds every edge of `wire`: the ends of each
+/// edge, the cube round a circle or ellipse, a spline's control points.
+fn push_wire_points(
+    topo: &brepkit_topology::Topology,
+    wire: brepkit_topology::wire::WireId,
+    points: &mut Vec<Point3>,
+) -> Result<(), WasmError> {
+    use brepkit_topology::edge::EdgeCurve;
+    for oe in topo.wire(wire)?.edges() {
+        let edge = topo.edge(oe.edge())?;
+        points.push(topo.vertex(edge.start())?.point());
+        points.push(topo.vertex(edge.end())?.point());
+        match edge.curve() {
+            EdgeCurve::Line => {}
+            EdgeCurve::Circle(c) => push_cube(points, c.center(), c.radius()),
+            EdgeCurve::Ellipse(e) => push_cube(points, e.center(), e.semi_major()),
+            EdgeCurve::NurbsCurve(n) => points.extend_from_slice(n.control_points()),
+        }
+    }
+    Ok(())
+}
+
+/// Points whose hull holds `face`: its wires, and a surface that can bulge
+/// past them. A spline surface lies in the hull of its control points while
+/// its weights are positive; a sphere or torus in the cube round it. A
+/// plane, cylinder or cone face lies within its edges' hull.
+pub fn face_points(
+    topo: &brepkit_topology::Topology,
+    face: brepkit_topology::face::FaceId,
+) -> Result<Vec<Point3>, WasmError> {
+    use brepkit_topology::face::FaceSurface;
+    let face_data = topo.face(face)?;
+    let mut points = Vec::new();
+    for wire in
+        std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
+    {
+        push_wire_points(topo, wire, &mut points)?;
+    }
+    match face_data.surface() {
+        FaceSurface::Nurbs(s) => points.extend(s.control_points().iter().flatten().copied()),
+        FaceSurface::Sphere(s) => push_cube(&mut points, s.center(), s.radius()),
+        FaceSurface::Torus(t) => {
+            push_cube(&mut points, t.center(), t.major_radius() + t.minor_radius());
+        }
+        FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {}
+    }
+    Ok(points)
+}
+
+/// Points whose hull holds every face of `solid`, in every shell.
+fn solid_points(
+    topo: &brepkit_topology::Topology,
+    solid: brepkit_topology::solid::SolidId,
+) -> Result<Vec<Point3>, WasmError> {
+    let mut points = Vec::new();
+    for face in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        points.extend(face_points(topo, face)?);
+    }
+    Ok(points)
+}
+
+/// A box that holds every edge of `wires`.
 pub fn wires_extent(
     topo: &brepkit_topology::Topology,
     wires: impl IntoIterator<Item = brepkit_topology::wire::WireId>,
 ) -> Result<Aabb3, WasmError> {
-    use brepkit_topology::edge::EdgeCurve;
     let mut points = Vec::new();
     for wire in wires {
-        for oe in topo.wire(wire)?.edges() {
-            let edge = topo.edge(oe.edge())?;
-            points.push(topo.vertex(edge.start())?.point());
-            points.push(topo.vertex(edge.end())?.point());
-            let round = match edge.curve() {
-                EdgeCurve::Line => None,
-                EdgeCurve::Circle(c) => Some((c.center(), c.radius())),
-                EdgeCurve::Ellipse(e) => Some((e.center(), e.semi_major())),
-                EdgeCurve::NurbsCurve(n) => {
-                    points.extend_from_slice(n.control_points());
-                    None
-                }
-            };
-            if let Some((center, r)) = round {
-                points.push(center - Vec3::new(r, r, r));
-                points.push(center + Vec3::new(r, r, r));
-            }
-        }
+        push_wire_points(topo, wire, &mut points)?;
     }
     Ok(Aabb3::from_points(points))
+}
+
+/// The box of `points` moved by `matrix`. An affine map takes a hull to
+/// the hull of the moved points, so this bounds the moved shape.
+fn moved(points: &[Point3], matrix: &Mat4) -> Aabb3 {
+    Aabb3::from_points(points.iter().map(|&p| matrix.mul_point(p)))
 }
 
 /// The box `aabb` takes under `matrix`: the box of its eight corners moved.
@@ -358,9 +437,7 @@ impl BrepKernel {
         matrix: &Mat4,
         what: &str,
     ) -> Result<(), WasmError> {
-        let aabb =
-            brepkit_operations::measure::solid_bounding_box_transformed(&self.topo, solid, matrix)?;
-        validate_extent(&aabb, what)
+        validate_extent(&moved(&solid_points(&self.topo, solid)?, matrix), what)
     }
 
     /// The checked body of `transformSolid` and the batch's `transform`.
@@ -398,8 +475,9 @@ impl BrepKernel {
     ) -> Result<(), WasmError> {
         let mat = matrix_from(matrix)?;
         let wire_id = self.resolve_wire(wire)?;
-        let extent = wires_extent(&self.topo, [wire_id])?;
-        validate_extent(&placed(&extent, &mat), "the moved wire")?;
+        let mut points = Vec::new();
+        push_wire_points(&self.topo, wire_id, &mut points)?;
+        validate_extent(&moved(&points, &mat), "the moved wire")?;
         brepkit_operations::transform::transform_wire(self.topo_mut(), wire_id, &mat)?;
         Ok(())
     }
@@ -412,12 +490,10 @@ impl BrepKernel {
     ) -> Result<(), WasmError> {
         let mat = matrix_from(matrix)?;
         let face_id = self.resolve_face(face)?;
-        let face_data = self.topo.face(face_id)?;
-        let wires: Vec<_> = std::iter::once(face_data.outer_wire())
-            .chain(face_data.inner_wires().iter().copied())
-            .collect();
-        let extent = wires_extent(&self.topo, wires)?;
-        validate_extent(&placed(&extent, &mat), "the moved face")?;
+        validate_extent(
+            &moved(&face_points(&self.topo, face_id)?, &mat),
+            "the moved face",
+        )?;
         brepkit_operations::transform::transform_face(self.topo_mut(), face_id, &mat)?;
         Ok(())
     }
@@ -432,7 +508,7 @@ impl BrepKernel {
         validate_point(point, "the mirror plane's point")?;
         validate_vector(normal, "the mirror plane's normal")?;
         let solid_id = self.resolve_solid(solid)?;
-        let n = normal.normalize()?;
+        let n = scaled_unit(normal)?;
         let offset = 2.0 * (point - Point3::new(0.0, 0.0, 0.0)).dot(n);
         let reflection = Mat4(std::array::from_fn(|i| {
             std::array::from_fn(|j| {
@@ -463,7 +539,7 @@ impl BrepKernel {
         validate_pattern_counts(&[count])?;
         let solid_id = self.resolve_solid(solid)?;
         let reach = spacing * f64::from(count.saturating_sub(1));
-        let last = direction.normalize()? * reach;
+        let last = scaled_unit(direction)? * reach;
         self.check_moved_solid(
             solid_id,
             &Mat4::translation(last.x(), last.y(), last.z()),
@@ -493,9 +569,11 @@ impl BrepKernel {
         validate_positive(spacings[1], "spacing_y")?;
         validate_pattern_counts(&counts)?;
         let solid_id = self.resolve_solid(solid)?;
-        let reach = |k: usize| -> Result<Vec3, WasmError> {
-            Ok(directions[k].normalize()? * (spacings[k] * f64::from(counts[k].saturating_sub(1))))
-        };
+        let reach =
+            |k: usize| -> Result<Vec3, WasmError> {
+                Ok(scaled_unit(directions[k])?
+                    * (spacings[k] * f64::from(counts[k].saturating_sub(1))))
+            };
         let (along_x, along_y) = (reach(0)?, reach(1)?);
         for corner in [along_x, along_y, along_x + along_y] {
             self.check_moved_solid(
@@ -529,14 +607,10 @@ impl BrepKernel {
         validate_vector(axis, "the pattern's axis")?;
         validate_pattern_counts(&[count])?;
         let solid_id = self.resolve_solid(solid)?;
-        let aabb = brepkit_operations::measure::solid_bounding_box(&self.topo, solid_id)?;
-        let far = aabb
-            .min
-            .x()
-            .abs()
-            .max(aabb.max.x().abs())
-            .hypot(aabb.min.y().abs().max(aabb.max.y().abs()))
-            .hypot(aabb.min.z().abs().max(aabb.max.z().abs()));
+        let far = solid_points(&self.topo, solid_id)?
+            .into_iter()
+            .map(|p| scaled_length(p - Point3::new(0.0, 0.0, 0.0)))
+            .fold(0.0, f64::max);
         validate_size(far, "a turned copy's distance from the origin")?;
         let compound = brepkit_operations::pattern::circular_pattern(
             self.topo_mut(),

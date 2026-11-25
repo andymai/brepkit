@@ -51,6 +51,11 @@ fn refused(cases: &[(&str, String)]) {
             "missing or invalid",
             "must be in",
             "must be finite",
+            "is not a number",
+            "unknown corner kind",
+            "must be two numbers",
+            "law must be",
+            "must be an array",
         ];
         assert!(
             checks.iter().any(|check| message.contains(check)),
@@ -605,4 +610,125 @@ fn the_shared_bodies_refuse_nan() {
     let mut nan_matrix = vec![0.0; 16];
     nan_matrix[0] = nan;
     assert!(k.transform_solid_impl(s, &nan_matrix).is_err());
+}
+
+/// A spec's field given as `null`, as JSON writes NaN and the infinities,
+/// is refused, not read as absent: `{"radius": null}` would take a radius
+/// of 1, and a null start would take its alias or the default.
+#[test]
+fn a_fillet_spec_field_written_as_null_is_refused() {
+    let (_, s, _, e, _) = fixture();
+    refused(&[
+        (
+            "radius",
+            format!(
+                r#"{{"op": "filletVariable", "args": {{"solid": {s}, "specs": [{{"edge": {e}, "radius": null}}]}}}}"#
+            ),
+        ),
+        (
+            "start",
+            format!(
+                r#"{{"op": "filletVariable", "args": {{"solid": {s}, "specs": [{{"edge": {e}, "law": "linear", "start": null, "end": 0.2}}]}}}}"#
+            ),
+        ),
+        (
+            "end",
+            format!(
+                r#"{{"op": "filletVariable", "args": {{"solid": {s}, "specs": [{{"edge": {e}, "law": "linear", "start": 0.1, "endRadius": null}}]}}}}"#
+            ),
+        ),
+        (
+            "law",
+            format!(
+                r#"{{"op": "filletVariable", "args": {{"solid": {s}, "specs": [{{"edge": {e}, "law": null, "radius": 0.1}}]}}}}"#
+            ),
+        ),
+        (
+            "an unknown law",
+            format!(
+                r#"{{"op": "filletVariable", "args": {{"solid": {s}, "specs": [{{"edge": {e}, "law": "cubic", "radius": 0.1}}]}}}}"#
+            ),
+        ),
+    ]);
+}
+
+/// A unit patch of degree one, flat at z = 0 but for one control point at
+/// `(1/8, 1/8)` raised to 2e299: a bump no quarter of its parameters meets,
+/// inside a boundary that stays at z = 0. Its face, and a solid of it alone.
+fn bumped_patch(k: &mut BrepKernel) -> (u32, u32) {
+    use brepkit_math::nurbs::surface::NurbsSurface;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    let points: Vec<Vec<Point3>> = (0..9_u32)
+        .map(|i| {
+            (0..9_u32)
+                .map(|j| {
+                    let z = if i == 1 && j == 1 { 2e299 } else { 0.0 };
+                    Point3::new(f64::from(i) / 8.0, f64::from(j) / 8.0, z)
+                })
+                .collect()
+        })
+        .collect();
+    let mut knots = vec![0.0, 0.0];
+    knots.extend((1..8_u32).map(|k| f64::from(k) / 8.0));
+    knots.extend([1.0, 1.0]);
+    let surface =
+        NurbsSurface::new(1, 1, knots.clone(), knots, points, vec![vec![1.0; 9]; 9]).unwrap();
+    let face = brepkit_topology::builder::make_nurbs_face(k.topo_mut(), surface, 1e-7).unwrap();
+    let shell = k.topo_mut().add_shell(Shell::new(vec![face]).unwrap());
+    let solid = k.topo_mut().add_solid(Solid::new(shell, vec![]));
+    (
+        crate::handles::face_id_to_u32(face),
+        crate::handles::solid_id_to_u32(solid),
+    )
+}
+
+/// The bump of [`bumped_patch`] scaled by 10 in z passes the size limit:
+/// a move of the solid or of the face alone is refused, though each box
+/// sampled from the surface, or drawn from its boundary, stays at z = 0.
+#[test]
+fn a_move_is_bounded_by_the_control_points_not_samples_of_the_surface() {
+    let scale = "[1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 10, 0, 0, 0, 0, 1]";
+    let mut k = BrepKernel::new();
+    let (face, solid) = bumped_patch(&mut k);
+    for op in [
+        format!(r#"{{"op": "transform", "args": {{"solid": {solid}, "matrix": {scale}}}}}"#),
+        format!(
+            r#"{{"op": "copyAndTransformSolid", "args": {{"solid": {solid}, "matrix": {scale}}}}}"#
+        ),
+        format!(r#"{{"op": "transformFace", "args": {{"face": {face}, "matrix": {scale}}}}}"#),
+    ] {
+        let out = run(&mut k, &op);
+        let message = out["error"].as_str().unwrap_or_default();
+        assert!(message.contains("must be at most"), "{op}: {out}");
+    }
+}
+
+/// A fillet corner's kind or setbacks given as `null` is refused, not read
+/// as absent, and so is a blend's weights.
+#[test]
+fn a_nested_option_written_as_null_is_refused() {
+    let (k, s, f, e, _) = fixture();
+    let v = k.get_solid_vertices(s).unwrap()[0];
+    let g = k.get_solid_faces(s).unwrap()[1];
+    refused(&[
+        (
+            "a corner's kind",
+            format!(
+                r#"{{"op": "filletV2Corners", "args": {{"solid": {s}, "edges": [{e}], "radius": 0.1, "corners": [{{"vertex": {v}, "corner": null}}]}}}}"#
+            ),
+        ),
+        (
+            "a corner's setbacks",
+            format!(
+                r#"{{"op": "filletV2Corners", "args": {{"solid": {s}, "edges": [{e}], "radius": 0.1, "corners": [{{"vertex": {v}, "setbacks": null}}]}}}}"#
+            ),
+        ),
+        (
+            "a blend's weights",
+            format!(
+                r#"{{"op": "blendSurface", "args": {{"chainA": [{e}], "faceA": {f}, "chainB": [{e}], "faceB": {g}, "continuity": "g1", "weights": null}}}}"#
+            ),
+        ),
+    ]);
 }

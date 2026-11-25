@@ -11,7 +11,7 @@ use brepkit_topology::edge::EdgeId;
 use brepkit_topology::face::FaceId;
 
 use crate::bindings::operations::parse_join_type_str;
-use crate::bindings::transforms::{placed, wires_extent};
+use crate::bindings::transforms::{face_points, placed, scaled_length, wires_extent};
 use crate::error::{
     WasmError, validate_extent, validate_finite, validate_point, validate_positive, validate_size,
     validate_tolerance, validate_vector,
@@ -61,7 +61,7 @@ fn turned_about(aabb: &Aabb3, center: Point3) -> Aabb3 {
                     aabb.max.z()
                 },
             );
-            (corner - center).length()
+            scaled_length(corner - center)
         })
         .fold(0.0, f64::max);
     let r = Vec3::new(reach, reach, reach);
@@ -77,13 +77,10 @@ impl BrepKernel {
         handles.iter().map(|&h| self.resolve_face(h)).collect()
     }
 
-    /// The box a face takes, from its wires.
+    /// A box that holds a face: its wires and the part of its surface that
+    /// can bulge past them.
     fn face_extent(&self, face: FaceId) -> Result<Aabb3, WasmError> {
-        let face_data = self.topo.face(face)?;
-        let wires: Vec<_> = std::iter::once(face_data.outer_wire())
-            .chain(face_data.inner_wires().iter().copied())
-            .collect();
-        wires_extent(&self.topo, wires)
+        Ok(Aabb3::from_points(face_points(&self.topo, face)?))
     }
 
     /// Check a sweep of `extent` by `offset`: the offset, and the profile at
@@ -339,30 +336,34 @@ impl BrepKernel {
                 .and_then(|n| u32::try_from(n).ok())
                 .ok_or_else(|| invalid(format!("a fillet spec's edge is not a handle: {spec}")))?;
             let edge_id = self.resolve_edge(edge_handle)?;
+            // A key that is present must hold a radius: `null` is how JSON
+            // writes NaN and the infinities, not a missing value.
             let number = |keys: &[&str]| -> Result<Option<f64>, WasmError> {
                 for key in keys {
-                    match &spec[*key] {
-                        serde_json::Value::Null => {}
-                        value => {
-                            let r = value.as_f64().ok_or_else(|| {
-                                invalid(format!("a fillet spec's '{key}' is not a number"))
-                            })?;
-                            validate_positive(r, key)?;
-                            return Ok(Some(r));
-                        }
+                    if let Some(value) = spec.get(*key) {
+                        let r = value.as_f64().ok_or_else(|| {
+                            invalid(format!("a fillet spec's '{key}' is not a number: {value}"))
+                        })?;
+                        validate_positive(r, key)?;
+                        return Ok(Some(r));
                     }
                 }
                 Ok(None)
             };
             let start = number(&["start", "startRadius"])?;
             let end = number(&["end", "endRadius"])?;
-            let law = match spec["law"].as_str() {
-                Some("linear") => "linear",
-                Some("scurve") => "scurve",
-                Some(_) => "constant",
+            let law = match spec.get("law") {
                 None => match (start, end) {
                     (Some(s), Some(e)) if (s - e).abs() > f64::EPSILON => "linear",
                     _ => "constant",
+                },
+                Some(value) => match value.as_str() {
+                    Some(law @ ("constant" | "linear" | "scurve")) => law,
+                    _ => {
+                        return Err(invalid(format!(
+                            "a fillet spec's law must be 'constant', 'linear' or 'scurve', got {value}"
+                        )));
+                    }
                 },
             };
             let law = match law {
@@ -616,5 +617,27 @@ impl BrepKernel {
             "visible": flatten(&result.visible),
             "hidden": flatten(&result.hidden),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A turn about an axis whose origin lies 1e155 along it keeps a small
+    /// profile within 1e155 of that origin, well within the size limit: its
+    /// reach is found without squaring 1e155, which overflows.
+    #[test]
+    fn a_turn_about_a_far_origin_is_bounded_without_overflow() {
+        let profile = Aabb3::from_points([Point3::new(1.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0)]);
+        let turned = turned_about(&profile, Point3::new(0.0, 0.0, 1e155));
+        assert!(
+            validate_extent(&turned, "the turned profile").is_ok(),
+            "{turned:?}"
+        );
+        assert!(
+            turned.max.z() > 1.9e155 && turned.max.z() < 2.1e155,
+            "{turned:?}"
+        );
     }
 }
