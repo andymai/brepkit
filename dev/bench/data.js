@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795589964896,
+  "lastUpdate": 1795603461124,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -78569,6 +78569,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19782885,
             "range": "± 41155",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "02ac534c80e47993472c1d1c5fdcc3e8ef2cae96",
+          "message": "fix(operations,io,math,wasm): bound mesh samples, JS sizes and counts, and points read from files (#2859)\n\n## Summary\n\nOn main, these inputs reach the kernel unchecked:\n\n- **Mesh sample counts (#2831).** A ball of radius 1e10 at a deflection\nof 0.1 ran in the solid mesher for over 120 s. It did not finish under a\n4 GB cap.\n- **Sizes from JS (#2832).** `makeBox`, `makeCylinder`, `makeSphere` and\n`makeTorus` in the batch, with a size of 1e301, return `ok` with\nmalformed faces. `make_circle_edge` with 1e301 builds a curve that fails\n`is_well_formed`.\n- **Points and constructors (#2833).** A STEP box with a NaN vertex\nloads. `RevolutionSurface::new` checks no sizes, and a profile of one\npoint underflows its evaluator.\n- **Counts from JS (#2838).** `makeCircle` with `u32::MAX` segments\naborts on a 103 GB allocation, and `linearPattern` on a 34 GB one.\n\nWith this change, each of these is refused with an error before any\nallocation. The pose sweep and the truth audit give the same output as\nmain.\n\nFixes #2831. Fixes #2832. Fixes #2833. Fixes #2838.\n\n## The change\n\n- **Mesh limits.** `MAX_EDGE_SAMPLES` (1e6) applies to each edge, and to\neach curved direction of a face over a whole turn. `MAX_SAMPLES` (1e7)\napplies to each grid, checked where each mesher sizes its grid from the\nface's own parameter ranges. A refusal is passed on, not skipped. The\nlargest real meshes in the test suites hold 217,980 face samples and\n6,588 edge samples.\n- **Sizes.** `validate_positive` uses a new `validate_size`, which\nreuses `SIZE_LIMIT` from the load checks. Cone radii, the extrude,\noffset and thicken distances, and the circle and ellipse centres use it\ntoo. The primitives' bindings and batch arms share their bodies, and\n`makeCircleEdge` is now in the batch.\n- **Points.** A shared `bounded_point` refuses a non-finite point or one\npast `SIZE_LIMIT`. The STEP, IGES, arena and mesh-import readers use it.\n`RevolutionSurface::new` refuses a one-point profile and a radius or\nheight that is negative, not finite, or past the limit. Spindle tori are\nlegal, since fillets build them, so the `ToroidalSurface::new` doc now\nsays so.\n- **Counts.** `MAX_COUNT` (65,536) bounds segments, sides, edge points,\nsamples per curve and pattern copies. `MAX_GRID_SIDE` (256) bounds the\nsides of square grids. Real counts in the tests and in brepjs are at\nmost 32. `makeCircle`, `makeCircleFace`, `makeRegularPolygonWire`,\n`sweepWithOptions` and `untrimFace` are now in the batch.\n\n- **Refusals pass through.** A mesh refused for too many samples is the\nnew error `OperationsError::TooManySamples`. Each mesher fallback passes\nit on, and none retries on another grid. The cone apex's ruling count is\nchecked before its samples are collected. Circles, ellipses and arcs are\ncounted over their own spans, so an arc of a huge circle is not counted\nas a whole turn.\n- **Counts from each mesher's own rows.** The sphere triangle mesher\ncounts each row with its own formula. A sliver 1e-4 rad wide on a ball\nof radius 1e8 meshes in 15,712 samples, where the old estimate refused\nit at 30,854,440.\n- **No silent caps on curves.** Each curve sampler takes the count its\ndeflection needs, and the shared count functions refuse past 1e6. On\nmain, an ellipse was capped at 4,096 segments, so a radius of 1e6 at a\ndeflection of 0.1 had chords 0.29 off. Removing the NURBS edge cap\nshowed that a still piece of an open spline was cut as a closed curve\nwithout end. Only a whole closed edge is now cut that way. A NURBS edge\nis broken first at each knot where its tangent turns, and a span that\ncannot halve further is refused. A whole closed edge keeps at least\nthree spans, and every span counts against the limit.\n- **Straight B-spline spans.** Take each control point's offset from the\nchord segment. A span takes one span where each coordinate of each\noffset is within 1 ulp of that coordinate's size. So a straight edge in\nB-spline form is not cut by rounding, and a small curve far from the\norigin keeps its shape. At x = 1e10, a cubic bowed 10 ulps is cut to\nwithin 0.625 ulps of the curve. A whole closed edge never takes this\nshortcut. The sampler reads a curve from its first control point, so\nrounding follows the curve's own size.\n- **Trimmed edges.** An edge on part of its spline is read from its own\ncontrol points, after knot insertion at its ends. A straight edge on 10\npieces of a 1e6-piece spline now takes 2 breaks, where it was refused.\n- **STEP placements.** Each vertex is checked where the unit and\nplacement put it, and each curve and surface is checked again after the\nmove.\n- **API.** `OperationsError::TooManySamples` is a new variant of a\npublic enum, so an exhaustive match on `OperationsError` outside the\nworkspace no longer compiles. The advisory SemVer check flags this. No\ncode in the workspace matches the enum exhaustively.\n\n## Tests\n\n- `a_face_or_edge_past_the_sample_limit_is_refused` meshes the ball of\nradius 1e10 and gets an error in 0.49 s.\n- Wasm tests refuse each primitive, `makeCircleEdge`, and signed sizes\npast the limit. A batch test sends each count binding `MAX + 1` and\n`u32::MAX`, and a real count.\n- Tests refuse a holed ring face past the sample limit, a cone ruling\npast it, and STEP shapes scaled or placed past the size limit. An arc\nand a patch of a circle and a ball of radius 1e10 mesh. An ellipse of\nradius 1e6 meshes in 19,870 segments within its deflection of 0.1. A\nchord count whose ratio underflows is refused, and so is a grid past the\nlimit in one direction.\n- Reader tests refuse a NaN STEP vertex, an IGES point past the limit,\nan arena vertex past the limit and a non-finite mesh position. Each\nfails with the check off.\n- brepkit-math (788), brepkit-topology (96), the io lib (180) and\nbrepkit-wasm native (310) pass, and so do all brepkit-operations and\nbrepkit-io tests (3347, 28 skipped). The wasm32 build passes.\n\n## Still open\n\n- NURBS face grids still coarsen past their caps without an error\n(#2873).\n- Most batch arms skip their bindings' checks, and JS coordinates are\nnot bounded. A count above `u32::MAX` falls back to a default, and\n`max_iterations` has no limit (#2858).",
+          "timestamp": "2026-11-25T10:40:33Z",
+          "tree_id": "ae2efb538193bb47e2174bfa545a2b10b1f66ace",
+          "url": "https://github.com/andymai/brepkit/commit/02ac534c80e47993472c1d1c5fdcc3e8ef2cae96"
+        },
+        "date": 1795603449201,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 898967,
+            "range": "± 13815",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 953655,
+            "range": "± 12029",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9703,
+            "range": "± 13",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 551313,
+            "range": "± 14213",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19727549,
+            "range": "± 44010",
             "unit": "ns/iter"
           }
         ]
