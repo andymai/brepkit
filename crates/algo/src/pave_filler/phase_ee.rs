@@ -1390,6 +1390,10 @@ fn whole_turn(curve: &EdgeCurve, data: &EdgeData, tol: f64) -> bool {
 /// meet, they cross rather than touch.
 const TOUCH_SIN: f64 = 1e-3;
 
+/// How many points between a reading and the touch that would stand for it
+/// are read to make sure the curves keep together between them.
+const TOUCH_PATH_SAMPLES: u32 = 32;
+
 /// Where two curves that meet within `tol` near `(ta, tb)`, along all but
 /// parallel tangents, touch: the parameter of `a` where its tangent turns
 /// parallel to `b`'s at the point of `b` nearest it.
@@ -1513,6 +1517,20 @@ fn touch_point(
     let t = f64::midpoint(lo, hi);
     let s = foot(t, s);
     let (pa, pb) = (at_a(t), at_b(s));
+    // The touch stands for the reading at the seed only where the curves
+    // keep together between the two: sampled from the seed to the touch,
+    // they stand no farther apart than the tolerance, or than at the seed
+    // where that is farther. Across a wider gap the touch is another
+    // contact, and the reading at the seed stays.
+    let bound = tol.max((at_a(ta) - at_b(foot(ta, tb))).length());
+    let mut along = tb;
+    for k in 1..TOUCH_PATH_SAMPLES {
+        let tk = ta + (t - ta) * (f64::from(k) / f64::from(TOUCH_PATH_SAMPLES));
+        along = foot(tk, along);
+        if (at_a(tk) - at_b(along)).length() > bound {
+            return None;
+        }
+    }
     let (t, s) = (wrap(t, lo_a, turn_a), wrap(s, lo_b, turn_b));
     if !turn_b && !(lo_b..=hi_b).contains(&s) || !turn_a && !(lo_a..=hi_a).contains(&t) {
         return None;
@@ -3713,6 +3731,132 @@ mod tests {
                     "{d}: {xs:?}"
                 );
             }
+        }
+    }
+
+    /// The polynomial curve `(x, y(x), z(x))` over `[x0, x1]`, for `y` and
+    /// `z` given by their coefficients from the constant up, as a Bezier
+    /// edge.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap
+    )]
+    fn poly_edge(topo: &mut Topology, ys: &[f64], zs: &[f64], (x0, x1): (f64, f64)) -> EdgeId {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let n = ys.len().max(zs.len()).max(2) - 1;
+        let w = x1 - x0;
+        let binom = |n: usize, k: usize| -> f64 {
+            (0..k).fold(1.0, |acc, i| acc * (n - i) as f64 / (i + 1) as f64)
+        };
+        // Coefficients in t, for x = x0 + w t, then the Bezier poles.
+        let in_t = |c: &[f64]| -> Vec<f64> {
+            let mut a = vec![0.0; n + 1];
+            for (j, &cj) in c.iter().enumerate() {
+                for (i, ai) in a.iter_mut().enumerate().take(j + 1) {
+                    *ai += cj * binom(j, i) * x0.powi((j - i) as i32) * w.powi(i as i32);
+                }
+            }
+            a
+        };
+        let bezier = |a: &[f64]| -> Vec<f64> {
+            (0..=n)
+                .map(|k| (0..=k).map(|i| binom(k, i) / binom(n, i) * a[i]).sum())
+                .collect()
+        };
+        let (by, bz) = (bezier(&in_t(ys)), bezier(&in_t(zs)));
+        let poles: Vec<Point3> = (0..=n)
+            .map(|k| Point3::new(x0 + w * k as f64 / n as f64, by[k], bz[k]))
+            .collect();
+        let knots: Vec<f64> = std::iter::repeat_n(0.0, n + 1)
+            .chain(std::iter::repeat_n(1.0, n + 1))
+            .collect();
+        let curve = NurbsCurve::new(n, knots, poles.clone(), vec![1.0; n + 1]).unwrap();
+        add_edge(topo, poles[0], poles[n], EdgeCurve::NurbsCurve(curve))
+    }
+
+    /// The x axis over `[x0, x1]` as a line edge.
+    fn axis_edge(topo: &mut Topology, (x0, x1): (f64, f64)) -> EdgeId {
+        add_edge(
+            topo,
+            Point3::new(x0, 0.0, 0.0),
+            Point3::new(x1, 0.0, 0.0),
+            EdgeCurve::Line,
+        )
+    }
+
+    /// The x axis against a skew line through `(0, 0, h)` that turns `delta`
+    /// off it, its tangent all but parallel. At h = 0.5 tolerances they meet
+    /// within the tolerance near x = 0, once; at h = 2 tolerances they never
+    /// meet.
+    #[test]
+    fn skew_edges_with_near_parallel_tangents_meet_only_within_the_tolerance() {
+        let tol = Tolerance::default().linear;
+        for delta in [1e-3, 1e-5] {
+            for (h, meets) in [(0.5 * tol, true), (2.0 * tol, false)] {
+                let mut topo = Topology::new();
+                let skew = poly_edge(&mut topo, &[0.0, delta], &[h], (-1.0, 1.0));
+                let axis = axis_edge(&mut topo, (-1.0, 1.0));
+                for (ea, eb) in [(axis, skew), (skew, axis)] {
+                    let hits = crossings(&topo, ea, eb);
+                    if meets {
+                        assert_eq!(hits.len(), 1, "{delta} {h}: {hits:?}");
+                        let x = hits[0].2.x();
+                        assert!(
+                            (delta * x).hypot(h) <= tol,
+                            "{delta} {h}: {x} is off the stretch where they meet"
+                        );
+                    } else {
+                        assert!(hits.is_empty(), "{delta} {h}: {hits:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// A curve out of the plane, `z = k (x^2 - 0.5625)^2` and
+    /// `y = 1e-3 x z`, touches the x axis at x = -/+ 0.75 and stands 3.2e-5
+    /// off it at x = 0: two stretches within the tolerance, apart across a
+    /// gap wider than it, each with its own touch.
+    #[test]
+    fn touches_apart_across_a_gap_keep_their_own_readings() {
+        let k = 1e-4;
+        let q = [k * 0.316_406_25, 0.0, -1.125 * k, 0.0, k];
+        let y: Vec<f64> = std::iter::once(0.0)
+            .chain(q.iter().map(|c| 1e-3 * c))
+            .collect();
+        let mut topo = Topology::new();
+        let curve = poly_edge(&mut topo, &y, &q, (-1.0, 1.0));
+        let axis = axis_edge(&mut topo, (-1.0, 1.0));
+        for xs in crossing_xs(&topo, curve, axis) {
+            assert_eq!(xs.len(), 2, "{xs:?}");
+            assert!(
+                (xs[0] + 0.75).abs() < 1e-6 && (xs[1] - 0.75).abs() < 1e-6,
+                "{xs:?}"
+            );
+        }
+    }
+
+    /// The curve `(x, x^2 (x - d), x^3 (x - d))`, out of any plane, touches
+    /// the x axis at 0 and crosses it at d = 0.1: one touch at its point of
+    /// tangency and one crossing at d.
+    #[test]
+    fn a_touch_beside_a_crossing_out_of_the_plane_stays_both() {
+        let d = 0.1;
+        let mut topo = Topology::new();
+        let curve = poly_edge(
+            &mut topo,
+            &[0.0, 0.0, -d, 1.0],
+            &[0.0, 0.0, 0.0, -d, 1.0],
+            (-2.0 * d, 3.0 * d),
+        );
+        let axis = axis_edge(&mut topo, (-2.0 * d, 3.0 * d));
+        for xs in crossing_xs(&topo, curve, axis) {
+            assert_eq!(xs.len(), 2, "{xs:?}");
+            assert!(
+                xs[0].abs() < 1e-9 && (xs[1] - d).abs() < 1e-3 * 1e-7 / (d * d),
+                "{xs:?}"
+            );
         }
     }
 }
