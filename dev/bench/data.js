@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795628371076,
+  "lastUpdate": 1795629650986,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -78893,6 +78893,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28186561,
             "range": "± 83309",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "33c7b5637f0c8116a688101ab96c0064176d08af",
+          "message": "fix(math,algo,operations): a box never hides a point that is not finite, and no box panics (#2898)\n\n## Summary\n\n#2888 reported that `Aabb3::from_points` hides a NaN and panics on an\nempty list. On main:\n\n- `try_from_points([a, NaN, b])` gives a finite box that leaves the NaN\nout, because a NaN fails both `<` and `>`. A NaN in the first point\nstays in the box, and an infinity is accepted.\n- `from_points` panics on an empty list, through an allowed `expect`.\n- `union` drops a NaN through `f64::min` and `f64::max`, and the\ndistance from a NaN box to any point is 0.\n\nA real path reaches this. A mesh fuse of two tetrahedra, with a NaN in\none vertex of the first, returned `Ok`, because each triangle's box hid\nthe NaN. An index past the vertices panicked.\n\nWith this change, no box hides a point that is not finite, and no\nlibrary code panics here. The pose sweep and the truth audit give the\nsame output as main.\n\nFixes #2888.\n\n## The change\n\n- **Constructors.** `from_points` cannot panic. A NaN coordinate in any\npoint makes that coordinate of both corners NaN. An empty list makes\nevery coordinate NaN. So no test of such a box passes. `try_from_points`\nreturns `None` for an empty list or any coordinate that is not finite.\n- **Box methods.** `union` keeps a NaN. `distance_squared_to_point`\ngives NaN for a NaN box, and `line_intersects` and `ray_intersects` give\nfalse. New: `is_finite`, `is_number` and `Aabb3::WHOLE`.\n- **`Bvh::build`.** A leaf whose box holds a NaN, or is infinite both\nways along an axis, has no centre. Such leaves go in a subtree of their\nown under a new root. Each query returns them all, and the finite leaves\nsplit by their own centres. Both split sorts use `total_cmp`.\n- **`point_to_solid`.** It sorts faces by their box's distance with\n`total_cmp`, and a NaN distance puts that face first.\n- **`mesh_boolean`.** It refuses a vertex that is not finite, an index\npast the vertices, and a NaN or negative tolerance.\n- **Callers.** Of the 50 library calls to `Aabb3::from_points`, 5 that\ncan get no point move to the fallible form with their own error path.\nThese are in the chamfer chain, the coplanar phase, phase EE, phase FF\nand the solid builder. The mesh boolean's calls are safe because its\noperands are checked first. The rest are non-empty by construction, and\ntheir points are checked or come from geometry that the load checks\nrefuse.\n\n## Tests\n\n- `a_box_hides_no_point_that_is_not_finite` covers a NaN in the first\nand in a later point, an infinity, and an empty list, for `Aabb3` and\n`Aabb2`.\n- `a_union_keeps_a_coordinate_that_is_not_a_number` and\n`a_box_that_is_not_a_number_is_a_candidate_and_loses_no_other` cover the\nunion and the box tree.\n`a_thousand_boxes_with_every_seventh_not_a_number_build_and_query`\nbuilds and queries a tree of 1,000 boxes; on the first version of this\nchange it panicked in the split sort.\n-\n`a_mesh_with_a_vertex_that_is_not_finite_or_an_index_past_its_vertices_is_refused`\ncovers the mesh boolean.\n- brepkit-math (793), brepkit-algo (752) and the operations lib (1271)\npass, and so do all brepkit-operations and brepkit-io tests (3370, 28\nskipped).\n\n## Still open\n\n- `meshBoolean` takes raw JS positions with no `SIZE_LIMIT` check\n(#2886).\n- `NurbsCurve::new` and `NurbsSurface::new` check counts only, so a\nspline with no control points or a NaN control point can be built\n(#2897).",
+          "timestamp": "2026-11-25T17:56:32Z",
+          "tree_id": "c50439706f0317a0d472527dc40b4546709721f8",
+          "url": "https://github.com/andymai/brepkit/commit/33c7b5637f0c8116a688101ab96c0064176d08af"
+        },
+        "date": 1795629641689,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1211883,
+            "range": "± 2523",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1281609,
+            "range": "± 5813",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14607,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 757492,
+            "range": "± 3557",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 27749643,
+            "range": "± 111027",
             "unit": "ns/iter"
           }
         ]
