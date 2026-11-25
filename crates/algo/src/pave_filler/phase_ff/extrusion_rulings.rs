@@ -183,14 +183,82 @@ impl CircleSection<'_> {
         w.dot(w) - self.radius * self.radius
     }
 
-    /// The point on the cylinder where the profile at `t` crosses it, set
-    /// on the circle across from the profile's point.
+    /// The point where the profile near `t` crosses the circle.
+    ///
+    /// The parameter places a crossing only as finely as its spacing, which
+    /// on a fast stretch of a rational profile is far coarser in space than
+    /// the tolerance: at a shallow crossing the profile's point there stands
+    /// off the circle by that spacing times the sine of the angle. So the
+    /// crossing is read in space too, where the profile's tangent across
+    /// the axis meets the circle (see [`Self::tangent_step`]). Where that
+    /// does not settle, the point is set on the circle across from the
+    /// profile's point.
     fn foot(&self, t: f64) -> Option<Point3> {
+        self.crossing_near(t).or_else(|| {
+            let point = self.profile.evaluate(t);
+            let w = point - self.origin;
+            let height = w.dot(self.axis);
+            let out = self.across(point).normalize().ok()?;
+            Some(self.origin + self.axis * height + out * self.radius)
+        })
+    }
+
+    /// Where the profile's tangent across the axis meets the circle, from
+    /// Newton steps in the parameter from `t0` until the parameter can move
+    /// no more, then one step in space. `None` where a step does not
+    /// settle, the parameter strays more than 1e-6 of the domain, the last
+    /// step leaves the domain, or the profile bends off its tangent over
+    /// that step by more than a thousandth of [`SPREAD`].
+    fn crossing_near(&self, t0: f64) -> Option<Point3> {
+        let (lo, hi) = self.profile.domain();
+        let mut t = t0;
+        let mut read = self.tangent_step(t)?;
+        for _ in 0..8 {
+            let next = (t + read.step).clamp(lo, hi);
+            if next.to_bits() == t.to_bits() {
+                break;
+            }
+            t = next;
+            read = self.tangent_step(t)?;
+        }
+        let s = read.step;
+        let bend = read.bend * (0.5 * s * s);
+        if (t - t0).abs() > 1e-6 * (hi - lo)
+            || !(lo..=hi).contains(&(t + s))
+            || bend.length() > 1e-3 * SPREAD
+        {
+            return None;
+        }
+        Some(read.point + read.slope * s)
+    }
+
+    /// The profile's point at `t`, its first and second derivatives across
+    /// the axis, and the step in the parameter along the first to where its
+    /// tangent across the axis meets the circle: the root of
+    /// `|a + s b|^2 = r^2` nearer zero, for `a` the point across the axis
+    /// and `b` that derivative. `None` where the tangent misses the circle.
+    fn tangent_step(&self, t: f64) -> Option<TangentStep> {
+        let ders = self.profile.derivatives(t, 2);
         let point = self.profile.evaluate(t);
-        let w = point - self.origin;
-        let height = w.dot(self.axis);
-        let out = self.across(point).normalize().ok()?;
-        Some(self.origin + self.axis * height + out * self.radius)
+        let flat = |v: Vec3| v - self.axis * v.dot(self.axis);
+        let a = self.across(point);
+        let b = flat(*ders.get(1)?);
+        let (ab, bb) = (a.dot(b), b.dot(b));
+        let c = a.dot(a) - self.radius * self.radius;
+        let disc = ab.madd(ab, -(bb * c));
+        if bb <= 0.0 || disc < 0.0 {
+            return None;
+        }
+        let q = ab + ab.signum() * disc.sqrt();
+        if q == 0.0 {
+            return None;
+        }
+        Some(TangentStep {
+            point,
+            slope: b,
+            bend: flat(*ders.get(2)?),
+            step: -c / q,
+        })
     }
 
     /// The profile's parameters where it crosses the circle, in order.
@@ -280,10 +348,19 @@ impl CircleSection<'_> {
     }
 
     /// Whether a run with one side at both ends, where `most` bounds
-    /// `reach`, holds no crossing that counts: its points spread no wider
-    /// than [`SPREAD`], so any crossings in it lie that near each other, or
-    /// the profile keeps within [`SPREAD`] of the circle all along it, so
-    /// any lens between crossings is thinner than that.
+    /// `reach`, holds no crossing that counts, so that it may be read as a
+    /// touch. Crossings are merged into a touch only here, and only where
+    /// one of two bounds holds:
+    ///
+    /// - the run's points spread no wider than [`SPREAD`], so any crossings
+    ///   in it lie within the tolerance of each other;
+    /// - `|reach| <= most` all along the run keeps the profile within
+    ///   `most / (r + sqrt(r^2 - most))` of the circle, and that is no more
+    ///   than [`SPREAD`], so any lens between crossings in it is thinner
+    ///   than the tolerance.
+    ///
+    /// Two crossings around a lens deeper than the tolerance fail both, and
+    /// the section is left to the marcher unless they are found apart.
     fn quiet(&self, run: Pieces, most: f64) -> bool {
         let r2 = self.radius * self.radius;
         // How far `reach` within `most` of zero lets the profile stand off
@@ -523,6 +600,15 @@ impl Bernstein {
     }
 }
 
+/// A profile's point, its first and second derivatives across the axis,
+/// and the step in its parameter to where its tangent meets the circle.
+struct TangentStep {
+    point: Point3,
+    slope: Vec3,
+    bend: Vec3,
+    step: f64,
+}
+
 /// What the Bernstein coefficients over an interval prove.
 enum Reading {
     /// No root.
@@ -552,6 +638,85 @@ mod tests {
     use brepkit_math::mat::Mat4;
 
     use super::*;
+
+    /// The rulings where `cylinder` crosses `wall`, each checked within the
+    /// linear tolerance of both, at its two ends and its middle: off the
+    /// cylinder by its distance from the axis less the radius, off the wall
+    /// as [`off_wall`] reads it.
+    fn rulings(
+        cylinder: &CylindricalSurface,
+        wall: &NurbsSurface,
+        bbox_a: &Aabb3,
+        bbox_b: &Aabb3,
+    ) -> Option<Vec<RawCurve>> {
+        let lines = cylinder_extrusion_rulings(cylinder, wall, bbox_a, bbox_b)?;
+        let tol = brepkit_math::tolerance::Tolerance::new().linear;
+        let axis = cylinder.axis().normalize().unwrap();
+        for line in &lines {
+            for p in [
+                line.p_start,
+                line.p_start + (line.p_end - line.p_start) * 0.5,
+                line.p_end,
+            ] {
+                let w = p - cylinder.origin();
+                let off_cylinder = ((w - axis * w.dot(axis)).length() - cylinder.radius()).abs();
+                let off_wall = off_wall(wall, p);
+                assert!(
+                    off_cylinder <= tol && off_wall <= tol,
+                    "{p:?}: {off_cylinder:e} off the cylinder, {off_wall:e} off the wall"
+                );
+            }
+        }
+        Some(lines)
+    }
+
+    /// How far `p` lies from `wall`: the distance to the point a projection
+    /// finds, or, where less, to a triangle from there to the wall's points
+    /// at the next parameters each way, which strays from the wall by no
+    /// more than its sag over one step of the parameters. A fast stretch of
+    /// a rational wall spaces the points its parameters reach wider than
+    /// the tolerance, and the projection can only land on one of them.
+    fn off_wall(wall: &NurbsSurface, p: Point3) -> f64 {
+        let found =
+            brepkit_math::nurbs::projection::project_point_to_surface(wall, p, 1e-10).unwrap();
+        let (u_lo, u_hi) = wall.domain_u();
+        let (v_lo, v_hi) = wall.domain_v();
+        let (u, v) = (found.u, found.v);
+        let mut best = found.distance;
+        for u_next in [u.next_up(), u.next_down()] {
+            for v_next in [v.next_up(), v.next_down()] {
+                let side_u = wall.evaluate(u_next.clamp(u_lo, u_hi), v);
+                let side_v = wall.evaluate(u, v_next.clamp(v_lo, v_hi));
+                best = best.min(to_triangle(p, [found.point, side_u, side_v]));
+            }
+        }
+        best
+    }
+
+    /// The distance from `p` to the triangle `[a, b, c]`.
+    fn to_triangle(p: Point3, [a, b, c]: [Point3; 3]) -> f64 {
+        let to_segment = |a: Point3, b: Point3| {
+            let d = b - a;
+            let len2 = d.dot(d);
+            let s = if len2 > 0.0 {
+                ((p - a).dot(d) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (p - (a + d * s)).length()
+        };
+        let edges = to_segment(a, b).min(to_segment(b, c)).min(to_segment(c, a));
+        let normal = (b - a).cross(c - a);
+        let Ok(n) = normal.normalize() else {
+            return edges;
+        };
+        let height = (p - a).dot(n);
+        let foot = p - n * height;
+        let inside = [(a, b), (b, c), (c, a)]
+            .iter()
+            .all(|&(x, y)| (y - x).cross(foot - x).dot(normal) >= 0.0);
+        if inside { height.abs() } else { edges }
+    }
 
     fn poses() -> [(&'static str, Mat4); 3] {
         [
@@ -639,7 +804,7 @@ mod tests {
     fn a_rod_crosses_an_elliptic_extrusion_on_two_rulings_and_touches_it_on_none() {
         for (name, pose) in poses() {
             let wall = elliptic_extrusion((4.0, 5.0), (3.0, 5.4_f64.sqrt()), 4.0, 0.0, &pose);
-            let lines = cylinder_extrusion_rulings(&rod(&pose), &wall, &room(), &room()).unwrap();
+            let lines = rulings(&rod(&pose), &wall, &room(), &room()).unwrap();
             assert_eq!(lines.len(), 2, "{name}");
             let up = direction(&pose, Vec3::new(0.0, 0.0, 4.0));
             let mut lows: Vec<Point3> = Vec::new();
@@ -671,7 +836,7 @@ mod tests {
         for (name, pose) in poses() {
             let wall = elliptic_extrusion((4.0, 5.0), (3.0, 5.4_f64.sqrt()), 4.0, 1e-6, &pose);
             assert!(
-                cylinder_extrusion_rulings(&rod(&pose), &wall, &room(), &room()).is_none(),
+                rulings(&rod(&pose), &wall, &room(), &room()).is_none(),
                 "{name}"
             );
         }
@@ -682,7 +847,7 @@ mod tests {
         for (name, pose) in poses() {
             let wall = elliptic_extrusion((5.0, 5.0), (2.0, 2.0), 4.0, 0.0, &pose);
             assert!(
-                cylinder_extrusion_rulings(&rod(&pose), &wall, &room(), &room()).is_none(),
+                rulings(&rod(&pose), &wall, &room(), &room()).is_none(),
                 "{name}"
             );
         }
@@ -697,8 +862,7 @@ mod tests {
                 ((12.0, 5.0), (3.0, 2.0)),
             ] {
                 let wall = elliptic_extrusion(centre, axes, 4.0, 0.0, &pose);
-                let lines =
-                    cylinder_extrusion_rulings(&rod(&pose), &wall, &room(), &room()).unwrap();
+                let lines = rulings(&rod(&pose), &wall, &room(), &room()).unwrap();
                 assert!(lines.is_empty(), "{name} {centre:?} {axes:?}");
             }
         }
@@ -741,7 +905,7 @@ mod tests {
         let seam = (6.0, 5.0 + 3.0_f64.sqrt());
         for (name, pose) in poses() {
             let wall = elliptic_extrusion((seam.0 - 3.0, seam.1), (3.0, 2.0), 4.0, 0.0, &pose);
-            let lines = cylinder_extrusion_rulings(&rod(&pose), &wall, &room(), &room()).unwrap();
+            let lines = rulings(&rod(&pose), &wall, &room(), &room()).unwrap();
             assert_eq!(lines.len(), 2, "{name}");
             let crossing = pose.mul_point(Point3::new(seam.0, seam.1, -1.0));
             let near = lines
@@ -777,7 +941,7 @@ mod tests {
                 vec![vec![1.0, s, 1.0]; 2],
             )
             .unwrap();
-            let lines = cylinder_extrusion_rulings(&rod(&pose), &wall, &room(), &room()).unwrap();
+            let lines = rulings(&rod(&pose), &wall, &room(), &room()).unwrap();
             assert_eq!(lines.len(), 1, "{name}");
             let crossing = pose.mul_point(Point3::new(6.0, 5.0 + 3.0_f64.sqrt(), -1.0));
             let line = &lines[0];
@@ -801,7 +965,7 @@ mod tests {
                 vec![0.0, 0.0, 1e-10, 1.0, 1.0],
                 &pose,
             );
-            let lines = cylinder_extrusion_rulings(
+            let lines = rulings(
                 &cylinder_about(0.0, 0.0, 1.0, &pose),
                 &wall,
                 &room(),
@@ -842,7 +1006,7 @@ mod tests {
                 vec![0.0, 0.0, 0.5, 1.0, 1.0],
                 &pose,
             );
-            let lines = cylinder_extrusion_rulings(
+            let lines = rulings(
                 &cylinder_about(1_000_000.0, 0.0, 1.0, &pose),
                 &wall,
                 &room(),
@@ -892,10 +1056,7 @@ mod tests {
                 &pose,
             );
             let rod = cylinder_about(0.0, 0.0, 1.0, &pose);
-            assert!(
-                cylinder_extrusion_rulings(&rod, &wall, &room(), &room()).is_none(),
-                "{name}"
-            );
+            assert!(rulings(&rod, &wall, &room(), &room()).is_none(), "{name}");
         }
     }
 
@@ -950,7 +1111,7 @@ mod tests {
                             Vec3::new(0.0, 0.0, 4.0),
                             &pose,
                         );
-                        cylinder_extrusion_rulings(&rod, &wall, &room, &room)
+                        rulings(&rod, &wall, &room, &room)
                     };
                     let what = format!("{name}, part at {part}, {} poles", points.len());
                     let found = read(1.0);
@@ -1010,10 +1171,110 @@ mod tests {
                 min: Point3::new(-1e13, -1e13, -1e13),
                 max: Point3::new(1e13, 1e13, 1e13),
             };
-            assert!(
-                cylinder_extrusion_rulings(&rod, &wall, &room, &room).is_none(),
-                "{name}"
-            );
+            assert!(rulings(&rod, &wall, &room, &room).is_none(), "{name}");
+        }
+    }
+
+    /// A line at distance `r cos(angle)` from the axis of a cylinder of
+    /// radius `r` about the origin, from y = -2r to 2r, with weights
+    /// `weights` at its ends, moved by `length` along the axis, the part
+    /// moved by `offset` and placed by `pose`, the cylinder's origin moved
+    /// by `along_axis` along its axis.
+    fn shallow_crossing(
+        (r, angle): (f64, f64),
+        weights: (f64, f64),
+        length: f64,
+        (offset, along_axis): (f64, f64),
+        pose: &Mat4,
+    ) -> (CylindricalSurface, NurbsSurface) {
+        let pose = *pose * Mat4::translation(offset, 0.0, offset);
+        let h = r * angle.cos();
+        let row = |z: f64| -> Vec<Point3> {
+            [(h, -2.0 * r), (h, 2.0 * r)]
+                .iter()
+                .map(|&(x, y)| pose.mul_point(Point3::new(x, y, z)))
+                .collect()
+        };
+        let wall = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![row(0.0), row(length)],
+            vec![vec![weights.0, weights.1]; 2],
+        )
+        .unwrap();
+        let rod = CylindricalSurface::new(
+            pose.mul_point(Point3::new(0.0, 0.0, along_axis)),
+            direction(&pose, Vec3::new(0.0, 0.0, 1.0)),
+            r,
+        )
+        .unwrap();
+        (rod, wall)
+    }
+
+    /// Rulings at shallow crossings, over weights, lengths, radii and
+    /// placements: each lies on both surfaces (see [`rulings`]). Where the
+    /// lens between the two crossings is deeper than the tolerance, both
+    /// are found or the section is left to the marcher; where it is
+    /// thinner, a touch may stand for them.
+    #[test]
+    fn rulings_at_shallow_crossings_lie_on_both_walls() {
+        let tol = brepkit_math::tolerance::Tolerance::new().linear;
+        let huge = Aabb3 {
+            min: Point3::new(-1e13, -1e13, -1e13),
+            max: Point3::new(1e13, 1e13, 1e13),
+        };
+        for (name, pose) in poses() {
+            for angle in [1e-3, 1e-6] {
+                for weights in [(1.0, 1.0), (1e-3, 1e3), (1e3, 1e-3)] {
+                    for length in [1e-3, 1e6] {
+                        for r in [1e-3, 1e6] {
+                            for place in [(0.0, 0.0), (1e8, 0.0), (0.0, 1e8)] {
+                                let (rod, wall) =
+                                    shallow_crossing((r, angle), weights, length, place, &pose);
+                                let what = format!(
+                                    "{name}, angle {angle:e}, weights {weights:?}, length \
+                                     {length:e}, radius {r:e}, place {place:?}"
+                                );
+                                let Some(lines) = rulings(&rod, &wall, &huge, &huge) else {
+                                    continue;
+                                };
+                                let depth = 2.0 * r * (0.5 * angle).sin().powi(2);
+                                if depth > tol {
+                                    assert_eq!(lines.len(), 2, "{what}");
+                                } else {
+                                    assert!(lines.len() % 2 == 0, "{what}: {}", lines.len());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Two crossings of a unit circle by a line 1e-6 inside it, at 1.4e-3
+    /// rad: the lens between them is ten times the tolerance deep, so they
+    /// are not a touch. Near the origin both are rulings; with the
+    /// cylinder's origin 1e8 along its axis, where rounding hides the side
+    /// between them, both are rulings or the section is left to the
+    /// marcher.
+    #[test]
+    fn two_crossings_around_a_lens_ten_tolerances_deep_are_two_rulings() {
+        let tol = brepkit_math::tolerance::Tolerance::new().linear;
+        let angle = (1.0 - 10.0 * tol).acos();
+        for (name, pose) in poses() {
+            for along_axis in [0.0, 1e8] {
+                let (rod, wall) =
+                    shallow_crossing((1.0, angle), (1.0, 1.0), 4.0, (0.0, along_axis), &pose);
+                let found = rulings(&rod, &wall, &room(), &room());
+                if along_axis == 0.0 {
+                    assert_eq!(found.map(|l| l.len()), Some(2), "{name}");
+                } else {
+                    assert!(found.is_none_or(|l| l.len() == 2), "{name}, far");
+                }
+            }
         }
     }
 }
