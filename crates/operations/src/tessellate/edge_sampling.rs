@@ -178,10 +178,11 @@ pub(super) fn nurbs_edge_breaks(
     // step over a polynomial piece.
     const MAX_KNOTS: usize = 8;
     const MIN_TURN_LENGTH: f64 = 0.1;
-    // The rounding of one coordinate of a point read off a chord, in units
-    // of that coordinate's relative precision at its largest size there:
-    // the error of the chord's evaluated ends and of the offset itself.
-    const ROUNDING: f64 = 4.0;
+    // The rounding of one coordinate of a control point's offset from a
+    // chord, in units of that coordinate's relative precision at its
+    // largest size there. A straight run's stored control points read up to
+    // 0.65 of it off their chord: one unit holds that rounding, and no more.
+    const ROUNDING: f64 = 1.0;
 
     // The curve is read from its first control point: the rounding of what
     // is read then follows the curve's own size, not its distance from the
@@ -274,9 +275,11 @@ pub(super) fn nurbs_edge_breaks(
         let whole = a.to_bits() == t0.to_bits() && b.to_bits() == t1.to_bits();
         let closed = whole && (pb - pa).length() <= 1e-9;
         // A span whose control points lie within rounding of its chord is
-        // straight as stored: what its probes read off the chord, and the
-        // turn of its tangents, is rounding. It takes one span, as no cut
-        // can bring its samples closer to the curve than their rounding. A
+        // straight as stored: the turn of its tangents is rounding, and it
+        // takes one span. Within the deflection, its sag is proved under it.
+        // Past the deflection, the deflection is below the coordinates'
+        // resolution, and it is met to that resolution: the stored control
+        // points hold no more, and no cut brings the samples closer. A
         // closed edge still takes its three.
         let (hull, straight) = hull_off_chord(span_lo, span_hi, pa, pb);
         if straight && !closed {
@@ -1134,6 +1137,54 @@ mod tests {
         ]);
         let breaks = nurbs_edge_breaks(&bowed, 0.0, 1.0, deflection, 0.0);
         assert!(matches!(&breaks, Ok(b) if b.len() > 3), "bowed: {breaks:?}");
+    }
+
+    /// A spline from (1e10, 0, 0) to (1e10, 1, 0), its middle control points
+    /// bowed along x, where one unit in the last place of x is 2^-19. Bowed
+    /// by 10 units, it is cut at a deflection of 1e-7: its samples come
+    /// within one unit of the curve (read exactly, from its base), the
+    /// rounding of x, where one span is 7.5 units off. Bowed by one unit,
+    /// within the rounding the shortcut allows, it takes one span.
+    #[test]
+    fn a_bow_far_out_is_cut_down_to_the_rounding() {
+        let ulp = 2f64.powi(-19);
+        let base = Point3::new(1e10, 0.0, 0.0);
+        let bowed = |at: Point3, bow: f64| {
+            let points = vec![
+                at,
+                at + Vec3::new(bow, 1.0 / 3.0, 0.0),
+                at + Vec3::new(bow, 2.0 / 3.0, 0.0),
+                at + Vec3::new(0.0, 1.0, 0.0),
+            ];
+            let knots = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+            NurbsCurve::new(3, knots, points, vec![1.0; 4]).unwrap()
+        };
+        let curve = bowed(base, 10.0 * ulp);
+        let exact = bowed(Point3::new(0.0, 0.0, 0.0), 10.0 * ulp);
+        let breaks = nurbs_edge_breaks(&curve, 0.0, 1.0, 1e-7, 0.0).unwrap();
+        let polyline: Vec<Vec3> = breaks.iter().map(|&t| curve.evaluate(t) - base).collect();
+        let off = |q: Vec3| {
+            polyline
+                .windows(2)
+                .map(|w| {
+                    let chord = w[1] - w[0];
+                    let f = ((q - w[0]).dot(chord) / chord.dot(chord)).clamp(0.0, 1.0);
+                    (q - (w[0] + chord * f)).length()
+                })
+                .fold(f64::INFINITY, f64::min)
+        };
+        let worst = (0..=10_000)
+            .map(|k| off(exact.evaluate(f64::from(k) / 10_000.0) - Point3::new(0.0, 0.0, 0.0)))
+            .fold(0.0, f64::max);
+        assert!(
+            worst <= ulp,
+            "{} units off in {} breaks",
+            worst / ulp,
+            breaks.len()
+        );
+        let barely = bowed(base, ulp);
+        let breaks = nurbs_edge_breaks(&barely, 0.0, 1.0, 1e-7, 0.0).unwrap();
+        assert!(breaks.len() <= 3, "{breaks:?}");
     }
 
     /// A spline that turns a corner on a middle piece that barely moves (its
