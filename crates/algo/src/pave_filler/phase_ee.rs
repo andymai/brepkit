@@ -1314,20 +1314,19 @@ fn refine(
     if ha <= 0.0 || hb <= 0.0 {
         return Refined::Apart;
     }
-    // Once the curves meet within a thousandth of the tolerance, a few more
-    // steps settle the crossing itself: at a shallow crossing the points
-    // that near each other run along both curves for that much over the
-    // sine of the angle, and two searches of one crossing would stop
-    // apart. A step that does not bring the curves nearer ends it.
+    // Once the curves meet within a thousandth of the tolerance, a shallow
+    // crossing takes a few more steps to settle on its point: there the
+    // points that near each other run along both curves for that much over
+    // the sine of the angle, past the tolerance below a sine of
+    // [`TOUCH_SIN`], and two searches of one crossing would stop apart. A
+    // crossing at a wider angle stops where it is already that near. A
+    // step that does not bring the curves nearer ends the settling.
     let mut settling = 0;
     for _ in 0..30 {
         let r = at_a(ta) - at_b(tb);
         let close = r.length() <= tol * 1e-3;
-        if close {
-            if settling == 3 {
-                break;
-            }
-            settling += 1;
+        if close && settling == 3 {
+            break;
         }
         let da = (at_a((ta + ha).min(hi_a)) - at_a((ta - ha).max(lo_a)))
             * (1.0 / ((ta + ha).min(hi_a) - (ta - ha).max(lo_a)));
@@ -1336,6 +1335,12 @@ fn refine(
         let (a11, a12, a22) = (da.dot(da), da.dot(db), db.dot(db));
         let (g1, g2) = (da.dot(r), db.dot(r));
         let det = a11.madd(a22, -(a12 * a12));
+        if close {
+            if da.cross(db).length() > TOUCH_SIN * (a11 * a22).sqrt() {
+                break;
+            }
+            settling += 1;
+        }
         if det.abs() <= 1e-12 * a11 * a22 && close {
             break;
         }
@@ -3652,8 +3657,10 @@ mod tests {
     /// Two crossings ten tolerances apart, at x = -/+ 5e-7. At 1 rad the lens
     /// between them is 2.5 tolerances deep: two crossings at their points.
     /// At 1e-3 rad it is 2.5e-10 deep, so the curves keep within the
-    /// tolerance all along between them, as at a touch: one touch, at the
-    /// lens's middle, where the tangents run parallel.
+    /// tolerance all along between them: both crossings are found, within a
+    /// tenth of their spacing, every reading lies where the curves meet
+    /// within the tolerance, and a touch at the lens's middle may stand
+    /// between them.
     #[test]
     fn two_crossings_ten_tolerances_apart_stay_two_around_a_lens_deeper_than_it() {
         let c = 5e-7;
@@ -3669,8 +3676,13 @@ mod tests {
                         "{angle}: {xs:?}"
                     );
                 } else {
-                    assert_eq!(xs.len(), 1, "{angle}: {xs:?}");
-                    assert!(xs[0].abs() < 1e-12, "{angle}: {xs:?}");
+                    let (first, last) = (xs[0], xs[xs.len() - 1]);
+                    assert!(
+                        xs.len() <= 3 && (first + c).abs() < 0.1 * c && (last - c).abs() < 0.1 * c,
+                        "{angle}: {xs:?}"
+                    );
+                    let gap = |x: f64| (k * (x * x - c * c)).abs();
+                    assert!(xs.iter().all(|&x| gap(x) <= 1e-7), "{angle}: {xs:?}");
                 }
             }
         }
@@ -3681,8 +3693,9 @@ mod tests {
     /// tangents all but parallel): one touch, read at its point of
     /// tangency, though the curves keep within the tolerance for 1e-3 of
     /// it each way, more than a thousandth of the edge; and one crossing
-    /// at d, settled to its point though at 1e-4 rad the curves meet
-    /// within a thousandth of the tolerance for 1e-6 along them.
+    /// at d. At 1e-2 rad the search stops where the curves meet within a
+    /// thousandth of the tolerance, at most 1e-8 along them from d; at
+    /// 1e-4 rad that stretch is 1e-6 long, and the crossing settles to d.
     #[test]
     fn a_touch_beside_a_crossing_stays_a_touch_and_a_crossing() {
         for d in [0.1, 0.01] {
@@ -3690,8 +3703,13 @@ mod tests {
             let (curve, line) = graph_and_axis(&mut topo, [0.0, 0.0, -d, 1.0], (-2.0 * d, 3.0 * d));
             for xs in crossing_xs(&topo, curve, line) {
                 assert_eq!(xs.len(), 2, "{d}: {xs:?}");
+                let along = if d > 0.05 {
+                    1e-3 * 1e-7 / (d * d)
+                } else {
+                    1e-12
+                };
                 assert!(
-                    xs[0].abs() < 1e-12 && (xs[1] - d).abs() < 1e-12,
+                    xs[0].abs() < 1e-12 && (xs[1] - d).abs() < along,
                     "{d}: {xs:?}"
                 );
             }
