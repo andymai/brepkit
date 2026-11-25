@@ -3093,7 +3093,7 @@ fn wave_runs(
 /// and two circles within the gap of their centres and radii and the radius
 /// times the turn between their planes of each other, however their axes
 /// turn. The least bound stands, grown by its rounding.
-fn conics_apart(a: &EdgeCurve, b: &EdgeCurve) -> Option<f64> {
+pub(super) fn conics_apart(a: &EdgeCurve, b: &EdgeCurve) -> Option<f64> {
     let form = |e: &EdgeCurve| match e {
         EdgeCurve::Circle(c) => Some((
             c.center(),
