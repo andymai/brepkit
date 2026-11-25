@@ -377,6 +377,190 @@ mod tests {
         }
     }
 
+    /// A rod of radius 2 about the origin from z = 0 to 2, its seam at angle
+    /// `cuts[0]` and each rim split into arcs at the angles `cuts`, in order.
+    fn split_rod(topo: &mut Topology, cuts: &[f64]) -> SolidId {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::CylindricalSurface;
+        use brepkit_topology::shell::Shell;
+        use brepkit_topology::solid::Solid;
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let rim = |topo: &mut Topology, z: f64| {
+            let circle =
+                Circle3D::new_with_ref(Point3::new(0.0, 0.0, z), up, 2.0, Vec3::new(1.0, 0.0, 0.0))
+                    .unwrap();
+            let vertices: Vec<_> = cuts
+                .iter()
+                .map(|&a| topo.add_vertex(Vertex::new(circle.evaluate(a), 1e-7)))
+                .collect();
+            let arcs: Vec<_> = (0..cuts.len())
+                .map(|i| {
+                    let next = vertices[(i + 1) % cuts.len()];
+                    topo.add_edge(Edge::new(
+                        vertices[i],
+                        next,
+                        EdgeCurve::Circle(circle.clone()),
+                    ))
+                })
+                .collect();
+            (vertices[0], arcs)
+        };
+        let (bottom_seam, bottom) = rim(topo, 0.0);
+        let (top_seam, top) = rim(topo, 2.0);
+        let seam = topo.add_edge(Edge::new(bottom_seam, top_seam, EdgeCurve::Line));
+        let mut lateral: Vec<OrientedEdge> =
+            bottom.iter().map(|&e| OrientedEdge::new(e, true)).collect();
+        lateral.push(OrientedEdge::new(seam, true));
+        lateral.extend(top.iter().rev().map(|&e| OrientedEdge::new(e, false)));
+        lateral.push(OrientedEdge::new(seam, false));
+        let wall = topo.add_wire(Wire::new(lateral, true).unwrap());
+        let wall = topo.add_face(Face::new(
+            wall,
+            Vec::new(),
+            FaceSurface::Cylinder(
+                CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), up, 2.0).unwrap(),
+            ),
+        ));
+        let floor = topo.add_wire(
+            Wire::new(
+                bottom
+                    .iter()
+                    .rev()
+                    .map(|&e| OrientedEdge::new(e, false))
+                    .collect(),
+                true,
+            )
+            .unwrap(),
+        );
+        let floor = topo.add_face(Face::new(
+            floor,
+            Vec::new(),
+            FaceSurface::Plane {
+                normal: -up,
+                d: 0.0,
+            },
+        ));
+        let roof = topo.add_wire(
+            Wire::new(
+                top.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+                true,
+            )
+            .unwrap(),
+        );
+        let roof = topo.add_face(Face::new(
+            roof,
+            Vec::new(),
+            FaceSurface::Plane { normal: up, d: 2.0 },
+        ));
+        let shell = topo.add_shell(Shell::new(vec![wall, floor, roof]).unwrap());
+        topo.add_solid(Solid::new(shell, Vec::new()))
+    }
+
+    /// That each boolean `ops` of the shorter rod, its rims cut at `cuts`
+    /// (see [`split_rod`]), with the prism is exact or refused.
+    fn rod_with_rims_against_the_prism(rim: &str, cuts: &[f64], ops: &[BooleanOp]) {
+        let ellipse = PI * 3.0 * 5.4_f64.sqrt();
+        let union = union_area();
+        let common = 4.0 * PI + ellipse - union;
+        for (name, pose) in poses() {
+            for &op in ops {
+                let volume = match op {
+                    BooleanOp::Fuse => 4.0 * ellipse + 2.0 * (union - ellipse),
+                    BooleanOp::Cut => 4.0 * ellipse - 2.0 * common,
+                    BooleanOp::Intersect => 2.0 * common,
+                };
+                let mut topo = Topology::new();
+                let [_, _, prism] = parts(&mut topo, 2.0, &pose);
+                let rod = split_rod(&mut topo, cuts);
+                transform_solid(&mut topo, rod, &(pose * Mat4::translation(5.0, 5.0, 0.0)))
+                    .unwrap();
+                let what = format!("{op:?}, {rim}, {name}");
+                assert!(
+                    validate_solid(&topo, rod).unwrap().is_valid(),
+                    "{what}: the rod"
+                );
+                let (a, b) = if op == BooleanOp::Cut {
+                    (prism, rod)
+                } else {
+                    (rod, prism)
+                };
+                let Ok(result) = boolean_with_options(&mut topo, op, a, b, exact()) else {
+                    continue;
+                };
+                let lens = Point3::new(6.72, 6.0, 1.0);
+                let (inside, outside): (Vec<Point3>, Vec<Point3>) = match op {
+                    BooleanOp::Fuse => (
+                        vec![lens, BY_TOUCH],
+                        vec![PAST_LENS, Point3::new(6.72, 6.0, 2.5)],
+                    ),
+                    BooleanOp::Cut => (vec![Point3::new(1.5, 5.0, 1.0)], vec![lens, BY_TOUCH]),
+                    BooleanOp::Intersect => {
+                        (vec![BY_TOUCH], vec![lens, Point3::new(1.5, 5.0, 1.0)])
+                    }
+                };
+                assert_exact(&topo, result, volume, (&inside, &outside), &pose, &what);
+            }
+        }
+    }
+
+    /// The shorter rod with a vertex of each rim where the rim crosses the
+    /// prism's wall, at (6, 5 -/+ sqrt(3)), as its seam or not, or with a
+    /// sliver of an arc there, 2e-7 or 2e-6 long, across the crossing: each
+    /// boolean with the prism is exact or refused, never wrong. The plane
+    /// caps' sections end where they cross the rims, read on the rims
+    /// themselves, a vertex there or not.
+    #[test]
+    fn a_rod_whose_rim_has_a_vertex_or_a_sliver_at_a_crossing_is_exact_or_refused() {
+        let third = PI / 3.0;
+        let all = [BooleanOp::Fuse, BooleanOp::Cut, BooleanOp::Intersect];
+        let rims: [(&str, Vec<f64>, &[BooleanOp]); 5] = [
+            (
+                "seam on the upper crossing",
+                vec![third],
+                &[BooleanOp::Cut, BooleanOp::Intersect],
+            ),
+            (
+                "seam on the lower crossing",
+                vec![-third],
+                &[BooleanOp::Cut, BooleanOp::Intersect],
+            ),
+            (
+                "a vertex on each crossing",
+                vec![2.0, 2.0 * PI - third, 2.0 * PI + third],
+                &all,
+            ),
+            (
+                "a sliver 2e-7 long across the upper crossing",
+                vec![third - 5e-8, third + 5e-8, 2.0],
+                &all,
+            ),
+            (
+                "a sliver 2e-6 long across the upper crossing",
+                vec![third - 5e-7, third + 5e-7, 2.0],
+                &all,
+            ),
+        ];
+        for (rim, cuts, ops) in &rims {
+            rod_with_rims_against_the_prism(rim, cuts, ops);
+        }
+    }
+
+    /// The fuse of the shorter rod and the prism with the rod's seam on a
+    /// crossing: the lens between the lower crossing and the touch is lost,
+    /// its cap pieces dropped and the prism's wall bounded by the rod's rim
+    /// there.
+    #[test]
+    #[ignore = "the fuse loses the lens between the lower crossing and the touch"]
+    fn a_rod_with_its_seam_on_a_crossing_fuses_exactly_or_is_refused() {
+        let third = PI / 3.0;
+        for (rim, seam) in [
+            ("seam on the upper crossing", third),
+            ("seam on the lower crossing", -third),
+        ] {
+            rod_with_rims_against_the_prism(rim, &[seam], &[BooleanOp::Fuse]);
+        }
+    }
+
     /// A rod of radius 2 about (6.5, 5) from z = 0 to 2, and the prism from
     /// z = -1 to 3: their walls cross at x = 10.25 - sqrt(19.9375), along
     /// rulings that run only over the rod's height, and the fuse is exact.
