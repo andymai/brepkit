@@ -390,8 +390,9 @@ pub fn deserialize_solid(bytes: &[u8], topo: &mut Topology) -> Result<SolidId, I
     }
 
     let mut vertex_ids = Vec::with_capacity(dump.vertices.len());
-    for v in dump.vertices {
-        vertex_ids.push(topo.add_vertex(Vertex::new(v.point, v.tolerance)));
+    for (index, v) in dump.vertices.into_iter().enumerate() {
+        let point = crate::bounded_point(v.point, || format!("arena dump vertex {index}"))?;
+        vertex_ids.push(topo.add_vertex(Vertex::new(point, v.tolerance)));
     }
 
     let mut edge_ids = Vec::with_capacity(dump.edges.len());
@@ -637,6 +638,28 @@ mod tests {
     /// radius or with no frame: such a dump is refused. The dump's text
     /// cannot hold a number that is not finite, so its parse refuses one.
     /// The dumps they were made from load and validate.
+    /// A JSON number cannot be NaN, but it can be past the size limit: a
+    /// dump with a vertex there is refused. The dump it was made from loads.
+    #[test]
+    fn a_dump_with_a_vertex_past_the_size_limit_is_refused() {
+        use serde_json::{Value, json};
+
+        let mut topo = Topology::new();
+        let block = make_box(&mut topo, 1.0, 2.0, 3.0).unwrap();
+        let bytes = serialize_solid(&topo, block).unwrap();
+        assert!(deserialize_solid(&bytes, &mut Topology::new()).is_ok());
+        for x in [1e305, -1e305, f64::MAX] {
+            let mut dump: Value = serde_json::from_slice(&bytes).unwrap();
+            dump["vertices"][0]["point"] = json!([x, 0.0, 0.0]);
+            let bad = serde_json::to_vec(&dump).unwrap();
+            let found = deserialize_solid(&bad, &mut Topology::new());
+            assert!(
+                matches!(found, Err(IoError::ParseError { .. })),
+                "{x}: {found:?}"
+            );
+        }
+    }
+
     #[test]
     #[allow(clippy::too_many_lines)]
     fn a_dump_with_a_malformed_curve_or_surface_is_refused() {

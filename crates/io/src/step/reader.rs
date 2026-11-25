@@ -1967,7 +1967,9 @@ impl<'a> StepBuilder<'a> {
                 ),
             });
         }
-        Ok(Point3::new(coords[0], coords[1], coords[2]))
+        crate::bounded_point(Point3::new(coords[0], coords[1], coords[2]), || {
+            format!("CARTESIAN_POINT #{cp_ref}")
+        })
     }
 
     fn build_direction(&self, dir_ref: u64) -> Result<Vec3, IoError> {
@@ -3293,6 +3295,45 @@ mod tests {
             assert!(
                 matches!(found, Err(IoError::ParseError { .. })),
                 "{what}: {found:?}"
+            );
+        }
+    }
+
+    /// A vertex point that is not finite, or past the size limit, gives an
+    /// edge whose ends cannot be read: the reader refuses each. The file it
+    /// was made from reads.
+    #[test]
+    fn a_vertex_point_the_reader_cannot_use_is_refused() {
+        let mut topo = Topology::new();
+        let block = brepkit_operations::primitives::make_box(&mut topo, 1.0, 2.0, 3.0).unwrap();
+        let step = writer::write_step(&topo, &[block]).unwrap();
+        assert_eq!(read_step(&step, &mut Topology::new()).unwrap().len(), 1);
+
+        let point = step
+            .lines()
+            .find_map(|l| l.split_once("= VERTEX_POINT("))
+            .and_then(|(_, rest)| rest.split_once('#'))
+            .map(|(_, rest)| rest.trim_end_matches(");").to_owned())
+            .unwrap();
+        let head = format!("#{point} = CARTESIAN_POINT(");
+        let moved = |x: &str| {
+            step.lines()
+                .map(|line| {
+                    if line.starts_with(&head) {
+                        format!("{head}'',({x},0.,0.));")
+                    } else {
+                        line.to_owned()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        assert_ne!(moved("NaN"), step);
+        for x in ["NaN", "inf", "-inf", "1.E400", "1.E305", "-1.E305"] {
+            let found = read_step(&moved(x), &mut Topology::new());
+            assert!(
+                matches!(found, Err(IoError::ParseError { .. })),
+                "{x}: {found:?}"
             );
         }
     }

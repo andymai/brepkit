@@ -196,7 +196,8 @@ impl Params {
     }
 
     fn point(&mut self) -> Result<Point3, IoError> {
-        Ok(Point3::new(self.real()?, self.real()?, self.real()?))
+        let point = Point3::new(self.real()?, self.real()?, self.real()?);
+        crate::bounded_point(point, || "an IGES point".to_string())
     }
 
     /// A count of things the entity goes on to list. It can be no more than the
@@ -977,6 +978,21 @@ mod tests {
         assert!(curve_is_read(&arc("1.,1.,0.")));
         for corner in ["NaN,1.,0.", "1E400,1.,0.", "1.,-inf,0."] {
             assert!(!curve_is_read(&arc(corner)), "{corner}");
+        }
+    }
+
+    /// The parameters of a point are each finite, and a point past the size
+    /// limit is refused as well.
+    #[test]
+    fn a_point_past_the_size_limit_is_refused() {
+        let point = |params: &str| Params::of(&entity(1, 116, params)).point();
+        assert!(point("116,1.,2.,3.,0;").is_ok());
+        for bad in [
+            "116,1E305,0.,0.,0;",
+            "116,0.,-1E305,0.,0;",
+            "116,0.,0.,NaN,0;",
+        ] {
+            assert!(point(bad).is_err(), "{bad}");
         }
     }
 
