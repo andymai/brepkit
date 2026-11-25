@@ -2593,59 +2593,203 @@ pub(super) struct Meeting {
 pub(super) struct UnsettledMeeting;
 
 /// The distance from a circle or ellipse arc to a second curve, as a wave in
-/// the arc's parameter `t`: `k0 + k1 cos t + l1 sin t + k2 cos 2t + l2 sin 2t`.
-/// Its derivatives are bounded by its amplitudes, which bounds it over any
-/// span from its value and slope at the span's middle.
+/// the arc's parameter `t`, read about the parameter `mid` with `s = t - mid`:
+/// `c0 + c1 (cos s - 1) + d1 sin s + c2 (cos 2s - 1) + d2 sin 2s`. Read so,
+/// each term is no larger than the arc's own reach from its middle point,
+/// though the arc's centre lies far off. Its derivatives are bounded by its
+/// amplitudes, which bounds it over any span from its value and slope at the
+/// span's middle.
 #[derive(Clone, Copy)]
 struct Wave {
-    k0: f64,
-    k1: f64,
-    l1: f64,
-    k2: f64,
-    l2: f64,
+    /// The parameter the wave is read about.
+    mid: f64,
+    /// How far from `mid` it is read, at most.
+    half: f64,
+    c0: f64,
+    c1: f64,
+    d1: f64,
+    c2: f64,
+    d2: f64,
+    /// Bounds on the error of the coefficients, as read in the value, the
+    /// slope and the bend over the span.
+    err: [f64; 3],
 }
 
 impl Wave {
+    /// The wave of coefficients `[c0, c1, d1, c2, d2]` within `errors` of
+    /// their own, read about `mid` up to `half` from it: the value's error
+    /// is each coefficient's times its term's size there at most.
+    fn new(mid: f64, half: f64, [c0, c1, d1, c2, d2]: [f64; 5], errors: [f64; 5]) -> Self {
+        let [e0, e1, f1, e2, f2] = errors;
+        let (first, second) = Self::reach(half);
+        let err = [
+            f2.madd(
+                second.1,
+                e2.madd(second.0, f1.madd(first.1, e1.madd(first.0, e0))),
+            ),
+            2.0f64.madd(e2 + f2, e1 + f1),
+            4.0f64.madd(e2 + f2, e1 + f1),
+        ];
+        Self {
+            mid,
+            half,
+            c0,
+            c1,
+            d1,
+            c2,
+            d2,
+            err,
+        }
+    }
+
+    /// The square of the length of `wm + wu (cos s - 1) + wv sin s`, each
+    /// part within the bound that comes with it, read about `mid` up to
+    /// `half` from it.
+    fn square(
+        mid: f64,
+        half: f64,
+        (wm, em): ((f64, f64), f64),
+        (wu, eu): ((f64, f64), f64),
+        (wv, ev): ((f64, f64), f64),
+    ) -> Self {
+        let dot = |a: (f64, f64), b: (f64, f64)| a.0.madd(b.0, a.1 * b.1);
+        let (lm, lu, lv) = (wm.0.hypot(wm.1), wu.0.hypot(wu.1), wv.0.hypot(wv.1));
+        // How far the product of two parts can stray, from theirs.
+        let apart = |la: f64, ea: f64, lb: f64, eb: f64| la.madd(eb, lb.madd(ea, ea * eb));
+        let e = f64::EPSILON;
+        let (uu, vv, mu, mv, uv) = (
+            apart(lu, eu, lu, eu),
+            apart(lv, ev, lv, ev),
+            apart(lm, em, lu, eu),
+            apart(lm, em, lv, ev),
+            apart(lu, eu, lv, ev),
+        );
+        Self::new(
+            mid,
+            half,
+            [
+                dot(wm, wm),
+                2.0 * (dot(wm, wu) - dot(wu, wu)),
+                2.0 * (dot(wm, wv) - dot(wu, wv)),
+                0.5 * (dot(wu, wu) - dot(wv, wv)),
+                dot(wu, wv),
+            ],
+            [
+                (4.0 * e).madd(lm * lm, apart(lm, em, lm, em)),
+                (8.0 * e).madd(lu.madd(lu, lm * lu), 2.0 * (mu + uu)),
+                (8.0 * e).madd(lv.madd(lm, lu * lv), 2.0 * (mv + uv)),
+                (4.0 * e).madd(lu.madd(lu, lv * lv), 0.5 * (uu + vv)),
+                (4.0 * e).madd(lu * lv, uv),
+            ],
+        )
+    }
+
+    /// How large `|cos s - 1|` and `|sin s|`, and `|cos 2s - 1|` and
+    /// `|sin 2s|`, grow within `half` of the middle.
+    fn reach(half: f64) -> ((f64, f64), (f64, f64)) {
+        let h = half.abs();
+        (
+            ((0.5 * h * h).min(2.0), h.min(1.0)),
+            ((2.0 * h * h).min(2.0), (2.0 * h).min(1.0)),
+        )
+    }
+
     /// The wave and its first two derivatives at `t`.
     fn at(&self, t: f64) -> [f64; 3] {
-        let (s1, c1) = t.sin_cos();
-        let (s2, c2) = (2.0 * t).sin_cos();
-        let g = self.l2.madd(
+        let s = t - self.mid;
+        let (s1, c1) = s.sin_cos();
+        let (s2, c2) = (2.0 * s).sin_cos();
+        let half = (0.5 * s).sin();
+        // `cos s - 1` and `cos 2s - 1`, read without the loss near nothing.
+        let (m1, m2) = (-2.0 * half * half, -2.0 * s1 * s1);
+        let g = self.d2.madd(
             s2,
-            self.k2
-                .madd(c2, self.l1.madd(s1, self.k1.madd(c1, self.k0))),
+            self.c2
+                .madd(m2, self.d1.madd(s1, self.c1.madd(m1, self.c0))),
         );
-        let g1 = (2.0 * self.l2).madd(
+        let g1 = (2.0 * self.d2).madd(
             c2,
-            (-2.0 * self.k2).madd(s2, self.l1.madd(c1, -self.k1 * s1)),
+            (-2.0 * self.c2).madd(s2, self.d1.madd(c1, -self.c1 * s1)),
         );
-        let g2 = (-4.0 * self.l2).madd(
+        let g2 = (-4.0 * self.d2).madd(
             s2,
-            (-4.0 * self.k2).madd(c2, (-self.l1).madd(s1, -self.k1 * c1)),
+            (-4.0 * self.c2).madd(c2, (-self.d1).madd(s1, -self.c1 * c1)),
         );
         [g, g1, g2]
     }
 
     /// Bounds on the size of the second and third derivatives anywhere.
     fn bounds(&self) -> (f64, f64) {
-        let (a1, a2) = (self.k1.hypot(self.l1), self.k2.hypot(self.l2));
+        let (a1, a2) = (self.c1.hypot(self.d1), self.c2.hypot(self.d2));
         (4.0f64.madd(a2, a1), 8.0f64.madd(a2, a1))
     }
 
-    /// A bound on the rounding of the value, slope and bend as read.
+    /// A bound on the error of the value, slope and bend as read: their
+    /// rounding, and the coefficients' own error.
     fn rounding(&self) -> [f64; 3] {
-        let (a1, a2) = (self.k1.hypot(self.l1), self.k2.hypot(self.l2));
+        let (a1, a2) = (self.c1.hypot(self.d1), self.c2.hypot(self.d2));
+        let (first, second) = Self::reach(self.half);
         let e = 32.0 * f64::EPSILON;
         [
-            e * (self.k0.abs() + a1 + a2),
-            e * 2.0f64.madd(a2, a1),
-            e * 4.0f64.madd(a2, a1),
+            e.madd(
+                a2.madd(
+                    second.0 + second.1,
+                    a1.madd(first.0 + first.1, self.c0.abs()),
+                ),
+                self.err[0],
+            ),
+            e.madd(2.0f64.madd(a2, a1), self.err[1]),
+            e.madd(4.0f64.madd(a2, a1), self.err[2]),
         ]
     }
 }
 
 /// A band of wave values, low end first.
 type Band = (f64, f64);
+
+/// An arc in another conic's frame about its middle: the point there and
+/// the two parts of the step from it, as `p + u (cos s - 1) + v sin s`.
+type Parts = ((f64, f64), (f64, f64), (f64, f64));
+
+/// An arc read in the frame of a circle or ellipse, where that conic is the
+/// unit circle.
+struct Frame {
+    /// The conic's semi-axes, the longer first.
+    sizes: (f64, f64),
+    /// The arc in the frame.
+    parts: Parts,
+    /// A bound on the error of the arc's points as read in the frame.
+    err: f64,
+}
+
+/// Where the points of another curve near a span of an arc lie against
+/// that curve's section.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// All beyond the section: the span is clear of it.
+    Beyond,
+    /// Some within it and some beyond, by enough that halving the span
+    /// may tell them apart.
+    Across,
+    /// Within it, or too close to tell.
+    Within,
+}
+
+/// What a span of an arc must reach to come near another section.
+enum Near {
+    /// A segment from its start along `d`, the arc's middle point at `w`
+    /// from its start within `e_w`, and the arc moving at most `reach` per
+    /// unit of its parameter.
+    Line {
+        w: brepkit_math::vec::Vec3,
+        e_w: f64,
+        d: brepkit_math::vec::Vec3,
+        reach: f64,
+    },
+    /// An arc of a circle or ellipse over its parameters from the first by
+    /// the second.
+    Conic { span: (f64, f64) },
+}
 
 /// How a stretch of the arc stands to the other curve.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2678,6 +2822,7 @@ fn wave_runs(
     (t0, t1): (f64, f64),
     target: f64,
     bands: &dyn Fn(f64, f64) -> (Band, Band),
+    place: &dyn Fn(f64, f64) -> Place,
 ) -> Option<Vec<(f64, f64, f64)>> {
     /// Intervals one pair may read before it is left unsettled.
     const BUDGET: usize = 4096;
@@ -2713,10 +2858,18 @@ fn wave_runs(
             return None;
         }
         let (m, h) = (0.5 * (a + b), 0.5 * (b - a));
+        let place = place(m, h);
+        if place == Place::Beyond {
+            continue;
+        }
         let [g, g1, g2] = wave.at(m);
         let (meet, clear) = bands(m, h);
         let spread = (0.5 * m2 * h).madd(h, g1.abs().madd(h, e0));
         if g + spread < clear.0 || g - spread > clear.1 {
+            continue;
+        }
+        if place == Place::Across && m > a && m < b {
+            stack.extend([(m, b), (a, m)]);
             continue;
         }
         if g - spread >= meet.0 && g + spread <= meet.1 {
@@ -2991,10 +3144,14 @@ pub(super) fn section_spans(edges: &[OrientedPCurveEdge]) -> Vec<SectionSpan<'_>
 /// or the squared distance from the other conic's centre in that conic's
 /// own frame, where it is the unit circle. The wave's derivatives bound it
 /// over each span, so every span is proved within `tol` of the other curve,
-/// or farther, or moves one way, or has one turn ([`wave_runs`]). Against an
-/// ellipse, the bands that settle a span come from how steeply its frame's
-/// radius climbs about the span, so a stretch between two crossings near
-/// the end of a long axis reads as farther. Each run proved within `tol`
+/// or farther, or moves one way, or has one turn ([`wave_runs`]). The wave is
+/// read about the arc's middle parameter, so an arc of a conic whose centre
+/// lies far off reads to its own size. A span whose near points on the other
+/// curve lie beyond the other section is clear of it, though the other
+/// curve passes near. Against an ellipse, the bands that settle a span come
+/// from how steeply its frame's radius climbs about the span, so a stretch
+/// between two crossings near the end of a long axis reads as farther. Each
+/// run proved within `tol`
 /// gives one meeting at its nearest point, with the two curves' points
 /// there as its witness, so long as the other curve's point lies on its
 /// section and no end of a section or earlier meeting within `tol` of both
@@ -3005,11 +3162,12 @@ pub(super) fn section_spans(edges: &[OrientedPCurveEdge]) -> Vec<SectionSpan<'_>
 /// covers alike. Two conics proved within `tol` of each other along their
 /// whole length ([`conics_apart`]) are one curve: their arcs overlap or lie
 /// apart, and are left to their ends. So is a conic no form on unit axes
-/// reads, a line of no length, and a pair not in one plane within a quarter
-/// of `tol`: the face holds such a section by its pcurve, which is the
-/// shadow of its curve on the face's plane. A pair the wave cannot settle
-/// within its budget, or whose distance it cannot settle near `tol`, is
-/// [`UnsettledMeeting`].
+/// reads, a line of no length, and a pair proved not in one plane within a
+/// quarter of `tol`: the face holds such a section by its pcurve, which is
+/// the shadow of its curve on the face's plane. A pair the wave cannot
+/// settle within its budget, whose distance it cannot settle near `tol`,
+/// whose plane the rounding hides, or that the gap between the curves and
+/// their unit forms leaves no room to read, is [`UnsettledMeeting`].
 #[allow(clippy::too_many_lines)]
 pub(super) fn section_meeting_points(
     sections: &[SectionSpan<'_>],
@@ -3089,7 +3247,9 @@ pub(super) fn section_meeting_points(
             } else {
                 (second, first)
             };
-            let (Some((_, _, a0, a_sweep)), Some((sb, tb, _, _))) = (span(a), span(b)) else {
+            let eps = f64::EPSILON;
+            let (Some((_, _, a0, a_sweep)), Some((sb, tb, b0, b_sweep))) = (span(a), span(b))
+            else {
                 continue;
             };
             let (Some((unit_a, gap_a)), Some((unit_b, gap_b))) =
@@ -3116,103 +3276,183 @@ pub(super) fn section_meeting_points(
             let Ok(normal) = cu.cross(cv).normalize() else {
                 continue;
             };
-            // The wave as the square of an affine map of the arc, `w0 + wu
-            // cos t + wv sin t`.
-            let square = |w0: Vec3, wu: Vec3, wv: Vec3| Wave {
-                k0: (0.5 * (wu.dot(wu) + wv.dot(wv))) + w0.dot(w0),
-                k1: 2.0 * w0.dot(wu),
-                l1: 2.0 * w0.dot(wv),
-                k2: 0.5 * (wu.dot(wu) - wv.dot(wv)),
-                l2: wu.dot(wv),
+            // The arc about its middle, `t = mid + s`: `centre + uu + uu (cos
+            // s - 1) + vv sin s`. `cos mid` and `sin mid` are each within a
+            // unit of rounding and each product and sum is rounded once, so
+            // `uu` and `vv` lie within `e_u` and `e_v` of their own, though
+            // `cu` and `cv` are long.
+            let (mid, half) = (0.5f64.madd(a_sweep, a0), 0.5 * a_sweep);
+            let (sm, cm) = mid.sin_cos();
+            let (lu, lv) = (cu.length(), cv.length());
+            let (uu, vv) = (cu * cm + cv * sm, cv * cm - cu * sm);
+            let (e_u, e_v) = (
+                3.0 * eps * lu.madd(cm.abs(), lv * sm.abs()),
+                3.0 * eps * lv.madd(cm.abs(), lu * sm.abs()),
+            );
+            let (first, _) = Wave::reach(half);
+            // The arc's offset from `anchor` at its middle, within the bound
+            // that comes with it.
+            let offset = |anchor: Point3| {
+                let w = (centre - anchor) + uu;
+                (w, eps.madd((centre - anchor).length() + w.length(), e_u))
             };
-            // How far a point of the arc can lie off the plane the other
-            // curve is read in, and so by how much its distance there falls
-            // short of the whole distance: off a line, how far the foot on
-            // it lies off the arc's plane, over the cosine of the line's
-            // slope to it.
-            let height =
-                |n: Vec3, c: Point3| (centre - c).dot(n).abs() + cu.dot(n).hypot(cv.dot(n));
+            let origin = Point3::new(0.0, 0.0, 0.0);
+            let (pm, e_pm) = offset(origin);
+            // The arc's point at `t`, within the bound that comes with it.
+            let point = |t: f64| {
+                let s = t - mid;
+                let (s1, h) = (s.sin(), (0.5 * s).sin());
+                let m1 = -2.0 * h * h;
+                let p = origin + pm + uu * m1 + vv * s1;
+                let e = (2.0 * eps).madd(
+                    uu.length().madd(m1.abs(), vv.length() * s1.abs()),
+                    e_u.madd(m1.abs(), e_v.madd(s1.abs(), e_pm)),
+                );
+                (p, e)
+            };
+            // How far the arc lies off the plane through `c` square to `n`
+            // at most, and so by how much its distance from a curve in that
+            // plane falls short of the whole distance, with the bound on its
+            // error.
+            let height = |n: Vec3, c: Point3| {
+                let (w, e_w) = offset(c);
+                let h = uu
+                    .dot(n)
+                    .abs()
+                    .madd(first.0, vv.dot(n).abs().madd(first.1, w.dot(n).abs()));
+                let size = uu
+                    .length()
+                    .madd(first.0, vv.length().madd(first.1, w.length()));
+                let e = (4.0 * eps).madd(size, e_u.madd(first.0, e_v.madd(first.1, e_w)));
+                (h, e)
+            };
             // Readings within the first band of `bands` are within `tol` of
             // the other curve; readings off the second are farther. The
             // reading's root is one plus or less the scaled distance, where
-            // the wave is squared.
-            let (wave, target, off_plane, squared, steep): (Wave, f64, f64, bool, Option<_>) =
-                match &*unit_b {
-                    EdgeCurve::Line => {
-                        let d = tb - sb;
-                        // A line of no length is no section of this face to
-                        // meet.
-                        let Ok(along) = d.normalize() else {
-                            continue;
-                        };
-                        let Ok(across) = normal.cross(along).normalize() else {
-                            continue;
-                        };
-                        let lean = along
-                            .dot(normal)
-                            .madd(-along.dot(normal), 1.0)
-                            .max(0.0)
-                            .sqrt();
-                        let off = (sb - centre)
-                            .dot(normal)
-                            .abs()
-                            .max((tb - centre).dot(normal).abs())
-                            / lean;
-                        let wave = Wave {
-                            k0: (centre - sb).dot(across),
-                            k1: cu.dot(across),
-                            l1: cv.dot(across),
-                            k2: 0.0,
-                            l2: 0.0,
-                        };
-                        (wave, 0.0, off, false, None)
-                    }
-                    EdgeCurve::Circle(c) => {
-                        let n = c.normal();
-                        let flat = |w: Vec3| (w - n * w.dot(n)) * (1.0 / c.radius());
-                        let wave = square(flat(centre - c.center()), flat(cu), flat(cv));
-                        (wave, 1.0, height(n, c.center()), true, None)
-                    }
-                    EdgeCurve::Ellipse(el) => {
-                        let local = |w: Vec3| {
-                            (
-                                w.dot(el.u_axis()) / el.semi_major(),
-                                w.dot(el.v_axis()) / el.semi_minor(),
-                            )
-                        };
-                        let as_vec = |(x, y): (f64, f64)| Vec3::new(x, y, 0.0);
-                        let (l0, lu, lv) = (local(centre - el.center()), local(cu), local(cv));
-                        let wave = square(as_vec(l0), as_vec(lu), as_vec(lv));
-                        let steep = (el.semi_major(), el.semi_minor(), l0, lu, lv);
+            // the wave is squared. `near` holds what `place` needs to tell
+            // where the other curve's points near a span of the arc lie
+            // against the other section.
+            let (wave, target, (off_plane, off_err, lean), squared, frame, near) = match &*unit_b {
+                EdgeCurve::Line => {
+                    let d = tb - sb;
+                    // A line of no length is no section of this face to
+                    // meet.
+                    let Ok(along) = d.normalize() else {
+                        continue;
+                    };
+                    let Ok(across) = normal.cross(along).normalize() else {
+                        continue;
+                    };
+                    let (w, e_w) = offset(sb);
+                    // The line's ends off the arc's plane through its
+                    // middle point, over the cosine of the line's slope
+                    // to it: how far the foot on the line lies off it.
+                    let lean = along
+                        .dot(normal)
+                        .madd(-along.dot(normal), 1.0)
+                        .max(0.0)
+                        .sqrt();
+                    let ends = w.dot(normal).abs().max((d - w).dot(normal).abs());
+                    let e_ends = (8.0 * eps).madd(w.length() + d.length(), e_w);
+                    let wave = Wave::new(
+                        mid,
+                        half,
+                        [w.dot(across), uu.dot(across), vv.dot(across), 0.0, 0.0],
+                        [
+                            (8.0 * eps).madd(w.length(), e_w),
+                            (8.0 * eps).madd(uu.length(), e_u),
+                            (8.0 * eps).madd(vv.length(), e_v),
+                            0.0,
+                            0.0,
+                        ],
+                    );
+                    let near = Near::Line {
+                        w,
+                        e_w,
+                        d,
+                        reach: lu + lv,
+                    };
+                    (wave, 0.0, (ends, e_ends, lean), false, None, near)
+                }
+                EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                    let (cb, nb, ea, eb, ub, vb) = match &*unit_b {
+                        EdgeCurve::Circle(c) => (
+                            c.center(),
+                            c.normal(),
+                            c.radius(),
+                            c.radius(),
+                            c.u_axis(),
+                            c.v_axis(),
+                        ),
+                        EdgeCurve::Ellipse(el) => (
+                            el.center(),
+                            el.normal(),
+                            el.semi_major(),
+                            el.semi_minor(),
+                            el.u_axis(),
+                            el.v_axis(),
+                        ),
+                        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => continue,
+                    };
+                    // The arc in the other conic's frame, where that
+                    // conic is the unit circle, each part within the
+                    // bound that comes with it.
+                    let local = |w: Vec3, e: f64| {
                         (
-                            wave,
-                            1.0,
-                            height(el.normal(), el.center()),
-                            true,
-                            Some(steep),
+                            (w.dot(ub) / ea, w.dot(vb) / eb),
+                            (4.0 * eps).madd(w.length(), e) / eb,
                         )
-                    }
-                    EdgeCurve::NurbsCurve(_) => continue,
-                };
-            if off_plane.is_nan() || off_plane > 0.25 * tol {
-                continue;
-            }
+                    };
+                    let (w, e_w) = offset(cb);
+                    let ((m0, e_m0), (mu, e_mu), (mv, e_mv)) =
+                        (local(w, e_w), local(uu, e_u), local(vv, e_v));
+                    let wave = Wave::square(mid, half, (m0, e_m0), (mu, e_mu), (mv, e_mv));
+                    let frame = Frame {
+                        sizes: (ea, eb),
+                        parts: (m0, mu, mv),
+                        err: e_mv.madd(first.1, e_mu.madd(first.0, e_m0)),
+                    };
+                    let (h, e) = height(nb, cb);
+                    let near = Near::Conic {
+                        span: (b0, b_sweep),
+                    };
+                    (wave, 1.0, (h, e, 1.0), true, Some(frame), near)
+                }
+                EdgeCurve::NurbsCurve(_) => continue,
+            };
             let [e0, ..] = wave.rounding();
-            let (meet_d, clear_d) = (tol - slack - off_plane, tol + slack);
-            let (near, far) = match &*unit_b {
+            let (meet_d, clear_d) = (tol - slack - (off_plane + off_err) / lean, tol + slack);
+            let (near_size, far_size) = match &*unit_b {
                 EdgeCurve::Circle(c) => (c.radius(), c.radius()),
                 EdgeCurve::Ellipse(el) => (el.semi_major(), el.semi_minor()),
                 EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => (1.0, 1.0),
             };
-            if !(meet_d / near > 0.0 && clear_d / far < 0.5) {
-                continue;
-            }
             let band = |d: f64, grow: f64| {
                 if squared {
                     ((1.0 - d) * (1.0 - d) - grow, (1.0 + d) * (1.0 + d) + grow)
                 } else {
                     (-d - grow, d + grow)
                 }
+            };
+            // The arc's point at `t` in the other conic's frame.
+            let framed = |t: f64, (m0, mu, mv): Parts| {
+                let s = t - mid;
+                let (s1, h) = (s.sin(), (0.5 * s).sin());
+                let m1 = -2.0 * h * h;
+                (
+                    mv.0.madd(s1, mu.0.madd(m1, m0.0)),
+                    mv.1.madd(s1, mu.1.madd(m1, m0.1)),
+                )
+            };
+            // How far the span `m - h` to `m + h` of the arc, and all points
+            // within `tol` of it, can lie from its point at `m` in the other
+            // conic's frame.
+            let room = |f: &Frame, h: f64| {
+                let (mu, mv) = (f.parts.1, f.parts.2);
+                h.madd(
+                    mu.0.hypot(mu.1) + mv.0.hypot(mv.1),
+                    2.0f64.madd(tol / f.sizes.1, f.err),
+                )
             };
             // Over a span, the radius of an ellipse's frame climbs at least
             // `g_min` and at most `g_max` per unit of distance about each of
@@ -3223,15 +3463,12 @@ pub(super) fn section_meeting_points(
             // all the way; one beyond `clear_d g_max` lies farther than
             // `clear_d`.
             let bands = |m: f64, h: f64| -> (Band, Band) {
-                let Some((ea, eb, l0, lu, lv)) = steep else {
-                    return (band(meet_d / near, -e0), band(clear_d / far, e0));
+                let Some(f) = &frame else {
+                    return (band(meet_d / near_size, -e0), band(clear_d / far_size, e0));
                 };
-                let (s, c) = m.sin_cos();
-                let (x, y) = (
-                    lu.0.madd(c, lv.0.madd(s, l0.0)),
-                    lu.1.madd(c, lv.1.madd(s, l0.1)),
-                );
-                let r = h.madd(lu.0.hypot(lu.1) + lv.0.hypot(lv.1), 2.0 * tol / eb);
+                let (ea, eb) = f.sizes;
+                let (x, y) = framed(m, f.parts);
+                let r = room(f, h);
                 let at = x.hypot(y);
                 let (lo, hi) = (
                     ((y.abs() - r) / (at + r)).clamp(0.0, 1.0),
@@ -3244,21 +3481,89 @@ pub(super) fn section_meeting_points(
                 let climb =
                     |s: f64| (s * s).madd(-1.0, 1.0).max(0.0) / (ea * ea) + (s * s) / (eb * eb);
                 let (g_min, g_max) = (
-                    climb(lo).sqrt() * (1.0 - 8.0 * f64::EPSILON),
-                    climb(hi).sqrt() * (1.0 + 8.0 * f64::EPSILON),
+                    climb(lo).sqrt() * (1.0 - 8.0 * eps),
+                    climb(hi).sqrt() * (1.0 + 8.0 * eps),
                 );
                 (
                     band(meet_d * g_min.max(1.0 / ea), -e0),
                     band(clear_d * g_max.min(1.0 / eb), e0),
                 )
             };
-            let runs =
-                wave_runs(&wave, (a0, a0 + a_sweep), target, &bands).ok_or(UnsettledMeeting)?;
+            // Where the points of the other curve within `tol` of the span
+            // `m - h` to `m + h` of the arc lie against the other section:
+            // such points lie within the span's reach of the arc's point at
+            // `m`, so their place along the other curve lies within that
+            // reach of that point's. A span that reaches past an end of the
+            // section by more than `tol` of its own length is worth halving.
+            let place = |m: f64, h: f64| -> Place {
+                let (off, room, own, lo, hi) = match (&near, &frame) {
+                    (Near::Line { w, e_w, d, reach }, _) => {
+                        let s = m - mid;
+                        let (s1, hs) = (s.sin(), (0.5 * s).sin());
+                        let at = *w + uu * (-2.0 * hs * hs) + vv * s1;
+                        let (along, size) = (at.dot(*d) / d.dot(*d), d.length());
+                        let own = h * reach;
+                        let room = own + 2.0f64.madd(tol, e_w + e_u + e_v);
+                        (along, room / size, own > tol, 0.0, 1.0)
+                    }
+                    (
+                        Near::Conic {
+                            span: (b0, b_sweep),
+                        },
+                        Some(f),
+                    ) => {
+                        let (x, y) = framed(m, f.parts);
+                        let (r, at) = (room(f, h), x.hypot(y));
+                        if at.is_nan() || at <= r {
+                            return Place::Within;
+                        }
+                        let (mu, mv) = (f.parts.1, f.parts.2);
+                        let own = h * (mu.0.hypot(mu.1) + mv.0.hypot(mv.1)) * f.sizes.1;
+                        let from_middle =
+                            (y.atan2(x) - 0.5f64.madd(*b_sweep, *b0) + PI).rem_euclid(TAU) - PI;
+                        let half_span = 0.5 * b_sweep;
+                        (
+                            from_middle,
+                            (r / at).asin() + 1e-9,
+                            own > tol,
+                            -half_span,
+                            half_span,
+                        )
+                    }
+                    (Near::Conic { .. }, None) => return Place::Within,
+                };
+                if off + room < lo || off - room > hi {
+                    Place::Beyond
+                } else if own && (off - room < lo || off + room > hi) {
+                    Place::Across
+                } else {
+                    Place::Within
+                }
+            };
+            // A whole arc whose near points lie beyond the other section is
+            // clear of it, in one plane or not.
+            if place(mid, half) == Place::Beyond {
+                continue;
+            }
+            // A pair proved not in one plane within a quarter of `tol` is
+            // left to its ends; one whose plane the rounding hides, or that
+            // the slack between the curves and their forms leaves no room
+            // to read, cannot be read.
+            let quarter = 0.25 * tol * lean;
+            if off_plane.is_nan() || off_plane - off_err > quarter {
+                continue;
+            }
+            if off_plane + off_err > quarter
+                || !(meet_d / near_size > 0.0 && clear_d / far_size < 0.5)
+            {
+                return Err(UnsettledMeeting);
+            }
+            let runs = wave_runs(&wave, (a0, a0 + a_sweep), target, &bands, &place)
+                .ok_or(UnsettledMeeting)?;
             for (run_start, run_end, t) in runs {
                 // The witness: the arc's point and its foot on the other
                 // curve.
-                let (s, c) = t.sin_cos();
-                let p = centre + cu * c + cv * s;
+                let (p, e_p) = point(t);
                 let q = match &*unit_b {
                     EdgeCurve::Line => {
                         let d = tb - sb;
@@ -3291,7 +3596,16 @@ pub(super) fn section_meeting_points(
                     }
                     EdgeCurve::NurbsCurve(_) => continue,
                 };
-                let apart = (p - q).length() + slack;
+                // The foot is a point of the other curve to within the
+                // rounding of its place.
+                let e_q = match &*unit_b {
+                    EdgeCurve::Circle(c) => (c.center() - origin).length() + c.radius(),
+                    EdgeCurve::Ellipse(el) => (el.center() - origin).length() + el.semi_major(),
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => {
+                        (sb - origin).length() + (tb - sb).length()
+                    }
+                } * (8.0 * eps);
+                let apart = (p - q).length() + slack + e_p + e_q;
                 if apart.is_nan() || apart > tol {
                     return Err(UnsettledMeeting);
                 }

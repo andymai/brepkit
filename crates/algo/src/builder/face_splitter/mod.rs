@@ -18813,6 +18813,67 @@ mod tests {
         }
     }
 
+    /// A circle of radius 2 about the plate's (5, 5) over (-0.5, 0.5), and
+    /// the segment from (7.0000001, 5.5) to (7.0000001, 5.8): the segment's
+    /// line lies one tolerance off the circle at (7, 5), but the segment
+    /// itself lies more than 0.06 from the arc. They are apart, in each
+    /// frame.
+    #[test]
+    fn an_arc_and_a_segment_whose_line_touches_it_elsewhere_are_apart() {
+        use brepkit_math::curves::Circle3D;
+        for (pose, o, u, v) in plate_frames() {
+            let n = u.cross(v);
+            let at = |x: f64, y: f64| o + u * x + v * y;
+            let circle = Circle3D::with_axes(at(5.0, 5.0), n, 2.0, u, v).unwrap();
+            let edges = vec![
+                meeting_edge(
+                    EdgeCurve::Circle(circle.clone()),
+                    circle.evaluate(-0.5),
+                    circle.evaluate(0.5),
+                    1,
+                ),
+                meeting_edge(
+                    EdgeCurve::Line,
+                    at(7.000_000_1, 5.5),
+                    at(7.000_000_1, 5.8),
+                    2,
+                ),
+            ];
+            let found = meetings(&edges);
+            assert!(found.is_empty(), "{pose}: meetings {found:?}");
+        }
+    }
+
+    /// Unit circles about the plate's (4, 5) and (6.0000001, 5), one
+    /// tolerance apart at their nearest: one arc over a half turn about its
+    /// nearest point, the other over the quarter turn about its top, far
+    /// from its own. They are apart whichever is read along, in each frame.
+    #[test]
+    fn arcs_whose_circles_touch_beyond_one_of_them_are_apart() {
+        use brepkit_math::curves::Circle3D;
+        use std::f64::consts::{FRAC_PI_2, FRAC_PI_4};
+        for (pose, o, u, v) in plate_frames() {
+            let n = u.cross(v);
+            let at = |x: f64, y: f64| o + u * x + v * y;
+            let left = Circle3D::with_axes(at(4.0, 5.0), n, 1.0, u, v).unwrap();
+            let right = Circle3D::with_axes(at(6.000_000_1, 5.0), n, 1.0, u, v).unwrap();
+            let arc = |c: &Circle3D, from: f64, to: f64, src| {
+                meeting_edge(
+                    EdgeCurve::Circle(c.clone()),
+                    c.evaluate(from),
+                    c.evaluate(to),
+                    src,
+                )
+            };
+            let near = arc(&left, -FRAC_PI_2, FRAC_PI_2, 1);
+            let top = arc(&right, FRAC_PI_4, 3.0 * FRAC_PI_4, 2);
+            for edges in [vec![near.clone(), top.clone()], vec![top, near]] {
+                let found = meetings(&edges);
+                assert!(found.is_empty(), "{pose}: meetings {found:?}");
+            }
+        }
+    }
+
     /// An arc in the plane square to the plate along the chord from (3, 5)
     /// to (7, 5), which is its shadow on the plate, and a line square to the
     /// arc's plane from (6, 7) to the chord at (6, 5), a hair off square to
