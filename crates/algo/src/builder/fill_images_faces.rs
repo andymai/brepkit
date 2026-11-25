@@ -1161,8 +1161,11 @@ fn cb_edge_runs_along(
     )
 }
 
-/// The CommonBlock edge among `candidates`, other than `own`, that runs
-/// where the edge `(curve, start, end)` does ([`cb_edge_runs_along`]).
+/// The CommonBlock edge among `candidates` that the edge `(curve, start,
+/// end)` takes: the first that runs where it does
+/// ([`cb_edge_runs_along`]), `own` among them, so all the edges of one
+/// bucket take the same one; `None` where that first is `own`, which the
+/// edge already is.
 fn cb_edge_for(
     topo: &Topology,
     candidates: Option<&Vec<EdgeId>>,
@@ -1172,7 +1175,8 @@ fn cb_edge_for(
     candidates?
         .iter()
         .copied()
-        .find(|&cb| cb != own && cb_edge_runs_along(topo, curve, start, end, cb))
+        .find(|&cb| cb == own || cb_edge_runs_along(topo, curve, start, end, cb))
+        .filter(|&cb| cb != own)
 }
 
 /// Rebuild an unsplit face replacing boundary edges with CommonBlock shared edges.
@@ -7911,6 +7915,37 @@ mod tests {
         assert!(!cb_edge_runs_along(&topo, &rim, start, start, whole_oval));
         assert!(!cb_edge_runs_along(&topo, &oval, start, start, whole_rim));
         assert!(cb_edge_runs_along(&topo, &rim, start, start, whole_rim));
+    }
+
+    /// Two CommonBlock edges on one segment in one bucket: an edge that is
+    /// the first of them keeps itself, the second takes the first, and an
+    /// edge on another curve between the same ends takes neither.
+    #[test]
+    fn a_bucket_of_two_matching_edges_shares_its_first() {
+        let mut topo = Topology::new();
+        let (a, b) = (Point3::new(0.0, 0.0, 0.0), Point3::new(2.0, 0.0, 0.0));
+        let va = topo.add_vertex(Vertex::new(a, 1e-7));
+        let vb = topo.add_vertex(Vertex::new(b, 1e-7));
+        let first = topo.add_edge(Edge::new(va, vb, EdgeCurve::Line));
+        let second = topo.add_edge(Edge::new(va, vb, EdgeCurve::Line));
+        let bucket = vec![first, second];
+        let line = (&EdgeCurve::Line, a, b);
+        assert_eq!(cb_edge_for(&topo, Some(&bucket), line, first), None);
+        assert_eq!(cb_edge_for(&topo, Some(&bucket), line, second), Some(first));
+        let arc = EdgeCurve::Circle(
+            Circle3D::new_with_ref(
+                Point3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 0.0, 1.0),
+                1.0,
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap(),
+        );
+        let arc_edge = topo.add_edge(Edge::new(vb, va, arc.clone()));
+        assert_eq!(
+            cb_edge_for(&topo, Some(&bucket), (&arc, b, a), arc_edge),
+            None
+        );
     }
 
     /// A plane sub-face whose hole the splitter reached twice (woven into
