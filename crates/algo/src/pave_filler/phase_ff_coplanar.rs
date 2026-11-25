@@ -116,7 +116,9 @@ pub fn perform(
             let frame = PlaneFrame2D::canonical(na, da);
             for fid in [fa, fb] {
                 if let Entry::Vacant(slot) = regions.entry(fid) {
-                    slot.insert(face_region_2d(topo, fid, &frame)?);
+                    let mut region = face_region_2d(topo, fid, &frame)?;
+                    attach_paves(&mut region, topo, arena);
+                    slot.insert(region);
                 }
             }
             process_coplanar_pair(
@@ -384,6 +386,27 @@ fn process_coplanar_pair(
                     );
                 }
             }
+            SectionPiece::Curve {
+                target,
+                along,
+                span,
+                start,
+                end,
+                mid,
+            } => {
+                if !has_existing_section_along(arena, topo, target, (start, end), mid, tol) {
+                    create_curve_section_edge(
+                        topo,
+                        arena,
+                        minted,
+                        faces,
+                        &along,
+                        (start, end),
+                        span,
+                        tol,
+                    );
+                }
+            }
         }
     }
 
@@ -428,6 +451,51 @@ struct BoundaryEdge {
     p3_start: Point3,
     p3_end: Point3,
     shape: Shape2,
+    /// The ellipse a sampled edge stands for, which its pieces follow.
+    along: Option<CurveSpan>,
+    /// The paves an ellipse edge has from the earlier phases, each a point
+    /// and its parameter: where it crosses or touches another edge.
+    paves: Vec<(Point3, f64)>,
+}
+
+/// An edge's curve over the edge, read in its wire's direction: the
+/// sampled polyline's parameter `s` in `[0, n]` stands for the curve's at
+/// the same fraction of `span`, from its start in the wire's direction.
+#[derive(Clone)]
+struct CurveSpan {
+    curve: EdgeCurve,
+    /// The edge's ends in its own order, which the curve reads its
+    /// parameters from.
+    ends: (Point3, Point3),
+    span: (f64, f64),
+    forward: bool,
+}
+
+impl CurveSpan {
+    /// The curve's parameter at the polyline's `s` of `n`.
+    fn at(&self, s: f64, n: f64) -> f64 {
+        let (t0, t1) = self.span;
+        let f = if self.forward { s / n } else { 1.0 - s / n };
+        (t1 - t0).madd(f, t0)
+    }
+
+    fn point(&self, t: f64) -> Point3 {
+        self.curve
+            .evaluate_with_endpoints(t, self.ends.0, self.ends.1)
+    }
+
+    /// The parameter in the span of a pave at `p` whose own parameter is
+    /// `t`: an ellipse's read round a turn into the span from the point, a
+    /// B-spline's as it is. `None` past the span.
+    fn param_of(&self, p: Point3, t: f64) -> Option<f64> {
+        let (lo, hi) = (self.span.0.min(self.span.1), self.span.0.max(self.span.1));
+        let t = match &self.curve {
+            EdgeCurve::Ellipse(e) => lo + (e.project(p) - lo).rem_euclid(std::f64::consts::TAU),
+            _ => t,
+        };
+        let slack = 1e-9 * (hi - lo).abs().max(1.0);
+        (t >= lo - slack && t <= hi + slack).then_some(t.clamp(lo, hi))
+    }
 }
 
 /// A face's boundary in the plane's frame: every wire's edges, and the
@@ -449,6 +517,17 @@ enum SectionPiece {
     Arc {
         target: FaceId,
         circle: brepkit_math::curves::Circle3D,
+        start: Point3,
+        end: Point3,
+        mid: Point3,
+    },
+    /// A piece of an ellipse boundary edge, along its curve
+    /// from parameter `span.0` (at `start`) to `span.1` (at `end`),
+    /// `span.0 < span.1`.
+    Curve {
+        target: FaceId,
+        along: CurveSpan,
+        span: (f64, f64),
         start: Point3,
         end: Point3,
         mid: Point3,
@@ -606,6 +685,16 @@ fn face_region_2d(
                     Shape2::Poly(poly)
                 }
             };
+            let along = matches!(
+                (&shape, edge.curve()),
+                (Shape2::Poly(_), EdgeCurve::Ellipse(_))
+            )
+            .then(|| CurveSpan {
+                curve: edge.curve().clone(),
+                ends: (v_start, v_end),
+                span: edge.curve().domain_with_endpoints(v_start, v_end),
+                forward: oe.is_forward(),
+            });
             edges.push(BoundaryEdge {
                 eid: oe.edge(),
                 p2_start,
@@ -613,10 +702,42 @@ fn face_region_2d(
                 p3_start,
                 p3_end,
                 shape,
+                along,
+                paves: Vec::new(),
             });
         }
     }
     Ok(Region2 { edges, lo, hi })
+}
+
+/// Give each ellipse edge of `region` its paves from the earlier phases:
+/// every pave of its pave blocks and their children, ends and extra paves
+/// alike, as a point and its parameter.
+fn attach_paves(region: &mut Region2, topo: &Topology, arena: &GfaArena) {
+    for e in &mut region.edges {
+        if e.along.is_none() {
+            continue;
+        }
+        let mut pending: Vec<_> = arena
+            .edge_pave_blocks
+            .get(&e.eid)
+            .cloned()
+            .unwrap_or_default();
+        while let Some(pb_id) = pending.pop() {
+            let Some(pb) = arena.pave_blocks.get(pb_id) else {
+                continue;
+            };
+            pending.extend(pb.children.iter().copied());
+            for pave in [pb.start, pb.end]
+                .into_iter()
+                .chain(pb.extra_paves.iter().copied())
+            {
+                if let Ok(v) = topo.vertex(arena.resolve_vertex(pave.vertex)) {
+                    e.paves.push((v.point(), pave.parameter));
+                }
+            }
+        }
+    }
 }
 
 /// The arc a NURBS boundary edge traces in the pair's frame, when it is a
@@ -1164,9 +1285,12 @@ fn clip_to_region(
         }
         Shape2::Poly(poly) => {
             // A sampled curve is walked sample by sample for its crossings
-            // and its in-region runs; each run is emitted as the chord
-            // between the run's ends (the true curve piece is the regular FF
-            // phase's job, this only partitions the partner consistently).
+            // and its in-region runs. An ellipse's crossings are then moved
+            // onto the ellipse, bisected between the samples either side
+            // where its points read on two sides of the partner's boundary,
+            // and each run follows the ellipse: its chord stands off the
+            // ellipse by its sag, and the partner's split along it would meet
+            // no edge of the face the ellipse bounds.
             let n = poly.len().saturating_sub(1);
             if n == 0 {
                 return;
@@ -1195,29 +1319,117 @@ fn clip_to_region(
                 (q.x() - p.x()).hypot(q.y() - p.y())
             };
             ss.dedup_by(|x, y| dist(*x, *y) < tol);
-            for w in ss.windows(2) {
-                let (sa, sb) = (w[0], w[1]);
-                if dist(sa, sb) < tol {
+            // A B-spline keeps its chords: the regular FF phase gives its
+            // true pieces, and this only partitions the partner alike.
+            let Some(along) = &e.along else {
+                for w in ss.windows(2) {
+                    let (sa, sb) = (w[0], w[1]);
+                    if dist(sa, sb) < tol {
+                        continue;
+                    }
+                    let mid = at(0.5 * (sa + sb));
+                    if on_boundary(mid, &target.edges, tol) || !inside_region(mid, target, tol) {
+                        continue;
+                    }
+                    let start = if sa <= 0.0 {
+                        e.p3_start
+                    } else {
+                        frame.unproject(at(sa))
+                    };
+                    let end = if sb >= n as f64 {
+                        e.p3_end
+                    } else {
+                        frame.unproject(at(sb))
+                    };
+                    out.push(SectionPiece::Line {
+                        target: target_face,
+                        start,
+                        end,
+                    });
+                }
+                return;
+            };
+            let nf = n as f64;
+            let inside = |t: f64| inside_region(frame.project(along.point(t)), target, tol);
+            // Each cut's parameter on the curve, its point, and its rank: an
+            // end of the edge, one of its paves, or a sampled crossing.
+            let mut cuts: Vec<(f64, Point3, u8)> = ss
+                .iter()
+                .map(|&s| {
+                    if s <= 0.0 {
+                        return (along.at(0.0, nf), e.p3_start, 2);
+                    }
+                    if s >= nf {
+                        return (along.at(nf, nf), e.p3_end, 2);
+                    }
+                    let k = s.floor().min(nf - 1.0);
+                    let (mut lo, mut hi) = (along.at(k, nf), along.at(k + 1.0, nf));
+                    let below = inside(lo);
+                    if below == inside(hi) {
+                        let t = along.at(s, nf);
+                        return (t, along.point(t), 0);
+                    }
+                    for _ in 0..60 {
+                        let mid = f64::midpoint(lo, hi);
+                        if inside(mid) == below {
+                            lo = mid;
+                        } else {
+                            hi = mid;
+                        }
+                    }
+                    let t = f64::midpoint(lo, hi);
+                    (t, along.point(t), 0)
+                })
+                .collect();
+            // The edge's own paves cut it too, at their points: where it
+            // touches the partner's boundary no sampled crossing shows, and a
+            // section running on through the touch would leave the partner's
+            // face pinched there, round no vertex.
+            cuts.extend(
+                e.paves
+                    .iter()
+                    .filter_map(|&(p, t)| along.param_of(p, t).map(|t| (t, p, 1))),
+            );
+            cuts.sort_by(|a, b| {
+                if along.forward {
+                    a.0.total_cmp(&b.0)
+                } else {
+                    b.0.total_cmp(&a.0)
+                }
+            });
+            let mut merged: Vec<(f64, Point3, u8)> = Vec::with_capacity(cuts.len());
+            for cut in cuts {
+                match merged.last_mut() {
+                    Some(last) if (last.1 - cut.1).length() < 10.0 * tol => {
+                        if cut.2 > last.2 {
+                            *last = cut;
+                        }
+                    }
+                    _ => merged.push(cut),
+                }
+            }
+            for w in merged.windows(2) {
+                let ((ta, start, _), (tb, end, _)) = (w[0], w[1]);
+                if (end - start).length() < tol {
                     continue;
                 }
-                let mid = at(0.5 * (sa + sb));
+                let mid3 = along.point(f64::midpoint(ta, tb));
+                let mid = frame.project(mid3);
                 if on_boundary(mid, &target.edges, tol) || !inside_region(mid, target, tol) {
                     continue;
                 }
-                let start = if sa <= 0.0 {
-                    e.p3_start
+                let (span, start, end) = if ta <= tb {
+                    ((ta, tb), start, end)
                 } else {
-                    frame.unproject(at(sa))
+                    ((tb, ta), end, start)
                 };
-                let end = if sb >= n as f64 {
-                    e.p3_end
-                } else {
-                    frame.unproject(at(sb))
-                };
-                out.push(SectionPiece::Line {
+                out.push(SectionPiece::Curve {
                     target: target_face,
+                    along: along.clone(),
+                    span,
                     start,
                     end,
+                    mid: mid3,
                 });
             }
         }
@@ -1403,6 +1615,103 @@ fn create_arc_section_edge(
 
     log::debug!(
         "FF-coplanar: faces {face_a:?} and {face_b:?} arc section t=[{t_s:.4},{t_e:.4}] \
+         (curve_index={curve_index}, edge={edge_id:?}, pb={pb_id:?})",
+    );
+}
+
+/// Whether `target` already has a section from `start` to `end` that runs
+/// through `mid`, a piece of an ellipse boundary edge: at its own middle for a
+/// line, a circle or an ellipse, and for a B-spline at the foot of `mid` on
+/// its span. A curve attached only to the other face of the pair does not
+/// count.
+fn has_existing_section_along(
+    arena: &GfaArena,
+    topo: &Topology,
+    target: FaceId,
+    (p_start, p_end): (Point3, Point3),
+    mid: Point3,
+    tol: Tolerance,
+) -> bool {
+    let near = |p: Point3, q: Point3| (p - q).length() < tol.linear * 10.0;
+    let piece = Aabb3::from_points([p_start, p_end, mid]);
+    arena.curves.iter().any(|curve| {
+        if (curve.face_a != target && curve.face_b != target)
+            || !curve.bbox.expanded(tol.linear).intersects(piece)
+        {
+            return false;
+        }
+        let Some(((s, t_s), (e, t_e))) = section_ends(topo, arena, curve) else {
+            return false;
+        };
+        if !((near(s, p_start) && near(e, p_end)) || (near(s, p_end) && near(e, p_start))) {
+            return false;
+        }
+        let at = |t: f64| curve.curve.evaluate_with_endpoints(t, s, e);
+        match &curve.curve {
+            EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                near(at(0.5 * (t_s + t_e)), mid)
+            }
+            EdgeCurve::NurbsCurve(nurbs) => {
+                let (lo, hi) = (t_s.min(t_e), t_s.max(t_e));
+                brepkit_math::nurbs::projection::project_point_to_curve(nurbs, mid, tol.linear)
+                    .is_ok_and(|foot| {
+                        foot.distance < tol.linear * 10.0
+                            && foot.parameter >= lo
+                            && foot.parameter <= hi
+                    })
+            }
+        }
+    })
+}
+
+/// Register one section along an ellipse boundary edge's curve, from `span.0`
+/// (at `p_s`) to `span.1` (at `p_e`), the way the regular FF phase registers
+/// its sections.
+#[allow(clippy::too_many_arguments)]
+fn create_curve_section_edge(
+    topo: &mut Topology,
+    arena: &mut GfaArena,
+    minted: &mut Vec<(Point3, VertexId)>,
+    faces: [FaceId; 2],
+    along: &CurveSpan,
+    (p_s, p_e): (Point3, Point3),
+    (t_s, t_e): (f64, f64),
+    tol: Tolerance,
+) {
+    if (p_e - p_s).length() < tol.linear {
+        return;
+    }
+    let [face_a, face_b] = faces;
+    let start_vid = find_or_create_vertex(topo, arena, minted, faces, p_s, tol);
+    let end_vid = find_or_create_vertex(topo, arena, minted, faces, p_e, tol);
+    let edge_id = topo.add_edge(Edge::new(start_vid, end_vid, along.curve.clone()));
+    let pb = PaveBlock::new(edge_id, Pave::new(start_vid, t_s), Pave::new(end_vid, t_e));
+    let pb_id = arena.pave_blocks.alloc(pb);
+    arena
+        .edge_pave_blocks
+        .entry(edge_id)
+        .or_default()
+        .push(pb_id);
+    let n: usize = 16;
+    let bbox = Aabb3::from_points(
+        (0..=n).map(|k| along.point((t_e - t_s).madd(k as f64 / n as f64, t_s))),
+    );
+    let curve_index = arena.curves.len();
+    arena.curves.push(IntersectionCurveDS {
+        curve: along.curve.clone(),
+        face_a,
+        face_b,
+        bbox,
+        pave_blocks: vec![pb_id],
+        t_range: (t_s, t_e),
+    });
+    arena.interference.ff.push(Interference::FF {
+        f1: face_a,
+        f2: face_b,
+        curve_index,
+    });
+    log::debug!(
+        "FF-coplanar: faces {face_a:?} and {face_b:?} curve section t=[{t_s:.4},{t_e:.4}] \
          (curve_index={curve_index}, edge={edge_id:?}, pb={pb_id:?})",
     );
 }
