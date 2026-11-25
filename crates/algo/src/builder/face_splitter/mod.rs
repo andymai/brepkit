@@ -133,6 +133,10 @@ fn collinear_overlap_span(a0: Point2, a1: Point2, b0: Point2, b1: Point2) -> Opt
 /// A section piece's two quantized ends, in either order.
 type EndsKey = (i64, i64, i64, i64, i64, i64);
 
+/// A split piece's id, the source it was cut from, its ends in that
+/// source's own direction, and the piece itself.
+type PieceOf = (usize, Option<usize>, EndsKey, SectionEdge);
+
 /// Split section edges at interior T-junctions with other sections.
 ///
 /// `all_edges[section_start..]` holds the section edges as consecutive
@@ -275,21 +279,30 @@ fn split_sections_at_t_junctions(
         .filter_map(|e| e.source_edge_idx)
         .max()
         .map_or(section_start, |m| m + 1);
-    // Pieces by their ends, each with its id and the piece as a section read
-    // from its stored start: two pieces with the same ends share an id only
-    // where they are one curve (a circle's and an ellipse's pieces between
-    // the two points where they meet are two).
-    let mut piece_src: std::collections::HashMap<EndsKey, Vec<(usize, SectionEdge)>> =
+    // Pieces by their ends, each with its id, the section it was cut from,
+    // its ends in that section's own direction, and the piece as a section
+    // read from its stored start. Two pieces cut from one section between
+    // the same ends in its own direction are one curve, a piece and its
+    // reverse twin; pieces of two sections with the same ends share an id
+    // only where they are proved one curve (a circle's and an ellipse's
+    // pieces between the two points where they meet are two).
+    let mut piece_src: std::collections::HashMap<EndsKey, Vec<PieceOf>> =
         std::collections::HashMap::new();
-    let key = |a: Point3, b: Point3| -> EndsKey {
+    let cell = |a: Point3| {
         let q = |x: f64| (x / tol).round() as i64;
-        let ka = (q(a.x()), q(a.y()), q(a.z()));
-        let kb = (q(b.x()), q(b.y()), q(b.z()));
-        // Order-independent so forward and reverse halves map to one id.
-        if ka <= kb {
-            (ka.0, ka.1, ka.2, kb.0, kb.1, kb.2)
+        (q(a.x()), q(a.y()), q(a.z()))
+    };
+    // The ends of a piece from `a` to `b`, in that order.
+    let ordered = |a: Point3, b: Point3| -> EndsKey {
+        let (ka, kb) = (cell(a), cell(b));
+        (ka.0, ka.1, ka.2, kb.0, kb.1, kb.2)
+    };
+    // Order-independent so forward and reverse halves map to one id.
+    let key = |a: Point3, b: Point3| -> EndsKey {
+        if cell(a) <= cell(b) {
+            ordered(a, b)
         } else {
-            (kb.0, kb.1, kb.2, ka.0, ka.1, ka.2)
+            ordered(b, a)
         }
     };
 
@@ -395,16 +408,23 @@ fn split_sections_at_t_junctions(
                 target_face: None,
                 pave_block_id: None,
             };
+            let along = ordered(start, end);
             let same_ends = piece_src.entry(key(s3, e3)).or_default();
-            let src = if let Some(&(src, _)) = same_ends
-                .iter()
-                .find(|(_, other)| same_section_curve(other, &piece, 10.0 * tol))
-            {
+            let twin = same_ends.iter().find(|(_, from, ends, _)| {
+                from.is_some() && *from == edge.source_edge_idx && *ends == along
+            });
+            let alike = || {
+                same_ends.iter().find(|(_, from, _, other)| {
+                    (from.is_none() || *from != edge.source_edge_idx)
+                        && same_section_curve(other, &piece, 10.0 * tol)
+                })
+            };
+            let src = if let Some(&(src, ..)) = twin.or_else(alike) {
                 src
             } else {
                 let v = next_src;
                 next_src += 1;
-                same_ends.push((v, piece));
+                same_ends.push((v, edge.source_edge_idx, along, piece));
                 v
             };
             new_sections.push(OrientedPCurveEdge {
@@ -18965,6 +18985,80 @@ mod tests {
         for (pose, edges, _) in flat_arc_of_an_ellipse_centred_far_off(&beside) {
             let found = meetings(&edges);
             assert!(found.is_empty(), "{pose}: meetings {found:?}");
+        }
+    }
+
+    /// A rational quadratic from the plate's (0, 0) to (10, 0) about (5, 5)
+    /// with weights 1, -0.5 and 1, which passes (5, -5), and the line from
+    /// (5, -8) to it: the curve is split there, and each piece and its
+    /// reverse twin keep one id, though no bound reads the curve as one with
+    /// itself. In each frame.
+    #[test]
+    fn a_piece_and_its_twin_keep_one_id_whatever_their_curve() {
+        use brepkit_math::nurbs::NurbsCurve;
+        for (pose, o, u, v) in plate_frames() {
+            let n = u.cross(v);
+            let at = |x: f64, y: f64| o + u * x + v * y;
+            let frame = PlaneFrame::from_normal_and_point(n, o);
+            let surface = FaceSurface::Plane {
+                normal: n,
+                d: n.dot(o - Point3::new(0.0, 0.0, 0.0)),
+            };
+            let curve = EdgeCurve::NurbsCurve(
+                NurbsCurve::new(
+                    2,
+                    vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                    vec![at(0.0, 0.0), at(5.0, 5.0), at(10.0, 0.0)],
+                    vec![1.0, -0.5, 1.0],
+                )
+                .unwrap(),
+            );
+            let both = |curve: &EdgeCurve, from: Point3, to: Point3, src: usize| {
+                let forward = OrientedPCurveEdge {
+                    start_uv: frame.project(from),
+                    end_uv: frame.project(to),
+                    ..meeting_edge(curve.clone(), from, to, src)
+                };
+                let reverse = OrientedPCurveEdge {
+                    start_uv: forward.end_uv,
+                    end_uv: forward.start_uv,
+                    start_3d: to,
+                    end_3d: from,
+                    forward: false,
+                    ..forward.clone()
+                };
+                [forward, reverse]
+            };
+            let mut edges: Vec<OrientedPCurveEdge> = both(&curve, at(0.0, 0.0), at(10.0, 0.0), 0)
+                .into_iter()
+                .chain(both(&EdgeCurve::Line, at(5.0, -8.0), at(5.0, -5.0), 1))
+                .collect();
+            split_sections_at_t_junctions(
+                &mut edges,
+                0,
+                &surface,
+                Some(&frame),
+                &[],
+                1e-7,
+                None,
+                &[],
+            );
+            let pieces: Vec<&OrientedPCurveEdge> = edges
+                .iter()
+                .filter(|e| matches!(e.curve_3d, EdgeCurve::NurbsCurve(_)))
+                .collect();
+            assert_eq!(pieces.len(), 4, "{pose}: pieces {pieces:?}");
+            for piece in pieces.iter().filter(|e| e.forward) {
+                let twin = pieces.iter().find(|e| {
+                    !e.forward
+                        && (e.start_3d - piece.end_3d).length() < 1e-9
+                        && (e.end_3d - piece.start_3d).length() < 1e-9
+                });
+                assert!(
+                    twin.is_some_and(|t| t.source_edge_idx == piece.source_edge_idx),
+                    "{pose}: piece {piece:?} and twin {twin:?}"
+                );
+            }
         }
     }
 
