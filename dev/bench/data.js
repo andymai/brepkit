@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795639518088,
+  "lastUpdate": 1795645579983,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -79055,6 +79055,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 15742465,
             "range": "± 126634",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "b863d78df55cd51df15b0b3256edc8a107a416b6",
+          "message": "fix(operations,algo): hold no solid inside a B-spline-walled one it pokes out of, and end sections on rims (#2899)\n\n## Summary\n\n#2894 reported a fuse that drops part of the result without an error.\n\nTake an elliptic prism with semi-axes 3 and √5.4 about (4, 5), from z =\n−1 to 3. Add a rod of radius 2 about (5, 5), from z = 0 to 2. The rod\nlies almost inside the prism. It sticks out only in two thin lenses\nbeside the line x = 7, where the two walls touch. On main, with both\nwalls' seams on the touch, the fuse returns the prism alone. Its volume\nis 87.6048, where the closed form is 87.7197.\n\nWith this change, the fuse, the cut and the intersect are exact in 3\nposes with both seam placements. The largest volume error of the 18\ncases is 3.4e-12. The pose sweep and the truth audit give the same\noutput as main.\n\nFixes #2894.\n\n## The change\n\n- **Containment shortcut.** `detect_trivial_relation` judged the rod to\nlie inside the prism by its box-only fallback. The prism has no analytic\nclassifier, and its box holds the rod's box. No rod vertex or probe\npoint lies outside it, because the lenses lie between the probes. A ring\nwhose tube poked 0.01 out through a rod's band was judged inside the\nsame way.\n- A new check, `outer_faces_hold`, takes the shortcut only where each\nouter face near the inner solid is proved to keep it on the material\nside.\n  - Planes are proved by the inner solid's reach along the normal.\n- Cylinders, cones and spheres with the material inside are proved by a\nconvex gauge.\n- Any other face near the inner solid sends the pair to the full\nboolean.\n- **Copies of edges.** `merge_duplicate_edges` took an exact edge and a\nfitted one with the same ends as copies. With the rod's seam on a\ncrossing, it replaced a cap's section with the rod's rim arc 0.02 off\nit. So the fuse was valid but wrong. An exact edge and a fitted one are\nnow kept apart where the fit strays off the exact curve. The test is\nmore than 100 tolerances at one of 7 places along its span.\n- **Ellipse sizes.** `Ellipse3D::with_axes` does not order the\nsemi-axes. So every bound that reads an ellipse's size as its largest\nradius now uses the larger semi-axis, at 19 sites in operations and\nalgo. This covers part of #2829.\n- **Sections that end on rims.** With the shortcut gone, the fuse needed\nthe mesh fallback where the seams lie on the touch. The section of the\nrod's cap with the prism wall ran 0.23 past the cap's rim. So the cap\nwas not split, and it was dropped as inside. The cause was the strict\nextent of a plane face with curved edges, which was its rim drawn as 16\nchords. Those chords cut 0.038 into the disc, more than the lens's\nthickness of 0.025. Such a face now reads its strict extent from its\nexact region, so the section ends at the rim crossing.\n\n## Tests\n\n- `a_shorter_rod_in_the_prism_but_for_two_lenses_is_not_held_in_it`\nchecks the fuse, the cut and the intersect in 3 poses with both seam\nplacements, against the closed-form volumes.\n-\n`an_ellipse_whose_semi_minor_axis_is_the_longer_still_reaches_past_the_band`\nholds a poking rod's end out of the shortcut, in 3 poses.\n-\n`a_rod_whose_rim_has_a_vertex_or_a_sliver_at_a_crossing_is_exact_or_refused`\ncovers the rod's seam on each crossing, a vertex on each crossing, and\nshort arcs across a crossing. Each fuse, cut and intersect is exact or\nrefused, in 3 poses.\n- `poke_past_a_container.rs` covers a ball through a prism's cap, a ball\nthrough a rod's band, and a ring through a rod's band. Each runs turned\nand tilted, in 3 poses.\n- brepkit-algo (790) and the boolean lib tests (233) pass, and so do all\nbrepkit-operations and brepkit-io tests (3382, 28 skipped).\n\n## Still open\n\n- `merge_duplicate_edges` still takes edges as copies by their ends and\nsamples, not by a proof (#2867).\n- A section's window can still end past a crossing where a face's strict\ntest is not exact. Examples are an analytic band with an ellipse or\nB-spline rim, or a B-spline face whose sampled boundary sags more than\n1e-6. No case is found yet.",
+          "timestamp": "2026-11-25T22:21:43Z",
+          "tree_id": "1f7fd4522a4f5652affce91ff444973b7c6b2679",
+          "url": "https://github.com/andymai/brepkit/commit/b863d78df55cd51df15b0b3256edc8a107a416b6"
+        },
+        "date": 1795645569563,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1221852,
+            "range": "± 15618",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1283802,
+            "range": "± 5696",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 13504,
+            "range": "± 249",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 771207,
+            "range": "± 4125",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 26096720,
+            "range": "± 344289",
             "unit": "ns/iter"
           }
         ]
