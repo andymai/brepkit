@@ -25,6 +25,8 @@ use crate::builder::same_domain::nurbs_patch_lies_on;
 use crate::ds::{GfaArena, Interference, IntersectionCurveDS, Pave, PaveBlock};
 use crate::error::AlgoError;
 
+mod extrusion_rulings;
+
 /// Default number of samples for NURBS intersection.
 const NURBS_SAMPLES: usize = 32;
 
@@ -7772,9 +7774,21 @@ fn compute_raw_curves(
         }
 
         (analytic_surf, FaceSurface::Nurbs(nurbs)) if analytic_surf.as_analytic().is_some() => {
+            if let FaceSurface::Cylinder(cyl) = analytic_surf
+                && let Some(lines) =
+                    extrusion_rulings::cylinder_extrusion_rulings(cyl, nurbs, bbox_a, bbox_b)
+            {
+                return Ok(lines);
+            }
             analytic_nurbs_intersection(analytic_surf, v_range_a, nurbs)
         }
         (FaceSurface::Nurbs(nurbs), analytic_surf) if analytic_surf.as_analytic().is_some() => {
+            if let FaceSurface::Cylinder(cyl) = analytic_surf
+                && let Some(lines) =
+                    extrusion_rulings::cylinder_extrusion_rulings(cyl, nurbs, bbox_a, bbox_b)
+            {
+                return Ok(lines);
+            }
             analytic_nurbs_intersection(analytic_surf, v_range_b, nurbs)
         }
 
