@@ -11,7 +11,7 @@ use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire};
 use wasm_bindgen::prelude::*;
 
-use crate::error::{WasmError, validate_finite, validate_positive};
+use crate::error::{WasmError, validate_finite, validate_positive, validate_size};
 use crate::handles::{
     edge_id_to_u32, face_id_to_u32, solid_id_to_u32, vertex_id_to_u32, wire_id_to_u32,
 };
@@ -172,7 +172,8 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if any coordinate is NaN/infinite, `radius` is
-    /// non-positive, or the normal vector is zero.
+    /// non-positive, the radius or a centre coordinate is larger than
+    /// `SIZE_LIMIT`, or the normal vector is zero.
     #[wasm_bindgen(js_name = "makeCircleEdge")]
     pub fn make_circle_edge(
         &mut self,
@@ -184,27 +185,7 @@ impl BrepKernel {
         nz: f64,
         radius: f64,
     ) -> Result<u32, JsError> {
-        validate_finite(cx, "cx")?;
-        validate_finite(cy, "cy")?;
-        validate_finite(cz, "cz")?;
-        validate_finite(nx, "nx")?;
-        validate_finite(ny, "ny")?;
-        validate_finite(nz, "nz")?;
-        validate_positive(radius, "radius")?;
-
-        let center = Point3::new(cx, cy, cz);
-        let normal = Vec3::new(nx, ny, nz);
-        normal.normalize().map_err(|e| WasmError::InvalidInput {
-            reason: format!("invalid normal: {e}"),
-        })?;
-        let eid = brepkit_topology::builder::make_circle_edge(
-            self.topo_mut(),
-            center,
-            normal,
-            radius,
-            TOL,
-        )?;
-        Ok(edge_id_to_u32(eid))
+        Ok(self.make_circle_edge_impl([cx, cy, cz], [nx, ny, nz], radius)?)
     }
 
     /// Create a closed elliptical edge with true `Ellipse` curve geometry.
@@ -218,8 +199,9 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if any coordinate is NaN/infinite, either
-    /// semi-axis is non-positive, `semi_minor` exceeds `semi_major`, or
-    /// the normal vector is zero.
+    /// semi-axis is non-positive, a semi-axis or a centre coordinate is
+    /// larger than `SIZE_LIMIT`, `semi_minor` exceeds `semi_major`, or the
+    /// normal vector is zero.
     #[wasm_bindgen(js_name = "makeEllipseEdge")]
     pub fn make_ellipse_edge(
         &mut self,
@@ -232,9 +214,9 @@ impl BrepKernel {
         semi_major: f64,
         semi_minor: f64,
     ) -> Result<u32, JsError> {
-        validate_finite(cx, "cx")?;
-        validate_finite(cy, "cy")?;
-        validate_finite(cz, "cz")?;
+        validate_size(cx, "cx")?;
+        validate_size(cy, "cy")?;
+        validate_size(cz, "cz")?;
         validate_finite(nx, "nx")?;
         validate_finite(ny, "ny")?;
         validate_finite(nz, "nz")?;
@@ -283,7 +265,8 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if any coordinate is NaN/infinite, `radius` is
-    /// non-positive, or the normal vector or `ref_dir` is zero.
+    /// non-positive, the radius or a centre coordinate is larger than
+    /// `SIZE_LIMIT`, or the normal vector or `ref_dir` is zero.
     #[wasm_bindgen(js_name = "makeCircleEdgeWithRef")]
     pub fn make_circle_edge_with_ref(
         &mut self,
@@ -298,9 +281,9 @@ impl BrepKernel {
         ry: f64,
         rz: f64,
     ) -> Result<u32, JsError> {
-        validate_finite(cx, "cx")?;
-        validate_finite(cy, "cy")?;
-        validate_finite(cz, "cz")?;
+        validate_size(cx, "cx")?;
+        validate_size(cy, "cy")?;
+        validate_size(cz, "cz")?;
         validate_finite(nx, "nx")?;
         validate_finite(ny, "ny")?;
         validate_finite(nz, "nz")?;
@@ -349,8 +332,9 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if any coordinate is NaN/infinite, either
-    /// semi-axis is non-positive, `semi_minor` exceeds `semi_major`, or
-    /// the normal vector or `ref_dir` is zero.
+    /// semi-axis is non-positive, a semi-axis or a centre coordinate is
+    /// larger than `SIZE_LIMIT`, `semi_minor` exceeds `semi_major`, or the
+    /// normal vector or `ref_dir` is zero.
     #[wasm_bindgen(js_name = "makeEllipseEdgeWithRef")]
     pub fn make_ellipse_edge_with_ref(
         &mut self,
@@ -366,9 +350,9 @@ impl BrepKernel {
         ry: f64,
         rz: f64,
     ) -> Result<u32, JsError> {
-        validate_finite(cx, "cx")?;
-        validate_finite(cy, "cy")?;
-        validate_finite(cz, "cz")?;
+        validate_size(cx, "cx")?;
+        validate_size(cy, "cy")?;
+        validate_size(cz, "cz")?;
         validate_finite(nx, "nx")?;
         validate_finite(ny, "ny")?;
         validate_finite(nz, "nz")?;
@@ -487,7 +471,8 @@ impl BrepKernel {
     /// # Errors
     ///
     /// Returns an error if any coordinate is NaN/infinite, a semi-axis is
-    /// non-positive, `semi_minor` exceeds `semi_major`, or `axis`/`ref` is
+    /// non-positive, a semi-axis or a centre coordinate is larger than
+    /// `SIZE_LIMIT`, `semi_minor` exceeds `semi_major`, or `axis`/`ref` is
     /// a zero vector.
     #[wasm_bindgen(js_name = "makeEllipseArc3d")]
     #[allow(clippy::too_many_arguments)]
@@ -518,9 +503,6 @@ impl BrepKernel {
             (end_x, "end_x"),
             (end_y, "end_y"),
             (end_z, "end_z"),
-            (center_x, "center_x"),
-            (center_y, "center_y"),
-            (center_z, "center_z"),
             (axis_x, "axis_x"),
             (axis_y, "axis_y"),
             (axis_z, "axis_z"),
@@ -529,6 +511,13 @@ impl BrepKernel {
             (ref_z, "ref_z"),
         ] {
             validate_finite(v, name)?;
+        }
+        for (v, name) in [
+            (center_x, "center_x"),
+            (center_y, "center_y"),
+            (center_z, "center_z"),
+        ] {
+            validate_size(v, name)?;
         }
         validate_positive(semi_major, "semi_major")?;
         validate_positive(semi_minor, "semi_minor")?;
@@ -884,6 +873,37 @@ impl BrepKernel {
 }
 
 impl BrepKernel {
+    /// Inner implementation for `make_circle_edge`, shared with its batch
+    /// arm.
+    pub(crate) fn make_circle_edge_impl(
+        &mut self,
+        center: [f64; 3],
+        normal: [f64; 3],
+        radius: f64,
+    ) -> Result<u32, WasmError> {
+        for (v, name) in center.iter().zip(["cx", "cy", "cz"]) {
+            validate_size(*v, name)?;
+        }
+        for (v, name) in normal.iter().zip(["nx", "ny", "nz"]) {
+            validate_finite(*v, name)?;
+        }
+        validate_positive(radius, "radius")?;
+
+        let center = Point3::new(center[0], center[1], center[2]);
+        let normal = Vec3::new(normal[0], normal[1], normal[2]);
+        normal.normalize().map_err(|e| WasmError::InvalidInput {
+            reason: format!("invalid normal: {e}"),
+        })?;
+        let eid = brepkit_topology::builder::make_circle_edge(
+            self.topo_mut(),
+            center,
+            normal,
+            radius,
+            TOL,
+        )?;
+        Ok(edge_id_to_u32(eid))
+    }
+
     /// Inner implementation for `make_nurbs_edge`: `control_points` holds x,
     /// y and z for each point.
     pub(crate) fn make_nurbs_edge_impl(
@@ -1062,5 +1082,73 @@ mod tests {
     fn resolve_edge_invalid_handle_is_error() {
         let k = BrepKernel::new();
         assert!(k.resolve_edge(999).is_err());
+    }
+
+    /// One batch result: the handle, or the error text.
+    fn batch_one(k: &mut BrepKernel, op: &str, args: &serde_json::Value) -> serde_json::Value {
+        let ops = serde_json::json!([{ "op": op, "args": args }]).to_string();
+        let parsed: serde_json::Value = serde_json::from_str(&k.execute_batch(&ops)).unwrap();
+        parsed[0].clone()
+    }
+
+    /// A radius or centre coordinate past `SIZE_LIMIT` gives a circle the
+    /// load checks refuse: `makeCircleEdge` refuses it through the batch,
+    /// and builds a well-formed circle at the limit.
+    #[test]
+    fn make_circle_edge_refuses_a_size_past_the_load_checks_limit() {
+        use brepkit_math::curves::SIZE_LIMIT;
+        use serde_json::json;
+
+        let past = SIZE_LIMIT * 10.0;
+        let mut k = BrepKernel::new();
+        for args in [
+            json!({"radius": past}),
+            json!({"radius": -past}),
+            json!({"cx": past, "radius": 1.0}),
+            json!({"cz": -past, "nx": 1.0, "nz": 0.0, "radius": 1.0}),
+        ] {
+            let found = batch_one(&mut k, "makeCircleEdge", &args);
+            let error = found["error"].as_str().unwrap_or_default();
+            assert!(error.contains("must be at most 1e300"), "{args}: {found}");
+        }
+        for args in [
+            json!({"radius": 2.0}),
+            json!({"cx": -SIZE_LIMIT, "radius": SIZE_LIMIT}),
+        ] {
+            let found = batch_one(&mut k, "makeCircleEdge", &args);
+            let handle = u32::try_from(found["ok"].as_u64().unwrap()).unwrap();
+            let edge = k.topo.edge(k.resolve_edge(handle).unwrap()).unwrap();
+            assert!(edge.curve().is_well_formed(), "{args}");
+            assert!(matches!(edge.curve(), EdgeCurve::Circle(_)), "{args}");
+        }
+    }
+
+    /// A signed size past `SIZE_LIMIT` puts a plane past the load checks'
+    /// bound: `extrude`, `offsetSolid` and `thicken` refuse it through the
+    /// batch.
+    #[test]
+    fn signed_sizes_past_the_load_checks_limit_are_refused() {
+        use brepkit_math::curves::SIZE_LIMIT;
+        use serde_json::json;
+
+        let mut k = BrepKernel::new();
+        let face = k.make_rectangle(1.0, 1.0).unwrap();
+        let solid = k.make_box_impl(1.0, 1.0, 1.0).unwrap();
+        for past in [SIZE_LIMIT * 10.0, -SIZE_LIMIT * 10.0] {
+            for (op, args) in [
+                ("extrude", json!({"face": face, "distance": past})),
+                ("offsetSolid", json!({"solid": solid, "distance": past})),
+                ("thicken", json!({"face": face, "thickness": past})),
+            ] {
+                let found = batch_one(&mut k, op, &args);
+                let error = found["error"].as_str().unwrap_or_default();
+                assert!(
+                    error.contains("must be at most 1e300"),
+                    "{op} {args}: {found}"
+                );
+            }
+        }
+        let built = batch_one(&mut k, "extrude", &json!({"face": face, "distance": 2.0}));
+        assert!(built["ok"].is_number(), "{built}");
     }
 }

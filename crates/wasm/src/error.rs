@@ -4,6 +4,8 @@
 //! `wasm-bindgen` provides a blanket `impl<E: Error> From<E> for JsError`,
 //! any `WasmError` can be converted to `JsError` automatically via `?`.
 
+use brepkit_math::curves::SIZE_LIMIT;
+
 /// Errors that can occur in WASM-exposed operations.
 #[derive(Debug, thiserror::Error)]
 pub enum WasmError {
@@ -50,17 +52,58 @@ pub fn validate_finite(value: f64, name: &str) -> Result<(), WasmError> {
         })
 }
 
-/// Validate that a `f64` value is finite and strictly positive.
+/// Validate that a `f64` value is a size the load checks accept.
+///
+/// The value must be finite and at most [`SIZE_LIMIT`] in magnitude. A
+/// curve or surface built with a larger radius, distance or centre
+/// coordinate fails `is_well_formed`.
+///
+/// # Errors
+///
+/// Returns [`WasmError::InvalidInput`] if `value` is NaN, infinite, or
+/// larger than [`SIZE_LIMIT`] in magnitude.
+pub fn validate_size(value: f64, name: &str) -> Result<(), WasmError> {
+    validate_finite(value, name)?;
+    (value.abs() <= SIZE_LIMIT)
+        .then_some(())
+        .ok_or_else(|| WasmError::InvalidInput {
+            reason: format!("{name} must be at most {SIZE_LIMIT:e} in magnitude, got {value:e}"),
+        })
+}
+
+/// Validate that a `f64` value is strictly positive and a size the load
+/// checks accept (see [`validate_size`]).
 ///
 /// # Errors
 ///
 /// Returns [`WasmError::InvalidInput`] if `value` is NaN, infinite, zero,
-/// or negative.
+/// negative, or larger than [`SIZE_LIMIT`].
 pub fn validate_positive(value: f64, name: &str) -> Result<(), WasmError> {
-    validate_finite(value, name)?;
+    validate_size(value, name)?;
     (value > 0.0)
         .then_some(())
         .ok_or_else(|| WasmError::InvalidInput {
             reason: format!("{name} must be positive, got {value}"),
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bound is the load checks' own: a size at the limit passes, one
+    /// past it is refused either way round, and so is zero or less where a
+    /// positive size is asked for.
+    #[test]
+    fn a_size_past_the_load_checks_limit_is_refused() {
+        assert!(validate_positive(SIZE_LIMIT, "radius").is_ok());
+        assert!(validate_size(-SIZE_LIMIT, "distance").is_ok());
+        assert!(validate_size(0.0, "distance").is_ok());
+        for past in [SIZE_LIMIT * 10.0, f64::MAX] {
+            assert!(validate_positive(past, "radius").is_err());
+            assert!(validate_size(past, "distance").is_err());
+            assert!(validate_size(-past, "distance").is_err());
+        }
+        assert!(validate_positive(0.0, "radius").is_err());
+    }
 }

@@ -6,7 +6,7 @@ use wasm_bindgen::prelude::*;
 
 use brepkit_operations::transform::transform_solid;
 
-use crate::error::{validate_finite, validate_positive};
+use crate::error::{WasmError, validate_positive, validate_size};
 use crate::handles::solid_id_to_u32;
 use crate::kernel::BrepKernel;
 
@@ -18,14 +18,11 @@ impl BrepKernel {
     ///
     /// # Errors
     ///
-    /// Returns an error if any dimension is non-positive or non-finite.
+    /// Returns an error if any dimension is non-positive, non-finite or
+    /// larger than `SIZE_LIMIT`.
     #[wasm_bindgen(js_name = "makeBox")]
     pub fn make_box_solid(&mut self, dx: f64, dy: f64, dz: f64) -> Result<u32, JsError> {
-        validate_positive(dx, "dx")?;
-        validate_positive(dy, "dy")?;
-        validate_positive(dz, "dz")?;
-        let solid_id = brepkit_operations::primitives::make_box(self.topo_mut(), dx, dy, dz)?;
-        Ok(solid_id_to_u32(solid_id))
+        Ok(self.make_box_impl(dx, dy, dz)?)
     }
 
     /// Create a cylinder solid centered at the origin, axis along +Z.
@@ -34,14 +31,11 @@ impl BrepKernel {
     ///
     /// # Errors
     ///
-    /// Returns an error if radius or height is non-positive.
+    /// Returns an error if radius or height is non-positive or larger than
+    /// `SIZE_LIMIT`.
     #[wasm_bindgen(js_name = "makeCylinder")]
     pub fn make_cylinder_solid(&mut self, radius: f64, height: f64) -> Result<u32, JsError> {
-        validate_positive(radius, "radius")?;
-        validate_positive(height, "height")?;
-        let solid_id =
-            brepkit_operations::primitives::make_cylinder(self.topo_mut(), radius, height)?;
-        Ok(solid_id_to_u32(solid_id))
+        Ok(self.make_cylinder_impl(radius, height)?)
     }
 
     /// Create a sphere solid centered at the origin.
@@ -50,9 +44,91 @@ impl BrepKernel {
     ///
     /// # Errors
     ///
-    /// Returns an error if radius is non-positive or segments < 4.
+    /// Returns an error if radius is non-positive or larger than
+    /// `SIZE_LIMIT`, or segments < 4.
     #[wasm_bindgen(js_name = "makeSphere")]
     pub fn make_sphere_solid(&mut self, radius: f64, segments: u32) -> Result<u32, JsError> {
+        Ok(self.make_sphere_impl(radius, segments)?)
+    }
+
+    /// Create a cone or frustum solid centered at the origin, axis along +Z.
+    ///
+    /// Returns a solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if height is non-positive, both radii are zero, or
+    /// a size is larger than `SIZE_LIMIT`.
+    #[wasm_bindgen(js_name = "makeCone")]
+    pub fn make_cone_solid(
+        &mut self,
+        bottom_radius: f64,
+        top_radius: f64,
+        height: f64,
+    ) -> Result<u32, JsError> {
+        Ok(self.make_cone_impl(bottom_radius, top_radius, height)?)
+    }
+
+    /// Create a torus solid centered at the origin in the XY plane.
+    ///
+    /// Returns a solid handle (`u32`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if radii are non-positive or larger than
+    /// `SIZE_LIMIT`, or minor > major.
+    #[wasm_bindgen(js_name = "makeTorus")]
+    pub fn make_torus_solid(
+        &mut self,
+        major_radius: f64,
+        minor_radius: f64,
+        segments: u32,
+    ) -> Result<u32, JsError> {
+        Ok(self.make_torus_impl(major_radius, minor_radius, segments)?)
+    }
+
+    /// Create an ellipsoid solid centered at the origin.
+    ///
+    /// Built by creating a unit sphere and scaling it by `(rx, ry, rz)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any radius is non-positive or larger than
+    /// `SIZE_LIMIT`.
+    #[wasm_bindgen(js_name = "makeEllipsoid")]
+    pub fn make_ellipsoid_solid(&mut self, rx: f64, ry: f64, rz: f64) -> Result<u32, JsError> {
+        Ok(self.make_ellipsoid_impl(rx, ry, rz)?)
+    }
+}
+
+/// The bodies of the primitive bindings, shared with their batch arms so a
+/// size is checked the same way on both paths.
+impl BrepKernel {
+    pub(crate) fn make_box_impl(&mut self, dx: f64, dy: f64, dz: f64) -> Result<u32, WasmError> {
+        validate_positive(dx, "dx")?;
+        validate_positive(dy, "dy")?;
+        validate_positive(dz, "dz")?;
+        let solid_id = brepkit_operations::primitives::make_box(self.topo_mut(), dx, dy, dz)?;
+        Ok(solid_id_to_u32(solid_id))
+    }
+
+    pub(crate) fn make_cylinder_impl(
+        &mut self,
+        radius: f64,
+        height: f64,
+    ) -> Result<u32, WasmError> {
+        validate_positive(radius, "radius")?;
+        validate_positive(height, "height")?;
+        let solid_id =
+            brepkit_operations::primitives::make_cylinder(self.topo_mut(), radius, height)?;
+        Ok(solid_id_to_u32(solid_id))
+    }
+
+    pub(crate) fn make_sphere_impl(
+        &mut self,
+        radius: f64,
+        segments: u32,
+    ) -> Result<u32, WasmError> {
         validate_positive(radius, "radius")?;
         let solid_id = brepkit_operations::primitives::make_sphere(
             self.topo_mut(),
@@ -62,22 +138,14 @@ impl BrepKernel {
         Ok(solid_id_to_u32(solid_id))
     }
 
-    /// Create a cone or frustum solid centered at the origin, axis along +Z.
-    ///
-    /// Returns a solid handle (`u32`).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if height is non-positive or both radii are zero.
-    #[wasm_bindgen(js_name = "makeCone")]
-    pub fn make_cone_solid(
+    pub(crate) fn make_cone_impl(
         &mut self,
         bottom_radius: f64,
         top_radius: f64,
         height: f64,
-    ) -> Result<u32, JsError> {
-        validate_finite(bottom_radius, "bottom_radius")?;
-        validate_finite(top_radius, "top_radius")?;
+    ) -> Result<u32, WasmError> {
+        validate_size(bottom_radius, "bottom_radius")?;
+        validate_size(top_radius, "top_radius")?;
         validate_positive(height, "height")?;
         let solid_id = brepkit_operations::primitives::make_cone(
             self.topo_mut(),
@@ -88,20 +156,12 @@ impl BrepKernel {
         Ok(solid_id_to_u32(solid_id))
     }
 
-    /// Create a torus solid centered at the origin in the XY plane.
-    ///
-    /// Returns a solid handle (`u32`).
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if radii are non-positive or minor > major.
-    #[wasm_bindgen(js_name = "makeTorus")]
-    pub fn make_torus_solid(
+    pub(crate) fn make_torus_impl(
         &mut self,
         major_radius: f64,
         minor_radius: f64,
         segments: u32,
-    ) -> Result<u32, JsError> {
+    ) -> Result<u32, WasmError> {
         validate_positive(major_radius, "major_radius")?;
         validate_positive(minor_radius, "minor_radius")?;
         let solid_id = brepkit_operations::primitives::make_torus(
@@ -113,19 +173,15 @@ impl BrepKernel {
         Ok(solid_id_to_u32(solid_id))
     }
 
-    /// Create an ellipsoid solid centered at the origin.
-    ///
-    /// Built by creating a unit sphere and scaling it by `(rx, ry, rz)`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if any radius is non-positive.
-    #[wasm_bindgen(js_name = "makeEllipsoid")]
-    pub fn make_ellipsoid_solid(&mut self, rx: f64, ry: f64, rz: f64) -> Result<u32, JsError> {
+    pub(crate) fn make_ellipsoid_impl(
+        &mut self,
+        rx: f64,
+        ry: f64,
+        rz: f64,
+    ) -> Result<u32, WasmError> {
         validate_positive(rx, "rx")?;
         validate_positive(ry, "ry")?;
         validate_positive(rz, "rz")?;
-        // Create a unit sphere, then scale it non-uniformly.
         let solid_id = brepkit_operations::primitives::make_sphere(self.topo_mut(), 1.0, 16)?;
         let mat = brepkit_math::mat::Mat4::scale(rx, ry, rz);
         transform_solid(self.topo_mut(), solid_id, &mat)?;
@@ -148,6 +204,54 @@ mod tests {
     fn batch_has_error(result: &str, idx: usize) -> bool {
         let parsed: serde_json::Value = serde_json::from_str(result).unwrap();
         parsed[idx]["error"].is_string()
+    }
+
+    /// A size from JS past `SIZE_LIMIT` builds a surface the load checks
+    /// refuse. Each primitive refuses one through the batch, which runs the
+    /// binding's own checks, and still builds at the limit.
+    #[test]
+    fn each_primitive_refuses_a_size_past_the_load_checks_limit() {
+        use brepkit_math::curves::SIZE_LIMIT;
+        use serde_json::json;
+
+        let mut k = BrepKernel::new();
+        let mut one = |op: &str, args: &serde_json::Value| -> serde_json::Value {
+            let ops = json!([{ "op": op, "args": args }]).to_string();
+            let parsed: serde_json::Value = serde_json::from_str(&k.execute_batch(&ops)).unwrap();
+            parsed[0].clone()
+        };
+        let cases = |r: f64| {
+            [
+                ("makeBox", json!({"width": r, "height": 1.0, "depth": 1.0})),
+                ("makeCylinder", json!({"radius": r, "height": 1.0})),
+                ("makeCylinder", json!({"radius": 1.0, "height": r})),
+                ("makeSphere", json!({"radius": r})),
+                (
+                    "makeCone",
+                    json!({"bottomRadius": r, "topRadius": 0.0, "height": 1.0}),
+                ),
+                (
+                    "makeCone",
+                    json!({"bottomRadius": 1.0, "topRadius": r, "height": 1.0}),
+                ),
+                ("makeTorus", json!({"majorRadius": r, "minorRadius": 1.0})),
+                ("makeEllipsoid", json!({"rx": r, "ry": 1.0, "rz": 1.0})),
+            ]
+        };
+        for (op, args) in cases(SIZE_LIMIT * 10.0) {
+            let found = one(op, &args);
+            let error = found["error"].as_str().unwrap_or_default();
+            assert!(
+                error.contains("must be at most 1e300"),
+                "{op} {args}: {found}"
+            );
+        }
+        for (op, args) in cases(2.0) {
+            let found = one(op, &args);
+            assert!(found["ok"].is_number(), "{op} {args}: {found}");
+        }
+        let at_limit = one("makeSphere", &json!({"radius": SIZE_LIMIT}));
+        assert!(at_limit["ok"].is_number(), "{at_limit}");
     }
 
     // ── make_box ────────────────────────────────────────────────────

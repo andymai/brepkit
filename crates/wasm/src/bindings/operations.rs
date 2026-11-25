@@ -13,7 +13,7 @@ use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::edge::Edge;
 use brepkit_topology::face::{Face, FaceSurface};
 
-use crate::error::{WasmError, validate_finite, validate_positive};
+use crate::error::{WasmError, validate_finite, validate_positive, validate_size};
 use crate::handles::{
     edge_id_to_u32, face_id_to_u32, shell_id_to_u32, solid_id_to_u32, wire_id_to_u32,
 };
@@ -371,7 +371,7 @@ impl BrepKernel {
         validate_finite(dir_x, "dir_x")?;
         validate_finite(dir_y, "dir_y")?;
         validate_finite(dir_z, "dir_z")?;
-        validate_finite(distance, "distance")?;
+        validate_size(distance, "distance")?;
 
         let face_id = self.resolve_face(face)?;
         let direction = Vec3::new(dir_x, dir_y, dir_z);
@@ -401,7 +401,7 @@ impl BrepKernel {
         validate_finite(dir_x, "dir_x")?;
         validate_finite(dir_y, "dir_y")?;
         validate_finite(dir_z, "dir_z")?;
-        validate_finite(distance, "distance")?;
+        validate_size(distance, "distance")?;
 
         let wire_id = self.resolve_wire(wire)?;
         let direction = Vec3::new(dir_x, dir_y, dir_z);
@@ -628,7 +628,7 @@ impl BrepKernel {
     /// Returns an error if the face handle is invalid or the operation fails.
     #[wasm_bindgen(js_name = "offsetFace")]
     pub fn offset_face(&mut self, face: u32, distance: f64, samples: u32) -> Result<u32, JsError> {
-        validate_finite(distance, "distance")?;
+        validate_size(distance, "distance")?;
         let face_id = self.resolve_face(face)?;
         let result = brepkit_operations::offset_face::offset_face(
             self.topo_mut(),
@@ -920,7 +920,7 @@ impl BrepKernel {
     /// Returns an error if the distance is zero or the solid is invalid.
     #[wasm_bindgen(js_name = "offsetSolid")]
     pub fn offset_solid(&mut self, solid: u32, distance: f64) -> Result<u32, JsError> {
-        validate_finite(distance, "distance")?;
+        validate_size(distance, "distance")?;
         let solid_id = self.resolve_solid(solid)?;
         let result =
             brepkit_operations::offset_v2::offset_solid_v2(self.topo_mut(), solid_id, distance)?;
@@ -936,7 +936,7 @@ impl BrepKernel {
     /// Returns an error if the distance is not finite or the solid is invalid.
     #[wasm_bindgen(js_name = "offsetSolidV2")]
     pub fn offset_solid_v2(&mut self, solid: u32, distance: f64) -> Result<u32, JsError> {
-        validate_finite(distance, "distance")?;
+        validate_size(distance, "distance")?;
         let sid = self.resolve_solid(solid)?;
         let result =
             brepkit_operations::offset_v2::offset_solid_v2(self.topo_mut(), sid, distance)?;
@@ -953,7 +953,7 @@ impl BrepKernel {
     /// Returns an error if the face handle is invalid or thickness is zero.
     #[wasm_bindgen(js_name = "thicken")]
     pub fn thicken_face(&mut self, face: u32, thickness: f64) -> Result<u32, JsError> {
-        validate_finite(thickness, "thickness")?;
+        validate_size(thickness, "thickness")?;
         let face_id = self.resolve_face(face)?;
         let result = brepkit_operations::thicken::thicken(self.topo_mut(), face_id, thickness)?;
         Ok(solid_id_to_u32(result))

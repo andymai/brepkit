@@ -16,7 +16,7 @@ use brepkit_operations::sweep::sweep;
 use brepkit_operations::transform::transform_solid;
 use brepkit_topology::edge::EdgeCurve;
 
-use crate::error::WasmError;
+use crate::error::{WasmError, validate_size};
 use crate::handles::{
     compound_id_to_u32, edge_id_to_u32, face_id_to_u32, shell_id_to_u32, solid_id_to_u32,
     wire_id_to_u32,
@@ -349,61 +349,65 @@ impl BrepKernel {
                 let w = get_f64(args, "width")?;
                 let h = get_f64(args, "height")?;
                 let d = get_f64(args, "depth")?;
-                let solid = brepkit_operations::primitives::make_box(self.topo_mut(), w, h, d)
-                    .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(solid)))
+                let solid = self.make_box_impl(w, h, d).map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid))
             }
             "makeCylinder" => {
                 let r = get_f64(args, "radius")?;
                 let h = get_f64(args, "height")?;
-                let solid = brepkit_operations::primitives::make_cylinder(self.topo_mut(), r, h)
-                    .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(solid)))
+                let solid = self.make_cylinder_impl(r, h).map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid))
             }
             "makeSphere" => {
                 let r = get_f64(args, "radius")?;
                 let segments = get_u32(args, "segments").unwrap_or(16);
-                let solid = brepkit_operations::primitives::make_sphere(
-                    self.topo_mut(),
-                    r,
-                    segments as usize,
-                )
-                .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(solid)))
+                let solid = self
+                    .make_sphere_impl(r, segments)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid))
             }
             "makeCone" => {
                 let br = get_f64(args, "bottomRadius")?;
                 let tr = get_f64(args, "topRadius")?;
                 let h = get_f64(args, "height")?;
-                let solid = brepkit_operations::primitives::make_cone(self.topo_mut(), br, tr, h)
-                    .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(solid)))
+                let solid = self.make_cone_impl(br, tr, h).map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid))
             }
             "makeTorus" => {
                 let major = get_f64(args, "majorRadius")?;
                 let minor = get_f64(args, "minorRadius")?;
                 let segments = get_u32(args, "segments").unwrap_or(16);
-                let solid = brepkit_operations::primitives::make_torus(
-                    self.topo_mut(),
-                    major,
-                    minor,
-                    segments as usize,
-                )
-                .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(solid)))
+                let solid = self
+                    .make_torus_impl(major, minor, segments)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid))
             }
             "makeEllipsoid" => {
                 let rx = get_f64(args, "rx")?;
                 let ry = get_f64(args, "ry")?;
                 let rz = get_f64(args, "rz")?;
-                if rx <= 0.0 || ry <= 0.0 || rz <= 0.0 {
-                    return Err("rx, ry, rz must be positive".to_string());
-                }
-                let solid = brepkit_operations::primitives::make_sphere(self.topo_mut(), 1.0, 16)
+                let solid = self
+                    .make_ellipsoid_impl(rx, ry, rz)
                     .map_err(|e| e.to_string())?;
-                let mat = brepkit_math::mat::Mat4::scale(rx, ry, rz);
-                transform_solid(self.topo_mut(), solid, &mat).map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(solid)))
+                Ok(serde_json::json!(solid))
+            }
+            "makeCircleEdge" => {
+                let edge = self
+                    .make_circle_edge_impl(
+                        [
+                            get_f64(args, "cx").unwrap_or(0.0),
+                            get_f64(args, "cy").unwrap_or(0.0),
+                            get_f64(args, "cz").unwrap_or(0.0),
+                        ],
+                        [
+                            get_f64(args, "nx").unwrap_or(0.0),
+                            get_f64(args, "ny").unwrap_or(0.0),
+                            get_f64(args, "nz").unwrap_or(1.0),
+                        ],
+                        get_f64(args, "radius")?,
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(edge))
             }
             "fuse" | "cut" | "intersect" => {
                 let bool_op = match op {
@@ -636,6 +640,7 @@ impl BrepKernel {
                 let dy = get_f64(args, "dy").unwrap_or(0.0);
                 let dz = get_f64(args, "dz").unwrap_or(1.0);
                 let dist = get_f64(args, "distance").unwrap_or(1.0);
+                validate_size(dist, "distance").map_err(|e| e.to_string())?;
                 let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
                 let dir = Vec3::new(dx, dy, dz);
                 let solid =
@@ -669,6 +674,7 @@ impl BrepKernel {
                 let dy = get_f64(args, "dy").unwrap_or(0.0);
                 let dz = get_f64(args, "dz").unwrap_or(1.0);
                 let dist = get_f64(args, "distance").unwrap_or(1.0);
+                validate_size(dist, "distance").map_err(|e| e.to_string())?;
                 let wire_id = self.resolve_wire(w).map_err(|e| e.to_string())?;
                 let shell = brepkit_operations::sheet::extrude_wire(
                     self.topo_mut(),
@@ -1421,6 +1427,7 @@ impl BrepKernel {
             "offsetFace" => {
                 let f = get_u32(args, "face")?;
                 let dist = get_f64(args, "distance")?;
+                validate_size(dist, "distance").map_err(|e| e.to_string())?;
                 let samples = get_u32(args, "samples").unwrap_or(16);
                 let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
                 let result = brepkit_operations::offset_face::offset_face(
@@ -1435,6 +1442,7 @@ impl BrepKernel {
             "offsetSolid" => {
                 let s = get_u32(args, "solid")?;
                 let dist = get_f64(args, "distance")?;
+                validate_size(dist, "distance").map_err(|e| e.to_string())?;
                 let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
                 let result =
                     brepkit_operations::offset_v2::offset_solid_v2(self.topo_mut(), solid_id, dist)
@@ -1444,6 +1452,7 @@ impl BrepKernel {
             "offsetSolidV2" => {
                 let s = get_u32(args, "solid")?;
                 let dist = get_f64(args, "distance")?;
+                validate_size(dist, "distance").map_err(|e| e.to_string())?;
                 let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
                 let result =
                     brepkit_operations::offset_v2::offset_solid_v2(self.topo_mut(), solid_id, dist)
@@ -1546,6 +1555,7 @@ impl BrepKernel {
             "thicken" => {
                 let f = get_u32(args, "face")?;
                 let thickness = get_f64(args, "thickness")?;
+                validate_size(thickness, "thickness").map_err(|e| e.to_string())?;
                 let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
                 let result =
                     brepkit_operations::thicken::thicken(self.topo_mut(), face_id, thickness)
