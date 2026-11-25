@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795629650986,
+  "lastUpdate": 1795632221351,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -78947,6 +78947,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27749643,
             "range": "± 111027",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "fb27c8d6dad32f4b9eb898250ab4218d888eadc1",
+          "message": "fix(algo): cut a rod against an elliptic wall on exact rulings, and refuse an N-way fuse with an unpaired edge (#2879)\n\n## Summary\n\n#2868 reported a rod of radius 2 about (5, 5) and an elliptic prism with\nsemi-axes 3 and √5.4 about (4, 5). Their walls cross along two lines and\ntouch along a third, at x = 7. The tests run each boolean in 3 poses,\nwith both walls' seams on the touch and away from it.\n\n| Boolean | Main | This branch |\n|---|---|---|\n| rod ∪ prism | 2.1e-8 to 9.8e-8 of the volume off, or refused | within\n2e-15 |\n| plate − (rod ∪ prism) | 5.9e-9 to 2.7e-8 off, or refused | within\n2.2e-11 |\n| `fuse_all` of plate, rod and prism | refused in all 6 cases | within\n6.5e-12 upright and mirrored, refused turned |\n| raw `fuse_n` of the three | invalid solids, 3.7% to 11% of the volume\noff, or refused | exact, or an error |\n\nEach result is valid, its mesh is closed, and points in the 0.024-wide\nlens beside the touch classify correctly. The pose sweep, the truth\naudit and random sweep seeds 1 to 3 give the same output as main.\n\nRefs #2868. Plate − rod − prism is still refused in every pose, as on\nmain.\n\n## The change\n\n- **Exact rulings.** For a cylinder against a B-spline wall, phase FF\nconverted the cylinder to NURBS and marched. Each crossing ruling came\nback as a fit that strays up to 1.2e-5 from the true line. Now a wall\nextruded along the cylinder's axis gets exact lines through the points\nwhere the circle crosses its profile (`phase_ff/extrusion_rulings.rs`).\n- Each line runs only over the extrusion's height and the cylinder\nface's own axial span, and a touch gives no line.\n- A profile is closed where its curve meets itself at its domain ends,\nnot where its end poles meet.\n- A crossing needs a proved change of side, measured from the cylinder's\naxis.\n- Where rounding hides the side, the face pair goes to the marcher. Take\na run with the same side at both ends. It counts as a touch only where\nthe profile is proved within the tolerance of the circle over it. At an\nopen profile's end, the face's own boundary edge carries the line.\n- An extrusion goes to the marcher where its axis drifts from the\ncylinder's by more than the tolerance over its length. The same holds\nwhere any pole's move strays that far from the others'.\n- The touch bound divides by the smallest weight squared, so it does not\nchange when every weight is scaled.\n- A ruling is placed by Newton steps in the profile's parameter, then\none step in space along its full tangent to the circle. The step's error\nis bounded over its whole span from the span's control points. At a\nshallow crossing on a skewed rational profile, a ruling had stood\n1.05e-7 off the wall.\n- Before a ruling is emitted, its ends and middle must lie within the\ntolerance of both surfaces. Otherwise the face pair goes to the marcher.\n- Every bound and guard reads the caller's `tol.linear`, with constants\nonly as rounding floors.\n- **Rim arcs on a B-spline face.** The in-face check for edges that\ncross a face kept every piece on a B-spline face. So the rod's rim arcs\nwent in as sections of the elliptic wall. The check now subtracts the\nprojection's own proof slack from its distance, and drops an arc only\nwhere it is proved off the surface.\n- **A touch of two edges.** Where phase EE meets two curves within the\ntolerance along near-parallel tangents, it finds the touch point by\nbisection. On a whole circle whose domain wraps at the touch, it read\nthe touch twice, about 3e-5 off. It now reads it once, within 1e-12.\n- **Crossings and touches in phase EE.** \n- A crossing shallower than a sine of 1e-3 is refined until the curves\nstop drawing nearer.\n- A touch's search window grows until the curves part by more than the\ntolerance.\n  - A resolved crossing is never polished into a touch.\n- A touch is kept only where the full tangent component vanishes, or at\nthe true least distance.\n- It must lie inside an interval that a Bezier bound proves within the\ntolerance.\n- Two crossings merge only where each coordinate differs by at most the\ntolerance or a few ulps of that coordinate.\n- Whether one edge's curve runs along the other's is proved once per\npair, by `same_section_curve` or a Bezier bound over the whole range. A\npair proved to run along skips the crossing search and the polish.\n  - A whole turn needs its two ends to meet in space.\n- Each bound scales its Bezier pieces' weights by a power of two and\nmeasures lengths with `hypot`. Each acceptance is written so that a NaN\nor infinite bound fails.\n- **`fuse_n` refuses an unpaired edge.** It returns `AssemblyFailed`\nwhere an edge of its result is not on exactly two face sides. In the\nturned pose with the seams on the touch, it had returned an invalid\nsolid 4.8% off.\n\n## Tests\n\n- `rod_and_elliptic_prism_touching.rs` runs the four booleans above in 3\nposes and 2 seam placements. Each result is checked for validity, a\nclosed mesh, the closed-form volume within 1e-9, and points in the lens.\n- `the_gfa_fuse_of_all_three_is_exact_or_an_error` asserts that raw\n`fuse_n` never returns an invalid solid. Upright and mirrored,\n`fuse_all` and `fuse_n` must succeed exactly.\n- `extrusion_rulings` unit tests find exactly 2 rulings within 1e-12 and\nnone at the touch, in 3 poses. A wall that leans 1e-6 off the axis gets\nnone. Every test checks each ruling within the tolerance of both\nsurfaces at its ends and middle. So do 216 stress cases, at tolerances\nof 1e-9, 1e-7 and 1e-5.\n- `a_circle_and_an_ellipse_touching_meet_at_the_touch` covers two arcs\nand a whole circle whose domain wraps at the touch.\n- Further tests run in 3 poses:\n  - two rulings on an uneven knot vector;\n  - a profile 1e6 off that stays clear;\n  - crossings 0.5 apart on a circle of radius 1e6;\n  - a prism whose quarter faces end on the crossings;\n- crossings 1e-4 apart at z = 2e11, an arc just short of a whole turn, a\ndrifting extrusion, and two crossings hidden by rounding at 1e9.\n- Tests cover closed profiles with their seams on, near and between\ncrossings, shallow crossings at 1e-3 and 1e-5 rad, and a touch beside a\ncrossing.\n- Tests also cover skew near-parallel edges 0.5 and 2 tolerances apart,\nand a 3D curve with two touches across a gap.\n- brepkit-algo (790) and the boolean lib tests (233) pass. Curves 10\ntolerances apart are never proved within the tolerance, at weights from\n1e-200 to 1e200 or scaled to 1e-160. All brepkit-operations and\nbrepkit-io tests pass on the branch merged with main (3371, 28 skipped).\n\n## Still open\n\n- Plate − rod − prism is refused, because the meeting finder does not\nread a B-spline section against a boundary circle (#2870).\n- In the turned three-way fuse, about 35 touch reads in\n`split_sections_at_triple_points` stay unpolished. They leave edges 2e-5\nlong next to the touch, so `fuse_n` refuses the result (#2878).\n- `imprint`, `split_by_faces` and `boolean_with_face_origins` are not\nyet checked for unpaired edges (#2877).\n- With flush caps, the same rod and prism fail to fuse, on main as well\n(#2880).\n- `fill_face_info` keeps edge pieces on B-spline faces by a fixed band,\nnot the caller's tolerance (#2889).\n- Readings of a triple point that agree to 1e-15 make a fuse join the\nwrong edges, reachable on main (#2891).\n- A fuse of a rod nearly inside the prism, with the seams on the touch,\ndrops two thin lenses, on main as well (#2894).\n- The rulings and the conic arc proofs are not yet checked at scales\nnear 1e-160 (#2900).",
+          "timestamp": "2026-11-25T18:40:00Z",
+          "tree_id": "495b3ae07afcc45e43d5980daaa193d13fbaaf9f",
+          "url": "https://github.com/andymai/brepkit/commit/fb27c8d6dad32f4b9eb898250ab4218d888eadc1"
+        },
+        "date": 1795632209726,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1000074,
+            "range": "± 1595",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1072284,
+            "range": "± 10579",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12232,
+            "range": "± 46",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 620887,
+            "range": "± 3683",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22171247,
+            "range": "± 53139",
             "unit": "ns/iter"
           }
         ]
