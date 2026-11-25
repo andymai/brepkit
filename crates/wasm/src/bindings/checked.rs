@@ -10,7 +10,7 @@ use brepkit_topology::edge::EdgeId;
 use brepkit_topology::face::FaceId;
 
 use crate::bindings::operations::parse_join_type_str;
-use crate::bindings::transforms::{check_moved_points, face_points, scaled_length, wire_points};
+use crate::bindings::transforms::Reach;
 use crate::error::{
     WasmError, validate_finite, validate_point, validate_positive, validate_size,
     validate_tolerance, validate_vector,
@@ -38,19 +38,6 @@ fn revolve_radians(angle_degrees: f64) -> Result<f64, WasmError> {
     }
 }
 
-/// Check that `points` turned about any axis through `center` stay within
-/// the size limit: a turn keeps each point's distance from `center`, so the
-/// cube round `center` out to the farthest point holds them.
-fn check_turned(points: &[Point3], center: Point3, what: &str) -> Result<(), WasmError> {
-    let reach = points
-        .iter()
-        .map(|&p| scaled_length(p - center))
-        .fold(0.0, f64::max);
-    let r = Vec3::new(reach, reach, reach);
-    validate_point(center - r, what)?;
-    validate_point(center + r, what)
-}
-
 impl BrepKernel {
     fn edge_ids(&self, handles: &[u32]) -> Result<Vec<EdgeId>, WasmError> {
         handles.iter().map(|&h| self.resolve_edge(h)).collect()
@@ -60,12 +47,12 @@ impl BrepKernel {
         handles.iter().map(|&h| self.resolve_face(h)).collect()
     }
 
-    /// Check a sweep of a profile held by `points` by `offset`: the offset,
-    /// and the profile at its far end, stay within the size limit.
-    fn check_swept(points: &[Point3], offset: Vec3) -> Result<(), WasmError> {
+    /// Check a sweep of a profile by `offset`: the offset, and the profile
+    /// at its far end, stay within the size limit.
+    fn check_swept(reach: &Reach, offset: Vec3) -> Result<(), WasmError> {
         validate_vector(offset, "the sweep's offset")?;
         let along = Mat4::translation(offset.x(), offset.y(), offset.z());
-        check_moved_points(points, &along, "the swept profile")
+        reach.check_moved(&along, "the swept profile")
     }
 
     // ── Measurement ────────────────────────────────────────────────
@@ -123,7 +110,7 @@ impl BrepKernel {
         validate_vector(direction, "the extrusion's direction")?;
         validate_size(distance, "distance")?;
         let face_id = self.resolve_face(face)?;
-        Self::check_swept(&face_points(&self.topo, face_id)?, direction * distance)?;
+        Self::check_swept(&Reach::of_face(&self.topo, face_id)?, direction * distance)?;
         let solid =
             brepkit_operations::extrude::extrude(self.topo_mut(), face_id, direction, distance)?;
         Ok(solid_id_to_u32(solid))
@@ -138,7 +125,10 @@ impl BrepKernel {
         validate_vector(direction, "the extrusion's direction")?;
         validate_size(distance, "distance")?;
         let wire_id = self.resolve_wire(wire)?;
-        Self::check_swept(&wire_points(&self.topo, [wire_id])?, direction * distance)?;
+        Self::check_swept(
+            &Reach::of_wires(&self.topo, [wire_id])?,
+            direction * distance,
+        )?;
         let shell =
             brepkit_operations::sheet::extrude_wire(self.topo_mut(), wire_id, direction, distance)?;
         Ok(shell_id_to_u32(shell))
@@ -155,11 +145,7 @@ impl BrepKernel {
         validate_vector(axis, "the axis' direction")?;
         let angle = revolve_radians(angle_degrees)?;
         let face_id = self.resolve_face(face)?;
-        check_turned(
-            &face_points(&self.topo, face_id)?,
-            origin,
-            "the revolved solid",
-        )?;
+        Reach::of_face(&self.topo, face_id)?.check_turned(origin, "the revolved solid")?;
         let solid =
             brepkit_operations::revolve::revolve(self.topo_mut(), face_id, origin, axis, angle)?;
         Ok(solid_id_to_u32(solid))
@@ -176,11 +162,7 @@ impl BrepKernel {
         validate_vector(axis, "the axis' direction")?;
         let angle = revolve_radians(angle_degrees)?;
         let wire_id = self.resolve_wire(wire)?;
-        check_turned(
-            &wire_points(&self.topo, [wire_id])?,
-            origin,
-            "the revolved shell",
-        )?;
+        Reach::of_wires(&self.topo, [wire_id])?.check_turned(origin, "the revolved shell")?;
         let shell =
             brepkit_operations::sheet::revolve_wire(self.topo_mut(), wire_id, origin, axis, angle)?;
         Ok(shell_id_to_u32(shell))
@@ -608,10 +590,19 @@ mod tests {
     /// profile has nothing to check.
     #[test]
     fn a_turn_about_a_far_origin_is_bounded_without_overflow() {
-        let profile = [Point3::new(1.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0)];
+        let profile =
+            Reach::of_points(vec![Point3::new(1.0, 0.0, 0.0), Point3::new(2.0, 0.0, 1.0)]);
         let far = Point3::new(0.0, 0.0, 1e155);
-        assert!(check_turned(&profile, far, "the turned profile").is_ok());
-        assert!(check_turned(&profile, Point3::new(0.0, 0.0, 9e299), "past").is_err());
-        assert!(check_turned(&[], far, "nothing").is_ok());
+        assert!(profile.check_turned(far, "the turned profile").is_ok());
+        assert!(
+            profile
+                .check_turned(Point3::new(0.0, 0.0, 9e299), "past")
+                .is_err()
+        );
+        assert!(
+            Reach::of_points(Vec::new())
+                .check_turned(far, "nothing")
+                .is_ok()
+        );
     }
 }

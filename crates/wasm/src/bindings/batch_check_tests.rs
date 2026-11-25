@@ -806,3 +806,87 @@ fn an_empty_solid_is_moved_without_a_panic() {
         assert!(out.is_object(), "{op}: {out}");
     }
 }
+
+/// A rational arc whose middle weight is 1e10, moved 1e295 along x: each
+/// control point stays within the size limit, but its largest weight times
+/// its largest coordinate, 1e305, passes the load checks' limit of 1e300,
+/// so the moved curve would not load. The move is refused, and the curve is
+/// left as it was.
+#[test]
+fn a_move_that_takes_a_weighted_spline_past_the_load_checks_is_refused() {
+    use brepkit_math::nurbs::curve::NurbsCurve;
+    use brepkit_topology::edge::EdgeCurve;
+    use brepkit_topology::wire::{OrientedEdge, Wire};
+    let mut k = BrepKernel::new();
+    let arc = NurbsCurve::new(
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 1.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+        ],
+        vec![1.0, 1e10, 1.0],
+    )
+    .unwrap();
+    assert!(arc.is_well_formed());
+    let edge = brepkit_topology::builder::make_nurbs_edge_from_curve(k.topo_mut(), &arc, 1e-7);
+    let wire = k
+        .topo_mut()
+        .add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], false).unwrap());
+    let shift = [
+        1.0, 0.0, 0.0, 1e295, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    let moved = k.transform_wire_impl(crate::handles::wire_id_to_u32(wire), &shift);
+    let EdgeCurve::NurbsCurve(after) = k.topo.edge(edge).unwrap().curve() else {
+        unreachable!()
+    };
+    assert!(
+        moved.is_err(),
+        "moved, and it loads: {}",
+        after.is_well_formed()
+    );
+    assert!(after.is_well_formed());
+}
+
+/// A box 1e299 across, set with its corners from (4e299, 0, 8e299) to
+/// (5e299, 1e299, 9e299), turned about z: its far corner is 1.03e300 from
+/// the origin but only 5.1e299 from the axis, so every copy keeps each
+/// coordinate within the size limit and the pattern is built. Set from
+/// (8e299, 8e299, 0), it is 1.27e300 from the axis, and a copy turned by
+/// 45 degrees would have a coordinate past the limit: refused.
+#[test]
+fn a_circular_pattern_is_bounded_by_its_distance_from_the_axis() {
+    let mut k = BrepKernel::new();
+    let at = |k: &mut BrepKernel, x: &str, y: &str, z: &str| {
+        let s = made(
+            k,
+            r#"{"op": "makeBox", "args": {"width": 1e299, "height": 1e299, "depth": 1e299}}"#,
+        );
+        let shift = format!("[1, 0, 0, {x}, 0, 1, 0, {y}, 0, 0, 1, {z}, 0, 0, 0, 1]");
+        let moved = run(
+            k,
+            &format!(r#"{{"op": "transform", "args": {{"solid": {s}, "matrix": {shift}}}}}"#),
+        );
+        assert!(moved["ok"].is_number(), "{moved}");
+        s
+    };
+    let near = at(&mut k, "4e299", "0", "8e299");
+    let built = run(
+        &mut k,
+        &format!(r#"{{"op": "circularPattern", "args": {{"solid": {near}, "count": 4}}}}"#),
+    );
+    assert!(built["ok"].is_number(), "{built}");
+    let far = at(&mut k, "8e299", "8e299", "0");
+    let refused = run(
+        &mut k,
+        &format!(r#"{{"op": "circularPattern", "args": {{"solid": {far}, "count": 8}}}}"#),
+    );
+    assert!(
+        refused["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("must be at most"),
+        "{refused}"
+    );
+}

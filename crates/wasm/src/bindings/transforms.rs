@@ -329,97 +329,192 @@ pub fn scaled_unit(v: Vec3) -> Result<Vec3, WasmError> {
     }
 }
 
-/// Push the eight corners of the cube about `center` with half side `r`.
-fn push_cube(points: &mut Vec<Point3>, center: Point3, r: f64) {
-    for k in 0..8 {
-        let side = |bit: i32| if k & bit == 0 { -r } else { r };
-        points.push(center + Vec3::new(side(1), side(2), side(4)));
-    }
+/// The points that hold a shape, kept for the checks a move must pass: the
+/// ends of its edges and the cube round each circle, ellipse, sphere or
+/// torus, and apart from them each spline's control points with its
+/// largest weight. A spline lies in the hull of its control points while
+/// its weights are positive; a plane, cylinder or cone face lies within its
+/// edges' hull.
+#[derive(Default)]
+pub struct Reach {
+    points: Vec<Point3>,
+    splines: Vec<(f64, Vec<Point3>)>,
 }
 
-/// Push points whose hull holds every edge of `wire`: the ends of each
-/// edge, the cube round a circle or ellipse, a spline's control points.
-fn push_wire_points(
-    topo: &brepkit_topology::Topology,
-    wire: brepkit_topology::wire::WireId,
-    points: &mut Vec<Point3>,
-) -> Result<(), WasmError> {
-    use brepkit_topology::edge::EdgeCurve;
-    for oe in topo.wire(wire)?.edges() {
-        let edge = topo.edge(oe.edge())?;
-        points.push(topo.vertex(edge.start())?.point());
-        points.push(topo.vertex(edge.end())?.point());
-        match edge.curve() {
-            EdgeCurve::Line => {}
-            EdgeCurve::Circle(c) => push_cube(points, c.center(), c.radius()),
-            EdgeCurve::Ellipse(e) => push_cube(points, e.center(), e.semi_major()),
-            EdgeCurve::NurbsCurve(n) => points.extend_from_slice(n.control_points()),
+impl Reach {
+    /// A reach of loose points alone, with no spline.
+    #[cfg(test)]
+    pub fn of_points(points: Vec<Point3>) -> Self {
+        Self {
+            points,
+            splines: Vec::new(),
         }
     }
-    Ok(())
-}
 
-/// Points whose hull holds `face`: its wires, and a surface that can bulge
-/// past them. A spline surface lies in the hull of its control points while
-/// its weights are positive; a sphere or torus in the cube round it. A
-/// plane, cylinder or cone face lies within its edges' hull.
-pub fn face_points(
-    topo: &brepkit_topology::Topology,
-    face: brepkit_topology::face::FaceId,
-) -> Result<Vec<Point3>, WasmError> {
-    use brepkit_topology::face::FaceSurface;
-    let face_data = topo.face(face)?;
-    let mut points = Vec::new();
-    for wire in
-        std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
-    {
-        push_wire_points(topo, wire, &mut points)?;
-    }
-    match face_data.surface() {
-        FaceSurface::Nurbs(s) => points.extend(s.control_points().iter().flatten().copied()),
-        FaceSurface::Sphere(s) => push_cube(&mut points, s.center(), s.radius()),
-        FaceSurface::Torus(t) => {
-            push_cube(&mut points, t.center(), t.major_radius() + t.minor_radius());
+    /// The reach of every edge of `wires`.
+    pub fn of_wires(
+        topo: &brepkit_topology::Topology,
+        wires: impl IntoIterator<Item = brepkit_topology::wire::WireId>,
+    ) -> Result<Self, WasmError> {
+        let mut reach = Self::default();
+        for wire in wires {
+            reach.add_wire(topo, wire)?;
         }
-        FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {}
+        Ok(reach)
     }
-    Ok(points)
-}
 
-/// Points whose hull holds every face of `solid`, in every shell.
-fn solid_points(
-    topo: &brepkit_topology::Topology,
-    solid: brepkit_topology::solid::SolidId,
-) -> Result<Vec<Point3>, WasmError> {
-    let mut points = Vec::new();
-    for face in brepkit_topology::explorer::solid_faces(topo, solid)? {
-        points.extend(face_points(topo, face)?);
+    /// The reach of a face: its wires, and a surface that can bulge past
+    /// them.
+    pub fn of_face(
+        topo: &brepkit_topology::Topology,
+        face: brepkit_topology::face::FaceId,
+    ) -> Result<Self, WasmError> {
+        let mut reach = Self::default();
+        reach.add_face(topo, face)?;
+        Ok(reach)
     }
-    Ok(points)
-}
 
-/// Points whose hull holds every edge of `wires`.
-pub fn wire_points(
-    topo: &brepkit_topology::Topology,
-    wires: impl IntoIterator<Item = brepkit_topology::wire::WireId>,
-) -> Result<Vec<Point3>, WasmError> {
-    let mut points = Vec::new();
-    for wire in wires {
-        push_wire_points(topo, wire, &mut points)?;
+    /// The reach of every face of `solid`, in every shell.
+    pub fn of_solid(
+        topo: &brepkit_topology::Topology,
+        solid: brepkit_topology::solid::SolidId,
+    ) -> Result<Self, WasmError> {
+        let mut reach = Self::default();
+        for face in brepkit_topology::explorer::solid_faces(topo, solid)? {
+            reach.add_face(topo, face)?;
+        }
+        Ok(reach)
     }
-    Ok(points)
-}
 
-/// Check each of `points` moved by `matrix` as a point within the size
-/// limit. An affine map takes a hull to the hull of the moved points, so
-/// this bounds the moved shape. Each point is checked on its own: a box of
-/// them would drop a coordinate that is not a number. A shape with no
-/// points, as an empty solid, has nothing to check.
-pub fn check_moved_points(points: &[Point3], matrix: &Mat4, what: &str) -> Result<(), WasmError> {
-    for &p in points {
-        validate_point(matrix.mul_point(p), what)?;
+    fn add_cube(&mut self, center: Point3, r: f64) {
+        for k in 0..8 {
+            let side = |bit: i32| if k & bit == 0 { -r } else { r };
+            self.points
+                .push(center + Vec3::new(side(1), side(2), side(4)));
+        }
     }
-    Ok(())
+
+    fn add_wire(
+        &mut self,
+        topo: &brepkit_topology::Topology,
+        wire: brepkit_topology::wire::WireId,
+    ) -> Result<(), WasmError> {
+        use brepkit_topology::edge::EdgeCurve;
+        for oe in topo.wire(wire)?.edges() {
+            let edge = topo.edge(oe.edge())?;
+            self.points.push(topo.vertex(edge.start())?.point());
+            self.points.push(topo.vertex(edge.end())?.point());
+            match edge.curve() {
+                EdgeCurve::Line => {}
+                EdgeCurve::Circle(c) => self.add_cube(c.center(), c.radius()),
+                EdgeCurve::Ellipse(e) => self.add_cube(e.center(), e.semi_major()),
+                EdgeCurve::NurbsCurve(n) => {
+                    let weight = n.weights().iter().fold(0.0_f64, |m, w| m.max(w.abs()));
+                    self.splines.push((weight, n.control_points().to_vec()));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn add_face(
+        &mut self,
+        topo: &brepkit_topology::Topology,
+        face: brepkit_topology::face::FaceId,
+    ) -> Result<(), WasmError> {
+        use brepkit_topology::face::FaceSurface;
+        let face_data = topo.face(face)?;
+        for wire in
+            std::iter::once(face_data.outer_wire()).chain(face_data.inner_wires().iter().copied())
+        {
+            self.add_wire(topo, wire)?;
+        }
+        match face_data.surface() {
+            FaceSurface::Nurbs(s) => {
+                let weight = s
+                    .weights()
+                    .iter()
+                    .flatten()
+                    .fold(0.0_f64, |m, w| m.max(w.abs()));
+                let controls = s.control_points().iter().flatten().copied().collect();
+                self.splines.push((weight, controls));
+            }
+            FaceSurface::Sphere(s) => self.add_cube(s.center(), s.radius()),
+            FaceSurface::Torus(t) => self.add_cube(t.center(), t.major_radius() + t.minor_radius()),
+            FaceSurface::Plane { .. } | FaceSurface::Cylinder(_) | FaceSurface::Cone(_) => {}
+        }
+        Ok(())
+    }
+
+    /// Check each point and control point that `place` gives as the bound of
+    /// its image, and each spline's largest weight times its largest bound,
+    /// as the load checks do. Each is checked on its own: a box of them
+    /// would drop a coordinate that is not a number. A shape with no points,
+    /// as an empty solid, has nothing to check.
+    fn check_by(&self, place: impl Fn(Point3) -> Point3, what: &str) -> Result<(), WasmError> {
+        for &p in &self.points {
+            validate_point(place(p), what)?;
+        }
+        for (weight, controls) in &self.splines {
+            let mut largest = 1.0_f64;
+            for &p in controls {
+                let q = place(p);
+                validate_point(q, what)?;
+                largest = largest.max(q.x().abs()).max(q.y().abs()).max(q.z().abs());
+            }
+            if weight * largest > brepkit_math::nurbs::basis::WEIGHTED_LIMIT {
+                return Err(WasmError::InvalidInput {
+                    reason: format!(
+                        "{what}: a spline's largest weight {weight:e} times its largest \
+                         coordinate {largest:e} must be at most {:e}",
+                        brepkit_math::nurbs::basis::WEIGHTED_LIMIT
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Check the shape moved by `matrix`. An affine map takes a hull to the
+    /// hull of the moved points, so this bounds the moved shape.
+    pub fn check_moved(&self, matrix: &Mat4, what: &str) -> Result<(), WasmError> {
+        self.check_by(|p| matrix.mul_point(p), what)
+    }
+
+    /// Check the shape turned about any axis through `center`: a turn keeps
+    /// each point's distance from `center`, so the corner of the cube round
+    /// `center` out to that distance bounds the point's every coordinate.
+    pub fn check_turned(&self, center: Point3, what: &str) -> Result<(), WasmError> {
+        self.check_by(
+            |p| {
+                let r = scaled_length(p - center);
+                let out = |c: f64| if c < 0.0 { -r } else { r };
+                center + Vec3::new(out(center.x()), out(center.y()), out(center.z()))
+            },
+            what,
+        )
+    }
+
+    /// Check the shape turned about the axis through the origin along the
+    /// unit `axis`, by any angle. A turn keeps each point on the circle
+    /// about the axis through it: its coordinate `i` stays within the
+    /// circle's centre `c_i` plus its radius times `sqrt(1 - a_i^2)`.
+    pub fn check_orbit(&self, axis: Vec3, what: &str) -> Result<(), WasmError> {
+        let a = [axis.x(), axis.y(), axis.z()];
+        self.check_by(
+            |p| {
+                let along = (p - Point3::new(0.0, 0.0, 0.0)).dot(axis);
+                let center = Point3::new(0.0, 0.0, 0.0) + axis * along;
+                let radius = scaled_length(p - center);
+                let c = [center.x(), center.y(), center.z()];
+                let far: [f64; 3] = std::array::from_fn(|i| {
+                    c[i].abs() + radius * (1.0 - a[i] * a[i]).max(0.0).sqrt()
+                });
+                Point3::new(far[0], far[1], far[2])
+            },
+            what,
+        )
+    }
 }
 
 impl BrepKernel {
@@ -430,7 +525,7 @@ impl BrepKernel {
         matrix: &Mat4,
         what: &str,
     ) -> Result<(), WasmError> {
-        check_moved_points(&solid_points(&self.topo, solid)?, matrix, what)
+        Reach::of_solid(&self.topo, solid)?.check_moved(matrix, what)
     }
 
     /// The checked body of `transformSolid` and the batch's `transform`.
@@ -468,9 +563,7 @@ impl BrepKernel {
     ) -> Result<(), WasmError> {
         let mat = matrix_from(matrix)?;
         let wire_id = self.resolve_wire(wire)?;
-        let mut points = Vec::new();
-        push_wire_points(&self.topo, wire_id, &mut points)?;
-        check_moved_points(&points, &mat, "the moved wire")?;
+        Reach::of_wires(&self.topo, [wire_id])?.check_moved(&mat, "the moved wire")?;
         brepkit_operations::transform::transform_wire(self.topo_mut(), wire_id, &mat)?;
         Ok(())
     }
@@ -483,7 +576,7 @@ impl BrepKernel {
     ) -> Result<(), WasmError> {
         let mat = matrix_from(matrix)?;
         let face_id = self.resolve_face(face)?;
-        check_moved_points(&face_points(&self.topo, face_id)?, &mat, "the moved face")?;
+        Reach::of_face(&self.topo, face_id)?.check_moved(&mat, "the moved face")?;
         brepkit_operations::transform::transform_face(self.topo_mut(), face_id, &mat)?;
         Ok(())
     }
@@ -585,9 +678,8 @@ impl BrepKernel {
         Ok(compound_id_to_u32(compound))
     }
 
-    /// The checked body of `circularPattern`, in JS and in the batch. A turn
-    /// about an axis through the origin keeps each point's distance from
-    /// the origin, so each copy is within the farthest corner's distance.
+    /// The checked body of `circularPattern`, in JS and in the batch. Each
+    /// copy is the solid turned about the axis through the origin.
     pub(crate) fn circular_pattern_impl(
         &mut self,
         solid: u32,
@@ -597,11 +689,7 @@ impl BrepKernel {
         validate_vector(axis, "the pattern's axis")?;
         validate_pattern_counts(&[count])?;
         let solid_id = self.resolve_solid(solid)?;
-        let far = solid_points(&self.topo, solid_id)?
-            .into_iter()
-            .map(|p| scaled_length(p - Point3::new(0.0, 0.0, 0.0)))
-            .fold(0.0, f64::max);
-        validate_size(far, "a turned copy's distance from the origin")?;
+        Reach::of_solid(&self.topo, solid_id)?.check_orbit(scaled_unit(axis)?, "a turned copy")?;
         let compound = brepkit_operations::pattern::circular_pattern(
             self.topo_mut(),
             solid_id,
