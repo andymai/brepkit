@@ -13,6 +13,7 @@ use brepkit_topology::solid::SolidId;
 
 use crate::bop::BooleanOp;
 use crate::builder::Builder;
+use crate::ds::shape_store::prove_source_pcurves;
 use crate::ds::{GfaArena, GfaImprintStore, GfaShapeStoreN};
 use crate::error::AlgoError;
 use crate::pave_filler;
@@ -75,6 +76,7 @@ pub fn boolean_with_tolerance(
     // The GFA pipeline operates entirely within the store, avoiding
     // vertex/edge identity conflicts with the caller's topology.
     let mut store = crate::ds::GfaShapeStore::new(topo, solid_a, solid_b)?;
+    prove_source_pcurves(&mut store.topo, &[store.solid_a, store.solid_b], &[], tol)?;
 
     // Stage 1: PaveFiller — intersection + pave block construction
     let mut arena = GfaArena::new();
@@ -139,6 +141,7 @@ pub fn fuse_n(topo: &mut Topology, sources: &[SolidId]) -> Result<SolidId, AlgoE
         _ => {
             let tol = Tolerance::default();
             let mut store = GfaShapeStoreN::new(topo, sources)?;
+            prove_source_pcurves(&mut store.topo, &store.sources, &[], tol)?;
 
             let mut arena = GfaArena::new();
             pave_filler::run_pave_filler_n(&mut store.topo, &store.sources, tol, &mut arena)?;
@@ -182,6 +185,7 @@ pub fn imprint(
         vec![tool_faces.to_vec()]
     };
     let mut store = GfaImprintStore::new(topo, solid, &groups, tool_edges)?;
+    prove_source_pcurves(&mut store.topo, &store.sources, &store.tool_edges, tol)?;
     let mut arena = GfaArena::new();
     pave_filler::run_pave_filler_with_edges(
         &mut store.topo,
@@ -284,6 +288,7 @@ fn split_piece(
 ) -> Result<Option<Vec<SolidId>>, AlgoError> {
     let groups: Vec<Vec<FaceId>> = tools.iter().map(|&f| vec![f]).collect();
     let mut store = GfaImprintStore::new(topo, piece, &groups, &[])?;
+    prove_source_pcurves(&mut store.topo, &store.sources, &[], tol)?;
     let mut arena = GfaArena::new();
     pave_filler::run_pave_filler_with_edges(&mut store.topo, &store.sources, &[], tol, &mut arena)?;
     let (store_topo, parts) = crate::builder::build_split_by_faces(
@@ -322,6 +327,7 @@ pub fn boolean_with_face_origins(
 ) -> Result<(SolidId, FaceOriginIndices), AlgoError> {
     let tol = Tolerance::default();
     let mut store = crate::ds::GfaShapeStore::new(topo, solid_a, solid_b)?;
+    prove_source_pcurves(&mut store.topo, &[store.solid_a, store.solid_b], &[], tol)?;
 
     let mut arena = GfaArena::new();
     pave_filler::run_pave_filler(

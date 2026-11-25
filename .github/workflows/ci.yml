@@ -55,9 +55,11 @@ jobs:
       - run: cargo test --workspace --doc
       # Complexity-regression guards: deterministic work-counter tests that fail
       # if a boolean hot path regresses to O(N²) (issue #987). Gated behind the
-      # `perf-counters` feature, so they need an explicit run.
+      # `perf-counters` feature, so they need an explicit run. `--lib` because
+      # every `scaling_` test is a lib test: without it, the feature change
+      # rebuilds each integration-test binary and fills the runner's disk.
       - name: Complexity guards
-        run: cargo nextest run -p brepkit-operations --cargo-profile ci --features perf-counters -E 'test(scaling_)'
+        run: cargo nextest run -p brepkit-operations --lib --cargo-profile ci --features perf-counters -E 'test(scaling_)'
 
   coverage:
     name: Coverage
