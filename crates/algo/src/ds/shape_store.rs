@@ -451,6 +451,213 @@ fn copy_shells(
     Ok((target.add_solid(Solid::new(new_outer, new_inner)), face_map))
 }
 
+/// Proves pcurves for the B-spline faces of each of `sources` that lie near
+/// another source's edges or `loose`: phase EF then bounds such a face by
+/// the part of its surface its pcurves enclose, not by the whole surface.
+/// The store's copies carry no pcurves of their own, so each one here is
+/// proved. A face far from every other source's edges finds no crossing
+/// with them, so it is left as it is.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a topology lookup fails.
+pub fn prove_source_pcurves(
+    topo: &mut Topology,
+    sources: &[SolidId],
+    loose: &[EdgeId],
+    tol: brepkit_math::tolerance::Tolerance,
+) -> Result<(), AlgoError> {
+    let mut boxes = Vec::with_capacity(sources.len());
+    for &source in sources {
+        boxes.push(edges_box(
+            topo,
+            &brepkit_topology::explorer::solid_edges(topo, source)?,
+        )?);
+    }
+    let loose_box = edges_box(topo, loose)?;
+    for (i, &source) in sources.iter().enumerate() {
+        let mut near = loose_box;
+        let mut unbounded = loose_box.is_none() && !loose.is_empty();
+        for (j, found) in boxes.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            match (*found, near) {
+                (None, _) => unbounded = true,
+                (Some(b), None) => near = Some(b),
+                (Some(b), Some(n)) => near = Some(n.union(b)),
+            }
+        }
+        prove_nurbs_pcurves(topo, source, if unbounded { None } else { near }, tol)?;
+    }
+    Ok(())
+}
+
+/// Gives each B-spline face of `solid` whose control box meets `near` (each
+/// such face where `near` is `None`) a pcurve for each edge of its wires,
+/// proved within the edge's tolerance, and not less than the linear one, of
+/// the edge ([`crate::builder::nurbs_pcurve::proved_nurbs_pcurve`]). A face
+/// with an edge its wires use twice (a seam, which one pcurve cannot
+/// trace), or an edge whose pcurve does not prove, gets none.
+fn prove_nurbs_pcurves(
+    topo: &mut Topology,
+    solid: SolidId,
+    near: Option<brepkit_math::aabb::Aabb3>,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> Result<(), AlgoError> {
+    use brepkit_topology::pcurve::PCurve;
+    for face_id in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        let face = topo.face(face_id)?;
+        let FaceSurface::Nurbs(surface) = face.surface() else {
+            continue;
+        };
+        if near.is_some_and(|near| !surface.aabb().intersects(near)) {
+            continue;
+        }
+        let mut edges = Vec::new();
+        for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            edges.extend(topo.wire(wire)?.edges().iter().map(OrientedEdge::edge));
+        }
+        let mut seen = std::collections::HashSet::new();
+        if !edges.iter().all(|e| seen.insert(*e))
+            || (face.inner_wires().is_empty() && runs_along_its_sides(topo, &edges, surface)?)
+        {
+            continue;
+        }
+        let mut proved = Vec::with_capacity(edges.len());
+        for &edge_id in &edges {
+            let edge = topo.edge(edge_id)?;
+            let (start, end) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let within = tol.linear.max(edge.tolerance().unwrap_or(0.0));
+            let Some(pcurve) = crate::builder::nurbs_pcurve::proved_nurbs_pcurve(
+                edge.curve(),
+                start,
+                end,
+                surface,
+                within,
+            ) else {
+                break;
+            };
+            proved.push((edge_id, pcurve));
+        }
+        if proved.len() == edges.len() {
+            for (edge_id, pcurve) in proved {
+                topo.pcurves_mut()
+                    .set(edge_id, face_id, PCurve::new(pcurve, 0.0, 1.0));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Whether each of `edges`, the edges of a face's one wire, runs along a
+/// side of its B-spline `surface`'s domain, read at five points along it.
+/// Such a face is its whole surface, so pcurves would bound it by the
+/// surface's own box and leave no point of the surface off it: they are not
+/// worth proving.
+fn runs_along_its_sides(
+    topo: &Topology,
+    edges: &[EdgeId],
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+) -> Result<bool, AlgoError> {
+    use brepkit_math::nurbs::projection::{
+        project_point_to_surface, project_point_to_surface_from,
+    };
+    let ((u0, u1), (v0, v1)) = (surface.domain_u(), surface.domain_v());
+    let near = |x: f64, at: f64, span: f64| (x - at).abs() <= 1e-9 * span;
+    for &edge_id in edges {
+        let edge = topo.edge(edge_id)?;
+        let (start, end) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+        let mut sides = [true; 4];
+        let mut last: Option<(f64, f64)> = None;
+        for k in 0..=4 {
+            let t = (t1 - t0).madd(f64::from(k) / 4.0, t0);
+            let p = edge.curve().evaluate_with_endpoints(t, start, end);
+            let found = match last {
+                Some(uv) => project_point_to_surface_from(surface, p, uv, 1e-10),
+                None => project_point_to_surface(surface, p, 1e-10),
+            };
+            let Ok(found) = found else {
+                return Ok(false);
+            };
+            let (u, v) = (found.u, found.v);
+            last = Some((u, v));
+            for (side, on) in sides.iter_mut().zip([
+                near(u, u0, u1 - u0),
+                near(u, u1, u1 - u0),
+                near(v, v0, v1 - v0),
+                near(v, v1, v1 - v0),
+            ]) {
+                *side &= on;
+            }
+        }
+        if !sides.iter().any(|&side| side) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// A box that holds each of `edges`, or `None` where one cannot be boxed
+/// or there are none: a line by its ends, a circle or an ellipse whole, a
+/// B-spline by its control points, which hold it where its weights are
+/// positive. It is grown by [`MAX_WIDEN`], the farthest an edge's tolerance
+/// lets a crossing near it stand.
+fn edges_box(
+    topo: &Topology,
+    edges: &[EdgeId],
+) -> Result<Option<brepkit_math::aabb::Aabb3>, AlgoError> {
+    use brepkit_topology::edge::EdgeCurve;
+    let mut points: Vec<Point3> = Vec::new();
+    for &edge_id in edges {
+        let edge = topo.edge(edge_id)?;
+        points.push(topo.vertex(edge.start())?.point());
+        points.push(topo.vertex(edge.end())?.point());
+        match edge.curve() {
+            EdgeCurve::Line => {}
+            EdgeCurve::Circle(c) => {
+                let (u, v, r) = (c.u_axis(), c.v_axis(), c.radius());
+                let reach = brepkit_math::vec::Vec3::new(
+                    r * u.x().hypot(v.x()),
+                    r * u.y().hypot(v.y()),
+                    r * u.z().hypot(v.z()),
+                );
+                points.extend([c.center() + reach, c.center() - reach]);
+            }
+            EdgeCurve::Ellipse(e) => {
+                let (u, v) = (e.u_axis() * e.semi_major(), e.v_axis() * e.semi_minor());
+                let reach = brepkit_math::vec::Vec3::new(
+                    u.x().hypot(v.x()),
+                    u.y().hypot(v.y()),
+                    u.z().hypot(v.z()),
+                );
+                points.extend([e.center() + reach, e.center() - reach]);
+            }
+            EdgeCurve::NurbsCurve(n) => {
+                if !n.weights().iter().all(|&w| w > 0.0 && w.is_normal()) {
+                    return Ok(None);
+                }
+                points.extend(n.control_points().iter().copied());
+            }
+        }
+    }
+    let Some(held) = brepkit_math::aabb::Aabb3::try_from_points(points) else {
+        return Ok(None);
+    };
+    let size = [held.min, held.max]
+        .iter()
+        .map(|p| p.x().abs().max(p.y().abs()).max(p.z().abs()))
+        .fold(0.0_f64, f64::max);
+    Ok(Some(held.expanded(1e-9_f64.madd(size, 2.0 * MAX_WIDEN))))
+}
+
 /// The widest gap a vertex or edge keeps from a surface it bounds that still
 /// reads as fit error rather than misplaced geometry: the junction band. An
 /// edge farther off its faces (a chord standing in for a rim) records its gap
