@@ -10820,8 +10820,26 @@ fn split_face_2d_impl(
     if all_edges.len() > n_boundary_edges + 2 {
         // Two sections may also meet inside both, where no end of either
         // lies (a circle and an ellipse touching at one point).
-        let meetings = if is_plane {
-            edge_splitting::section_meeting_points(&all_edges[n_boundary_edges..], tol.linear)
+        // A pair whose meetings cannot be settled leaves the face unsplit,
+        // which the builder refuses: a guess could split it wrongly.
+        let meetings: Vec<Point3> = if is_plane {
+            let Ok(found) =
+                edge_splitting::section_meeting_points(&all_edges[n_boundary_edges..], tol.linear)
+            else {
+                log::debug!("split_face_2d: face {face_id:?} has sections that may meet unproved");
+                return Vec::new();
+            };
+            found
+                .into_iter()
+                .map(|m| {
+                    log::debug!(
+                        "split_face_2d: face {face_id:?}: sections meet at {:?}, witnesses {:e} apart",
+                        m.at,
+                        m.apart
+                    );
+                    m.at
+                })
+                .collect()
         } else {
             Vec::new()
         };
@@ -18287,6 +18305,178 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// A section edge along `curve` from `from` to `to`, its source `src`.
+    fn meeting_edge(curve: EdgeCurve, from: Point3, to: Point3, src: usize) -> OrientedPCurveEdge {
+        OrientedPCurveEdge {
+            curve_3d: curve,
+            pcurve: dummy_pcurve(),
+            start_uv: Point2::new(0.0, 0.0),
+            end_uv: Point2::new(0.0, 0.0),
+            start_3d: from,
+            end_3d: to,
+            forward: true,
+            source_edge_idx: Some(src),
+            pave_block_id: None,
+        }
+    }
+
+    /// The points where the sections meet inside both, at 1e-7.
+    fn meetings(edges: &[OrientedPCurveEdge]) -> Vec<Point3> {
+        let found = edge_splitting::section_meeting_points(edges, 1e-7).unwrap();
+        assert!(found.iter().all(|m| m.apart <= 1e-7), "{found:?}");
+        found.into_iter().map(|m| m.at).collect()
+    }
+
+    /// The half of a circle of radius 2 about the plate's (5, 5) from angle 0
+    /// round to pi, and the half of a circle of radius 0.5 outside it that
+    /// touches it at angle 0.02, `gap` off. At angle 0.02 the touch lies
+    /// within the first of 64 even steps along the first, nearer its start.
+    fn touch_near_an_arcs_start(
+        o: Point3,
+        u: Vec3,
+        v: Vec3,
+        gap: f64,
+    ) -> (Vec<OrientedPCurveEdge>, Point3) {
+        use brepkit_math::curves::Circle3D;
+        use std::f64::consts::PI;
+        let n = u.cross(v);
+        let centre = o + u * 5.0 + v * 5.0;
+        let big = Circle3D::with_axes(centre, n, 2.0, u, v).unwrap();
+        let (sin, cos) = 0.02f64.sin_cos();
+        let out = u * cos + v * sin;
+        let small = Circle3D::with_axes(centre + out * (2.5 + gap), n, 0.5, u, v).unwrap();
+        let touch = centre + out * 2.0;
+        let edges = vec![
+            meeting_edge(
+                EdgeCurve::Circle(big.clone()),
+                big.evaluate(0.0),
+                big.evaluate(PI),
+                1,
+            ),
+            meeting_edge(
+                EdgeCurve::Circle(small.clone()),
+                small.evaluate(0.02 + 0.5 * PI),
+                small.evaluate(0.02 + 1.5 * PI),
+                2,
+            ),
+        ];
+        (edges, touch)
+    }
+
+    /// Two circles touching a fiftieth of a radian from one's start, nearer
+    /// it than its first sample at 64 even steps: the touch is found in each
+    /// frame.
+    #[test]
+    fn a_touch_between_samples_near_an_arcs_start_is_found() {
+        for (pose, o, u, v) in plate_frames() {
+            let (edges, touch) = touch_near_an_arcs_start(o, u, v, 0.0);
+            let found = meetings(&edges);
+            assert!(
+                found.len() == 1 && (found[0] - touch).length() < 1e-6,
+                "{pose}: meetings {found:?}, want {touch:?}"
+            );
+        }
+    }
+
+    /// The same two circles two tolerances apart do not meet, in each frame.
+    #[test]
+    fn circles_two_tolerances_apart_do_not_meet() {
+        for (pose, o, u, v) in plate_frames() {
+            let (edges, _) = touch_near_an_arcs_start(o, u, v, 2e-7);
+            let found = meetings(&edges);
+            assert!(found.is_empty(), "{pose}: meetings {found:?}");
+        }
+    }
+
+    /// A circle of radius 1 on axes of length 2, so of radius 2 read along
+    /// them, over (-0.5, 0.5), and the line `x = 2` from `y = -1` to `1`:
+    /// they touch at (2, 0), in each frame.
+    #[test]
+    fn a_circle_on_long_axes_touching_a_line_is_found() {
+        use brepkit_math::curves::Circle3D;
+        for (pose, o, u, v) in plate_frames() {
+            let at = |x: f64, y: f64| o + u * x + v * y;
+            let circle =
+                Circle3D::with_axes(at(0.0, 0.0), u.cross(v), 1.0, u * 2.0, v * 2.0).unwrap();
+            let edges = vec![
+                meeting_edge(
+                    EdgeCurve::Circle(circle.clone()),
+                    circle.evaluate(-0.5),
+                    circle.evaluate(0.5),
+                    1,
+                ),
+                meeting_edge(EdgeCurve::Line, at(2.0, -1.0), at(2.0, 1.0), 2),
+            ];
+            let found = meetings(&edges);
+            assert!(
+                found.len() == 1 && (found[0] - at(2.0, 0.0)).length() < 1e-6,
+                "{pose}: meetings {found:?}"
+            );
+        }
+    }
+
+    /// Ellipses of semi-axes 3 and 2 about one centre, the second turned a
+    /// quarter: their arcs over the first quadrant cross at
+    /// `(6 / sqrt(13), 6 / sqrt(13))`, in each frame.
+    #[test]
+    fn concentric_ellipses_turned_a_quarter_cross() {
+        use brepkit_math::curves::Ellipse3D;
+        use std::f64::consts::FRAC_PI_2;
+        for (pose, o, u, v) in plate_frames() {
+            let n = u.cross(v);
+            let first = Ellipse3D::with_axes(o, n, 3.0, 2.0, u, v).unwrap();
+            let turned = Ellipse3D::with_axes(o, n, 3.0, 2.0, v, -u).unwrap();
+            let edges = vec![
+                meeting_edge(
+                    EdgeCurve::Ellipse(first.clone()),
+                    first.evaluate(0.0),
+                    first.evaluate(FRAC_PI_2),
+                    1,
+                ),
+                meeting_edge(
+                    EdgeCurve::Ellipse(turned.clone()),
+                    turned.evaluate(-FRAC_PI_2),
+                    turned.evaluate(0.0),
+                    2,
+                ),
+            ];
+            let s = 6.0 / 13.0f64.sqrt();
+            let want = o + (u + v) * s;
+            let found = meetings(&edges);
+            assert!(
+                found.len() == 1 && (found[0] - want).length() < 1e-6,
+                "{pose}: meetings {found:?}, want {want:?}"
+            );
+        }
+    }
+
+    /// The circle and the ellipse of
+    /// [`a_circle_and_an_ellipse_through_three_points_split_a_plate_in_four`],
+    /// and a line from (7.000005, 5), fifty tolerances off both at their
+    /// touch, to (9, 5): the touch at (7, 5) is still found, in each frame.
+    #[test]
+    fn a_point_off_both_curves_does_not_hide_their_touch() {
+        use brepkit_math::curves::{Circle3D, Ellipse3D};
+        use std::f64::consts::PI;
+        for (pose, o, u, v) in plate_frames() {
+            let n = u.cross(v);
+            let at = |x: f64, y: f64| o + u * x + v * y;
+            let circle = Circle3D::with_axes(at(5.0, 5.0), n, 2.0, u, v).unwrap();
+            let ellipse = Ellipse3D::with_axes(at(4.0, 5.0), n, 3.0, 5.4f64.sqrt(), u, v).unwrap();
+            let (p, q) = (circle.evaluate(-PI / 3.0), circle.evaluate(PI / 3.0));
+            let edges = vec![
+                meeting_edge(EdgeCurve::Circle(circle), p, q, 1),
+                meeting_edge(EdgeCurve::Ellipse(ellipse), p, q, 2),
+                meeting_edge(EdgeCurve::Line, at(7.000_005, 5.0), at(9.0, 5.0), 3),
+            ];
+            let found = meetings(&edges);
+            assert!(
+                found.len() == 1 && (found[0] - at(7.0, 5.0)).length() < 1e-6,
+                "{pose}: meetings {found:?}"
+            );
         }
     }
 
