@@ -7275,3 +7275,48 @@ fn a_closed_spline_with_one_corner_meshes_its_face() {
     let fine = area(1e-4);
     assert!((fine - 4.0 / 3.0).abs() < 1e-3, "{fine}");
 }
+
+/// A sliver of a ball of radius 1e8, between two meridians 1e-4 rad apart
+/// from its pole to its equator, meshed to 2 at an angle of 2e-4: its
+/// meridians take about 7.9e3 samples each, and its rows a segment or two
+/// each, about 1.6e4 samples in all. The rows are counted as the mesher cuts
+/// them, not each as wide as its level: counted so, they came to 3.1e7,
+/// past the limit for one face, and the sliver was refused.
+#[test]
+fn a_sliver_of_a_ball_is_counted_by_its_own_rows() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::surfaces::SphericalSurface;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+
+    let (r, width) = (1e8, 1e-4_f64);
+    let center = Point3::new(0.0, 0.0, 0.0);
+    let axes = [
+        Vec3::new(1.0, 0.0, 0.0),
+        Vec3::new(width.cos(), width.sin(), 0.0),
+        Vec3::new(0.0, 0.0, 1.0),
+    ];
+    let mut topo = Topology::new();
+    let corners = axes.map(|a| topo.add_vertex(Vertex::new(center + a * r, 1e-7)));
+    let edges: Vec<OrientedEdge> = (0..3)
+        .map(|k| {
+            let (a, b) = (axes[k], axes[(k + 1) % 3]);
+            let circle = Circle3D::new(center, a.cross(b), r).unwrap();
+            let edge = Edge::new(corners[k], corners[(k + 1) % 3], EdgeCurve::Circle(circle));
+            OrientedEdge::new(topo.add_edge(edge), true)
+        })
+        .collect();
+    let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+    let sphere = SphericalSurface::new(center, r).unwrap();
+    let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Sphere(sphere)));
+    let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+    let solid = topo.add_solid(Solid::new(shell, vec![]));
+    let mesh = tessellate_solid_with_tolerance(&topo, solid, 2.0, 2e-4);
+    let samples = mesh
+        .as_ref()
+        .map(|m| (m.positions.len(), m.indices.len() / 3));
+    assert!(
+        matches!(samples, Ok((positions, triangles)) if triangles > 0 && positions < 100_000),
+        "{samples:?}"
+    );
+}

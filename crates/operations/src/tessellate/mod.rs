@@ -340,6 +340,21 @@ pub(super) fn check_grid(
     }
 }
 
+/// Refuses `samples` samples over one face past [`MAX_SAMPLES`], counted as
+/// a mesher will place them, before it allocates them.
+pub(super) fn check_total(
+    what: &str,
+    samples: usize,
+    deflection: f64,
+) -> Result<(), crate::OperationsError> {
+    let samples = samples as f64;
+    if samples <= MAX_SAMPLES {
+        Ok(())
+    } else {
+        Err(too_many_samples(what, samples, MAX_SAMPLES, deflection))
+    }
+}
+
 /// Refuses a face, before any of its samples is allocated, when one of its
 /// circle or ellipse edges would take more than [`MAX_EDGE_SAMPLES`]
 /// samples at `deflection`, counted as the meshers count it over the edge's

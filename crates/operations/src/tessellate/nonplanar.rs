@@ -1767,27 +1767,35 @@ pub(super) fn tessellate_sphere_triangle_shared(
     let ptg_start = point_to_global.len();
     // Row `s` runs from the `s`-th sample towards `b` to the `s`-th towards
     // `c` in up to `s` segments, at the barycentric level `s / m` from the
-    // apex.
-    // Row `s` holds at most `s + 1` samples.
-    super::check_grid(m + 1, m / 2 + 1, deflection)?;
+    // apex. A row that turns through less than `s` of the side segments
+    // beside it takes fewer segments, so a narrow patch takes triangles for
+    // its area and not for its sides' length. An octant's rows turn through
+    // at least `s` of them and keep `s`.
+    let turn = |p: Point3, q: Point3| {
+        let (u, v) = (p - center, q - center);
+        u.cross(v).length().atan2(u.dot(v))
+    };
+    let counts: Vec<usize> = (1..m)
+        .map(|s| {
+            let spacing =
+                turn(b_points[s - 1], b_points[s]).max(turn(c_points[s - 1], c_points[s]));
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            if spacing > 0.0 {
+                ((turn(b_points[s], c_points[s]) / spacing).ceil() as usize).clamp(1, s)
+            } else {
+                s
+            }
+        })
+        .collect();
+    // The rows are counted as they will be cut, before any is built: a
+    // narrow patch has short rows however many it has.
+    super::check_count("a face grid's rows", m + 1, deflection)?;
+    let samples = 1 + base.len() + counts.iter().map(|&count| count + 1).sum::<usize>();
+    super::check_total("a face's rows", samples, deflection)?;
     let mut rows: Vec<Vec<u32>> = Vec::with_capacity(m + 1);
     rows.push(vec![along_b[0]]);
     for s in 1..m {
-        // A row that turns through less than `s` of the side segments
-        // beside it takes fewer segments, so a narrow patch takes triangles
-        // for its area and not for its sides' length. An octant's rows turn
-        // through at least `s` of them and keep `s`.
-        let turn = |p: Point3, q: Point3| {
-            let (u, v) = (p - center, q - center);
-            u.cross(v).length().atan2(u.dot(v))
-        };
-        let spacing = turn(b_points[s - 1], b_points[s]).max(turn(c_points[s - 1], c_points[s]));
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let count = if spacing > 0.0 {
-            ((turn(b_points[s], c_points[s]) / spacing).ceil() as usize).clamp(1, s)
-        } else {
-            s
-        };
+        let count = counts[s - 1];
         let mut row = Vec::with_capacity(count + 1);
         row.push(along_b[s]);
         #[allow(clippy::cast_precision_loss)]
