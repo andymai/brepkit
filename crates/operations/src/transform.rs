@@ -48,6 +48,107 @@ pub fn transform_solid(
     transform_topology(topo, &vertex_ids, &edge_ids, &face_ids, matrix, &inverse)
 }
 
+/// Check that `solid`, moved by `matrix`, would pass the load checks, and
+/// move nothing.
+///
+/// Each face's surface, each edge's curve and each vertex is mapped as
+/// [`transform_solid`] maps it, and must be well formed. That transform
+/// moves the faces one by one, so one that fails part way leaves the faces
+/// before it moved: this finds such a failure first.
+///
+/// # Errors
+///
+/// Returns an error if the matrix is degenerate, an image cannot be
+/// computed, or an image would not pass the load checks.
+pub fn check_solid_transform(
+    topo: &Topology,
+    solid: SolidId,
+    matrix: &Mat4,
+) -> Result<(), crate::OperationsError> {
+    let inverse = checked_inverse(matrix)?;
+    let (vertex_ids, edge_ids, face_ids) = collect_solid_entities(topo, solid)?;
+    check_images(topo, &vertex_ids, &edge_ids, &face_ids, matrix, &inverse)
+}
+
+/// Check that `face`, moved by `matrix` as [`transform_face`] moves it,
+/// would pass the load checks, and move nothing.
+///
+/// # Errors
+///
+/// As [`check_solid_transform`].
+pub fn check_face_transform(
+    topo: &Topology,
+    face: FaceId,
+    matrix: &Mat4,
+) -> Result<(), crate::OperationsError> {
+    let inverse = checked_inverse(matrix)?;
+    let (vertex_ids, edge_ids) = collect_face_entities(topo, face)?;
+    let face_ids = HashSet::from([face]);
+    check_images(topo, &vertex_ids, &edge_ids, &face_ids, matrix, &inverse)
+}
+
+/// Check that `wire`, moved by `matrix` as [`transform_wire`] moves it,
+/// would pass the load checks, and move nothing.
+///
+/// # Errors
+///
+/// As [`check_solid_transform`].
+pub fn check_wire_transform(
+    topo: &Topology,
+    wire: WireId,
+    matrix: &Mat4,
+) -> Result<(), crate::OperationsError> {
+    let inverse = checked_inverse(matrix)?;
+    let (vertex_ids, edge_ids) = collect_wire_entities(topo, wire)?;
+    check_images(
+        topo,
+        &vertex_ids,
+        &edge_ids,
+        &HashSet::new(),
+        matrix,
+        &inverse,
+    )
+}
+
+/// Whether each surface, curve and point of the given entities, mapped by
+/// `matrix`, passes the load checks.
+fn check_images(
+    topo: &Topology,
+    vertex_ids: &HashSet<VertexId>,
+    edge_ids: &HashSet<EdgeId>,
+    face_ids: &HashSet<FaceId>,
+    matrix: &Mat4,
+    inverse: &Mat4,
+) -> Result<(), crate::OperationsError> {
+    use brepkit_math::curves::SIZE_LIMIT;
+    let refused = |what: String| crate::OperationsError::InvalidInput {
+        reason: format!("{what}, moved, would not pass the load checks"),
+    };
+    for &fid in face_ids {
+        if !surface_image(topo, fid, matrix, inverse)?
+            .surface
+            .is_well_formed()
+        {
+            return Err(refused(format!("the surface of face {}", fid.index())));
+        }
+    }
+    for &eid in edge_ids {
+        if !curve_image(topo.edge(eid)?.curve(), matrix)?
+            .0
+            .is_well_formed()
+        {
+            return Err(refused(format!("the curve of edge {}", eid.index())));
+        }
+    }
+    for &vid in vertex_ids {
+        let p = matrix.mul_point(topo.vertex(vid)?.point());
+        if ![p.x(), p.y(), p.z()].iter().all(|c| c.abs() <= SIZE_LIMIT) {
+            return Err(refused(format!("vertex {}", vid.index())));
+        }
+    }
+    Ok(())
+}
+
 /// Checks the matrix is invertible and returns its inverse.
 ///
 /// The determinant of a uniform scale by `s` is `s³`, so a comparison of the

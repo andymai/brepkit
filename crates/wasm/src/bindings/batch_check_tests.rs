@@ -851,10 +851,10 @@ fn a_move_that_takes_a_weighted_spline_past_the_load_checks_is_refused() {
 
 /// A box 1e299 across, set with its corners from (4e299, 0, 8e299) to
 /// (5e299, 1e299, 9e299), turned about z: its far corner is 1.03e300 from
-/// the origin but only 5.1e299 from the axis, so every copy keeps each
-/// coordinate within the size limit and the pattern is built. Set from
-/// (8e299, 8e299, 0), it is 1.27e300 from the axis, and a copy turned by
-/// 45 degrees would have a coordinate past the limit: refused.
+/// the origin but every copy keeps each coordinate within the size limit,
+/// so the pattern is built. Set from (8e299, 8e299, 0), four copies a
+/// quarter turn apart still fit, but a copy turned by 45 degrees would put
+/// its far corner 1.27e300 out along y: eight copies are refused.
 #[test]
 fn a_circular_pattern_is_bounded_by_its_distance_from_the_axis() {
     let mut k = BrepKernel::new();
@@ -878,6 +878,11 @@ fn a_circular_pattern_is_bounded_by_its_distance_from_the_axis() {
     );
     assert!(built["ok"].is_number(), "{built}");
     let far = at(&mut k, "8e299", "8e299", "0");
+    let four = run(
+        &mut k,
+        &format!(r#"{{"op": "circularPattern", "args": {{"solid": {far}, "count": 4}}}}"#),
+    );
+    assert!(four["ok"].is_number(), "{four}");
     let refused = run(
         &mut k,
         &format!(r#"{{"op": "circularPattern", "args": {{"solid": {far}, "count": 8}}}}"#),
@@ -889,4 +894,57 @@ fn a_circular_pattern_is_bounded_by_its_distance_from_the_axis() {
             .contains("must be at most"),
         "{refused}"
     );
+}
+
+/// A triangle on the plane x + y + z = 1, moved 6e299 along each axis: each
+/// vertex stays within the size limit, but the plane's distance from the
+/// origin, which a plane face stores, becomes 1.04e300, which the load
+/// checks refuse. The move is refused and the face left as it was; so is a
+/// section plane at that distance.
+#[test]
+fn a_plane_moved_past_the_load_checks_is_refused() {
+    let mut k = BrepKernel::new();
+    let face = k
+        .make_polygon(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
+        .unwrap();
+    let shift = "[1, 0, 0, 6e299, 0, 1, 0, 6e299, 0, 0, 1, 6e299, 0, 0, 0, 1]";
+    let moved = run(
+        &mut k,
+        &format!(r#"{{"op": "transformFace", "args": {{"face": {face}, "matrix": {shift}}}}}"#),
+    );
+    let id = k.resolve_face(face).unwrap();
+    let loads = k.topo.face(id).unwrap().surface().is_well_formed();
+    assert!(
+        moved["error"].is_string(),
+        "moved: {moved}, and it loads: {loads}"
+    );
+    assert!(loads);
+    let (mut k, s, ..) = fixture();
+    let cut = run(
+        &mut k,
+        &format!(
+            r#"{{"op": "section", "args": {{"solid": {s}, "px": 6e299, "py": 6e299, "pz": 6e299, "nx": 1, "ny": 1, "nz": 1}}}}"#
+        ),
+    );
+    assert!(
+        cut["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("distance from the origin"),
+        "{cut}"
+    );
+}
+
+/// A scale of 1e300 composed with a scale of 1e-300 is the identity: each
+/// is a finite matrix, and so is their product, so neither is refused.
+#[test]
+fn a_composition_of_large_and_small_scales_is_built() {
+    let k = BrepKernel::new();
+    let scale = |s: f64| {
+        vec![
+            s, 0.0, 0.0, 0.0, 0.0, s, 0.0, 0.0, 0.0, 0.0, s, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ]
+    };
+    let product = k.compose_transforms(scale(1e300), scale(1e-300)).unwrap();
+    assert_eq!(product, scale(1.0));
 }

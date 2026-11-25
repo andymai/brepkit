@@ -10,7 +10,7 @@ use brepkit_topology::edge::EdgeId;
 use brepkit_topology::face::FaceId;
 
 use crate::bindings::operations::parse_join_type_str;
-use crate::bindings::transforms::Reach;
+use crate::bindings::transforms::{Reach, scaled_unit};
 use crate::error::{
     WasmError, validate_finite, validate_point, validate_positive, validate_size,
     validate_tolerance, validate_vector,
@@ -36,6 +36,14 @@ fn revolve_radians(angle_degrees: f64) -> Result<f64, WasmError> {
             reason: format!("angle_degrees must be in [-360, 0) or (0, 360], got {angle_degrees}"),
         })
     }
+}
+
+/// Check a plane from JS: a plane face stores its distance from the origin,
+/// which the load checks hold within the size limit, and a point within it
+/// can lie farther, up to the square root of 3 times it.
+fn check_plane(point: Point3, normal: Vec3, what: &str) -> Result<(), WasmError> {
+    let unit = scaled_unit(normal)?;
+    validate_size((point - Point3::new(0.0, 0.0, 0.0)).dot(unit), what)
 }
 
 impl BrepKernel {
@@ -178,6 +186,7 @@ impl BrepKernel {
     ) -> Result<Vec<FaceId>, WasmError> {
         validate_point(point, "the plane's point")?;
         validate_vector(normal, "the plane's normal")?;
+        check_plane(point, normal, "the plane's distance from the origin")?;
         let solid_id = self.resolve_solid(solid)?;
         let result =
             brepkit_operations::section::section(self.topo_mut(), solid_id, point, normal)?;
@@ -192,6 +201,7 @@ impl BrepKernel {
     ) -> Result<(u32, u32), WasmError> {
         validate_point(point, "the plane's point")?;
         validate_vector(normal, "the plane's normal")?;
+        check_plane(point, normal, "the plane's distance from the origin")?;
         let solid_id = self.resolve_solid(solid)?;
         let result = brepkit_operations::split::split(self.topo_mut(), solid_id, point, normal)?;
         Ok((
@@ -211,6 +221,11 @@ impl BrepKernel {
     ) -> Result<u32, WasmError> {
         validate_vector(pull, "the pull direction")?;
         validate_point(neutral, "the neutral plane's point")?;
+        check_plane(
+            neutral,
+            pull,
+            "the neutral plane's distance from the origin",
+        )?;
         validate_finite(angle, "angle")?;
         let solid_id = self.resolve_solid(solid)?;
         let face_ids = self.face_ids(faces)?;

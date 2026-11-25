@@ -9,8 +9,7 @@ use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::transform::transform_solid;
 
 use crate::error::{
-    WasmError, validate_pattern_counts, validate_point, validate_positive, validate_size,
-    validate_vector,
+    WasmError, validate_pattern_counts, validate_point, validate_positive, validate_vector,
 };
 use crate::handles::{compound_id_to_u32, face_id_to_u32, solid_id_to_u32, wire_id_to_u32};
 use crate::kernel::BrepKernel;
@@ -289,17 +288,6 @@ fn matrix_from(matrix: &[f64]) -> Result<Mat4, WasmError> {
             reason: format!("matrix element at index {pos} is not finite"),
         });
     }
-    // A unit direction maps to a sum of three entries of the linear block's
-    // column, so each at most a third of the size limit keeps every moved
-    // axis and normal finite and within the limit.
-    for row in 0..3 {
-        for col in 0..3 {
-            validate_size(
-                3.0 * matrix[row * 4 + col],
-                "three times an entry of the matrix's linear block",
-            )?;
-        }
-    }
     Ok(Mat4(std::array::from_fn(|i| {
         std::array::from_fn(|j| matrix[i * 4 + j])
     })))
@@ -495,20 +483,35 @@ impl Reach {
         )
     }
 
-    /// Check the shape turned about the axis through the origin along the
-    /// unit `axis`, by any angle. A turn keeps each point on the circle
-    /// about the axis through it: its coordinate `i` stays within the
-    /// circle's centre `c_i` plus its radius times `sqrt(1 - a_i^2)`.
-    pub fn check_orbit(&self, axis: Vec3, what: &str) -> Result<(), WasmError> {
-        let a = [axis.x(), axis.y(), axis.z()];
+    /// Check the copies of the shape turned about the axis through the
+    /// origin along the unit `axis` by each multiple of a `count`-th of a
+    /// turn, as a circular pattern places them. A turn keeps each point `p`
+    /// on the circle about the axis: its coordinate `i` at angle `t` is
+    /// `c_i + A_i cos(t - f_i)`, with `c` the circle's centre, and `A_i` and
+    /// `f_i` from the radial offset `u` and `a x u`. The copy nearest to
+    /// `f_i`, and the one nearest to the opposite angle, give the largest
+    /// and smallest values over the copies: the bound is exact, with no
+    /// copy checked twice.
+    pub fn check_copies(&self, axis: Vec3, count: u32, what: &str) -> Result<(), WasmError> {
+        let step = std::f64::consts::TAU / f64::from(count.max(1));
+        let gap = |angle: f64| angle - (angle / step).round() * step;
         self.check_by(
             |p| {
                 let along = (p - Point3::new(0.0, 0.0, 0.0)).dot(axis);
                 let center = Point3::new(0.0, 0.0, 0.0) + axis * along;
-                let radius = scaled_length(p - center);
-                let c = [center.x(), center.y(), center.z()];
+                let u = p - center;
+                let v = axis.cross(u);
+                let (c, u, v) = (
+                    [center.x(), center.y(), center.z()],
+                    [u.x(), u.y(), u.z()],
+                    [v.x(), v.y(), v.z()],
+                );
                 let far: [f64; 3] = std::array::from_fn(|i| {
-                    c[i].abs() + radius * (1.0 - a[i] * a[i]).max(0.0).sqrt()
+                    let amplitude = u[i].hypot(v[i]);
+                    let phase = v[i].atan2(u[i]);
+                    let high = c[i] + amplitude * gap(phase).cos();
+                    let low = c[i] - amplitude * gap(phase + std::f64::consts::PI).cos();
+                    high.abs().max(low.abs())
                 });
                 Point3::new(far[0], far[1], far[2])
             },
@@ -525,7 +528,10 @@ impl BrepKernel {
         matrix: &Mat4,
         what: &str,
     ) -> Result<(), WasmError> {
-        Reach::of_solid(&self.topo, solid)?.check_moved(matrix, what)
+        Reach::of_solid(&self.topo, solid)?.check_moved(matrix, what)?;
+        Ok(brepkit_operations::transform::check_solid_transform(
+            &self.topo, solid, matrix,
+        )?)
     }
 
     /// The checked body of `transformSolid` and the batch's `transform`.
@@ -564,6 +570,7 @@ impl BrepKernel {
         let mat = matrix_from(matrix)?;
         let wire_id = self.resolve_wire(wire)?;
         Reach::of_wires(&self.topo, [wire_id])?.check_moved(&mat, "the moved wire")?;
+        brepkit_operations::transform::check_wire_transform(&self.topo, wire_id, &mat)?;
         brepkit_operations::transform::transform_wire(self.topo_mut(), wire_id, &mat)?;
         Ok(())
     }
@@ -577,6 +584,7 @@ impl BrepKernel {
         let mat = matrix_from(matrix)?;
         let face_id = self.resolve_face(face)?;
         Reach::of_face(&self.topo, face_id)?.check_moved(&mat, "the moved face")?;
+        brepkit_operations::transform::check_face_transform(&self.topo, face_id, &mat)?;
         brepkit_operations::transform::transform_face(self.topo_mut(), face_id, &mat)?;
         Ok(())
     }
@@ -689,7 +697,11 @@ impl BrepKernel {
         validate_vector(axis, "the pattern's axis")?;
         validate_pattern_counts(&[count])?;
         let solid_id = self.resolve_solid(solid)?;
-        Reach::of_solid(&self.topo, solid_id)?.check_orbit(scaled_unit(axis)?, "a turned copy")?;
+        Reach::of_solid(&self.topo, solid_id)?.check_copies(
+            scaled_unit(axis)?,
+            count,
+            "a turned copy",
+        )?;
         let compound = brepkit_operations::pattern::circular_pattern(
             self.topo_mut(),
             solid_id,
