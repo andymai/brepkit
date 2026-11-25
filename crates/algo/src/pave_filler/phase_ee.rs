@@ -352,14 +352,21 @@ fn find_edge_edge_crossings(
         });
         let (t_a, t_b, pt) = refined.unwrap_or((hit.t_a, hit.t_b, hit.point));
         // A touch where a closed curve's domain wraps reads at either end of
-        // it: one point.
+        // it: one place, a whole turn apart in its parameter.
+        let apart = |t: f64, c: f64, curve: &EdgeCurve, data: &EdgeData| {
+            let gap = (t - c).abs();
+            if whole_turn(curve, data) {
+                let turn = gap.rem_euclid(std::f64::consts::TAU);
+                turn.min(std::f64::consts::TAU - turn)
+            } else {
+                gap
+            }
+        };
         let is_dup = crossings
             .iter()
-            .any(|&(ct_a, ct_b, cp): &(f64, f64, Point3)| {
-                ((t_a - ct_a).abs() < 1e-6 && (t_b - ct_b).abs() < 1e-6)
-                    || (refined.is_some()
-                        && (cp - pt).length()
-                            <= 1e-12 * (1.0 + pt.x().abs() + pt.y().abs() + pt.z().abs()))
+            .any(|&(ct_a, ct_b, _): &(f64, f64, Point3)| {
+                apart(t_a, ct_a, edge_a.curve(), ea) < 1e-6
+                    && apart(t_b, ct_b, edge_b.curve(), eb) < 1e-6
             });
         if !is_dup {
             crossings.push((t_a, t_b, pt));
@@ -1328,6 +1335,13 @@ fn refine(
     }
 }
 
+/// Whether `curve` over its edge's domain is a whole circle or ellipse,
+/// whose parameter wraps a turn on.
+fn whole_turn(curve: &EdgeCurve, data: &EdgeData) -> bool {
+    matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
+        && ((data.t1 - data.t0).abs() - std::f64::consts::TAU).abs() <= 1e-9
+}
+
 /// Above this sine of the angle between two curves' tangents where they
 /// meet, they cross rather than touch.
 const TOUCH_SIN: f64 = 1e-3;
@@ -1358,11 +1372,7 @@ fn touch_point(
     let (lo_b, hi_b) = (eb.t0.min(eb.t1), eb.t0.max(eb.t1));
     // A closed circle or ellipse runs on past the ends of its domain: a
     // touch at the point where its domain wraps lies inside either end.
-    let whole_turn = |curve: &EdgeCurve, lo: f64, hi: f64| {
-        matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
-            && (hi - lo - std::f64::consts::TAU).abs() <= 1e-9
-    };
-    let (turn_a, turn_b) = (whole_turn(ca, lo_a, hi_a), whole_turn(cb, lo_b, hi_b));
+    let (turn_a, turn_b) = (whole_turn(ca, ea), whole_turn(cb, eb));
     let keep_b = |s: f64| if turn_b { s } else { s.clamp(lo_b, hi_b) };
     let wrap = |t: f64, lo: f64, turn: bool| {
         if turn {
@@ -2015,39 +2025,43 @@ mod tests {
         use brepkit_math::nurbs::curve::NurbsCurve;
 
         let height = |x: f64| (x - 1.62) * (x - 1.74);
-        let poles = vec![
-            Point3::new(0.0, height(0.0), 0.0),
-            Point3::new(1.6, height(0.0) - 1.6 * 3.36, 0.0),
-            Point3::new(3.2, height(3.2), 0.0),
-        ];
-        let mut topo = Topology::new();
-        let line = add_edge(
-            &mut topo,
-            Point3::new(0.0, 0.0, 0.0),
-            Point3::new(3.2, 0.0, 0.0),
-            EdgeCurve::Line,
-        );
-        let parabola = NurbsCurve::new(
-            2,
-            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
-            poles.clone(),
-            vec![1.0; 3],
-        )
-        .unwrap();
-        let curve = add_edge(
-            &mut topo,
-            poles[0],
-            poles[2],
-            EdgeCurve::NurbsCurve(parabola),
-        );
-        for (ea, eb) in [(line, curve), (curve, line)] {
-            let mut xs: Vec<f64> = crossings(&topo, ea, eb).iter().map(|h| h.2.x()).collect();
-            xs.sort_by(f64::total_cmp);
-            assert_eq!(xs.len(), 2, "{xs:?}");
-            assert!(
-                (xs[0] - 1.62).abs() < 1e-9 && (xs[1] - 1.74).abs() < 1e-9,
-                "{xs:?}"
+        // Far from the origin too: two crossings 0.12 apart stay two
+        // wherever the part sits.
+        for z in [0.0, 2e11] {
+            let poles = vec![
+                Point3::new(0.0, height(0.0), z),
+                Point3::new(1.6, height(0.0) - 1.6 * 3.36, z),
+                Point3::new(3.2, height(3.2), z),
+            ];
+            let mut topo = Topology::new();
+            let line = add_edge(
+                &mut topo,
+                Point3::new(0.0, 0.0, z),
+                Point3::new(3.2, 0.0, z),
+                EdgeCurve::Line,
             );
+            let parabola = NurbsCurve::new(
+                2,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                poles.clone(),
+                vec![1.0; 3],
+            )
+            .unwrap();
+            let curve = add_edge(
+                &mut topo,
+                poles[0],
+                poles[2],
+                EdgeCurve::NurbsCurve(parabola),
+            );
+            for (ea, eb) in [(line, curve), (curve, line)] {
+                let mut xs: Vec<f64> = crossings(&topo, ea, eb).iter().map(|h| h.2.x()).collect();
+                xs.sort_by(f64::total_cmp);
+                assert_eq!(xs.len(), 2, "{z}: {xs:?}");
+                assert!(
+                    (xs[0] - 1.62).abs() < 1e-9 && (xs[1] - 1.74).abs() < 1e-9,
+                    "{z}: {xs:?}"
+                );
+            }
         }
     }
 
