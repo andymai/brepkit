@@ -464,8 +464,11 @@ fn unit_form(curve: &EdgeCurve) -> Option<(std::borrow::Cow<'_, EdgeCurve>, f64)
 /// Whether the parts of their edges' curves that two blocks cover are one
 /// curve, within tolerance. The two blocks share their ends already.
 ///
-/// Each block is read at the places of [`block_places`], and each place
-/// must be within tolerance of its foot on the other block.
+/// Each block is read as its edge's curve from its start's point to its
+/// end's, and the two must be proved one curve along their whole length
+/// ([`crate::builder::face_splitter::curves_one_curve`]): two B-splines that
+/// agree at any number of places may part between them. A pair no bound
+/// holds together is two curves.
 fn block_lies_on_block(
     topo: &Topology,
     arena: &GfaArena,
@@ -477,77 +480,21 @@ fn block_lies_on_block(
     else {
         return Ok(false);
     };
-    let read = |block: &crate::ds::PaveBlock| -> Result<BlockCurve<'_>, AlgoError> {
+    let read = |block: &crate::ds::PaveBlock| -> Result<_, AlgoError> {
         let edge = topo.edge(block.original_edge)?;
         let ends = (
             topo.vertex(edge.start())?.point(),
             topo.vertex(edge.end())?.point(),
         );
-        let range = (block.start.parameter, block.end.parameter);
-        let places = block_places(edge.curve(), range)
-            .into_iter()
-            .map(|t| (t, edge.curve().evaluate_with_endpoints(t, ends.0, ends.1)))
-            .collect();
-        Ok(BlockCurve {
-            curve: edge.curve(),
-            ends,
-            range,
-            places,
-        })
+        let at = |t: f64| edge.curve().evaluate_with_endpoints(t, ends.0, ends.1);
+        let (from, to) = (block.start.parameter, block.end.parameter);
+        let (from, to) = if from <= to { (from, to) } else { (to, from) };
+        Ok((edge.curve(), at(from), at(to)))
     };
     let (i, j) = (read(block_i)?, read(block_j)?);
-    let lies_on = |from: &BlockCurve<'_>, on: &BlockCurve<'_>| {
-        from.places.iter().all(|&(_, p)| {
-            super::helpers::foot_on_curve(p, on.curve, on.ends, on.range, &on.places).1
-                <= tol.linear
-        })
-    };
-    Ok(lies_on(&i, &j) && lies_on(&j, &i))
-}
-
-/// The part of an edge's curve that a pave block covers.
-struct BlockCurve<'a> {
-    /// The edge's curve.
-    curve: &'a EdgeCurve,
-    /// The edge's vertex positions.
-    ends: (brepkit_math::vec::Point3, brepkit_math::vec::Point3),
-    /// The block's parameters.
-    range: (f64, f64),
-    /// The places of [`block_places`], each with its parameter.
-    places: Vec<(f64, brepkit_math::vec::Point3)>,
-}
-
-/// The parameters at which a block's part of its curve is read, in rising
-/// order: 17 or more, the two ends included.
-///
-/// A B-spline is a different polynomial between each two knots, so a narrow
-/// span can leave the rest of the curve and come back between two places
-/// that are spread evenly. Each span between the knots inside the block
-/// gets its own places, two more than the degree.
-fn block_places(curve: &EdgeCurve, range: (f64, f64)) -> Vec<f64> {
-    const LEAST: usize = 16;
-    let (lo, hi) = (range.0.min(range.1), range.0.max(range.1));
-    let mut breaks = vec![lo];
-    let per_span = if let EdgeCurve::NurbsCurve(nurbs) = curve {
-        for &knot in nurbs.knots() {
-            if knot > lo && knot < hi && breaks.last().is_some_and(|&last| knot > last) {
-                breaks.push(knot);
-            }
-        }
-        (nurbs.degree() + 3).max(LEAST.div_ceil(breaks.len()))
-    } else {
-        LEAST
-    };
-    breaks.push(hi);
-    let mut places = Vec::with_capacity((breaks.len() - 1) * per_span + 1);
-    for span in breaks.windows(2) {
-        for k in 0..per_span {
-            #[allow(clippy::cast_precision_loss)]
-            places.push(span[0] + (span[1] - span[0]) * (k as f64 / per_span as f64));
-        }
-    }
-    places.push(hi);
-    places
+    Ok(crate::builder::face_splitter::curves_one_curve(
+        i, j, tol.linear,
+    ))
 }
 
 #[cfg(test)]
@@ -670,6 +617,60 @@ mod tests {
                 }
                 assert_eq!(common_blocks(&topo, &mut arena), 0);
             }
+        }
+    }
+
+    /// A quadratic B-spline over 32 even spans whose control points weave
+    /// 0.2 either side of the line from (0, 0) to (32, 0), and the polyline
+    /// through its points at its 33 knots: the two agree at each knot and
+    /// part by 0.1 at each span's middle, so they do not share their block.
+    /// A copy of the spline 2e-8 aside does.
+    #[test]
+    fn b_splines_that_agree_at_their_knots_and_part_between_are_not_common() {
+        let mut points = vec![Point3::new(0.0, 0.0, 0.0)];
+        for i in 1..=32_i32 {
+            let side = if i % 2 == 0 { 0.2 } else { -0.2 };
+            points.push(Point3::new(f64::from(i) - 0.5, side, 0.0));
+        }
+        points.push(Point3::new(32.0, 0.0, 0.0));
+        let mut knots = vec![0.0, 0.0];
+        knots.extend((0..=32).map(f64::from));
+        knots.extend([32.0, 32.0]);
+        let weave = NurbsCurve::new(2, knots.clone(), points.clone(), vec![1.0; 34]).unwrap();
+        let at_knots: Vec<Point3> = (0..=32).map(|k| weave.evaluate(f64::from(k))).collect();
+        let mut line_knots = vec![0.0];
+        line_knots.extend((0..=32).map(f64::from));
+        line_knots.push(32.0);
+        let polyline = NurbsCurve::new(1, line_knots, at_knots, vec![1.0; 33]).unwrap();
+        let aside = NurbsCurve::new(
+            2,
+            knots,
+            points
+                .iter()
+                .map(|&p| p + Vec3::new(0.0, 0.0, 2e-8))
+                .collect(),
+            vec![1.0; 34],
+        )
+        .unwrap();
+        let (start, end) = (Point3::new(0.0, 0.0, 0.0), Point3::new(32.0, 0.0, 0.0));
+        for (other, common) in [(polyline, 0), (aside, 1)] {
+            let mut topo = Topology::new();
+            let mut arena = GfaArena::new();
+            whole_edge(
+                &mut topo,
+                &mut arena,
+                start,
+                end,
+                EdgeCurve::NurbsCurve(weave.clone()),
+            );
+            whole_edge(
+                &mut topo,
+                &mut arena,
+                start,
+                end,
+                EdgeCurve::NurbsCurve(other),
+            );
+            assert_eq!(common_blocks(&topo, &mut arena), common);
         }
     }
 
