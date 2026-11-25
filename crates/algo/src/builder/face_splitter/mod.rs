@@ -7042,11 +7042,11 @@ pub fn split_face_2d(
     let mut rest_sections: Vec<SectionEdge> = Vec::new();
     let mut is_cap: Vec<bool> = Vec::with_capacity(sections.len());
     for s in sections {
-        // An oblique plane's ellipse lies within its semi-major axis of its
+        // An oblique plane's ellipse lies within its longer semi-axis of its
         // centre, so it clears the outline when that circle would.
         let conic = match &s.curve_3d {
             EdgeCurve::Circle(c) => Some((c.center(), c.radius())),
-            EdgeCurve::Ellipse(e) => Some((e.center(), e.semi_major())),
+            EdgeCurve::Ellipse(e) => Some((e.center(), e.semi_major().max(e.semi_minor()))),
             EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
         };
         let closed = (s.start - s.end).length() < tol.linear && outer_poly.len() >= 3;
@@ -7617,7 +7617,7 @@ fn sample_wire_outline_uv(
 /// the face outline by more than its radius, while a corner cylinder's section
 /// circle is exactly tangent (centre exactly one radius out); the 5% margin
 /// keeps float noise on such a tangent circle from reading as interior. An
-/// ellipse is held to its semi-major axis, so one that touches the outline
+/// ellipse is held to its longer semi-axis, so one that touches the outline
 /// anywhere is refused.
 const CAP_INTERIORITY_MARGIN: f64 = 1.05;
 
@@ -8146,7 +8146,7 @@ fn circle_cap_meets(
 /// [`Circle3D::intersect_segment`], and a circle's from
 /// [`Circle3D::intersect_circle`], kept where they lie on `other`'s arc (read
 /// along its curve or the short way round). An ellipse or a spline is only
-/// proved apart: it lies within its semi-major axis of its centre, and a
+/// proved apart: it lies within its longer semi-axis of its centre, and a
 /// spline's pieces within the hull of their control points.
 fn circle_meets(
     circle: &brepkit_math::curves::Circle3D,
@@ -8198,7 +8198,8 @@ fn circle_meets(
         }
         EdgeCurve::Ellipse(e) => {
             let apart = (e.center() - center).length();
-            ((apart - e.semi_major()).max(0.0), apart + e.semi_major())
+            let longer = e.semi_major().max(e.semi_minor());
+            ((apart - longer).max(0.0), apart + longer)
         }
         EdgeCurve::NurbsCurve(n) => {
             let (t0, t1) = other.curve_3d.domain_with_endpoints(other.start, other.end);
@@ -14278,6 +14279,7 @@ pub fn ellipse_arcs_apart(
         let start = (sv * q0.sin()).atan2(su * q0.cos());
         let bound = p
             .semi_major()
+            .max(p.semi_minor())
             .madd(spans_apart(pa, (start, su * sv * qd)), moved);
         if bound.is_nan() {
             return f64::NAN;

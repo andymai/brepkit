@@ -655,7 +655,7 @@ pub(super) fn is_point_on_boundary_uv(
             }
             brepkit_topology::edge::EdgeCurve::Ellipse(e) => {
                 let t = e.project(point);
-                (t, e.evaluate(t), e.semi_major())
+                (t, e.evaluate(t), e.semi_major().max(e.semi_minor()))
             }
             brepkit_topology::edge::EdgeCurve::Line
             | brepkit_topology::edge::EdgeCurve::NurbsCurve(_) => continue,

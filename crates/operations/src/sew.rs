@@ -476,7 +476,7 @@ impl Span {
             EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
                 let reach = match &span.curve {
                     EdgeCurve::Circle(c) => c.radius(),
-                    EdgeCurve::Ellipse(e) => e.semi_major(),
+                    EdgeCurve::Ellipse(e) => e.semi_major().max(e.semi_minor()),
                     _ => 0.0,
                 };
                 let eighth = std::f64::consts::FRAC_PI_8;
