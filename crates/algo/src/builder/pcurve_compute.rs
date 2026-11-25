@@ -1632,12 +1632,19 @@ fn piece_stray(curve: &EdgeCurve, a: Point3, b: Point3, span: Option<(f64, f64)>
 
 /// The larger of `a` and `b`, or NaN where either is NaN. `f64::max` drops
 /// a NaN, so a bound built with it could pass a term it never read.
-pub(super) fn max_or_nan(a: f64, b: f64) -> f64 {
+pub fn max_or_nan(a: f64, b: f64) -> f64 {
     if a.is_nan() || b.is_nan() {
         f64::NAN
     } else {
         a.max(b)
     }
+}
+
+/// The length of `v` for a bound: read by `hypot`, which keeps it where its
+/// square underflows to nothing (a gap of 1e-166 reads as none through its
+/// square) or overflows.
+pub fn bound_length(v: brepkit_math::vec::Vec3) -> f64 {
+    v.x().hypot(v.y()).hypot(v.z())
 }
 
 /// The distance from `p` to the segment from `a` to `b`.

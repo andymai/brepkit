@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.57](https://github.com/andymai/brepkit/compare/v4.11.56...v4.11.57) (2026-11-25)
+
+
+### Bug Fixes
+
+* **wasm,topology,math:** check each batch arm's sizes, coordinates and counts as its binding does ([#2887](https://github.com/andymai/brepkit/issues/2887)) ([c493507](https://github.com/andymai/brepkit/commit/c4935072390caa23773c19bf832ec4bccfd3d19f))
+
 ## [4.11.56](https://github.com/andymai/brepkit/compare/v4.11.55...v4.11.56) (2026-11-25)
 
 

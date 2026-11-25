@@ -67,11 +67,13 @@ pub fn point_to_solid(
 
     // Sort candidates by AABB distance to point for early termination.
     let mut candidates: Vec<usize> = (0..face_aabbs.len()).collect();
-    candidates.sort_by(|&a, &b| {
-        let da = face_aabbs[a].1.distance_squared_to_point(point);
-        let db = face_aabbs[b].1.distance_squared_to_point(point);
-        da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    // A box that hides where its face lies is no distance off: its face is
+    // read first.
+    let gap = |i: usize| {
+        let d = face_aabbs[i].1.distance_squared_to_point(point);
+        if d.is_nan() { 0.0 } else { d }
+    };
+    candidates.sort_by(|&a, &b| gap(a).total_cmp(&gap(b)));
 
     if let Some(closest_idx) = bvh.query_closest(point)
         && let Some(pos) = candidates

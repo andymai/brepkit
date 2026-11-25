@@ -14120,7 +14120,7 @@ fn one_conic_speed(a: &EdgeCurve, b: &EdgeCurve) -> Option<f64> {
 /// holds it within `tol` of the conic; and is another B-spline's trim where
 /// [`nurbs_trims_apart`] or [`nurbs_paths_apart`] holds them within `tol`.
 /// Any other pair is taken for two curves.
-fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
+pub fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
     use std::borrow::Cow;
     // Each bound reads a conic's sizes from its radius or semi-axes, true
     // only on unit, square axes. A line or a B-spline is read as it is.
@@ -14167,11 +14167,12 @@ fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
         s.curve_3d
             .evaluate_with_endpoints((t1 - t0).madd(t, t0), s.start, s.end)
     };
-    let middles_meet = (evaluate_edge_at_t(&a.curve_3d, a.start, a.end, 0.5)
-        - evaluate_edge_at_t(&b.curve_3d, b.start, b.end, 0.5))
-    .length()
-        <= tol
-        && (along(a, 0.5) - along(b, 0.5)).length() <= tol;
+    let bound_length = crate::builder::pcurve_compute::bound_length;
+    let middles_meet = bound_length(
+        evaluate_edge_at_t(&a.curve_3d, a.start, a.end, 0.5)
+            - evaluate_edge_at_t(&b.curve_3d, b.start, b.end, 0.5),
+    ) <= tol
+        && bound_length(along(a, 0.5) - along(b, 0.5)) <= tol;
     // A B-spline trim is a line's segment where the control points of the
     // trim's own pieces all lie within the tolerance of the segment, as the
     // trim lies in their hull, and its ends lie on the segment's, as it
@@ -14183,7 +14184,7 @@ fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
         let len2 = d.dot(d);
         let off = |p: Point3| {
             let t = ((p - line.start).dot(d) / len2).clamp(0.0, 1.0);
-            (line.start + d * t - p).length()
+            bound_length(line.start + d * t - p)
         };
         let trim = spline
             .curve_3d
@@ -14193,7 +14194,8 @@ fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
                 let (Some(&first), Some(&last)) = (hull.first(), hull.last()) else {
                     return false;
                 };
-                let ends = |x: Point3, y: Point3| (first - x).length().max((last - y).length());
+                let ends =
+                    |x: Point3, y: Point3| bound_length(first - x).max(bound_length(last - y));
                 ends(line.start, line.end).min(ends(line.end, line.start)) <= tol
                     && hull.iter().all(|&p| off(p) <= tol)
             })
@@ -15021,7 +15023,7 @@ fn nurbs_conic_apart(
 /// and `w` at least the least weight. `None` for a weight not above nothing
 /// or a bound that is not finite.
 fn nurbs_speed_bound(n: &brepkit_math::nurbs::curve::NurbsCurve) -> Option<f64> {
-    use crate::builder::pcurve_compute::max_or_nan;
+    use crate::builder::pcurve_compute::{bound_length, max_or_nan};
     let (p, pts, ws, knots) = (n.degree(), n.control_points(), n.weights(), n.knots());
     if pts.is_empty() || ws.iter().any(|&w| w.is_nan() || w <= 0.0) {
         return None;
@@ -15034,7 +15036,7 @@ fn nurbs_speed_bound(n: &brepkit_math::nurbs::curve::NurbsCurve) -> Option<f64> 
     let least = ws.iter().fold(f64::INFINITY, |m, &w| m.min(w));
     let reach = pts
         .iter()
-        .fold(0.0_f64, |m, &q| max_or_nan(m, (q - origin).length()));
+        .fold(0.0_f64, |m, &q| max_or_nan(m, bound_length(q - origin)));
     #[allow(clippy::cast_precision_loss)]
     let degree = p as f64;
     let (mut lead, mut weight_rate) = (0.0_f64, 0.0_f64);
@@ -15044,7 +15046,7 @@ fn nurbs_speed_bound(n: &brepkit_math::nurbs::curve::NurbsCurve) -> Option<f64> 
             continue;
         }
         let step = (pts[i + 1] - origin) * ws[i + 1] - (pts[i] - origin) * ws[i];
-        lead = max_or_nan(lead, step.length() * degree / du);
+        lead = max_or_nan(lead, bound_length(step) * degree / du);
         weight_rate = max_or_nan(weight_rate, (ws[i + 1] - ws[i]).abs() * degree / du);
     }
     let speed = weight_rate.madd(reach, lead) / least;
@@ -15079,9 +15081,10 @@ fn nurbs_data_apart(
     let max_or_nan = crate::builder::pcurve_compute::max_or_nan;
     let most = |w: &[f64]| w.iter().copied().fold(0.0_f64, max_or_nan);
     let (top_m, top_n) = (most(mw), most(nw));
+    let bound_length = crate::builder::pcurve_compute::bound_length;
     let reach = mp
         .iter()
-        .map(|&p| (p - mp[0]).length())
+        .map(|&p| bound_length(p - mp[0]))
         .fold(0.0_f64, max_or_nan);
     // Each set of weights is read against its own largest, so the ratios
     // stay near one whatever the scale: raw products of weights can
@@ -15089,7 +15092,7 @@ fn nurbs_data_apart(
     let apart = |pairs: &mut dyn Iterator<Item = ((Point3, f64), (Point3, f64))>| {
         let (mut moved, mut ratio) = (0.0_f64, 0.0_f64);
         for ((p, wp), (q, wq)) in pairs {
-            moved = max_or_nan(moved, (q - p).length());
+            moved = max_or_nan(moved, bound_length(q - p));
             ratio = max_or_nan(ratio, ((wq / top_n) / (wp / top_m) - 1.0).abs());
         }
         let bound = (2.0 * ratio / (1.0 - ratio)).madd(reach, moved);
