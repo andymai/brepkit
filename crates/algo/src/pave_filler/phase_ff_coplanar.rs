@@ -387,6 +387,24 @@ fn process_coplanar_pair(
                     );
                 }
             }
+            SectionPiece::Curve {
+                target,
+                curve,
+                start,
+                end,
+            } => {
+                if !has_existing_curve_section(arena, topo, target, (&curve, start, end), tol) {
+                    create_curve_section_edge(
+                        topo,
+                        arena,
+                        minted,
+                        faces,
+                        &curve,
+                        (start, end),
+                        tol,
+                    );
+                }
+            }
         }
     }
 
@@ -431,6 +449,9 @@ struct BoundaryEdge {
     p3_start: Point3,
     p3_end: Point3,
     shape: Shape2,
+    /// A sampled edge's curve with its own start and end, which a section
+    /// that runs its whole length takes.
+    sampled: Option<(EdgeCurve, Point3, Point3)>,
 }
 
 /// A face's boundary in the plane's frame: every wire's edges, and the
@@ -455,6 +476,14 @@ enum SectionPiece {
         start: Point3,
         end: Point3,
         mid: Point3,
+    },
+    /// A sampled boundary edge's whole length, on its own curve from its
+    /// own start to its own end.
+    Curve {
+        target: FaceId,
+        curve: EdgeCurve,
+        start: Point3,
+        end: Point3,
     },
 }
 
@@ -609,6 +638,8 @@ fn face_region_2d(
                     Shape2::Poly(poly)
                 }
             };
+            let sampled =
+                matches!(shape, Shape2::Poly(_)).then(|| (edge.curve().clone(), v_start, v_end));
             edges.push(BoundaryEdge {
                 eid: oe.edge(),
                 p2_start,
@@ -616,6 +647,7 @@ fn face_region_2d(
                 p3_start,
                 p3_end,
                 shape,
+                sampled,
             });
         }
     }
@@ -1167,9 +1199,9 @@ fn clip_to_region(
         }
         Shape2::Poly(poly) => {
             // A sampled curve is walked sample by sample for its crossings
-            // and its in-region runs; each run is emitted as the chord
-            // between the run's ends (the true curve piece is the regular FF
-            // phase's job, this only partitions the partner consistently).
+            // and its in-region runs. A run over the whole edge is the edge's
+            // own curve; a shorter run is emitted as the chord between its
+            // ends, whose ends on the curve the samples do not hold.
             let n = poly.len().saturating_sub(1);
             if n == 0 {
                 return;
@@ -1205,6 +1237,18 @@ fn clip_to_region(
                 }
                 let mid = at(0.5 * (sa + sb));
                 if on_boundary(mid, &target.edges, tol) || !inside_region(mid, target, tol) {
+                    continue;
+                }
+                if sa <= 0.0
+                    && sb >= n as f64
+                    && let Some((curve, start, end)) = &e.sampled
+                {
+                    out.push(SectionPiece::Curve {
+                        target: target_face,
+                        curve: curve.clone(),
+                        start: *start,
+                        end: *end,
+                    });
                     continue;
                 }
                 let start = if sa <= 0.0 {
@@ -1406,6 +1450,82 @@ fn create_arc_section_edge(
 
     log::debug!(
         "FF-coplanar: faces {face_a:?} and {face_b:?} arc section t=[{t_s:.4},{t_e:.4}] \
+         (curve_index={curve_index}, edge={edge_id:?}, pb={pb_id:?})",
+    );
+}
+
+/// Whether `target` already holds a section with the ends of `piece` that
+/// is proved one curve with it along its whole length.
+fn has_existing_curve_section(
+    arena: &GfaArena,
+    topo: &Topology,
+    target: FaceId,
+    piece: (&EdgeCurve, Point3, Point3),
+    tol: Tolerance,
+) -> bool {
+    let near = |p: Point3, q: Point3| (p - q).length() < tol.linear * 10.0;
+    let (_, p_start, p_end) = piece;
+    arena.curves.iter().any(|curve| {
+        if curve.face_a != target && curve.face_b != target {
+            return false;
+        }
+        let Some(((s, _), (e, _))) = section_ends(topo, arena, curve) else {
+            return false;
+        };
+        ((near(s, p_start) && near(e, p_end)) || (near(s, p_end) && near(e, p_start)))
+            && crate::builder::face_splitter::curves_one_curve(
+                (&curve.curve, s, e),
+                piece,
+                tol.linear * 10.0,
+            )
+    })
+}
+
+/// Register the whole of a sampled boundary edge's curve from `p_s` to
+/// `p_e` as one section, the way [`create_arc_section_edge`] registers an
+/// arc.
+fn create_curve_section_edge(
+    topo: &mut Topology,
+    arena: &mut GfaArena,
+    minted: &mut Vec<(Point3, VertexId)>,
+    faces: [FaceId; 2],
+    curve: &EdgeCurve,
+    (p_s, p_e): (Point3, Point3),
+    tol: Tolerance,
+) {
+    let [face_a, face_b] = faces;
+    let (t_s, t_e) = super::edge_pave_span(curve, p_s, p_e);
+    let start_vid = find_or_create_vertex(topo, arena, minted, faces, p_s, tol);
+    let end_vid = find_or_create_vertex(topo, arena, minted, faces, p_e, tol);
+    let edge_id = topo.add_edge(Edge::new(start_vid, end_vid, curve.clone()));
+    let pb = PaveBlock::new(edge_id, Pave::new(start_vid, t_s), Pave::new(end_vid, t_e));
+    let pb_id = arena.pave_blocks.alloc(pb);
+    arena
+        .edge_pave_blocks
+        .entry(edge_id)
+        .or_default()
+        .push(pb_id);
+    let n: u32 = 16;
+    let (d0, d1) = curve.domain_with_endpoints(p_s, p_e);
+    let bbox = Aabb3::from_points((0..=n).map(|k| {
+        curve.evaluate_with_endpoints((d1 - d0).madd(f64::from(k) / f64::from(n), d0), p_s, p_e)
+    }));
+    let curve_index = arena.curves.len();
+    arena.curves.push(IntersectionCurveDS {
+        curve: curve.clone(),
+        face_a,
+        face_b,
+        bbox,
+        pave_blocks: vec![pb_id],
+        t_range: (t_s, t_e),
+    });
+    arena.interference.ff.push(Interference::FF {
+        f1: face_a,
+        f2: face_b,
+        curve_index,
+    });
+    log::debug!(
+        "FF-coplanar: faces {face_a:?} and {face_b:?} curve section t=[{t_s:.4},{t_e:.4}] \
          (curve_index={curve_index}, edge={edge_id:?}, pb={pb_id:?})",
     );
 }
