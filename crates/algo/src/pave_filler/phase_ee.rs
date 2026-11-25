@@ -142,11 +142,22 @@ pub(super) fn edge_crossings(
         return Ok(Vec::new());
     }
     let (curve_a, curve_b) = (topo.edge(a)?.curve(), topo.edge(b)?.curve());
+    let run_along = std::cell::OnceCell::new();
+    let along = || {
+        *run_along.get_or_init(|| {
+            runs_along((curve_a, data_a), (curve_b, data_b), tol.linear)
+                || runs_along((curve_b, data_b), (curve_a, data_a), tol.linear)
+        })
+    };
     Ok(find_edge_edge_crossings(topo, a, data_a, b, data_b, tol)?
         .into_iter()
         .filter_map(|(t_a, t_b, _)| {
-            let (t_a, t_b, p) =
-                refine_on_curves((curve_a, data_a), (curve_b, data_b), (t_a, t_b), tol.linear)?;
+            let (t_a, t_b, p) = refine_on_curves(
+                (curve_a, data_a),
+                (curve_b, data_b),
+                (t_a, t_b),
+                (tol.linear, &along),
+            )?;
             let on_a = curve_a.evaluate_with_endpoints(t_a, data_a.start_pos, data_a.end_pos);
             let on_b = curve_b.evaluate_with_endpoints(t_b, data_b.start_pos, data_b.end_pos);
             ((on_a - on_b).length() <= tol.linear
@@ -331,6 +342,14 @@ fn find_edge_edge_crossings(
     // compute on the same curves, and the two copies of one vertex then
     // bound a sliver edge.
     let mut matched: Vec<bool> = Vec::new();
+    // Whether one curve runs along the other, read once for the pair.
+    let run_along = std::cell::OnceCell::new();
+    let along_pair = || {
+        *run_along.get_or_init(|| {
+            runs_along((edge_a.curve(), ea), (edge_b.curve(), eb), tol.linear)
+                || runs_along((edge_b.curve(), eb), (edge_a.curve(), ea), tol.linear)
+        })
+    };
     let mut read = |crossings: &mut Vec<(f64, f64, Point3)>, hit: &ChordApproach| {
         // A touch stops the refinement on parallel tangents anywhere along
         // the run where the curves keep within the tolerance; it is read at
@@ -340,15 +359,19 @@ fn find_edge_edge_crossings(
             (edge_a.curve(), ea),
             (edge_b.curve(), eb),
             (hit.t_a, hit.t_b),
-            tol.linear,
+            (tol.linear, &along_pair),
         )
         .or_else(|| {
-            touch_point(
-                (edge_a.curve(), ea),
-                (edge_b.curve(), eb),
-                (hit.t_a, hit.t_b),
-                tol.linear,
-            )
+            (!along_pair())
+                .then(|| {
+                    touch_point(
+                        (edge_a.curve(), ea),
+                        (edge_b.curve(), eb),
+                        (hit.t_a, hit.t_b),
+                        tol.linear,
+                    )
+                })
+                .flatten()
         });
         let (t_a, t_b, pt) = refined.unwrap_or((hit.t_a, hit.t_b, hit.point));
         // One crossing read from two pairs of chords, or a touch where a
@@ -524,7 +547,12 @@ fn find_edge_edge_crossings(
         );
         // A place where the curves touch along parallel tangents is a contact
         // as a crossing is: the step for one curve below sorts the two.
-        let ends = match refine((edge_a.curve(), ea), (edge_b.curve(), eb), seed, tol.linear) {
+        let ends = match refine(
+            (edge_a.curve(), ea),
+            (edge_b.curve(), eb),
+            seed,
+            (tol.linear, &along_pair),
+        ) {
             Refined::Met(t_a, t_b, point) | Refined::Along(t_a, t_b, point) => {
                 crossed[cell] = Some(t_a);
                 let at = ChordApproach {
@@ -997,6 +1025,12 @@ fn drop_crossings_along_one_curve(
         return;
     }
     let at_a = |t: f64| a.0.evaluate_with_endpoints(t, a.1.start_pos, a.1.end_pos);
+    let run_along = std::cell::OnceCell::new();
+    let along = || {
+        *run_along.get_or_init(|| {
+            runs_along((a.0, a.1), (b.0, b.1), tol) || runs_along((b.0, b.1), (a.0, a.1), tol)
+        })
+    };
     let samples_b: Vec<(f64, Point3)> = b.2.iter().map(|p| (p.t, p.pos)).collect();
     let foot = |t: f64| {
         foot_on_curve(
@@ -1193,7 +1227,7 @@ fn drop_crossings_along_one_curve(
             continue;
         }
         let past = (at + side * probe).clamp(lo, hi);
-        let corner = refine_on_curves((a.0, a.1), (b.0, b.1), (past, foot(past).0), tol)
+        let corner = refine_on_curves((a.0, a.1), (b.0, b.1), (past, foot(past).0), (tol, &along))
             .filter(|&(t_a, _, _)| (t_a - at).abs() <= 2.0 * probe)
             .unwrap_or_else(|| {
                 let t_b = foot(at).0;
@@ -1279,9 +1313,9 @@ fn refine_on_curves(
     curve_a: (&EdgeCurve, &EdgeData),
     curve_b: (&EdgeCurve, &EdgeData),
     seed: (f64, f64),
-    tol: f64,
+    (tol, along): (f64, &dyn Fn() -> bool),
 ) -> Option<(f64, f64, Point3)> {
-    match refine(curve_a, curve_b, seed, tol) {
+    match refine(curve_a, curve_b, seed, (tol, along)) {
         Refined::Met(ta, tb, point) => Some((ta, tb, point)),
         Refined::Along(..) | Refined::Apart => None,
     }
@@ -1300,11 +1334,15 @@ enum Refined {
 
 /// [`refine_on_curves`], telling where it stops on parallel tangents
 /// within the tolerance.
+///
+/// `along` tells, once for the pair, whether one curve runs along the other
+/// (see [`runs_along`]); such a pair's readings are neither sorted into
+/// crossings nor polished.
 fn refine(
     (ca, ea): (&EdgeCurve, &EdgeData),
     (cb, eb): (&EdgeCurve, &EdgeData),
     (mut ta, mut tb): (f64, f64),
-    tol: f64,
+    (tol, along): (f64, &dyn Fn() -> bool),
 ) -> Refined {
     let at_a = |t: f64| ca.evaluate_with_endpoints(t, ea.start_pos, ea.end_pos);
     let at_b = |t: f64| cb.evaluate_with_endpoints(t, eb.start_pos, eb.end_pos);
@@ -1348,13 +1386,16 @@ fn refine(
             return if r.length() <= tol {
                 // Stalled on parallel tangents: a touch proved about here
                 // is a meeting; otherwise the curves run along each other.
-                touch_point((ca, ea), (cb, eb), (ta, tb), tol).map_or_else(
-                    || {
-                        let (pa, pb) = (at_a(ta), at_b(tb));
-                        Refined::Along(ta, tb, pa + (pb - pa) * 0.5)
-                    },
-                    |(ta, tb, point)| Refined::Met(ta, tb, point),
-                )
+                (!along())
+                    .then(|| touch_point((ca, ea), (cb, eb), (ta, tb), tol))
+                    .flatten()
+                    .map_or_else(
+                        || {
+                            let (pa, pb) = (at_a(ta), at_b(tb));
+                            Refined::Along(ta, tb, pa + (pb - pa) * 0.5)
+                        },
+                        |(ta, tb, point)| Refined::Met(ta, tb, point),
+                    )
             } else {
                 Refined::Apart
             };
@@ -1371,7 +1412,8 @@ fn refine(
     if gap <= tol {
         // A crossing the search resolved stays where it is; only a reading
         // that stopped short of one, or on a touch, is polished.
-        let resolved = gap <= 1e-3 * tol && crosses_at((ca, ea), (cb, eb), (ta, tb), tol);
+        let resolved =
+            along() || gap <= 1e-3 * tol && crosses_at((ca, ea), (cb, eb), (ta, tb), tol);
         let polished = if resolved {
             None
         } else {
@@ -1398,6 +1440,47 @@ fn whole_turn(curve: &EdgeCurve, data: &EdgeData, tol: f64) -> bool {
 /// meet, they cross rather than touch.
 const TOUCH_SIN: f64 = 1e-3;
 
+/// Whether curve `a` runs along curve `b`: at nine points spread over `a`,
+/// it lies within `tol` of `b`, each point's nearest on `b` found from `b`'s
+/// nearest sample. A pair where one runs along the other has no one point
+/// of touch, and its readings are left as the search finds them; refusing
+/// to sort or polish keeps the readings, so these few samples need prove
+/// nothing.
+fn runs_along(
+    (ca, ea): (&EdgeCurve, &EdgeData),
+    (cb, eb): (&EdgeCurve, &EdgeData),
+    tol: f64,
+) -> bool {
+    let samples = &eb
+        .sampled
+        .get_or_init(|| SampledEdgeChords::new(cb, eb))
+        .pts;
+    let turn_b = whole_turn(cb, eb, tol);
+    (0..=8).all(|k| {
+        let t = ea.t0 + (ea.t1 - ea.t0) * f64::from(k) / 8.0;
+        let p = ca.evaluate_with_endpoints(t, ea.start_pos, ea.end_pos);
+        let seed = samples
+            .iter()
+            .min_by(|x, y| (x.pos - p).length().total_cmp(&(y.pos - p).length()))
+            .map_or(eb.t0, |x| x.t);
+        let s = nearest_on((cb, eb), p, seed, turn_b);
+        (p - cb.evaluate_with_endpoints(s, eb.start_pos, eb.end_pos)).length() <= tol
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times a reading is sorted into a crossing or polished, for
+    /// tests that bound that work.
+    static POLISH_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Count one sorting or polish of a reading, in tests.
+fn count_polish_work() {
+    #[cfg(test)]
+    POLISH_WORK.with(|w| w.set(w.get() + 1));
+}
+
 /// Where two curves that meet within `tol` near `(ta, tb)`, along all but
 /// parallel tangents, touch: their nearest points, where the separation
 /// between them stands square to both tangents.
@@ -1420,6 +1503,7 @@ fn touch_point(
     (ta, tb): (f64, f64),
     tol: f64,
 ) -> Option<(f64, f64, Point3)> {
+    count_polish_work();
     let at_a = |t: f64| ca.evaluate_with_endpoints(t, ea.start_pos, ea.end_pos);
     let at_b = |t: f64| cb.evaluate_with_endpoints(t, eb.start_pos, eb.end_pos);
     let tan_a = |t: f64| ca.tangent_with_endpoints(t, ea.start_pos, ea.end_pos);
@@ -1454,13 +1538,6 @@ fn touch_point(
             &mut budget,
         )
     };
-    // Curves within the tolerance at nine points spread over `a` run along
-    // each other, and have no one point of touch; refusing to polish keeps
-    // the reading, so these few samples need prove nothing.
-    let gap_at = |t: f64| (at_a(t) - at_b(foot(t, tb))).length();
-    if (0..=8).all(|k| gap_at(lo_a + (hi_a - lo_a) * f64::from(k) / 8.0) <= tol) {
-        return None;
-    }
     let keep_a = |t: f64| if turn_a { t } else { t.clamp(lo_a, hi_a) };
     let first = 1e-6 * (hi_a - lo_a);
     let (mut lo, mut hi) = (keep_a(ta - first), keep_a(ta + first));
@@ -1731,6 +1808,7 @@ fn crosses_at(
     (ta, tb): (f64, f64),
     tol: f64,
 ) -> bool {
+    count_polish_work();
     let at_a = |t: f64| ca.evaluate_with_endpoints(t, ea.start_pos, ea.end_pos);
     let at_b = |t: f64| cb.evaluate_with_endpoints(t, eb.start_pos, eb.end_pos);
     let (lo_a, hi_a) = (ea.t0.min(ea.t1), ea.t0.max(ea.t1));
@@ -4254,6 +4332,26 @@ mod tests {
                 xs[0].abs() < 1e-9 && (xs[1] - d).abs() < 1e-3 * 1e-7 / (d * d),
                 "{xs:?}"
             );
+        }
+    }
+
+    /// Two copies of the quadratic `(t, t^2, 0)`, and the copy against its
+    /// own middle half: one runs along the other, which is read once for
+    /// the pair, so no reading is sorted into a crossing or polished, how
+    /// many seeds the chords give.
+    #[test]
+    fn coincident_curves_take_no_sorting_or_polish() {
+        let parabola = [0.0, 0.0, 1.0];
+        for (a_span, b_span) in [((0.0, 1.0), (0.0, 1.0)), ((0.25, 0.75), (0.0, 1.0))] {
+            let mut topo = Topology::new();
+            let a = poly_edge(&mut topo, &parabola, &[0.0], a_span);
+            let b = poly_edge(&mut topo, &parabola, &[0.0], b_span);
+            let before = POLISH_WORK.with(std::cell::Cell::get);
+            for (ea, eb) in [(a, b), (b, a)] {
+                let _ = crossings(&topo, ea, eb);
+            }
+            let work = POLISH_WORK.with(std::cell::Cell::get) - before;
+            assert_eq!(work, 0, "{a_span:?} against {b_span:?}");
         }
     }
 }
