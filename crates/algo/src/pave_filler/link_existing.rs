@@ -355,7 +355,9 @@ fn link_along_split_arc(
                 arena.resolve_vertex(b.end.vertex),
             ];
             theirs.sort_by_key(|v| v.index());
-            (theirs == ours && can_link(topo, tol, arena, section_curve, pb_id)).then_some(pb_id)
+            let span = (from.parameter, pave.parameter);
+            (theirs == ours && can_link(topo, tol, arena, section_curve, span, pb_id))
+                .then_some(pb_id)
         });
         let Some(partner) = partner else {
             return 0;
@@ -379,20 +381,31 @@ fn link_along_split_arc(
     linked
 }
 
-/// Whether [`try_link`] can link a new pave block, in no common block yet,
-/// on `section_curve` with `boundary_pb_id`.
+/// Whether [`try_link`] can link a new pave block over `span` of
+/// `section_curve`, in no common block yet, with `boundary_pb_id`: the
+/// curves pass the gate, and the two blocks are [`one_arc`].
+///
+/// [`one_arc`]: super::force_interf_ee::one_arc
 fn can_link(
     topo: &Topology,
     tol: Tolerance,
     arena: &GfaArena,
     section_curve: &EdgeCurve,
+    span: (f64, f64),
     boundary_pb_id: PaveBlockId,
 ) -> bool {
-    arena
-        .pave_blocks
-        .get(boundary_pb_id)
-        .and_then(|pb| topo.edge(pb.original_edge).ok())
-        .is_some_and(|edge| curves_compatible(section_curve, edge.curve(), tol))
+    arena.pave_blocks.get(boundary_pb_id).is_some_and(|pb| {
+        topo.edge(pb.original_edge).is_ok_and(|edge| {
+            curves_compatible(section_curve, edge.curve(), tol)
+                && super::force_interf_ee::one_arc(
+                    section_curve,
+                    span,
+                    edge.curve(),
+                    pb.parameter_range(),
+                    tol,
+                )
+        })
+    })
 }
 
 /// Attempt to link a section PB with a boundary PB into a CommonBlock.
@@ -563,6 +576,79 @@ mod tests {
             bbox: Aabb3::from_points([Point3::new(-1.0, -1.0, 0.0), Point3::new(1.0, 1.0, 0.0)]),
             pave_blocks: vec![section_pb],
             t_range: (0.0, 3.0),
+        });
+
+        super::perform(&topo, Tolerance::default(), &mut arena).unwrap();
+
+        let leaves = arena.collect_leaf_pave_blocks(&[section_pb]);
+        let linked = leaves
+            .iter()
+            .filter(|pb| arena.pb_to_cb.contains_key(pb))
+            .count();
+        assert!(
+            leaves == vec![section_pb] && linked == 0,
+            "the section is left in {} pieces, {linked} linked",
+            leaves.len()
+        );
+    }
+
+    /// A section along a rim from angle 0 to 2, and two rim pieces from 0 to
+    /// 1 and from 1 to 2. The second lies on the rim's circle turned a
+    /// millionth of a radian about the x axis: close enough for the circles'
+    /// gate, but no bound holds its arc on the section's. The section stays
+    /// whole, with no piece linked.
+    #[test]
+    fn a_section_along_a_rim_stays_whole_when_a_piece_has_no_bound() {
+        let centre = Point3::new(0.0, 0.0, 0.0);
+        let circle = Circle3D::with_axes(
+            centre,
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap();
+        let (sin, cos) = 1e-6f64.sin_cos();
+        let tilted = Circle3D::with_axes(
+            centre,
+            Vec3::new(0.0, -sin, cos),
+            1.0,
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, cos, sin),
+        )
+        .unwrap();
+        let mut topo = Topology::default();
+        let v: Vec<_> = [0.0, 1.0, 2.0]
+            .iter()
+            .map(|&t| topo.add_vertex(Vertex::new(circle.evaluate(t), 1e-7)))
+            .collect();
+        let e01 = topo.add_edge(Edge::new(v[0], v[1], EdgeCurve::Circle(circle.clone())));
+        let e12 = topo.add_edge(Edge::new(v[1], v[2], EdgeCurve::Circle(tilted)));
+        let section = topo.add_edge(Edge::new(v[0], v[2], EdgeCurve::Circle(circle.clone())));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(section, true)], false).unwrap());
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let mut arena = GfaArena::new();
+        arena.init_edge_pave_block(e01, v[0], 0.0, v[1], 1.0);
+        arena.init_edge_pave_block(e12, v[1], 1.0, v[2], 2.0);
+        let section_pb = arena.pave_blocks.alloc(crate::ds::PaveBlock::new(
+            section,
+            crate::ds::Pave::new(v[0], 0.0),
+            crate::ds::Pave::new(v[2], 2.0),
+        ));
+        arena.curves.push(IntersectionCurveDS {
+            curve: EdgeCurve::Circle(circle),
+            face_a: face,
+            face_b: face,
+            bbox: Aabb3::from_points([Point3::new(-1.0, -1.0, 0.0), Point3::new(1.0, 1.0, 0.0)]),
+            pave_blocks: vec![section_pb],
+            t_range: (0.0, 2.0),
         });
 
         super::perform(&topo, Tolerance::default(), &mut arena).unwrap();
