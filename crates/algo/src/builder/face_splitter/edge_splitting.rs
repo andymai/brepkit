@@ -1,7 +1,7 @@
 //! Curve-specific edge splitting at 3D intersection points.
 
 use brepkit_math::madd::Madd;
-use brepkit_math::vec::Point3;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::FaceSurface;
 
@@ -1174,7 +1174,9 @@ pub(super) fn find_splits_on_nurbs_section(
 /// matches the evaluator for both twins. Boundary-edge splitting keeps the
 /// CCW-domain convention (`find_splits_on_circle`) — boundary arcs may
 /// genuinely exceed π, as may ellipse sections (no π-split guarantee), so
-/// both stay on the domain-based finders.
+/// both stay on the domain-based finders. A section of a half turn, which
+/// either way reads to rounding, is read counter-clockwise from its stored
+/// start for both twins ([`splits_on_section_conic`]).
 pub(super) fn find_splits_on_section_arc(
     edge: &OrientedPCurveEdge,
     split_pts_3d: &[Point3],
@@ -1183,20 +1185,59 @@ pub(super) fn find_splits_on_section_arc(
     let EdgeCurve::Circle(circle) = &edge.curve_3d else {
         return Vec::new();
     };
-    let a0 = circle.project(edge.start_3d);
-    let delta = shorter_arc_delta(circle.project(edge.end_3d) - a0);
+    splits_on_section_conic(
+        edge,
+        &|p| circle.project(p),
+        &|t| circle.evaluate(t),
+        split_pts_3d,
+        tol,
+    )
+}
+
+/// The splits of a circle or ellipse section at the points of
+/// `split_pts_3d` within `tol` of its curve and strictly inside it, as
+/// fractions along it in the traversal's order. The arc is read from the
+/// stored edge's start to its end the shorter way round, or
+/// counter-clockwise, the stored way, where both ways are a half turn to
+/// rounding: a section and its reverse twin read the one arc.
+fn splits_on_section_conic(
+    edge: &OrientedPCurveEdge,
+    project: &dyn Fn(Point3) -> f64,
+    evaluate: &dyn Fn(f64) -> Point3,
+    split_pts_3d: &[Point3],
+    tol: f64,
+) -> Vec<(f64, Point3)> {
+    use std::f64::consts::{PI, TAU};
+    let (stored_start, stored_end) = if edge.forward {
+        (edge.start_3d, edge.end_3d)
+    } else {
+        (edge.end_3d, edge.start_3d)
+    };
+    let a0 = project(stored_start);
+    let raw = project(stored_end) - a0;
+    let half_turn = (shorter_arc_delta(raw).abs() - PI).abs() <= 1e-9;
+    let delta = if half_turn {
+        raw.rem_euclid(TAU)
+    } else {
+        shorter_arc_delta(raw)
+    };
     if delta.abs() < 1e-14 {
         return Vec::new();
     }
     let mut splits = Vec::new();
     for &sp in split_pts_3d {
         crate::perf::bump_face_split_probe();
-        let angle = circle.project(sp);
-        let closest = circle.evaluate(angle);
+        let angle = project(sp);
+        let closest = evaluate(angle);
         if (sp - closest).length() > tol {
             continue;
         }
-        let t_norm = shorter_arc_delta(angle - a0) / delta;
+        let along = if half_turn {
+            (angle - a0).rem_euclid(TAU) / delta
+        } else {
+            shorter_arc_delta(angle - a0) / delta
+        };
+        let t_norm = if edge.forward { along } else { 1.0 - along };
         if t_norm <= tol || t_norm >= 1.0 - tol {
             continue;
         }
@@ -1232,28 +1273,13 @@ pub(super) fn find_splits_on_section_ellipse(
     let EdgeCurve::Ellipse(ellipse) = &edge.curve_3d else {
         return Vec::new();
     };
-    let a0 = ellipse.project(edge.start_3d);
-    let delta = shorter_arc_delta(ellipse.project(edge.end_3d) - a0);
-    if delta.abs() < 1e-14 {
-        return Vec::new();
-    }
-    let mut splits = Vec::new();
-    for &sp in split_pts_3d {
-        crate::perf::bump_face_split_probe();
-        let angle = ellipse.project(sp);
-        let closest = ellipse.evaluate(angle);
-        if (sp - closest).length() > tol {
-            continue;
-        }
-        let t_norm = shorter_arc_delta(angle - a0) / delta;
-        if t_norm <= tol || t_norm >= 1.0 - tol {
-            continue;
-        }
-        splits.push((t_norm, sp));
-    }
-    splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
-    splits
+    splits_on_section_conic(
+        edge,
+        &|p| ellipse.project(p),
+        &|t| ellipse.evaluate(t),
+        split_pts_3d,
+        tol,
+    )
 }
 
 /// The span of its ellipse that an ellipse edge runs on, counter-clockwise
@@ -2575,4 +2601,1413 @@ mod hole_copy_tests {
             }
         }
     }
+}
+
+/// A point where two section edges meet inside both, with its witness: a
+/// point of each curve, `apart` from each other, on either side of it.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Meeting {
+    /// The midpoint of the witness points.
+    pub(super) at: Point3,
+    /// How far apart the witness points lie.
+    pub(super) apart: f64,
+}
+
+/// A pair of sections whose meetings [`section_meeting_points`] could not
+/// settle within its budget.
+#[derive(Debug)]
+pub(super) struct UnsettledMeeting;
+
+/// The distance from a circle or ellipse arc to a second curve, as a wave in
+/// the arc's parameter `t`, read about the parameter `mid` with `s = t - mid`:
+/// `c0 + c1 (cos s - 1) + d1 sin s + c2 (cos 2s - 1) + d2 sin 2s`. Read so,
+/// each term is no larger than the arc's own reach from its middle point,
+/// though the arc's centre lies far off. Its derivatives are bounded by its
+/// amplitudes, which bounds it over any span from its value and slope at the
+/// span's middle.
+#[derive(Clone, Copy)]
+struct Wave {
+    /// The parameter the wave is read about.
+    mid: f64,
+    /// How far from `mid` it is read, at most.
+    half: f64,
+    c0: f64,
+    c1: f64,
+    d1: f64,
+    c2: f64,
+    d2: f64,
+    /// Bounds on the error of the coefficients, as read in the value, the
+    /// slope and the bend over the span.
+    err: [f64; 3],
+}
+
+impl Wave {
+    /// The wave of coefficients `[c0, c1, d1, c2, d2]` within `errors` of
+    /// their own, read about `mid` up to `half` from it: the value's error
+    /// is each coefficient's times its term's size there at most.
+    fn new(mid: f64, half: f64, [c0, c1, d1, c2, d2]: [f64; 5], errors: [f64; 5]) -> Self {
+        let [e0, e1, f1, e2, f2] = errors;
+        let (first, second) = Self::reach(half);
+        let err = [
+            f2.madd(
+                second.1,
+                e2.madd(second.0, f1.madd(first.1, e1.madd(first.0, e0))),
+            ),
+            2.0f64.madd(e2 + f2, e1 + f1),
+            4.0f64.madd(e2 + f2, e1 + f1),
+        ];
+        Self {
+            mid,
+            half,
+            c0,
+            c1,
+            d1,
+            c2,
+            d2,
+            err,
+        }
+    }
+
+    /// The square of the length of `wm + wu (cos s - 1) + wv sin s`, each
+    /// part within the bound that comes with it, read about `mid` up to
+    /// `half` from it.
+    fn square(
+        mid: f64,
+        half: f64,
+        (wm, em): ((f64, f64), f64),
+        (wu, eu): ((f64, f64), f64),
+        (wv, ev): ((f64, f64), f64),
+    ) -> Self {
+        let dot = |a: (f64, f64), b: (f64, f64)| a.0.madd(b.0, a.1 * b.1);
+        let (lm, lu, lv) = (wm.0.hypot(wm.1), wu.0.hypot(wu.1), wv.0.hypot(wv.1));
+        // How far the product of two parts can stray, from theirs.
+        let apart = |la: f64, ea: f64, lb: f64, eb: f64| la.madd(eb, lb.madd(ea, ea * eb));
+        let e = f64::EPSILON;
+        let (uu, vv, mu, mv, uv) = (
+            apart(lu, eu, lu, eu),
+            apart(lv, ev, lv, ev),
+            apart(lm, em, lu, eu),
+            apart(lm, em, lv, ev),
+            apart(lu, eu, lv, ev),
+        );
+        Self::new(
+            mid,
+            half,
+            [
+                dot(wm, wm),
+                2.0 * (dot(wm, wu) - dot(wu, wu)),
+                2.0 * (dot(wm, wv) - dot(wu, wv)),
+                0.5 * (dot(wu, wu) - dot(wv, wv)),
+                dot(wu, wv),
+            ],
+            [
+                (4.0 * e).madd(lm * lm, apart(lm, em, lm, em)),
+                (8.0 * e).madd(lu.madd(lu, lm * lu), 2.0 * (mu + uu)),
+                (8.0 * e).madd(lv.madd(lm, lu * lv), 2.0 * (mv + uv)),
+                (4.0 * e).madd(lu.madd(lu, lv * lv), 0.5 * (uu + vv)),
+                (4.0 * e).madd(lu * lv, uv),
+            ],
+        )
+    }
+
+    /// How large `|cos s - 1|` and `|sin s|`, and `|cos 2s - 1|` and
+    /// `|sin 2s|`, grow within `half` of the middle.
+    fn reach(half: f64) -> ((f64, f64), (f64, f64)) {
+        let h = half.abs();
+        (
+            ((0.5 * h * h).min(2.0), h.min(1.0)),
+            ((2.0 * h * h).min(2.0), (2.0 * h).min(1.0)),
+        )
+    }
+
+    /// The wave and its first two derivatives at `t`.
+    fn at(&self, t: f64) -> [f64; 3] {
+        let s = t - self.mid;
+        let (s1, c1) = s.sin_cos();
+        let (s2, c2) = (2.0 * s).sin_cos();
+        let half = (0.5 * s).sin();
+        // `cos s - 1` and `cos 2s - 1`, read without the loss near nothing.
+        let (m1, m2) = (-2.0 * half * half, -2.0 * s1 * s1);
+        let g = self.d2.madd(
+            s2,
+            self.c2
+                .madd(m2, self.d1.madd(s1, self.c1.madd(m1, self.c0))),
+        );
+        let g1 = (2.0 * self.d2).madd(
+            c2,
+            (-2.0 * self.c2).madd(s2, self.d1.madd(c1, -self.c1 * s1)),
+        );
+        let g2 = (-4.0 * self.d2).madd(
+            s2,
+            (-4.0 * self.c2).madd(c2, (-self.d1).madd(s1, -self.c1 * c1)),
+        );
+        [g, g1, g2]
+    }
+
+    /// Bounds on the size of the second and third derivatives anywhere.
+    fn bounds(&self) -> (f64, f64) {
+        let (a1, a2) = (self.c1.hypot(self.d1), self.c2.hypot(self.d2));
+        (4.0f64.madd(a2, a1), 8.0f64.madd(a2, a1))
+    }
+
+    /// A bound on the error of the value, slope and bend as read: their
+    /// rounding, and the coefficients' own error.
+    fn rounding(&self) -> [f64; 3] {
+        let (a1, a2) = (self.c1.hypot(self.d1), self.c2.hypot(self.d2));
+        let (first, second) = Self::reach(self.half);
+        let e = 32.0 * f64::EPSILON;
+        [
+            e.madd(
+                a2.madd(
+                    second.0 + second.1,
+                    a1.madd(first.0 + first.1, self.c0.abs()),
+                ),
+                self.err[0],
+            ),
+            e.madd(2.0f64.madd(a2, a1), self.err[1]),
+            e.madd(4.0f64.madd(a2, a1), self.err[2]),
+        ]
+    }
+}
+
+/// A band of wave values, low end first.
+type Band = (f64, f64);
+
+/// An arc in another conic's frame about its middle: the point there and
+/// the two parts of the step from it, as `p + u (cos s - 1) + v sin s`.
+type Parts = ((f64, f64), (f64, f64), (f64, f64));
+
+/// An arc read in the frame of a circle or ellipse, where that conic is the
+/// unit circle.
+struct Frame {
+    /// The conic's semi-axes, the longer first.
+    sizes: (f64, f64),
+    /// The arc in the frame.
+    parts: Parts,
+    /// A bound on the error of the arc's points as read in the frame.
+    err: f64,
+}
+
+/// Where the points of another curve near a span of an arc lie against
+/// that curve's section.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Place {
+    /// All beyond the section: the span is clear of it.
+    Beyond,
+    /// Some within it and some beyond, by enough that halving the span
+    /// may tell them apart.
+    Across,
+    /// Within it, or too close to tell.
+    Within,
+}
+
+/// What a span of an arc must reach to come near another section.
+enum Near {
+    /// A segment from its start along `d`, the arc's middle point at `w`
+    /// from its start within `e_w`, and the arc moving at most `reach` per
+    /// unit of its parameter.
+    Line {
+        w: Vec3,
+        e_w: f64,
+        d: Vec3,
+        reach: f64,
+    },
+    /// An arc of a circle or ellipse over its parameters from the first by
+    /// the second.
+    Conic { span: (f64, f64) },
+}
+
+/// How a stretch of the arc stands to the other curve.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Reach {
+    /// Proved farther than the tolerance.
+    Out,
+    /// Proved within the tolerance.
+    Meet,
+    /// Neither, the wave moving up (`true`) or down along it.
+    Unsure(bool),
+}
+
+/// The runs of parameters in `(t0, t1)` where `wave` is proved within the
+/// tolerance of the other curve, as `(start, end, best)` with `best` a
+/// parameter of the run where the wave lies nearest `target`. Each run is
+/// one junction, as the two curves stay within the tolerance across it.
+///
+/// `bands(m, h)` gives two bands that hold over the span `m - h` to `m + h`:
+/// a wave value in the first is within the tolerance, one off the second is
+/// farther. Each span read is proved off the second band, inside the first,
+/// moving one way, or turning once, from the wave's value and slope at its
+/// middle and the bounds on its bend and the bend's rate. A stretch the
+/// bands do not settle must lead, one way, from a run to a stretch proved
+/// farther or to the span's end, or lie between two runs. `None` where one
+/// does not, or the budget runs out first: the curves may come within the
+/// tolerance there unseen.
+#[allow(clippy::too_many_lines)]
+fn wave_runs(
+    wave: &Wave,
+    (t0, t1): (f64, f64),
+    target: f64,
+    bands: &dyn Fn(f64, f64) -> (Band, Band),
+    place: &dyn Fn(f64, f64) -> Place,
+) -> Option<Vec<(f64, f64, f64)>> {
+    /// Intervals one pair may read before it is left unsettled.
+    const BUDGET: usize = 4096;
+    let (m2, m3) = wave.bounds();
+    let [e0, e1, e2] = wave.rounding();
+    let value = |t: f64| wave.at(t)[0];
+    let slope = |t: f64| wave.at(t)[1];
+    // A parameter in `(a, b)` where `f` crosses `level`, given the signs of
+    // `f - level` at the ends differ.
+    let cross = |f: &dyn Fn(f64) -> f64, (mut a, mut b): (f64, f64), level: f64| {
+        let below_at_a = f(a) < level;
+        for _ in 0..200 {
+            let m = 0.5 * (a + b);
+            if m <= a || m >= b {
+                break;
+            }
+            if (f(m) < level) == below_at_a {
+                a = m;
+            } else {
+                b = m;
+            }
+        }
+        0.5 * (a + b)
+    };
+    // Spans with their bands, each lying in the first band throughout
+    // (`true`) or moving one way (`false`).
+    let mut pieces: Vec<(f64, f64, bool, Band, Band)> = Vec::new();
+    let mut stack = vec![(t0, t1)];
+    let mut read = 0;
+    while let Some((a, b)) = stack.pop() {
+        read += 1;
+        if read > BUDGET {
+            return None;
+        }
+        let (m, h) = (0.5 * (a + b), 0.5 * (b - a));
+        let place = place(m, h);
+        if place == Place::Beyond {
+            continue;
+        }
+        let [g, g1, g2] = wave.at(m);
+        let (meet, clear) = bands(m, h);
+        let spread = (0.5 * m2 * h).madd(h, g1.abs().madd(h, e0));
+        if g + spread < clear.0 || g - spread > clear.1 {
+            continue;
+        }
+        if place == Place::Across && m > a && m < b {
+            stack.extend([(m, b), (a, m)]);
+            continue;
+        }
+        if g - spread >= meet.0 && g + spread <= meet.1 {
+            pieces.push((a, b, true, meet, clear));
+            continue;
+        }
+        if g1.abs() > m2.madd(h, e1) {
+            pieces.push((a, b, false, meet, clear));
+            continue;
+        }
+        if g2.abs() > m3.madd(h, e2) {
+            // The slope moves one way, so it is nothing at one place at most.
+            let (sa, sb) = (slope(a), slope(b));
+            if (sa < 0.0) == (sb < 0.0) {
+                pieces.push((a, b, false, meet, clear));
+            } else {
+                let c = cross(&slope, (a, b), 0.0);
+                pieces.extend([(a, c, false, meet, clear), (c, b, false, meet, clear)]);
+            }
+            continue;
+        }
+        // Split, the far half first so the near one is read next.
+        stack.extend([(m, b), (a, m)]);
+    }
+    pieces.sort_by(|x, y| x.0.total_cmp(&y.0));
+    // Each piece cut where the wave crosses an end of either band, as
+    // stretches with how they stand, gaps between pieces proved farther.
+    let mut stretches: Vec<(f64, f64, Reach)> = Vec::new();
+    let mut push = |x0: f64, x1: f64, reach: Reach| match stretches.last_mut() {
+        Some(last) if last.2 == reach && last.1.to_bits() == x0.to_bits() => last.1 = x1,
+        _ => stretches.push((x0, x1, reach)),
+    };
+    let mut reached = t0;
+    for &(a, b, inside, meet, clear) in &pieces {
+        if a > reached {
+            push(reached, a, Reach::Out);
+        }
+        reached = b;
+        if inside {
+            push(a, b, Reach::Meet);
+            continue;
+        }
+        let (ga, gb) = (value(a), value(b));
+        let mut cuts = vec![a, b];
+        for level in [clear.0, meet.0, meet.1, clear.1] {
+            if (ga - level) * (gb - level) < 0.0 {
+                cuts.push(cross(&value, (a, b), level));
+            }
+        }
+        cuts.sort_by(f64::total_cmp);
+        for w in cuts.windows(2) {
+            let (x0, x1) = (w[0], w[1]);
+            if x1 <= x0 {
+                continue;
+            }
+            let g = value(0.5 * (x0 + x1));
+            let reach = if (meet.0..=meet.1).contains(&g) {
+                Reach::Meet
+            } else if (clear.0..=clear.1).contains(&g) {
+                Reach::Unsure(gb > ga)
+            } else {
+                Reach::Out
+            };
+            push(x0, x1, reach);
+        }
+    }
+    if reached < t1 {
+        push(reached, t1, Reach::Out);
+    }
+    // A parameter of `(a, b)` near which the wave comes nearest the target:
+    // where it crosses it, else where its slope is nothing, else the nearer
+    // end.
+    let nearest = |(a, b): (f64, f64)| {
+        let (ga, gb) = (value(a) - target, value(b) - target);
+        if ga * gb < 0.0 {
+            cross(&value, (a, b), target)
+        } else if slope(a) * slope(b) < 0.0 {
+            cross(&slope, (a, b), 0.0)
+        } else if ga.abs() <= gb.abs() {
+            a
+        } else {
+            b
+        }
+    };
+    let nearer = |x: f64, y: f64| {
+        if (value(x) - target).abs() <= (value(y) - target).abs() {
+            x
+        } else {
+            y
+        }
+    };
+    // Whether the wave is proved within the tolerance over `(x0, x1)`,
+    // where it moves one way, by halving it until each half's own band
+    // holds it. A point the band about it alone does not hold ends the
+    // search.
+    let mut left = BUDGET.saturating_sub(read);
+    let mut held = |x0: f64, x1: f64| -> bool {
+        let at = |x: f64| {
+            let (meet, _) = bands(x, 0.0);
+            (meet.0..=meet.1).contains(&value(x))
+        };
+        if !(at(x0) && at(x1)) {
+            return false;
+        }
+        let mut stack = vec![(x0, x1)];
+        while let Some((x, y)) = stack.pop() {
+            if left == 0 {
+                return false;
+            }
+            left -= 1;
+            let (m, h) = (0.5 * (x + y), 0.5 * (y - x));
+            let (meet, _) = bands(m, h);
+            let (gx, gy) = (value(x), value(y));
+            if gx.min(gy) >= meet.0 && gx.max(gy) <= meet.1 {
+                continue;
+            }
+            if !(m > x && m < y && at(m)) {
+                return false;
+            }
+            stack.extend([(m, y), (x, m)]);
+        }
+        true
+    };
+    // From a run the wave moves off the target: a stretch after a run that
+    // moves up does so where the wave lies above the target, one before a
+    // run where it lies below.
+    let away = |&(x0, x1, reach): &(f64, f64, Reach), after_run: bool| {
+        let Reach::Unsure(up) = reach else {
+            return false;
+        };
+        let off_above = value(0.5 * (x0 + x1)) > target;
+        up == (off_above == after_run)
+    };
+    let mut runs: Vec<(f64, f64, f64)> = Vec::new();
+    let mut k = 0;
+    while let Some(&(x0, x1, reach)) = stretches.get(k) {
+        match reach {
+            Reach::Out => k += 1,
+            Reach::Meet => {
+                let best = nearest((x0, x1));
+                match runs.last_mut() {
+                    Some(run) if run.1.to_bits() == x0.to_bits() => {
+                        run.1 = x1;
+                        run.2 = nearer(run.2, best);
+                    }
+                    _ => runs.push((x0, x1, best)),
+                }
+                k += 1;
+            }
+            Reach::Unsure(_) => {
+                let end = stretches[k..]
+                    .iter()
+                    .position(|s| !matches!(s.2, Reach::Unsure(_)))
+                    .map_or(stretches.len(), |n| k + n);
+                let group = &stretches[k..end];
+                let run_before = k > 0 && stretches[k - 1].2 == Reach::Meet;
+                let run_after = stretches.get(end).is_some_and(|s| s.2 == Reach::Meet);
+                let settled = match (run_before, run_after, group) {
+                    // Between two runs: one run across where the bands about
+                    // each part hold it, else two where the wave turns once
+                    // between them.
+                    (true, true, _) => {
+                        if group.iter().all(|&(g0, g1, _)| held(g0, g1)) {
+                            if let (Some(run), Some(last)) = (runs.last_mut(), group.last()) {
+                                run.1 = last.1;
+                            }
+                            true
+                        } else {
+                            matches!(group, [off, back] if away(off, true) && away(back, false))
+                        }
+                    }
+                    (true, false, [off]) => away(off, true),
+                    (false, true, [back]) => away(back, false),
+                    _ => false,
+                };
+                if !settled {
+                    return None;
+                }
+                k = end;
+            }
+        }
+    }
+    Some(runs)
+}
+
+/// A bound on how far apart the whole circles or ellipses `a` and `b`, each
+/// on unit axes square to each other, lie: each point of one within it of
+/// the other. `None` for another curve.
+///
+/// A circle is read as the ellipse of two equal semi-axes on its axes. With
+/// `b`'s axes taken with signs `su`, `sv`, its point at each parameter lies
+/// within `|c_a - c_b| + sqrt(|a_b su U_b - a_a U_a|^2 + |b_b sv V_b - b_a
+/// V_a|^2)` of `a`'s at the same parameter. Each conic also lies within half
+/// the gap between its semi-axes of the circle of their mean on its axes,
+/// and two circles within the gap of their centres and radii and the radius
+/// times the turn between their planes of each other, however their axes
+/// turn. The least bound stands, grown by its rounding.
+fn conics_apart(a: &EdgeCurve, b: &EdgeCurve) -> Option<f64> {
+    let form = |e: &EdgeCurve| match e {
+        EdgeCurve::Circle(c) => Some((
+            c.center(),
+            c.normal(),
+            c.radius(),
+            c.radius(),
+            c.u_axis(),
+            c.v_axis(),
+        )),
+        EdgeCurve::Ellipse(el) => Some((
+            el.center(),
+            el.normal(),
+            el.semi_major(),
+            el.semi_minor(),
+            el.u_axis(),
+            el.v_axis(),
+        )),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+    };
+    let ((ca, na, aa, ba, ua, va), (cb, nb, ab, bb, ub, vb)) = (form(a)?, form(b)?);
+    let centres = (ca - cb).length();
+    let mut matched = f64::INFINITY;
+    for (su, sv) in [(1.0, 1.0), (1.0, -1.0), (-1.0, 1.0), (-1.0, -1.0)] {
+        let major = ub * (su * ab) - ua * aa;
+        let minor = vb * (sv * bb) - va * ba;
+        matched = matched.min(centres + major.length().hypot(minor.length()));
+    }
+    let (ra, rb) = (0.5 * (aa + ba), 0.5 * (ab + bb));
+    let nb = if na.dot(nb) < 0.0 { -nb } else { nb };
+    let round = ra.madd((na - nb).length(), centres + (ra - rb).abs())
+        + 0.5 * ((aa - ba).abs() + (ab - bb).abs());
+    let bound = (16.0 * f64::EPSILON).madd(aa + ba + ab + bb + centres, matched.min(round));
+    (!bound.is_nan()).then_some(bound)
+}
+
+/// A section's curve and its ends, in the curve's own direction.
+#[derive(Clone, Copy)]
+pub(super) struct SectionSpan<'a> {
+    /// The section's curve.
+    pub(super) curve: &'a EdgeCurve,
+    /// Where the section starts along its curve.
+    pub(super) start: Point3,
+    /// Where it ends.
+    pub(super) end: Point3,
+}
+
+/// The sections among `edges`, one for each forward and reverse pair.
+pub(super) fn section_spans(edges: &[OrientedPCurveEdge]) -> Vec<SectionSpan<'_>> {
+    let mut seen = std::collections::HashSet::new();
+    edges
+        .iter()
+        .filter(|e| e.source_edge_idx.is_none_or(|i| seen.insert(i)))
+        .map(|e| {
+            let (start, end) = if e.forward {
+                (e.start_3d, e.end_3d)
+            } else {
+                (e.end_3d, e.start_3d)
+            };
+            SectionSpan {
+                curve: &e.curve_3d,
+                start,
+                end,
+            }
+        })
+        .collect()
+}
+
+/// A number as the sum of two, the second within half a unit of the first's
+/// last place: twice the precision of one.
+#[derive(Clone, Copy)]
+struct Dd(f64, f64);
+
+impl Dd {
+    /// `a + b` as it is.
+    fn sum(a: f64, b: f64) -> Self {
+        let s = a + b;
+        let back = s - a;
+        Self(s, (a - (s - back)) + (b - back))
+    }
+
+    /// `a b` as it is.
+    fn product(a: f64, b: f64) -> Self {
+        let split = |x: f64| {
+            let c = 134_217_729.0 * x;
+            let hi = c - (c - x);
+            (hi, x - hi)
+        };
+        let p = a * b;
+        let ((ah, al), (bh, bl)) = (split(a), split(b));
+        Self(p, ((ah * bh - p) + ah * bl + al * bh) + al * bl)
+    }
+
+    fn of(a: f64) -> Self {
+        Self(a, 0.0)
+    }
+
+    fn normal(hi: f64, lo: f64) -> Self {
+        let s = hi + lo;
+        Self(s, lo - (s - hi))
+    }
+
+    fn add(self, o: Self) -> Self {
+        let s = Self::sum(self.0, o.0);
+        Self::normal(s.0, s.1 + self.1 + o.1)
+    }
+
+    fn sub(self, o: Self) -> Self {
+        self.add(Self(-o.0, -o.1))
+    }
+
+    fn mul(self, o: Self) -> Self {
+        let p = Self::product(self.0, o.0);
+        Self::normal(p.0, p.1 + (self.0 * o.1 + self.1 * o.0))
+    }
+
+    fn div(self, o: Self) -> Self {
+        let q1 = self.0 / o.0;
+        let r = self.sub(o.mul(Self::of(q1)));
+        let q2 = r.0 / o.0;
+        let r = r.sub(o.mul(Self::of(q2)));
+        Self::normal(q1, q2).add(Self::of(r.0 / o.0))
+    }
+}
+
+/// A point or a step in twice the precision of one.
+type Dd3 = [Dd; 3];
+
+fn dd_sub(a: &Dd3, b: &Dd3) -> Dd3 {
+    [a[0].sub(b[0]), a[1].sub(b[1]), a[2].sub(b[2])]
+}
+
+fn dd_dot(a: &Dd3, b: &Dd3) -> Dd {
+    a[0].mul(b[0]).add(a[1].mul(b[1])).add(a[2].mul(b[2]))
+}
+
+/// A circle or ellipse as `c + a u cos t + b v sin t`; `None` for another
+/// curve.
+fn conic_form(curve: &EdgeCurve) -> Option<(Point3, f64, Vec3, f64, Vec3)> {
+    match curve {
+        EdgeCurve::Circle(c) => Some((c.center(), c.radius(), c.u_axis(), c.radius(), c.v_axis())),
+        EdgeCurve::Ellipse(el) => Some((
+            el.center(),
+            el.semi_major(),
+            el.u_axis(),
+            el.semi_minor(),
+            el.v_axis(),
+        )),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+    }
+}
+
+/// The point of the conic `c + a u cos t + b v sin t` near the parameter
+/// `t`, in twice the precision of one, and the parameter it lies at, read
+/// through `tau`: the tangent of half the parameter (or of half its gap to
+/// a half turn) moved by `step` units of `tau`'s size, so each point lies
+/// on the conic to that precision however far off its centre lies.
+fn conic_point_near((c, a, u, b, v): (Point3, f64, Vec3, f64, Vec3), t: f64, step: i32) -> Dd3 {
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+    let t = (t + PI).rem_euclid(TAU) - PI;
+    let (flip, half) = if t.abs() <= FRAC_PI_2 {
+        (false, 0.5 * t)
+    } else {
+        (true, 0.5 * (t - PI.copysign(t)))
+    };
+    let tau = half.tan();
+    let tau = (4.0 * f64::EPSILON * f64::from(step)).madd(tau.abs().max(1.0), tau);
+    let one = Dd::of(1.0);
+    let square = Dd::product(tau, tau);
+    let den = one.add(square);
+    let (x, y) = (one.sub(square).div(den), Dd::of(2.0 * tau).div(den));
+    let (x, y) = if flip {
+        (Dd(-x.0, -x.1), Dd(-y.0, -y.1))
+    } else {
+        (x, y)
+    };
+    let part = |ci: f64, ui: f64, vi: f64| {
+        Dd::of(ci)
+            .add(Dd::product(a, ui).mul(x))
+            .add(Dd::product(b, vi).mul(y))
+    };
+    [
+        part(c.x(), u.x(), v.x()),
+        part(c.y(), u.y(), v.y()),
+        part(c.z(), u.z(), v.z()),
+    ]
+}
+
+/// A bound on how far `p` lies from the conic `form`, read near its
+/// parameter `t`: the distance, in twice the precision of one, to the
+/// chords between points of the conic a few units of rounding apart about
+/// `t`, plus how far the conic strays from those chords.
+fn off_conic(form: (Point3, f64, Vec3, f64, Vec3), p: Point3, t: f64) -> f64 {
+    const STEPS: i32 = 8;
+    let (_, a, _, b, _) = form;
+    let at = [Dd::of(p.x()), Dd::of(p.y()), Dd::of(p.z())];
+    let points: Vec<Dd3> = (-STEPS..=STEPS)
+        .map(|k| conic_point_near(form, t, k))
+        .collect();
+    let mut near = f64::INFINITY;
+    for w in points.windows(2) {
+        let (d, off) = (dd_sub(&w[1], &w[0]), dd_sub(&at, &w[0]));
+        let (dd, wd) = (dd_dot(&d, &d), dd_dot(&off, &d));
+        let along = if wd.0 <= 0.0 || dd.0 <= 0.0 {
+            Dd::of(0.0)
+        } else if wd.0 >= dd.0 {
+            Dd::of(1.0)
+        } else {
+            wd.div(dd)
+        };
+        let foot = [
+            off[0].sub(d[0].mul(along)),
+            off[1].sub(d[1].mul(along)),
+            off[2].sub(d[2].mul(along)),
+        ];
+        let gap = dd_dot(&foot, &foot);
+        near = near.min((gap.0 + gap.1).max(0.0).sqrt());
+    }
+    // Neighbouring points lie at most `8 EPS` apart in the parameter, where
+    // the conic strays from their chord by at most its larger semi-axis
+    // times the square of that.
+    let size = a.max(b);
+    let stray = size * (64.0 * f64::EPSILON * f64::EPSILON);
+    let rounding = 64.0
+        * f64::EPSILON
+        * f64::EPSILON
+        * (size + (form.0 - Point3::new(0.0, 0.0, 0.0)).length());
+    near.madd(1.0 + 4.0 * f64::EPSILON, stray + rounding)
+}
+
+/// How far an arc of a circle or ellipse section lies from the segment
+/// between its ends, at most, where that is within a quarter of `tol`.
+///
+/// An arc `c + A cos t + B sin t` over the sweep `f` about the middle `m`
+/// strays from the chord of its true ends by `(cos s - cos(f / 2)) |A x B|
+/// / |T|` at `m + s`, `T` its tangent at `m`: at most `2 sin^2(f / 4) |A x
+/// B| / |T|`. It is a graph over that chord, so each point of either lies
+/// that near the other, while `|R . T| tan(f / 2) < |T|^2` for `R` its
+/// radius at `m` (read here with room to half of that). The segment between the section's ends lies within the
+/// larger end's distance from the conic ([`off_conic`]) of the chord of the
+/// true ends. `None` for another curve, or an arc too curved.
+fn chord_bound(e: &SectionSpan<'_>, tol: f64) -> Option<f64> {
+    let form = conic_form(e.curve)?;
+    let (_, a, u, b, v) = form;
+    let (t0, t1) = e.curve.domain_with_endpoints(e.start, e.end);
+    let sweep = t1 - t0;
+    if !(sweep > 0.0 && sweep < 1e-2) {
+        return None;
+    }
+    let mid = 0.5f64.madd(sweep, t0);
+    let (sm, cm) = mid.sin_cos();
+    let (au, bv) = (u * a, v * b);
+    let (tangent, radius) = (bv * cm - au * sm, au * cm + bv * sm);
+    let size = tangent.length();
+    // The true ends lie a few units of rounding off the read ones.
+    let sweep = (64.0 * f64::EPSILON).madd(t0.abs() + t1.abs(), sweep);
+    let lean = radius.dot(tangent).abs() * (0.5 * sweep).tan();
+    if lean.is_nan() || lean >= 0.5 * size * size {
+        return None;
+    }
+    let q = (0.25 * sweep).sin();
+    let sag = (2.0 * q * q) * (a * b * u.cross(v).length()) / size * (1.0 + 1e-9);
+    if sag.is_nan() || sag > 0.25 * tol {
+        return None;
+    }
+    let ends = off_conic(form, e.start, t0).max(off_conic(form, e.end, t1));
+    let bound = sag + ends;
+    (bound <= 0.25 * tol).then_some(bound)
+}
+
+/// Where the segments of two sections come within `tol`, each within the
+/// bound that comes with it of the section it stands for: the points within
+/// `tol` of both form one stretch, as the distance along one segment from
+/// the other is convex, so the nearest point stands for it. `None` where
+/// they are farther apart, [`UnsettledMeeting`] where the bounds cannot tell.
+///
+/// The distance is searched in thirds along the first segment, which a
+/// convex function allows, and read from points of both, so the nearest
+/// found is an upper bound; the true least lies no lower than it less the
+/// rounding and the first segment's length times the last third.
+pub(super) fn segments_meet(
+    (first, chord_a): (&SectionSpan<'_>, f64),
+    (second, chord_b): (&SectionSpan<'_>, f64),
+    tol: f64,
+) -> Result<Option<Meeting>, UnsettledMeeting> {
+    // Read from the first segment's start, as steps of stored coordinates,
+    // each within a rounding of its own size: the coordinates themselves
+    // may be far larger than the gap between the segments.
+    let p0 = first.start;
+    let (d1, w0, d2) = (
+        first.end - first.start,
+        second.start - first.start,
+        second.end - second.start,
+    );
+    let near = |s: f64| {
+        let x = d1 * s;
+        let l = if d2.dot(d2) > 0.0 {
+            ((x - w0).dot(d2) / d2.dot(d2)).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let f = w0 + d2 * l;
+        ((x - f).length(), x, f)
+    };
+    let (mut lo, mut hi) = (0.0f64, 1.0f64);
+    for _ in 0..200 {
+        if hi - lo <= 4.0 * f64::EPSILON {
+            break;
+        }
+        let (m1, m2) = ((hi - lo).madd(1.0 / 3.0, lo), (lo - hi).madd(1.0 / 3.0, hi));
+        if near(m1).0 > near(m2).0 {
+            lo = m1;
+        } else {
+            hi = m2;
+        }
+    }
+    let (d, x, f) = near(0.5 * (lo + hi));
+    let rounding = 16.0 * f64::EPSILON * (w0.length() + d1.length() + d2.length());
+    let bounds = chord_a + chord_b;
+    let least = d - 2.0 * rounding - d1.length() * (hi - lo);
+    if least > tol + bounds {
+        return Ok(None);
+    }
+    // The witness points lie off their place by the rounding of adding the
+    // start back.
+    let at = p0 + (x + (f - x) * 0.5);
+    let placed = 2.0 * f64::EPSILON * ((p0 - Point3::new(0.0, 0.0, 0.0)).length() + x.length());
+    let apart = d + rounding + bounds + placed;
+    if apart > tol || apart.is_nan() {
+        return Err(UnsettledMeeting);
+    }
+    Ok(Some(Meeting { at, apart }))
+}
+
+/// The point of a circle or ellipse near the parameter `t`, to twice the
+/// precision of one before it is rounded, however far off its centre lies.
+#[cfg(test)]
+pub(super) fn conic_point(curve: &EdgeCurve, t: f64) -> Option<Point3> {
+    let p = conic_point_near(conic_form(curve)?, t, 0);
+    Some(Point3::new(
+        p[0].0 + p[0].1,
+        p[1].0 + p[1].1,
+        p[2].0 + p[2].1,
+    ))
+}
+
+/// Points where two section edges of a plane face meet inside both: where
+/// they touch (a circle and an ellipse tangent at one point) or cross.
+///
+/// For each pair, one curve, a circle or ellipse arc, is read along its
+/// parameter, and its distance from the other curve, a line, a circle or an
+/// ellipse, becomes a wave there ([`Wave`]): the signed distance from a line,
+/// or the squared distance from the other conic's centre in that conic's
+/// own frame, where it is the unit circle. The wave's derivatives bound it
+/// over each span, so every span is proved within `tol` of the other curve,
+/// or farther, or moves one way, or has one turn ([`wave_runs`]). The wave is
+/// read about the arc's middle parameter, so an arc of a conic whose centre
+/// lies far off reads to its own size. A span whose near points on the other
+/// curve lie beyond the other section is clear of it, though the other
+/// curve passes near. Against an ellipse, the bands that settle a span come
+/// from how steeply its frame's radius climbs about the span, so a stretch
+/// between two crossings near the end of a long axis reads as farther. Each
+/// run proved within `tol`
+/// gives one meeting at its nearest point, with the two curves' points
+/// there as its witness, so long as the other curve's point lies on its
+/// section and no end of a section or earlier meeting within `tol` of both
+/// curves stands for it already.
+///
+/// An arc of a circle or ellipse flat to within a quarter of `tol` is read
+/// as the segment between its ends, within the bound [`chord_bound`] gives,
+/// so a centre far off never enters: against a line or another such arc,
+/// the two segments' nearest points settle it ([`segments_meet`]).
+///
+/// Lines, circles and ellipses take part, and no B-spline, at least one of
+/// each pair curved or read as a chord, and an arc only over at most half a
+/// turn, which
+/// every reading of it covers alike. Two conics proved within `tol` of each other along their
+/// whole length ([`conics_apart`]) are one curve: their arcs overlap or lie
+/// apart, and are left to their ends. So is a conic no form on unit axes
+/// reads, a line of no length, and a pair proved not in one plane within a
+/// quarter of `tol`: the face holds such a section by its pcurve, which is
+/// the shadow of its curve on the face's plane. A pair the wave cannot
+/// settle within its budget, whose distance it cannot settle near `tol`,
+/// whose plane the rounding hides, or that the gap between the curves and
+/// their unit forms leaves no room to read, is [`UnsettledMeeting`].
+#[allow(clippy::too_many_lines)]
+pub(super) fn section_meeting_points(
+    sections: &[SectionSpan<'_>],
+    tol: f64,
+) -> Result<Vec<Meeting>, UnsettledMeeting> {
+    use crate::builder::pcurve_compute::{unit_conic, unit_conic_arc_gap};
+    use std::f64::consts::{PI, TAU};
+    /// The section's start and end, and its curve's parameter at the start
+    /// with the sweep to the end; `None` for a B-spline or an arc over half
+    /// a turn.
+    fn span(e: &SectionSpan<'_>) -> Option<(Point3, Point3, f64, f64)> {
+        let (s, t) = (e.start, e.end);
+        match e.curve {
+            EdgeCurve::Line => Some((s, t, 0.0, 1.0)),
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                let (t0, t1) = e.curve.domain_with_endpoints(s, t);
+                (t1 - t0 <= PI && (s - t).length() > 0.0).then_some((s, t, t0, t1 - t0))
+            }
+            EdgeCurve::NurbsCurve(_) => None,
+        }
+    }
+    /// A box about the whole curve of `e`, grown by `tol`.
+    fn reach(e: &SectionSpan<'_>, tol: f64) -> brepkit_math::aabb::Aabb3 {
+        let curve = match e.curve {
+            EdgeCurve::Circle(c) => c.aabb(),
+            EdgeCurve::Ellipse(el) => el.aabb(),
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => {
+                brepkit_math::aabb::Aabb3::from_points([e.start, e.end])
+            }
+        };
+        curve.expanded(tol)
+    }
+    let curved =
+        |e: &SectionSpan<'_>| matches!(e.curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_));
+    // Whether point `p` lies within `tol` of edge `e`'s section, by the
+    // splitter's own reading: its foot on the curve within `tol`, inside the
+    // span (an end counts). A flat arc read as its chord, within `chord` of
+    // it, holds a point within `tol - chord` of the chord.
+    let on_section = |e: &SectionSpan<'_>, chord: f64, p: Point3| -> bool {
+        let Some((s, t, t0, sweep)) = span(e) else {
+            return false;
+        };
+        match e.curve {
+            EdgeCurve::Line => {
+                let (d, w) = (t - s, p - s);
+                let along = (w.dot(d) / d.dot(d)).clamp(0.0, 1.0);
+                (w - d * along).length() <= tol - chord
+            }
+            EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                if (p - s).length() <= tol || (p - t).length() <= tol {
+                    return true;
+                }
+                let (u, foot) = match e.curve {
+                    EdgeCurve::Circle(c) => {
+                        let u = c.project(p);
+                        (u, c.evaluate(u))
+                    }
+                    EdgeCurve::Ellipse(el) => {
+                        let u = el.project(p);
+                        (u, el.evaluate(u))
+                    }
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return false,
+                };
+                // Away from the ends, which the lengths above decide however
+                // coarse a parameter is there, the foot's own parameter lies
+                // strictly inside the span.
+                let along = (u - t0).rem_euclid(TAU);
+                (foot - p).length() <= tol && along > 0.0 && along < sweep
+            }
+            EdgeCurve::NurbsCurve(_) => false,
+        }
+    };
+    // Each section as read: an arc of a circle or ellipse flat to within a
+    // quarter of `tol` as the segment between its ends, with the bound on
+    // how far the two lie apart ([`chord_bound`]), so a centre far off never
+    // enters; any other as it is.
+    let line = EdgeCurve::Line;
+    let chords: Vec<Option<f64>> = sections.iter().map(|e| chord_bound(e, tol)).collect();
+    let unique: Vec<SectionSpan<'_>> = sections
+        .iter()
+        .zip(&chords)
+        .map(|(e, chord)| match chord {
+            Some(_) => SectionSpan { curve: &line, ..*e },
+            None => *e,
+        })
+        .collect();
+    let chord = |k: usize| chords[k].unwrap_or(0.0);
+    let boxes: Vec<_> = unique
+        .iter()
+        .enumerate()
+        .map(|(k, e)| reach(e, tol + chord(k)))
+        .collect();
+    let ends: Vec<Point3> = unique.iter().flat_map(|e| [e.start, e.end]).collect();
+    let mut found: Vec<Meeting> = Vec::new();
+    for (i, first) in unique.iter().enumerate() {
+        for (j, second) in unique.iter().enumerate().skip(i + 1) {
+            // A B-spline section stays out of the finder.
+            if !boxes[i].intersects(boxes[j])
+                || matches!(first.curve, EdgeCurve::NurbsCurve(_))
+                || matches!(second.curve, EdgeCurve::NurbsCurve(_))
+            {
+                continue;
+            }
+            if !(curved(first) || curved(second)) {
+                // Two lines meet only at their ends; a flat arc read as its
+                // chord is proved against the other segment.
+                if chords[i].is_none() && chords[j].is_none() {
+                    continue;
+                }
+                let Some(meeting) = segments_meet((first, chord(i)), (second, chord(j)), tol)?
+                else {
+                    continue;
+                };
+                let both =
+                    |k: Point3| on_section(first, chord(i), k) && on_section(second, chord(j), k);
+                // The points within `tol` of both segments form one stretch,
+                // so a kept point within `tol` of both stands for it.
+                if both(meeting.at)
+                    && !ends.iter().any(|&k| both(k))
+                    && !found.iter().any(|m| both(m.at))
+                {
+                    found.push(meeting);
+                }
+                continue;
+            }
+            // Read along a circle or ellipse; measure from a line, else from
+            // a circle, else from the second ellipse.
+            let ((a, _), (b, chord_b)) = if !curved(second)
+                || matches!(
+                    (first.curve, second.curve),
+                    (EdgeCurve::Ellipse(_), EdgeCurve::Circle(_))
+                ) {
+                ((first, chord(i)), (second, chord(j)))
+            } else {
+                ((second, chord(j)), (first, chord(i)))
+            };
+            let eps = f64::EPSILON;
+            let (Some((_, _, a0, a_sweep)), Some((sb, tb, b0, b_sweep))) = (span(a), span(b))
+            else {
+                continue;
+            };
+            let (Some((unit_a, gap_a)), Some((unit_b, gap_b))) =
+                (unit_conic(a.curve), unit_conic(b.curve))
+            else {
+                continue;
+            };
+            let slack = gap_a + unit_conic_arc_gap(gap_b) + chord_b;
+            if conics_apart(&unit_a, &unit_b).is_some_and(|d| d + gap_a + gap_b <= tol) {
+                continue;
+            }
+            // The arc as `centre + cu cos t + cv sin t`, and its plane.
+            let (centre, cu, cv) = match &*unit_a {
+                EdgeCurve::Circle(c) => {
+                    (c.center(), c.u_axis() * c.radius(), c.v_axis() * c.radius())
+                }
+                EdgeCurve::Ellipse(el) => (
+                    el.center(),
+                    el.u_axis() * el.semi_major(),
+                    el.v_axis() * el.semi_minor(),
+                ),
+                EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => continue,
+            };
+            let Ok(normal) = cu.cross(cv).normalize() else {
+                continue;
+            };
+            // The arc about its middle, `t = mid + s`: `centre + uu + uu (cos
+            // s - 1) + vv sin s`. `cos mid` and `sin mid` are each within a
+            // unit of rounding and each product and sum is rounded once, so
+            // `uu` and `vv` lie within `e_u` and `e_v` of their own, though
+            // `cu` and `cv` are long.
+            let (mid, half) = (0.5f64.madd(a_sweep, a0), 0.5 * a_sweep);
+            let (sm, cm) = mid.sin_cos();
+            let (lu, lv) = (cu.length(), cv.length());
+            let (uu, vv) = (cu * cm + cv * sm, cv * cm - cu * sm);
+            let (e_u, e_v) = (
+                3.0 * eps * lu.madd(cm.abs(), lv * sm.abs()),
+                3.0 * eps * lv.madd(cm.abs(), lu * sm.abs()),
+            );
+            let (first, _) = Wave::reach(half);
+            // The arc's offset from `anchor` at its middle, within the bound
+            // that comes with it.
+            let offset = |anchor: Point3| {
+                let w = (centre - anchor) + uu;
+                (w, eps.madd((centre - anchor).length() + w.length(), e_u))
+            };
+            let origin = Point3::new(0.0, 0.0, 0.0);
+            let (pm, e_pm) = offset(origin);
+            // The arc's point at `t`, within the bound that comes with it.
+            let point = |t: f64| {
+                let s = t - mid;
+                let (s1, h) = (s.sin(), (0.5 * s).sin());
+                let m1 = -2.0 * h * h;
+                let p = origin + pm + uu * m1 + vv * s1;
+                let e = (2.0 * eps).madd(
+                    uu.length().madd(m1.abs(), vv.length() * s1.abs()),
+                    e_u.madd(m1.abs(), e_v.madd(s1.abs(), e_pm)),
+                );
+                (p, e)
+            };
+            // How far the arc lies off the plane through `c` square to `n`
+            // at most, and so by how much its distance from a curve in that
+            // plane falls short of the whole distance, with the bound on its
+            // error.
+            let height = |n: Vec3, c: Point3| {
+                let (w, e_w) = offset(c);
+                let h = uu
+                    .dot(n)
+                    .abs()
+                    .madd(first.0, vv.dot(n).abs().madd(first.1, w.dot(n).abs()));
+                let size = uu
+                    .length()
+                    .madd(first.0, vv.length().madd(first.1, w.length()));
+                let e = (4.0 * eps).madd(size, e_u.madd(first.0, e_v.madd(first.1, e_w)));
+                (h, e)
+            };
+            // Readings within the first band of `bands` are within `tol` of
+            // the other curve; readings off the second are farther. The
+            // reading's root is one plus or less the scaled distance, where
+            // the wave is squared. `near` holds what `place` needs to tell
+            // where the other curve's points near a span of the arc lie
+            // against the other section.
+            let (wave, target, (off_plane, off_err, lean), squared, frame, near) = match &*unit_b {
+                EdgeCurve::Line => {
+                    let d = tb - sb;
+                    // A line of no length is no section of this face to
+                    // meet.
+                    let Ok(along) = d.normalize() else {
+                        continue;
+                    };
+                    let Ok(across) = normal.cross(along).normalize() else {
+                        continue;
+                    };
+                    let (w, e_w) = offset(sb);
+                    // The line's ends off the arc's plane through its
+                    // middle point, over the cosine of the line's slope
+                    // to it: how far the foot on the line lies off it.
+                    let lean = along
+                        .dot(normal)
+                        .madd(-along.dot(normal), 1.0)
+                        .max(0.0)
+                        .sqrt();
+                    let ends = w.dot(normal).abs().max((d - w).dot(normal).abs());
+                    let e_ends = (8.0 * eps).madd(w.length() + d.length(), e_w);
+                    let wave = Wave::new(
+                        mid,
+                        half,
+                        [w.dot(across), uu.dot(across), vv.dot(across), 0.0, 0.0],
+                        [
+                            (8.0 * eps).madd(w.length(), e_w),
+                            (8.0 * eps).madd(uu.length(), e_u),
+                            (8.0 * eps).madd(vv.length(), e_v),
+                            0.0,
+                            0.0,
+                        ],
+                    );
+                    let near = Near::Line {
+                        w,
+                        e_w,
+                        d,
+                        reach: lu + lv,
+                    };
+                    (wave, 0.0, (ends, e_ends, lean), false, None, near)
+                }
+                EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+                    let (cb, nb, ea, eb, ub, vb) = match &*unit_b {
+                        EdgeCurve::Circle(c) => (
+                            c.center(),
+                            c.normal(),
+                            c.radius(),
+                            c.radius(),
+                            c.u_axis(),
+                            c.v_axis(),
+                        ),
+                        EdgeCurve::Ellipse(el) => (
+                            el.center(),
+                            el.normal(),
+                            el.semi_major(),
+                            el.semi_minor(),
+                            el.u_axis(),
+                            el.v_axis(),
+                        ),
+                        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => continue,
+                    };
+                    // The arc in the other conic's frame, where that
+                    // conic is the unit circle, each part within the
+                    // bound that comes with it.
+                    let local = |w: Vec3, e: f64| {
+                        (
+                            (w.dot(ub) / ea, w.dot(vb) / eb),
+                            (4.0 * eps).madd(w.length(), e) / eb,
+                        )
+                    };
+                    let (w, e_w) = offset(cb);
+                    let ((m0, e_m0), (mu, e_mu), (mv, e_mv)) =
+                        (local(w, e_w), local(uu, e_u), local(vv, e_v));
+                    let wave = Wave::square(mid, half, (m0, e_m0), (mu, e_mu), (mv, e_mv));
+                    let frame = Frame {
+                        sizes: (ea, eb),
+                        parts: (m0, mu, mv),
+                        err: e_mv.madd(first.1, e_mu.madd(first.0, e_m0)),
+                    };
+                    let (h, e) = height(nb, cb);
+                    let near = Near::Conic {
+                        span: (b0, b_sweep),
+                    };
+                    (wave, 1.0, (h, e, 1.0), true, Some(frame), near)
+                }
+                EdgeCurve::NurbsCurve(_) => continue,
+            };
+            let [e0, ..] = wave.rounding();
+            let (meet_d, clear_d) = (tol - slack - (off_plane + off_err) / lean, tol + slack);
+            let (near_size, far_size) = match &*unit_b {
+                EdgeCurve::Circle(c) => (c.radius(), c.radius()),
+                EdgeCurve::Ellipse(el) => (el.semi_major(), el.semi_minor()),
+                EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => (1.0, 1.0),
+            };
+            let band = |d: f64, grow: f64| {
+                if squared {
+                    ((1.0 - d) * (1.0 - d) - grow, (1.0 + d) * (1.0 + d) + grow)
+                } else {
+                    (-d - grow, d + grow)
+                }
+            };
+            // The arc's point at `t` in the other conic's frame.
+            let framed = |t: f64, (m0, mu, mv): Parts| {
+                let s = t - mid;
+                let (s1, h) = (s.sin(), (0.5 * s).sin());
+                let m1 = -2.0 * h * h;
+                (
+                    mv.0.madd(s1, mu.0.madd(m1, m0.0)),
+                    mv.1.madd(s1, mu.1.madd(m1, m0.1)),
+                )
+            };
+            // How far the span `m - h` to `m + h` of the arc, and all points
+            // within `tol` of it, can lie from its point at `m` in the other
+            // conic's frame.
+            let room = |f: &Frame, h: f64| {
+                let (mu, mv) = (f.parts.1, f.parts.2);
+                h.madd(
+                    mu.0.hypot(mu.1) + mv.0.hypot(mv.1),
+                    2.0f64.madd(tol / f.sizes.1, f.err),
+                )
+            };
+            // Over a span, the radius of an ellipse's frame climbs at least
+            // `g_min` and at most `g_max` per unit of distance about each of
+            // its points: at `sqrt(cos^2 f / a^2 + sin^2 f / b^2)` at frame
+            // angle `f`, read over the span's points and all points within
+            // `tol` of them. A reading within `meet_d g_min` of the radius 1
+            // then lies within `meet_d`, as the climb to it is that steep
+            // all the way; one beyond `clear_d g_max` lies farther than
+            // `clear_d`.
+            let bands = |m: f64, h: f64| -> (Band, Band) {
+                let Some(f) = &frame else {
+                    return (band(meet_d / near_size, -e0), band(clear_d / far_size, e0));
+                };
+                let (ea, eb) = f.sizes;
+                let (x, y) = framed(m, f.parts);
+                let r = room(f, h);
+                let at = x.hypot(y);
+                let (lo, hi) = (
+                    ((y.abs() - r) / (at + r)).clamp(0.0, 1.0),
+                    if at > r {
+                        ((y.abs() + r) / (at - r)).min(1.0)
+                    } else {
+                        1.0
+                    },
+                );
+                let climb =
+                    |s: f64| (s * s).madd(-1.0, 1.0).max(0.0) / (ea * ea) + (s * s) / (eb * eb);
+                let (g_min, g_max) = (
+                    climb(lo).sqrt() * (1.0 - 8.0 * eps),
+                    climb(hi).sqrt() * (1.0 + 8.0 * eps),
+                );
+                (
+                    band(meet_d * g_min.max(1.0 / ea), -e0),
+                    band(clear_d * g_max.min(1.0 / eb), e0),
+                )
+            };
+            // Where the points of the other curve within `tol` of the span
+            // `m - h` to `m + h` of the arc lie against the other section:
+            // such points lie within the span's reach of the arc's point at
+            // `m`, so their place along the other curve lies within that
+            // reach of that point's. A span that reaches past an end of the
+            // section by more than `tol` of its own length is worth halving.
+            let place = |m: f64, h: f64| -> Place {
+                let (off, room, own, lo, hi) = match (&near, &frame) {
+                    (Near::Line { w, e_w, d, reach }, _) => {
+                        let s = m - mid;
+                        let (s1, hs) = (s.sin(), (0.5 * s).sin());
+                        let at = *w + uu * (-2.0 * hs * hs) + vv * s1;
+                        let (along, size) = (at.dot(*d) / d.dot(*d), d.length());
+                        let own = h * reach;
+                        let room = own + 2.0f64.madd(tol, e_w + e_u + e_v);
+                        (along, room / size, own > tol, 0.0, 1.0)
+                    }
+                    (
+                        Near::Conic {
+                            span: (b0, b_sweep),
+                        },
+                        Some(f),
+                    ) => {
+                        let (x, y) = framed(m, f.parts);
+                        let (r, at) = (room(f, h), x.hypot(y));
+                        if at.is_nan() || at <= r {
+                            return Place::Within;
+                        }
+                        let (mu, mv) = (f.parts.1, f.parts.2);
+                        let own = h * (mu.0.hypot(mu.1) + mv.0.hypot(mv.1)) * f.sizes.1;
+                        let from_middle =
+                            (y.atan2(x) - 0.5f64.madd(*b_sweep, *b0) + PI).rem_euclid(TAU) - PI;
+                        let half_span = 0.5 * b_sweep;
+                        (
+                            from_middle,
+                            (r / at).asin() + 1e-9,
+                            own > tol,
+                            -half_span,
+                            half_span,
+                        )
+                    }
+                    (Near::Conic { .. }, None) => return Place::Within,
+                };
+                if off + room < lo || off - room > hi {
+                    Place::Beyond
+                } else if own && (off - room < lo || off + room > hi) {
+                    Place::Across
+                } else {
+                    Place::Within
+                }
+            };
+            // A whole arc whose near points lie beyond the other section is
+            // clear of it, in one plane or not.
+            if place(mid, half) == Place::Beyond {
+                continue;
+            }
+            // A pair proved not in one plane within a quarter of `tol` is
+            // left to its ends; one whose plane the rounding hides, or that
+            // the slack between the curves and their forms leaves no room
+            // to read, cannot be read.
+            let quarter = 0.25 * tol * lean;
+            if off_plane.is_nan() || off_plane - off_err > quarter {
+                continue;
+            }
+            if off_plane + off_err > quarter
+                || !(meet_d / near_size > 0.0 && clear_d / far_size < 0.5)
+            {
+                return Err(UnsettledMeeting);
+            }
+            let runs = wave_runs(&wave, (a0, a0 + a_sweep), target, &bands, &place)
+                .ok_or(UnsettledMeeting)?;
+            for (run_start, run_end, t) in runs {
+                // The witness: the arc's point and its foot on the other
+                // curve.
+                let (p, e_p) = point(t);
+                let q = match &*unit_b {
+                    EdgeCurve::Line => {
+                        let d = tb - sb;
+                        sb + d * ((p - sb).dot(d) / d.dot(d))
+                    }
+                    EdgeCurve::Circle(circle) => {
+                        let n = circle.normal();
+                        let w = p - circle.center();
+                        let Ok(out) = (w - n * w.dot(n)).normalize() else {
+                            return Err(UnsettledMeeting);
+                        };
+                        circle.center() + out * circle.radius()
+                    }
+                    EdgeCurve::Ellipse(el) => {
+                        let w = p - el.center();
+                        let (x, y) = (
+                            w.dot(el.u_axis()) / el.semi_major(),
+                            w.dot(el.v_axis()) / el.semi_minor(),
+                        );
+                        let r = x.hypot(y);
+                        let radial = el.center()
+                            + el.u_axis() * (el.semi_major() * x / r)
+                            + el.v_axis() * (el.semi_minor() * y / r);
+                        let foot = el.evaluate(el.project(p));
+                        if (foot - p).length() < (radial - p).length() {
+                            foot
+                        } else {
+                            radial
+                        }
+                    }
+                    EdgeCurve::NurbsCurve(_) => continue,
+                };
+                // The foot is a point of the other curve to within the
+                // rounding of its place.
+                let e_q = match &*unit_b {
+                    EdgeCurve::Circle(c) => (c.center() - origin).length() + c.radius(),
+                    EdgeCurve::Ellipse(el) => (el.center() - origin).length() + el.semi_major(),
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => {
+                        (sb - origin).length() + (tb - sb).length()
+                    }
+                } * (8.0 * eps);
+                let apart = (p - q).length() + slack + e_p + e_q;
+                if apart.is_nan() || apart > tol {
+                    return Err(UnsettledMeeting);
+                }
+                let at = p + (q - p) * 0.5;
+                // A meeting on the other curve beyond its section is no
+                // meeting of the two sections.
+                if !(on_section(a, 0.0, at) && on_section(b, chord_b, at)) {
+                    continue;
+                }
+                // A kept point stands for this junction where it lies within
+                // `tol` of both sections and on the arc within this run: its
+                // foot's parameter strictly inside the run, or the point
+                // within `tol` of one of the run's ends by length, which
+                // decides there however coarse a parameter is.
+                let (from, to) = (point(run_start).0, point(run_end).0);
+                let in_run = |k: Point3| {
+                    if (k - from).length() <= tol || (k - to).length() <= tol {
+                        return true;
+                    }
+                    let near = match &*unit_a {
+                        EdgeCurve::Circle(circle) => circle.project(k),
+                        EdgeCurve::Ellipse(el) => el.project(k),
+                        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return false,
+                    };
+                    let along = (near - run_start).rem_euclid(TAU);
+                    along > 0.0 && along < run_end - run_start
+                };
+                let stands_for =
+                    |k: Point3| on_section(a, 0.0, k) && on_section(b, chord_b, k) && in_run(k);
+                if ends.iter().any(|&k| stands_for(k)) || found.iter().any(|m| stands_for(m.at)) {
+                    continue;
+                }
+                found.push(Meeting { at, apart });
+            }
+        }
+    }
+    Ok(found)
 }

@@ -229,9 +229,29 @@ fn trace_loops(
                 let candidate = &edges[entry.edge_idx];
                 if quantize_uv_periodic(candidate.end_uv, tol, u_period, v_period) == arriving_start
                 {
-                    // Check if this is truly the reverse edge (same line, opposite direction).
+                    // Check if this is truly the reverse edge (same curve,
+                    // opposite direction): a section's own twin, or another
+                    // edge leaving close by. Two lines, circles or ellipses
+                    // that leave the vertex close together but apart are two
+                    // curves unless proved one (a circle and an ellipse
+                    // through the same ends). Edges that leave along one
+                    // direction to rounding cannot be told apart here, and a
+                    // B-spline is read by angle alone.
                     let angle_diff = (entry.angle - incoming_angle).abs();
-                    let is_reverse = angle_diff < 0.1 || (angle_diff - TAU).abs() < 0.1;
+                    let close = angle_diff < 0.1 || (angle_diff - TAU).abs() < 0.1;
+                    let along = angle_diff < 1e-9 || (angle_diff - TAU).abs() < 1e-9;
+                    let twin = current_edge.source_edge_idx.is_some()
+                        && current_edge.source_edge_idx == candidate.source_edge_idx
+                        && current_edge.forward != candidate.forward;
+                    let is_reverse = twin
+                        || close
+                            && (along
+                                || super::face_splitter::edges_one_curve(
+                                    current_edge,
+                                    candidate,
+                                    10.0 * tol,
+                                )
+                                .unwrap_or(true));
                     if is_reverse {
                         continue;
                     }
