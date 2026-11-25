@@ -1305,3 +1305,38 @@ fn a_scale_scales_vertex_and_edge_tolerances_and_a_motion_keeps_them() {
         assert!(topo.edge(edges[1]).unwrap().tolerance().is_none(), "{name}");
     }
 }
+
+/// The stretch is a bound from above on the largest singular value, close
+/// to it, at any size of map and with the two largest singular values
+/// equal; a motion gives none.
+#[test]
+fn the_largest_stretch_bounds_the_largest_singular_value_at_any_size() {
+    let turn = Mat4::rotation_x(0.4) * Mat4::rotation_y(1.1) * Mat4::rotation_z(0.3);
+    let cases = [
+        ("huge", Mat4::scale(1e80, 2e80, 3e80), 3e80),
+        ("tiny", Mat4::scale(1e-100, 2e-100, 3e-100), 3e-100),
+        (
+            "huge turned",
+            turn * Mat4::scale(1e150, 3e150, 2e150),
+            3e150,
+        ),
+        (
+            "tiny turned",
+            Mat4::scale(2e-150, 1e-150, 3e-150) * turn,
+            3e-150,
+        ),
+        ("two equal", turn * Mat4::scale(3.0, 3.0, 1.0) * turn, 3.0),
+        ("two equal at the top", Mat4::scale(3.0, 1.0, 3.0), 3.0),
+        ("uniform", turn * Mat4::scale(7.0, 7.0, 7.0), 7.0),
+    ];
+    for (name, matrix, singular) in cases {
+        let stretch = largest_stretch(&matrix).unwrap();
+        assert!(
+            stretch >= singular && stretch <= singular * (1.0 + 1e-12),
+            "{name}: {stretch:e} against {singular:e}"
+        );
+    }
+    for matrix in [turn, Mat4::scale(-1.0, 1.0, 1.0) * turn, Mat4::identity()] {
+        assert!(largest_stretch(&matrix).is_none());
+    }
+}

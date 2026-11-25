@@ -376,36 +376,68 @@ fn similarity_scale(matrix: &Mat4) -> Option<f64> {
 }
 
 /// The most `matrix` stretches a length, by which it scales a tolerance:
-/// the scale of a similarity, and the largest singular value of the linear
-/// block of any other map. `None` for a motion, which keeps every length.
+/// the largest singular value of its linear block, rounded up. `None` for a
+/// motion, which keeps every length.
+///
+/// The block is divided by a power of two near its largest entry first, so
+/// that no product overflows or underflows, and the result is multiplied
+/// back: both are exact.
 pub(crate) fn largest_stretch(matrix: &Mat4) -> Option<f64> {
-    if let Some(scale) = similarity_scale(matrix) {
-        return (!nearly_equal(scale, 1.0)).then_some(scale);
+    let m = &matrix.0;
+    let largest = (0..3)
+        .flat_map(|i| (0..3).map(move |j| m[i][j].abs()))
+        .fold(0.0, f64::max);
+    if !(largest.is_finite() && largest > 0.0) {
+        return None;
+    }
+    let unit = 2.0_f64.powi(largest.log2().floor() as i32);
+    let row = |i: usize| [m[i][0] / unit, m[i][1] / unit, m[i][2] / unit, 0.0];
+    let block = Mat4([row(0), row(1), row(2), [0.0, 0.0, 0.0, 1.0]]);
+    if similarity_scale(&block).is_some_and(|scale| nearly_equal(scale * unit, 1.0)) {
+        return None;
     }
     let cols = [
-        linear(matrix, Vec3::new(1.0, 0.0, 0.0)),
-        linear(matrix, Vec3::new(0.0, 1.0, 0.0)),
-        linear(matrix, Vec3::new(0.0, 0.0, 1.0)),
+        linear(&block, Vec3::new(1.0, 0.0, 0.0)),
+        linear(&block, Vec3::new(0.0, 1.0, 0.0)),
+        linear(&block, Vec3::new(0.0, 0.0, 1.0)),
     ];
-    // The largest eigenvalue of the columns' Gram matrix, in closed form.
-    let g = |i: usize, j: usize| cols[i].dot(cols[j]);
-    let mean = (g(0, 0) + g(1, 1) + g(2, 2)) / 3.0;
-    let off = g(0, 1).powi(2) + g(0, 2).powi(2) + g(1, 2).powi(2);
-    let spread = (((g(0, 0) - mean).powi(2)
-        + (g(1, 1) - mean).powi(2)
-        + (g(2, 2) - mean).powi(2)
-        + 2.0 * off)
-        / 6.0)
-        .sqrt();
-    if spread <= f64::EPSILON * mean {
-        return Some(mean.sqrt());
+    let mut gram = [[0.0; 3]; 3];
+    for (i, row) in gram.iter_mut().enumerate() {
+        for (j, entry) in row.iter_mut().enumerate() {
+            *entry = cols[i].dot(cols[j]);
+        }
     }
-    let b = |i: usize, j: usize| (g(i, j) - if i == j { mean } else { 0.0 }) / spread;
-    let det = b(0, 0) * (b(1, 1) * b(2, 2) - b(1, 2) * b(2, 1))
-        - b(0, 1) * (b(1, 0) * b(2, 2) - b(1, 2) * b(2, 0))
-        + b(0, 2) * (b(1, 0) * b(2, 1) - b(1, 1) * b(2, 0));
-    let angle = (det / 2.0).clamp(-1.0, 1.0).acos() / 3.0;
-    Some((mean + 2.0 * spread * angle.cos()).sqrt())
+    let trace = gram[0][0] + gram[1][1] + gram[2][2];
+    // Jacobi rotations keep the eigenvalues. What is left off the diagonal
+    // moves the largest one by no more than its size, and the rounding of
+    // the Gram matrix and of the rotations by a few units of the trace.
+    for _ in 0..8 {
+        for (p, q) in [(0, 1), (0, 2), (1, 2)] {
+            if gram[p][q].abs() <= f64::MIN_POSITIVE {
+                continue;
+            }
+            let theta = (gram[q][q] - gram[p][p]) / (2.0 * gram[p][q]);
+            let t = theta.signum() / (theta.abs() + theta.hypot(1.0));
+            let c = 1.0 / t.hypot(1.0);
+            let s = t * c;
+            for k in 0..3 {
+                let (kp, kq) = (gram[k][p], gram[k][q]);
+                gram[k][p] = c * kp - s * kq;
+                gram[k][q] = s * kp + c * kq;
+            }
+            for k in 0..3 {
+                let (pk, qk) = (gram[p][k], gram[q][k]);
+                gram[p][k] = c * pk - s * qk;
+                gram[q][k] = s * pk + c * qk;
+            }
+        }
+    }
+    let off = gram[0][1].abs().max(gram[1][0].abs())
+        + gram[0][2].abs().max(gram[2][0].abs())
+        + gram[1][2].abs().max(gram[2][1].abs());
+    let top = gram[0][0].max(gram[1][1]).max(gram[2][2]);
+    let bound = top + 2.0 * off + 64.0 * f64::EPSILON * trace;
+    Some(bound.sqrt() * (1.0 + 4.0 * f64::EPSILON) * unit)
 }
 
 /// For a surface of revolution with frame images `x`, `y` (radial) and `z`
