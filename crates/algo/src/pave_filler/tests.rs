@@ -3264,6 +3264,145 @@ fn two_crossings_in_one_place_cut_a_section_once() {
     }
 }
 
+/// The common blocks whose pave blocks come from more than one of `edges`,
+/// each as the edges' indices in `edges`, sorted.
+fn common_blocks_across(
+    arena: &GfaArena,
+    edges: &[brepkit_topology::edge::EdgeId],
+) -> Vec<Vec<usize>> {
+    let mut joined = Vec::new();
+    for (_, cb) in arena.common_blocks.iter() {
+        let mut from: Vec<usize> = cb
+            .pave_blocks
+            .iter()
+            .filter_map(|&pb| arena.pave_blocks.get(pb))
+            .filter_map(|pb| edges.iter().position(|&e| e == pb.original_edge))
+            .collect();
+        from.sort_unstable();
+        from.dedup();
+        if from.len() > 1 {
+            joined.push(from);
+        }
+    }
+    joined.sort();
+    joined
+}
+
+/// A planar sheet in `z = 0` bounded by `arc` (an edge from `p` to `q`, used
+/// forward or backward) and the line between `q` and `p`.
+fn sheet_on_arc(
+    topo: &mut Topology,
+    arc: brepkit_topology::edge::EdgeId,
+    forward: bool,
+) -> brepkit_topology::solid::SolidId {
+    let (from, to) = {
+        let e = topo.edge(arc).unwrap();
+        if forward {
+            (e.start(), e.end())
+        } else {
+            (e.end(), e.start())
+        }
+    };
+    let chord = topo.add_edge(Edge::new(to, from, EdgeCurve::Line));
+    let wire = topo.add_wire(
+        Wire::new(
+            vec![
+                OrientedEdge::new(arc, forward),
+                OrientedEdge::new(chord, true),
+            ],
+            true,
+        )
+        .unwrap(),
+    );
+    let face = topo.add_face(Face::new(
+        wire,
+        vec![],
+        FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: 0.0,
+        },
+    ));
+    let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+    topo.add_solid(Solid::new(shell, vec![]))
+}
+
+/// An arc of a sixth of a turn and the rest of its circle, with one pair of
+/// ends, the rest stored from the arc's end or from its start about the
+/// reversed normal. As the edges of two sheets, each is paved at its middle
+/// before any block meets another, so no block is common to both. As two
+/// loose tool edges over a plate's top, each stays one block, and the two
+/// blocks stay apart.
+#[test]
+fn an_arc_and_the_rest_of_its_circle_share_no_common_block() {
+    use brepkit_math::curves::Circle3D;
+    use brepkit_math::tolerance::Tolerance;
+    let pi = std::f64::consts::PI;
+    let tol = Tolerance::new();
+    let centre = Point3::new(5.0, 5.0, 0.0);
+    let up = Circle3D::new(centre, Vec3::new(0.0, 0.0, 1.0), 2.0).unwrap();
+    let down = Circle3D::new(centre, Vec3::new(0.0, 0.0, -1.0), 2.0).unwrap();
+    for back in [false, true] {
+        // The arc and the rest, with their own vertices: the edges, and
+        // whether the rest runs from the arc's start.
+        let edges = |topo: &mut Topology| {
+            let mut vertex = |t: f64| topo.add_vertex(Vertex::new(up.evaluate(t), 1e-7));
+            let (p, q, p2, q2) = (
+                vertex(0.2),
+                vertex(0.2 + pi / 3.0),
+                vertex(0.2),
+                vertex(0.2 + pi / 3.0),
+            );
+            let arc = topo.add_edge(Edge::new(p, q, EdgeCurve::Circle(up.clone())));
+            let rest = if back {
+                topo.add_edge(Edge::new(p2, q2, EdgeCurve::Circle(down.clone())))
+            } else {
+                topo.add_edge(Edge::new(q2, p2, EdgeCurve::Circle(up.clone())))
+            };
+            (arc, rest)
+        };
+        let leaves = |arena: &GfaArena, edge| {
+            arena
+                .collect_leaf_pave_blocks(&arena.edge_pave_blocks[&edge])
+                .len()
+        };
+
+        let mut topo = Topology::default();
+        let (arc, rest) = edges(&mut topo);
+        let a = sheet_on_arc(&mut topo, arc, true);
+        let b = sheet_on_arc(&mut topo, rest, !back);
+        let mut arena = GfaArena::new();
+        crate::pave_filler::run_pave_filler(&mut topo, a, b, tol, &mut arena).unwrap();
+        assert_eq!(
+            common_blocks_across(&arena, &[arc, rest]),
+            Vec::<Vec<usize>>::new()
+        );
+        assert_eq!(
+            (leaves(&arena, arc), leaves(&arena, rest)),
+            (2, 2),
+            "sheets"
+        );
+
+        let mut topo = Topology::default();
+        let plate = make_box(&mut topo, [0.0, 0.0, -2.0], [10.0, 10.0, 0.0]);
+        let (arc, rest) = edges(&mut topo);
+        let mut arena = GfaArena::new();
+        crate::pave_filler::run_pave_filler_with_edges(
+            &mut topo,
+            &[plate],
+            &[arc, rest],
+            tol,
+            &mut arena,
+        )
+        .unwrap();
+        assert_eq!(
+            common_blocks_across(&arena, &[arc, rest]),
+            Vec::<Vec<usize>>::new(),
+            "tool edges, the rest about -z: {back}"
+        );
+        assert_eq!((leaves(&arena, arc), leaves(&arena, rest)), (1, 1), "tools");
+    }
+}
+
 /// A bicubic sheet over `[-50, 50]` squared with four knot spans each way,
 /// bent along `z`, moved by `pose`.
 fn bent_sheet(pose: &dyn Fn(Point3) -> Point3) -> brepkit_math::nurbs::surface::NurbsSurface {

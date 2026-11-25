@@ -8935,7 +8935,8 @@ fn split_face_2d_impl(
         // Quantize at the kernel's linear tolerance so dedup only collapses
         // genuinely-coincident sections (a doubly-recorded interference) and
         // never distinct splitters that happen to be close on a small model.
-        let scale = 1.0 / tol.linear.max(1e-12);
+        let cell = tol.linear.max(1e-12);
+        let scale = 1.0 / cell;
         let q = |p: Point3| -> (i64, i64, i64) {
             (
                 (p.x() * scale).round() as i64,
@@ -8943,19 +8944,27 @@ fn split_face_2d_impl(
                 (p.z() * scale).round() as i64,
             )
         };
-        let mut seen = std::collections::HashSet::new();
-        deduped_sections = sections
-            .iter()
-            .filter(|s| {
-                // Key on the endpoints plus a midpoint sample so two distinct
-                // arcs sharing endpoints (e.g. the two halves of a split
-                // circle) are not collapsed into one.
-                let (a, b) = (q(s.start), q(s.end));
-                let mid = q(evaluate_edge_at_t(&s.curve_3d, s.start, s.end, 0.5));
-                seen.insert((if a <= b { (a, b) } else { (b, a) }, mid))
-            })
-            .cloned()
-            .collect();
+        // Two sections with the same quantized ends are one only where a
+        // bound over their whole length holds them together: an arc and the
+        // rest of its circle share their ends, and so do the two halves of a
+        // circle. Ends in one cell lie within `sqrt(3)` cells of each other.
+        let mut seen: std::collections::HashMap<_, Vec<usize>> = std::collections::HashMap::new();
+        let mut kept: Vec<SectionEdge> = Vec::with_capacity(sections.len());
+        for s in sections {
+            let (a, b) = (q(s.start), q(s.end));
+            let twins = seen
+                .entry(if a <= b { (a, b) } else { (b, a) })
+                .or_default();
+            if twins
+                .iter()
+                .any(|&i| same_section_curve(&kept[i], s, 2.0 * cell))
+            {
+                continue;
+            }
+            twins.push(kept.len());
+            kept.push(s.clone());
+        }
+        deduped_sections = kept;
         &deduped_sections[..]
     };
 
@@ -14030,7 +14039,7 @@ fn spans_apart((a0, ad): (f64, f64), (b0, bd): (f64, f64)) -> f64 {
 /// into an arc of `p`. That arc's ends lie within the span gap
 /// ([`spans_apart`]) of `p`'s arc's ends along `p`, so the two arcs of `p`
 /// lie within `r_p` times that gap of each other.
-fn circle_arcs_apart(
+pub fn circle_arcs_apart(
     p: &brepkit_math::curves::Circle3D,
     pa: (f64, f64),
     q: &brepkit_math::curves::Circle3D,
@@ -14047,8 +14056,16 @@ fn circle_arcs_apart(
     let turn = |e: Vec3| e * cos + w.cross(e) + w * (w.dot(e) / (1.0 + cos));
     // `|n1 - n2|` is `2 sin(angle / 2)`, read from the components with no
     // cancellation, where `sqrt(2 - 2 cos)` loses a small turn to rounding;
-    // a few units of rounding cover normals unit only within it.
-    let tilt = 8.0f64.madd(f64::EPSILON, (n1 - n2).length());
+    // a few units of rounding cover normals unit only within it. Normals
+    // alike to the bit make `w` nothing, and the turn moves no point.
+    let alike = [(n1.x(), n2.x()), (n1.y(), n2.y()), (n1.z(), n2.z())]
+        .iter()
+        .all(|&(a, b)| (a + 0.0).to_bits() == (b + 0.0).to_bits());
+    let tilt = if alike {
+        0.0
+    } else {
+        8.0f64.madd(f64::EPSILON, (n1 - n2).length())
+    };
     let moved =
         (p.center() - q.center()).length() + (p.radius() - q.radius()).abs() + p.radius() * tilt;
     let (s, c) = q0.sin_cos();
@@ -14065,9 +14082,14 @@ fn circle_arcs_apart(
 /// (`cos t = su cos t2`, `sin t = sv sin t2`), so it stands within
 /// `|c_p - c_q| + sqrt(|a_q su U_q - a_p U_p|^2 + |b_q sv V_q - b_p V_p|^2)` of
 /// `p`'s point at `t`. The arc of `p` over the matching span then lies within
-/// `a_p` times the span gap ([`spans_apart`]) of `p`'s own arc. The least
-/// bound over the four sign pairs stands.
-fn ellipse_arcs_apart(
+/// `a_p` times the span gap ([`spans_apart`]) of `p`'s own arc.
+///
+/// A second bound reads each ellipse as the circle on its axes whose radius
+/// is its mean semi-axis. At each parameter the ellipse lies within half the
+/// gap between its semi-axes of that circle, so [`circle_arcs_apart`] between
+/// the circles plus both half gaps bounds the ellipses too. It reads two round
+/// ellipses on turned axes as one. The least bound stands.
+pub fn ellipse_arcs_apart(
     p: &brepkit_math::curves::Ellipse3D,
     pa: (f64, f64),
     q: &brepkit_math::curves::Ellipse3D,
@@ -14086,6 +14108,25 @@ fn ellipse_arcs_apart(
             return f64::NAN;
         }
         best = best.min(bound);
+    }
+    let round = |e: &brepkit_math::curves::Ellipse3D| {
+        let radius = 0.5 * (e.semi_major() + e.semi_minor());
+        let off = (0.5 * (e.semi_major() - e.semi_minor())).abs() + f64::EPSILON * radius;
+        brepkit_math::curves::Circle3D::with_axes(
+            e.center(),
+            e.normal(),
+            radius,
+            e.u_axis(),
+            e.v_axis(),
+        )
+        .ok()
+        .map(|circle| (circle, off))
+    };
+    if let (Some((cp, off_p)), Some((cq, off_q))) = (round(p), round(q)) {
+        let bound = circle_arcs_apart(&cp, pa, &cq, (q0, qd)) + off_p + off_q;
+        if !bound.is_nan() {
+            best = best.min(bound);
+        }
     }
     best
 }
@@ -17977,6 +18018,201 @@ mod tests {
         assert!(!same_section_curve(&short, &rest, 1e-5));
         assert!(!same_section_curve(&rest, &short, 1e-5));
         assert!(same_section_curve(&short, &short.clone(), 1e-5));
+    }
+
+    /// The plate of [`two_arcs_between_one_pair_of_points`] laid in the frame
+    /// at `o` with axes `u` and `v`, its normal `u x v`: the plate's (x, y)
+    /// lies at `o + x u + y v`.
+    fn plate_in_frame(o: Point3, u: Vec3, v: Vec3) -> (Topology, FaceId) {
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+
+        let mut topo = Topology::new();
+        let corners = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
+            .map(|(x, y)| topo.add_vertex(Vertex::new(o + u * x + v * y, 1e-7)));
+        let edges: Vec<_> = (0..4)
+            .map(|i| {
+                let edge = Edge::new(corners[i], corners[(i + 1) % 4], EdgeCurve::Line);
+                OrientedEdge::new(topo.add_edge(edge), true)
+            })
+            .collect();
+        let outer = topo.add_wire(Wire::new(edges, true).unwrap());
+        let normal = u.cross(v);
+        let face = topo.add_face(Face::new(
+            outer,
+            vec![],
+            FaceSurface::Plane {
+                normal,
+                d: normal.dot(o - Point3::new(0.0, 0.0, 0.0)),
+            },
+        ));
+        (topo, face)
+    }
+
+    /// The area a wire of lines and circular arcs bounds in the frame at `o`
+    /// with axes `u` and `v`, signed by its way round about `u x v`. Each
+    /// edge adds its chord's term of the shoelace formula, and an arc adds
+    /// the segment between it and its chord, `r^2 (phi - sin phi) / 2` for
+    /// a sweep `phi`, so the sum is exact.
+    fn exact_wire_area(wire: &[OrientedPCurveEdge], o: Point3, u: Vec3, v: Vec3) -> f64 {
+        let local = |p: Point3| ((p - o).dot(u), (p - o).dot(v));
+        let normal = u.cross(v);
+        wire.iter()
+            .map(|e| {
+                let (s3, e3) = if e.forward {
+                    (e.start_3d, e.end_3d)
+                } else {
+                    (e.end_3d, e.start_3d)
+                };
+                let (a, b) = (local(s3), local(e3));
+                let chord = 0.5 * (a.0 * b.1 - b.0 * a.1);
+                let segment = match &e.curve_3d {
+                    EdgeCurve::Line => 0.0,
+                    EdgeCurve::Circle(c) => {
+                        let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+                        let phi = t1 - t0;
+                        let r = c.radius();
+                        c.normal().dot(normal).signum() * 0.5 * r * r * (phi - phi.sin())
+                    }
+                    other => unreachable!("a wire edge on {other:?}"),
+                };
+                if e.forward {
+                    chord + segment
+                } else {
+                    -(chord + segment)
+                }
+            })
+            .sum()
+    }
+
+    /// The regions' areas, sorted, of the plate in the frame at `o` with
+    /// axes `u` and `v` split by `sections`. Each outline must wind
+    /// counter-clockwise about `u x v` and each hole clockwise.
+    fn framed_plate_region_areas(
+        o: Point3,
+        u: Vec3,
+        v: Vec3,
+        sections: &[SectionEdge],
+    ) -> Vec<f64> {
+        let (topo, face_id) = plate_in_frame(o, u, v);
+        let subs = split_face_2d(
+            &topo,
+            face_id,
+            sections,
+            Rank::A,
+            &brepkit_math::tolerance::Tolerance::new(),
+            None,
+            None,
+            &std::collections::HashMap::new(),
+            &std::collections::BTreeSet::new(),
+            None,
+        );
+        let mut areas: Vec<f64> = subs
+            .iter()
+            .map(|s| {
+                let outline = exact_wire_area(&s.outer_wire, o, u, v);
+                assert!(outline > 0.0, "an outline winds clockwise: {outline}");
+                let holes: Vec<f64> = s
+                    .inner_wires
+                    .iter()
+                    .map(|w| exact_wire_area(w, o, u, v))
+                    .collect();
+                assert!(
+                    holes.iter().all(|&h| h < 0.0),
+                    "a hole winds counter-clockwise: {holes:?}"
+                );
+                outline + holes.iter().sum::<f64>()
+            })
+            .collect();
+        areas.sort_by(f64::total_cmp);
+        areas
+    }
+
+    /// The plate's frames: upright, turned about a slant axis and moved,
+    /// and that turn mirrored in the plane `x = 0`.
+    fn plate_frames() -> [(&'static str, Point3, Vec3, Vec3); 3] {
+        let axis = Vec3::new(1.0, 2.0, 3.0).normalize().unwrap();
+        let (sin, cos) = 0.7f64.sin_cos();
+        let turn = |e: Vec3| e * cos + axis.cross(e) * sin + axis * (axis.dot(e) * (1.0 - cos));
+        let mirror = |e: Vec3| Vec3::new(-e.x(), e.y(), e.z());
+        let (u, v) = (
+            turn(Vec3::new(1.0, 0.0, 0.0)),
+            turn(Vec3::new(0.0, 1.0, 0.0)),
+        );
+        let o = Point3::new(3.0, -2.0, 5.0);
+        [
+            (
+                "upright",
+                Point3::new(0.0, 0.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ),
+            ("turned", o, u, v),
+            (
+                "mirrored",
+                Point3::new(-o.x(), o.y(), o.z()),
+                mirror(u),
+                mirror(v),
+            ),
+        ]
+    }
+
+    /// A circle of radius 2 about the plate's (5, 5), cut at two points a
+    /// sixth of a turn apart into an arc and the rest of the circle: the
+    /// plate splits into the disc and the rest, in each frame. The rest is
+    /// stored from the arc's end round to its start, or from the arc's start
+    /// about the reversed normal; either way its shorter-arc middle is the
+    /// arc's, and only a reading along each curve keeps both.
+    #[test]
+    fn an_arc_and_the_rest_of_its_circle_split_a_plate_into_the_disc_and_the_rest() {
+        use brepkit_math::curves::Circle3D;
+        let pi = std::f64::consts::PI;
+        for (pose, o, u, v) in plate_frames() {
+            let normal = u.cross(v);
+            let centre = o + u * 5.0 + v * 5.0;
+            let circle = Circle3D::new(centre, normal, 2.0).unwrap();
+            let back = Circle3D::new(centre, -normal, 2.0).unwrap();
+            let (p, q) = (circle.evaluate(0.2), circle.evaluate(0.2 + pi / 3.0));
+            let on = |c: &Circle3D, from: Point3, to: Point3| SectionEdge {
+                curve_3d: EdgeCurve::Circle(c.clone()),
+                ..line_section(from, to)
+            };
+            for (how, arc, rest) in [
+                (
+                    "rest from the arc's end",
+                    on(&circle, p, q),
+                    on(&circle, q, p),
+                ),
+                (
+                    "rest about the reversed normal",
+                    on(&circle, p, q),
+                    on(&back, p, q),
+                ),
+                (
+                    "arc about the reversed normal",
+                    on(&back, q, p),
+                    on(&circle, q, p),
+                ),
+            ] {
+                assert!(
+                    (section_middle(&arc) - section_middle(&rest)).length() < 1e-9,
+                    "{pose}, {how}: the shorter-arc middles differ"
+                );
+                let want = [4.0 * pi, 100.0 - 4.0 * pi];
+                for sections in [[arc.clone(), rest.clone()], [rest, arc]] {
+                    let areas = framed_plate_region_areas(o, u, v, &sections);
+                    assert_eq!(areas.len(), 2, "{pose}, {how}: regions of areas {areas:?}");
+                    for (got, want) in areas.iter().zip(want) {
+                        assert!(
+                            (got - want).abs() < 1e-9,
+                            "{pose}, {how}: regions of areas {areas:?}, want {want}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     /// A closed B-spline (an exact circle of radius 2 about (5, 5), nine

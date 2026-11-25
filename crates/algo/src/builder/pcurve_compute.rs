@@ -1660,7 +1660,7 @@ fn segment_distance_3d(p: Point3, a: Point3, b: Point3) -> f64 {
 /// `|A - A'| + |B - B'|` of each other: that covers a difference in the
 /// axes' lengths and their skew. Each difference is read as it is computed,
 /// plus its rounding, and is nothing where the two are the same to the bit.
-pub(super) fn unit_conic(curve: &EdgeCurve) -> Option<(Cow<'_, EdgeCurve>, f64)> {
+pub fn unit_conic(curve: &EdgeCurve) -> Option<(Cow<'_, EdgeCurve>, f64)> {
     let slack = 64.0 * f64::EPSILON;
     // The unit first axis, the second squared to it, and both lengths.
     let frame = |u: Vec3, v: Vec3| {
@@ -1726,7 +1726,7 @@ pub(super) fn unit_conic(curve: &EdgeCurve) -> Option<(Cow<'_, EdgeCurve>, f64)>
 /// forms' gap at one parameter: the gap, plus the shift of each end, at most
 /// twice the gap as each end's nearest point lies no farther than its point
 /// at the same parameter.
-pub(super) const fn unit_conic_arc_gap(gap: f64) -> f64 {
+pub const fn unit_conic_arc_gap(gap: f64) -> f64 {
     3.0 * gap
 }
 
