@@ -154,7 +154,7 @@ pub fn perform(topo: &Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<
                         let compatible =
                             match curves_compatible(curve_i, span_i, curve_j, span_j, tol) {
                                 Some(compatible) => compatible,
-                                None => block_lies_on_block(topo, arena, pb_i, pb_j, tol)?,
+                                None => block_lies_on_block(topo, arena, pb_i, pb_j, tol.linear)?,
                             };
                         if !compatible {
                             continue;
@@ -477,7 +477,8 @@ type BlockRead = Option<(
 )>;
 
 /// Whether the parts of their edges' curves that two blocks cover are one
-/// curve, within tolerance. The two blocks share their ends already.
+/// curve, within the length `linear`. The two blocks share their ends
+/// already.
 ///
 /// Each block is read over its own parameters, never back from its ends: a
 /// B-spline cut to the block's span, so neither a short block nor half of a
@@ -490,24 +491,49 @@ type BlockRead = Option<(
 /// A pair no bound holds together is two curves. Where the pieces of a cut
 /// B-spline part at a join, twice the widest gap counts against the
 /// tolerance: the cut moves the curve by up to that gap.
-fn block_lies_on_block(
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a topology lookup fails.
+pub fn block_lies_on_block(
     topo: &Topology,
     arena: &GfaArena,
     pb_i: PaveBlockId,
     pb_j: PaveBlockId,
-    tol: Tolerance,
+    linear: f64,
 ) -> Result<bool, AlgoError> {
     let (Some(block_i), Some(block_j)) = (arena.pave_blocks.get(pb_i), arena.pave_blocks.get(pb_j))
     else {
         return Ok(false);
     };
-    let read = |block: &crate::ds::PaveBlock| -> Result<BlockRead, AlgoError> {
-        let edge = topo.edge(block.original_edge)?;
+    let span = |block: &crate::ds::PaveBlock| (block.start.parameter, block.end.parameter);
+    spans_lie_on_one_curve(
+        topo,
+        (block_i.original_edge, span(block_i)),
+        (block_j.original_edge, span(block_j)),
+        linear,
+    )
+}
+
+/// Whether the parts of two edges' curves over the given parameter spans
+/// are one curve, within the length `linear`, read as
+/// [`block_lies_on_block`] reads two blocks.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a topology lookup fails.
+pub fn spans_lie_on_one_curve(
+    topo: &Topology,
+    (edge_i, span_i): (EdgeId, (f64, f64)),
+    (edge_j, span_j): (EdgeId, (f64, f64)),
+    linear: f64,
+) -> Result<bool, AlgoError> {
+    let read = |edge: EdgeId, (from, to): (f64, f64)| -> Result<BlockRead, AlgoError> {
+        let edge = topo.edge(edge)?;
         let ends = (
             topo.vertex(edge.start())?.point(),
             topo.vertex(edge.end())?.point(),
         );
-        let (from, to) = (block.start.parameter, block.end.parameter);
         let (from, to) = if from <= to { (from, to) } else { (to, from) };
         if let EdgeCurve::NurbsCurve(curve) = edge.curve() {
             let Some((piece, gap)) = b_spline_between(curve, from, to) else {
@@ -526,10 +552,10 @@ fn block_lies_on_block(
             0.0,
         )))
     };
-    let (Some(i), Some(j)) = (read(block_i)?, read(block_j)?) else {
+    let (Some(i), Some(j)) = (read(edge_i, span_i)?, read(edge_j, span_j)?) else {
         return Ok(false);
     };
-    let room = tol.linear - 2.0 * (i.4 + j.4);
+    let room = linear - 2.0 * (i.4 + j.4);
     if room.is_nan() || room <= 0.0 {
         return Ok(false);
     }

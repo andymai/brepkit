@@ -21,6 +21,7 @@ use crate::vec::{Point3, Vec3};
 
 mod cover;
 mod section_fit;
+pub use section_fit::spline_off_surface;
 use section_fit::{crosses_at, fit_section, settle_on_section};
 
 /// Exact curve type resulting from plane-analytic surface intersection.

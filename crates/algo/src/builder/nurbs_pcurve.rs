@@ -66,14 +66,7 @@ pub fn proved_nurbs_pcurve(
     surface: &NurbsSurface,
     tolerance: f64,
 ) -> Option<Curve2D> {
-    if surface.is_periodic_u()
-        || surface.is_periodic_v()
-        || !surface
-            .weights()
-            .iter()
-            .flatten()
-            .all(|&w| w > 0.0 && w.is_normal())
-    {
+    if !readable(surface) {
         return None;
     }
     let run = Run::of(curve, start, end)?;
@@ -86,7 +79,100 @@ pub fn proved_nurbs_pcurve(
         return None;
     }
     let jets = Jets::of(surface);
+    let newton = (1e-3 * allowed).max(f64::MIN_POSITIVE);
+    let (done, _) = walk(&run, &jets, newton, Some(allowed), |err, _, _| {
+        err <= allowed
+    })?;
 
+    let pieces = done.len() - 1;
+    let mut points = Vec::with_capacity(3 * pieces + 1);
+    let mut knots = vec![0.0; 4];
+    points.push(done[0].uv);
+    for (k, w) in done.windows(2).enumerate() {
+        let [p1, p2, p3] = jets.inner_points(&w[0], &w[1]);
+        points.extend([p1, p2, p3]);
+        if k + 1 < pieces {
+            knots.extend([w[1].s; 3]);
+        }
+    }
+    knots.extend([1.0; 4]);
+    let weights = vec![1.0; points.len()];
+    NurbsCurve2D::new(3, knots, points, weights)
+        .ok()
+        .map(Curve2D::Nurbs)
+}
+
+/// A proved bound on how far the B-spline `curve` over its parameters
+/// `[t0, t1]` lies from `surface`, or `None`.
+///
+/// The bound is read as [`proved_nurbs_pcurve`] reads its pcurve: a bound on
+/// `|S(f(s)) - C(s)|` over each piece, with the roundings of reading the
+/// curve and the surface. A piece is halved while its bound exceeds `aim`
+/// and twice the larger gap at its ends, plus those roundings: past that
+/// the bound reads the curve's own distance from the surface there, which
+/// no halving lowers.
+///
+/// `None` where [`proved_nurbs_pcurve`] would fail for any reason but its
+/// bound: a periodic surface, a weight that is not a positive normal float,
+/// a range of no length, a point that does not project, a pole, or past
+/// [`MOST_PIECES`].
+#[must_use]
+pub fn proved_distance(
+    curve: &NurbsCurve,
+    (t0, t1): (f64, f64),
+    surface: &NurbsSurface,
+    aim: f64,
+) -> Option<f64> {
+    if !readable(surface)
+        || t0.is_nan()
+        || t1.is_nan()
+        || t0 >= t1
+        || !curve.weights().iter().all(|&w| w > 0.0 && w.is_normal())
+    {
+        return None;
+    }
+    let run = Run::Spline(curve, t0, t1);
+    let speed = run.bounds((0.0, 1.0), 1)?[1];
+    if !(speed.is_finite() && speed > 0.0) {
+        return None;
+    }
+    let rounding = run.rounding(speed) + surface_rounding(surface);
+    let allowed = aim - rounding;
+    let jets = Jets::of(surface);
+    let newton = (1e-3 * aim).max(f64::MIN_POSITIVE);
+    let (_, worst) = walk(&run, &jets, newton, None, |err, a, b| {
+        err <= allowed || err <= 2.0f64.madd(a.gap.max(b.gap), rounding)
+    })?;
+    let bound = worst + rounding;
+    bound.is_finite().then_some(bound)
+}
+
+/// Whether the walk can read `surface`: not periodic, with every weight a
+/// positive normal float.
+fn readable(surface: &NurbsSurface) -> bool {
+    !surface.is_periodic_u()
+        && !surface.is_periodic_v()
+        && surface
+            .weights()
+            .iter()
+            .flatten()
+            .all(|&w| w > 0.0 && w.is_normal())
+}
+
+/// The nodes of a walk along `run` on the surface of `jets`, from even stops
+/// and the edge's knots, a piece halved until `accept` takes its bound and
+/// its two end nodes, with the largest bound taken. `None` where a node is
+/// not found, a piece grows shorter than `1e-9` of the run, or past
+/// [`MOST_PIECES`]. Where `allowed` is set, `None` also where the surface's
+/// parameters at the first node round by more than it.
+fn walk(
+    run: &Run<'_>,
+    jets: &Jets<'_>,
+    newton: f64,
+    allowed: Option<f64>,
+    accept: impl Fn(f64, &Node, &Node) -> bool,
+) -> Option<(Vec<Node>, f64)> {
+    let surface = jets.surface;
     // The edge's knots, and even stops not beside one.
     let mut stops: Vec<(f64, bool)> = (0..=START_PIECES)
         .map(|k| (k as f64 / START_PIECES as f64, false))
@@ -108,24 +194,26 @@ pub fn proved_nurbs_pcurve(
         *last = 1.0;
     }
 
-    let newton = (1e-3 * allowed).max(f64::MIN_POSITIVE);
     let first = run.at(0.0)?;
     let found =
         brepkit_math::nurbs::projection::project_point_to_surface(surface, first.0, newton).ok()?;
-    let start = jets.node(&run, 0.0, Point2::new(found.u, found.v), newton)?;
+    let start = jets.node(run, 0.0, Point2::new(found.u, found.v), newton)?;
     // A surface whose parameters lie far from nothing, beside its own
     // size, reads any spline there to more than the tolerance: the first
     // piece's bound holds at least this.
-    let (su, sv) = partials_on(surface, start.uv, jets.spans(start.uv, [false, false]))?;
-    let mut at_start: Table = [[0.0; ORDER + 1]; ORDER + 1];
-    (at_start[1][0], at_start[0][1]) = (
-        length(su.x(), su.y(), su.z()),
-        length(sv.x(), sv.y(), sv.z()),
-    );
-    if read_rounding(&at_start, start.uv.x().abs(), start.uv.y().abs()) > allowed {
-        return None;
+    if let Some(allowed) = allowed {
+        let (su, sv) = partials_on(surface, start.uv, jets.spans(start.uv, [false, false]))?;
+        let mut at_start: Table = [[0.0; ORDER + 1]; ORDER + 1];
+        (at_start[1][0], at_start[0][1]) = (
+            length(su.x(), su.y(), su.z()),
+            length(sv.x(), sv.y(), sv.z()),
+        );
+        if read_rounding(&at_start, start.uv.x().abs(), start.uv.y().abs()) > allowed {
+            return None;
+        }
     }
     let mut done = vec![start];
+    let mut worst = 0.0_f64;
     // Each pending node is found once, the first time a piece ends there.
     let mut pending: Vec<(f64, Option<Node>)> =
         stops.into_iter().skip(1).rev().map(|s| (s, None)).collect();
@@ -133,10 +221,11 @@ pub fn proved_nurbs_pcurve(
         let a = done[done.len() - 1];
         let b = match found {
             Some(b) => b,
-            None => jets.node(&run, s, a.uv + a.rate_out * (s - a.s), newton)?,
+            None => jets.node(run, s, a.uv + a.rate_out * (s - a.s), newton)?,
         };
-        let err = jets.piece_bound(&run, &a, &b);
-        if err.is_finite() && err <= allowed {
+        let err = jets.piece_bound(run, &a, &b);
+        if err.is_finite() && accept(err, &a, &b) {
+            worst = worst.max(err);
             done.push(b);
             continue;
         }
@@ -146,23 +235,7 @@ pub fn proved_nurbs_pcurve(
         pending.push((s, Some(b)));
         pending.push((f64::midpoint(a.s, s), None));
     }
-
-    let pieces = done.len() - 1;
-    let mut points = Vec::with_capacity(3 * pieces + 1);
-    let mut knots = vec![0.0; 4];
-    points.push(done[0].uv);
-    for (k, w) in done.windows(2).enumerate() {
-        let [p1, p2, p3] = jets.inner_points(&w[0], &w[1]);
-        points.extend([p1, p2, p3]);
-        if k + 1 < pieces {
-            knots.extend([w[1].s; 3]);
-        }
-    }
-    knots.extend([1.0; 4]);
-    let weights = vec![1.0; points.len()];
-    NurbsCurve2D::new(3, knots, points, weights)
-        .ok()
-        .map(Curve2D::Nurbs)
+    Some((done, worst))
 }
 
 /// How far a point of `surface` its evaluator returns can stand from the
@@ -1310,6 +1383,47 @@ mod tests {
                     .expect("a pcurve for each edge");
                 let far = stray(&pcurve, curve, start, end, surface);
                 assert!(far <= tol, "{far:e} with {} pieces", pieces(&pcurve));
+            }
+        }
+    }
+
+    /// A cubic at a height of `lift` over the flat sheet reads a bound of at
+    /// least `lift` and at most twice it, over its whole range and over part
+    /// of it, and an iso curve of the bent sheet reads one within the aim;
+    /// in each pose, the last 4e4 from the origin.
+    #[test]
+    fn a_spline_is_bounded_by_its_distance_from_a_sheet() {
+        let flat = sheet(0.0);
+        let bent = sheet(4.0);
+        let iso = iso_v(&bent, 0.3);
+        for pose in Pose::POSES {
+            let (flat, bent) = (pose.surface(&flat), pose.surface(&bent));
+            let EdgeCurve::NurbsCurve(iso) = pose.curve(&EdgeCurve::NurbsCurve(iso.clone())) else {
+                unreachable!()
+            };
+            let (d0, d1) = iso.domain();
+            let on = proved_distance(&iso, (d0, d1), &bent, 1e-7).expect("a bound on the sheet");
+            assert!(on <= 1e-7, "on the sheet: {on:e}");
+            for lift in [0.0, 1e-5, 3e-4] {
+                let line = NurbsCurve::new(
+                    3,
+                    vec![0.0, 0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0, 1.0],
+                    (0..5)
+                        .map(|k| {
+                            let f = f64::from(k) / 4.0;
+                            pose.point(Point3::new(-40.0 + 77.0 * f, -31.0 + 75.0 * f, lift))
+                        })
+                        .collect(),
+                    vec![1.0; 5],
+                )
+                .unwrap();
+                for range in [(0.0, 1.0), (0.2, 0.7)] {
+                    let bound = proved_distance(&line, range, &flat, 1e-7).expect("a bound");
+                    assert!(
+                        bound >= lift && bound <= 2.0f64.madd(lift, 1e-7),
+                        "lift {lift}: {bound:e}"
+                    );
+                }
             }
         }
     }

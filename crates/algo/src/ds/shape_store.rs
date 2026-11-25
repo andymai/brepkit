@@ -488,9 +488,116 @@ pub fn prove_source_pcurves(
                 (Some(b), Some(n)) => near = Some(n.union(b)),
             }
         }
-        prove_nurbs_pcurves(topo, source, if unbounded { None } else { near }, tol)?;
+        let near = if unbounded { None } else { near };
+        raise_to_proved_reach(topo, source, near, tol)?;
+        prove_nurbs_pcurves(topo, source, near, tol)?;
     }
     Ok(())
+}
+
+/// A share of an edge's size its proved distance from a face it bounds must
+/// stay below to be taken as its tolerance.
+const PART_OF_EDGE: f64 = 0.1;
+
+/// Raises the tolerance of each B-spline edge of a face of `solid` whose
+/// edges' box meets `near` (of each face where `near` is `None`) to its
+/// proved distance from the face's surface
+/// ([`crate::surface_reach::spline_off_face`]) where that exceeds it: a fit
+/// that lies farther off its faces than its tolerance says. A distance of
+/// [`PART_OF_EDGE`] of the edge's size or more is not a fit's: such an edge
+/// keeps its tolerance. An open edge's size is the distance between its two
+/// vertices, and a closed edge's is that of its whole curve.
+fn raise_to_proved_reach(
+    topo: &mut Topology,
+    solid: SolidId,
+    near: Option<brepkit_math::aabb::Aabb3>,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> Result<(), AlgoError> {
+    use brepkit_topology::edge::EdgeCurve;
+    let mut reach: HashMap<EdgeId, Option<f64>> = HashMap::new();
+    for face_id in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        let face = topo.face(face_id)?;
+        let mut edges = Vec::new();
+        for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            edges.extend(topo.wire(wire)?.edges().iter().map(OrientedEdge::edge));
+        }
+        if let Some(near) = near
+            && !edges_box(topo, &edges)?.is_some_and(|b| b.intersects(near))
+        {
+            continue;
+        }
+        let mut seen = std::collections::HashSet::new();
+        for edge_id in edges {
+            if !seen.insert(edge_id) {
+                continue;
+            }
+            let edge = topo.edge(edge_id)?;
+            let EdgeCurve::NurbsCurve(curve) = edge.curve() else {
+                continue;
+            };
+            let (sp, ep) = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+            let held = tol.linear.max(edge.tolerance().unwrap_or(0.0));
+            let Some(bound) = crate::surface_reach::spline_off_face(
+                curve,
+                (t0.min(t1), t0.max(t1)),
+                face.surface(),
+                held,
+            ) else {
+                continue;
+            };
+            if bound <= held {
+                continue;
+            }
+            let size = if edge.start() == edge.end() {
+                widest_apart(curve.control_points())
+            } else {
+                (ep - sp).length()
+            };
+            let entry = reach.entry(edge_id).or_insert(Some(0.0));
+            *entry = if bound < PART_OF_EDGE * size {
+                entry.map(|largest| largest.max(bound))
+            } else {
+                None
+            };
+        }
+    }
+    for (edge_id, bound) in reach {
+        if let Some(bound) = bound {
+            let edge = topo.edge_mut(edge_id)?;
+            if bound > edge.tolerance().unwrap_or(0.0) {
+                edge.set_tolerance(Some(bound));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The largest distance between two of `points`. Past 512 points, twice the
+/// largest distance from the first point, which is no less and at most
+/// twice as much, so that the cost stays linear.
+fn widest_apart(points: &[Point3]) -> f64 {
+    const PAIRS_UP_TO: usize = 512;
+    let Some(&first) = points.first() else {
+        return 0.0;
+    };
+    if points.len() > PAIRS_UP_TO {
+        return 2.0
+            * points
+                .iter()
+                .map(|&p| (p - first).length())
+                .fold(0.0, f64::max);
+    }
+    let mut widest = 0.0_f64;
+    for (i, &p) in points.iter().enumerate() {
+        for &q in &points[i + 1..] {
+            widest = widest.max((p - q).length());
+        }
+    }
+    widest
 }
 
 /// Gives each B-spline face of `solid` whose control box meets `near` (each
@@ -738,6 +845,76 @@ fn widen_tolerances(topo: &mut Topology, solid: SolidId) -> Result<(), AlgoError
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
     use super::*;
+
+    /// A unit cube whose edge from (0, 0, 0) to (1, 0, 0) is a cubic that
+    /// bows `bow` off both of its faces at its middle. Below a tenth of the
+    /// edge's length the edge takes its proved distance from them as its
+    /// tolerance, at least the bow and at most twice it. At a tenth or more
+    /// it keeps none.
+    #[test]
+    fn a_b_spline_edge_off_its_faces_takes_its_proved_distance() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::vec::Vec3;
+        use brepkit_topology::edge::EdgeCurve;
+        use brepkit_topology::test_utils::make_unit_cube_manifold_at;
+        for (bow, raised) in [(1e-4, true), (0.15, false)] {
+            let mut topo = Topology::default();
+            let solid = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
+            let at = |topo: &Topology, e: EdgeId| {
+                let edge = topo.edge(e).unwrap();
+                (
+                    topo.vertex(edge.start()).unwrap().point(),
+                    topo.vertex(edge.end()).unwrap().point(),
+                )
+            };
+            let edges = brepkit_topology::explorer::solid_edges(&topo, solid).unwrap();
+            let edge = *edges
+                .iter()
+                .find(|&&e| {
+                    let (p, q) = at(&topo, e);
+                    let lie = |p: Point3, x: f64| (p - Point3::new(x, 0.0, 0.0)).length() < 1e-12;
+                    (lie(p, 0.0) && lie(q, 1.0)) || (lie(p, 1.0) && lie(q, 0.0))
+                })
+                .unwrap();
+            let (p, q) = at(&topo, edge);
+            // The middle Bezier points carry three quarters of their lift to
+            // the cubic's middle.
+            let lift = Vec3::new(0.0, -1.0, -1.0) * (bow / 0.75);
+            let cubic = NurbsCurve::new(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                vec![
+                    p,
+                    p + (q - p) * (1.0 / 3.0) + lift,
+                    p + (q - p) * (2.0 / 3.0) + lift,
+                    q,
+                ],
+                vec![1.0; 4],
+            )
+            .unwrap();
+            topo.edge_mut(edge)
+                .unwrap()
+                .set_curve(EdgeCurve::NurbsCurve(cubic));
+
+            raise_to_proved_reach(
+                &mut topo,
+                solid,
+                None,
+                brepkit_math::tolerance::Tolerance::default(),
+            )
+            .unwrap();
+
+            let held = topo.edge(edge).unwrap().tolerance();
+            if raised {
+                assert!(
+                    held.is_some_and(|t| t >= bow && t <= 2.0 * bow),
+                    "bow {bow}: {held:?}"
+                );
+            } else {
+                assert!(held.is_none(), "bow {bow}: {held:?}");
+            }
+        }
+    }
 
     #[test]
     fn round_trip_preserves_box() {

@@ -555,6 +555,92 @@ fn piece_bound(
     piece_bound(a, b, &left, tol, depth - 1).max(piece_bound(a, b, &right, tol, depth - 1))
 }
 
+/// Halvings of one knot span of a curve [`spline_off_surface`] may take.
+const SETTLE_DEPTH: usize = 16;
+
+/// An upper bound of the distance from `surface` of every point of `curve`
+/// over `[t0, t1]`, or `None`.
+///
+/// Each knot span the range covers is read as its cubic Bezier piece and
+/// bounded by the surface's implicit form ([`Carrier::bound`]). A piece is
+/// halved while its bound exceeds `aim` and its halves tighten it by a
+/// quarter or more: past that the bound reads the curve's own distance from
+/// the surface, which no halving lowers. The bound adds the rounding of the
+/// pieces, taken from the curve and then halved.
+///
+/// `None` for a rational curve, a curve of degree above three, an empty or
+/// unordered range, and where a piece has no bound (a piece near the axis
+/// of a cylinder or cone, or a centre).
+#[must_use]
+pub fn spline_off_surface(
+    curve: &NurbsCurve,
+    (t0, t1): (f64, f64),
+    surface: &AnalyticSurface<'_>,
+    aim: f64,
+) -> Option<f64> {
+    let first = *curve.weights().first()?;
+    if curve.degree() > 3
+        || !(first > 0.0 && first.is_normal())
+        || curve
+            .weights()
+            .iter()
+            .any(|w| w.to_bits() != first.to_bits())
+        || t0.is_nan()
+        || t1.is_nan()
+        || t0 >= t1
+    {
+        return None;
+    }
+    let size = curve
+        .control_points()
+        .iter()
+        .map(|p| p.x().abs().max(p.y().abs()).max(p.z().abs()))
+        .fold(0.0_f64, f64::max);
+    let read = |ctrl: &[Point3; 4]| {
+        surface
+            .bound(ctrl)
+            .filter(|b| b.is_finite())
+            .unwrap_or(f64::INFINITY)
+    };
+    let mut breaks = vec![t0];
+    for &k in curve.knots() {
+        if k > t0 && k < t1 && breaks.last().is_some_and(|&last| k > last) {
+            breaks.push(k);
+        }
+    }
+    breaks.push(t1);
+    let mut worst = 0.0_f64;
+    for span in breaks.windows(2) {
+        let ctrl = span_bezier(curve, span[0], span[1]).ok()?;
+        worst = worst.max(settle(&read, &ctrl, read(&ctrl), aim, SETTLE_DEPTH));
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let rounding = (64 + 8 * SETTLE_DEPTH) as f64 * f64::EPSILON * size;
+    let bound = worst + rounding;
+    bound.is_finite().then_some(bound)
+}
+
+/// The bound `here` of the cubic Bezier `ctrl`, or the greater of its
+/// halves' bounds, halved again while they exceed `aim` and tighten by a
+/// quarter or more, `depth` more times at most.
+fn settle(
+    read: &impl Fn(&[Point3; 4]) -> f64,
+    ctrl: &[Point3; 4],
+    here: f64,
+    aim: f64,
+    depth: usize,
+) -> f64 {
+    if here <= aim || depth == 0 {
+        return here;
+    }
+    let (left, right) = halves(ctrl);
+    let (l, r) = (read(&left), read(&right));
+    if l.max(r) > 0.75 * here {
+        return here.min(l.max(r));
+    }
+    settle(read, &left, l, aim, depth - 1).max(settle(read, &right, r, aim, depth - 1))
+}
+
 /// A share of the tolerance the first pass of a fit aims each span at, so
 /// that its bound, which reads up to about twice the true miss, passes.
 const AIM: f64 = 0.25;
@@ -728,6 +814,78 @@ mod tests {
     use super::*;
     use crate::mat::Mat4;
     use crate::surfaces::{CylindricalSurface, ToroidalSurface};
+
+    /// A cubic of four spans along a ruling of a cylinder of radius 2 about
+    /// the axis (1, 2, 3) through (3, -2, 5), at `off` outside it.
+    fn along_a_ruling(cylinder: &CylindricalSurface, off: f64) -> NurbsCurve {
+        let across = cylinder
+            .axis()
+            .cross(Vec3::new(1.0, 0.0, 0.0))
+            .normalize()
+            .unwrap();
+        let foot = cylinder.origin() + across * (cylinder.radius() + off);
+        NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 3.0, 4.0, 4.0, 4.0, 4.0],
+            (0..7)
+                .map(|k| foot + cylinder.axis() * (f64::from(k) - 3.0))
+                .collect(),
+            vec![1.0; 7],
+        )
+        .unwrap()
+    }
+
+    /// A ruling's cubic lies on its cylinder to rounding, and one 1e-4
+    /// outside it reads at least 1e-4 and at most twice that, over its
+    /// whole range and over part of it.
+    #[test]
+    fn a_spline_beside_a_cylinder_is_bounded_by_its_distance() {
+        let cylinder = CylindricalSurface::new(
+            Point3::new(3.0, -2.0, 5.0),
+            Vec3::new(1.0, 2.0, 3.0).normalize().unwrap(),
+            2.0,
+        )
+        .unwrap();
+        let surface = AnalyticSurface::Cylinder(&cylinder);
+        for (off, range) in [(0.0, (0.0, 4.0)), (1e-4, (0.0, 4.0)), (1e-4, (0.5, 2.5))] {
+            let curve = along_a_ruling(&cylinder, off);
+            let bound = spline_off_surface(&curve, range, &surface, 1e-7).unwrap();
+            assert!(
+                bound >= off && bound <= 2.0 * off + 1e-12,
+                "off {off}: {bound:e}"
+            );
+        }
+    }
+
+    /// A rational curve, a reversed range and a curve of degree four read
+    /// no bound.
+    #[test]
+    fn a_spline_the_bound_cannot_read_has_none() {
+        let cylinder =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), 2.0)
+                .unwrap();
+        let surface = AnalyticSurface::Cylinder(&cylinder);
+        let curve = along_a_ruling(&cylinder, 0.0);
+        let mut weights = vec![1.0; 7];
+        weights[3] = 2.0;
+        let rational = NurbsCurve::new(
+            3,
+            curve.knots().to_vec(),
+            curve.control_points().to_vec(),
+            weights,
+        )
+        .unwrap();
+        let quartic = NurbsCurve::new(
+            4,
+            vec![0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+            curve.control_points()[..5].to_vec(),
+            vec![1.0; 5],
+        )
+        .unwrap();
+        assert!(spline_off_surface(&rational, (0.0, 4.0), &surface, 1e-7).is_none());
+        assert!(spline_off_surface(&curve, (3.0, 1.0), &surface, 1e-7).is_none());
+        assert!(spline_off_surface(&quartic, (0.0, 1.0), &surface, 1e-7).is_none());
+    }
 
     /// How many knot spans of a cubic through `points` the bound reads as
     /// more than `tol` off either surface, and how many spans there are.

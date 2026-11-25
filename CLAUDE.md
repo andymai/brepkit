@@ -156,6 +156,8 @@ Quick reference — find the right file for any task:
 | Sections along loose tool edges (imprint) | `pave_filler/tool_edges.rs` |
 | A NURBS face's pcurves in its surface's parameters (on which side of its wires a point lies) | `pave_filler/nurbs_trim.rs` |
 | Whether a NURBS surface's sides keep apart (no seam, fold or pole), for phase EF and the ray cast | `nurbs_sides.rs` |
+| A proved bound on how far a B-spline curve lies from a face's surface (plane, analytic or B-spline) | `surface_reach.rs` |
+| Tolerances of B-spline sections, proved off both of their faces, for linking a section with a boundary edge | `pave_filler/section_tolerance.rs` |
 | Pave block splitting + edge creation | `pave_filler/make_blocks.rs`, `make_split_edges.rs` |
 | FaceInfo population | `pave_filler/fill_face_info.rs` |
 | Builder (face splitting + assembly) | `builder/mod.rs`, `builder/assemble.rs` |
