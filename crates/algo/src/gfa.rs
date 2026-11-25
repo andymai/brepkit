@@ -155,9 +155,34 @@ pub fn fuse_n(topo: &mut Topology, sources: &[SolidId]) -> Result<SolidId, AlgoE
             )?;
             store.topo = store_topo;
 
-            store.export_solid(topo, store_result)
+            let fused = store.export_solid(topo, store_result)?;
+            refuse_unpaired_edges(topo, fused)?;
+            Ok(fused)
         }
     }
+}
+
+/// Refuses `solid` where an edge does not bound exactly two sides of its
+/// faces: an edge on one side leaves a shell open, and an edge on three or
+/// more makes it non-manifold. The N-way fuse has no caller that heals its
+/// result, so it returns no such solid.
+fn refuse_unpaired_edges(topo: &Topology, solid: SolidId) -> Result<(), AlgoError> {
+    let mut sides: std::collections::HashMap<EdgeId, usize> = std::collections::HashMap::new();
+    for face in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        let data = topo.face(face)?;
+        for wire in std::iter::once(data.outer_wire()).chain(data.inner_wires().iter().copied()) {
+            for oe in topo.wire(wire)?.edges() {
+                *sides.entry(oe.edge()).or_default() += 1;
+            }
+        }
+    }
+    let unpaired = sides.values().filter(|&&n| n != 2).count();
+    if unpaired > 0 {
+        return Err(AlgoError::AssemblyFailed(format!(
+            "the fused solid has {unpaired} edge(s) not shared by exactly two face sides"
+        )));
+    }
+    Ok(())
 }
 
 /// A copy of `solid` with its faces split along where the tools meet them.

@@ -252,4 +252,35 @@ mod tests {
             }
         }
     }
+
+    /// The GFA's own fuse of all three, with no layer above it to check its
+    /// result: the exact solid or an error, never an invalid solid.
+    #[test]
+    fn the_gfa_fuse_of_all_three_is_exact_or_an_error() {
+        let u = union_area();
+        for (seams, seam) in SEAMS {
+            for (name, pose) in poses() {
+                let what = format!("{seams}, {name}");
+                let mut topo = Topology::new();
+                let parts = parts(&mut topo, seam, &pose);
+                if let Ok(fused) = brepkit_algo::gfa::fuse_n(&mut topo, &parts) {
+                    assert_exact(
+                        &topo,
+                        fused,
+                        200.0 + 2.0 * u,
+                        (
+                            &[
+                                Point3::new(6.72, 6.0, 2.5),
+                                BY_TOUCH,
+                                Point3::new(9.0, 9.0, 1.0),
+                            ],
+                            &[Point3::new(6.74, 6.0, 2.5)],
+                        ),
+                        &pose,
+                        &format!("fuse_n, {what}"),
+                    );
+                }
+            }
+        }
+    }
 }
