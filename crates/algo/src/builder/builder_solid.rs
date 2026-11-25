@@ -1301,7 +1301,10 @@ fn shell_is_outward_oriented(topo: &Topology, faces: &[FaceId]) -> Option<bool> 
     // Positions are taken from the shell's own centre: a curved face
     // integrates over its boundary's whole parameter box, not its trimmed
     // patch, and that error scales with the distance to the origin used.
-    let origin = shell_corner_box(topo, faces).center();
+    let origin = shell_corner_box(topo, faces).map_or(
+        Point3::new(0.0, 0.0, 0.0),
+        brepkit_math::aabb::Aabb3::center,
+    );
     for &fid in faces {
         // Only meaningful under BK_FLUX; skip the bookkeeping otherwise.
         let flux_before = if trace { flux } else { 0.0 };
@@ -1806,8 +1809,9 @@ fn shell_extent(topo: &Topology, faces: &[FaceId]) -> f64 {
     brepkit_math::aabb::Aabb3::try_from_points(points).map_or(0.0, |b| (b.max - b.min).length())
 }
 
-/// The box of a shell's outer-wire corners.
-fn shell_corner_box(topo: &Topology, faces: &[FaceId]) -> brepkit_math::aabb::Aabb3 {
+/// The box of a shell's outer-wire corners, if it has one and each is
+/// finite.
+fn shell_corner_box(topo: &Topology, faces: &[FaceId]) -> Option<brepkit_math::aabb::Aabb3> {
     let corners = faces
         .iter()
         .filter_map(|&fid| topo.face(fid).ok())
@@ -1816,7 +1820,7 @@ fn shell_corner_box(topo: &Topology, faces: &[FaceId]) -> brepkit_math::aabb::Aa
         .filter_map(|oe| topo.edge(oe.edge()).ok())
         .filter_map(|edge| topo.vertex(edge.start()).ok())
         .map(brepkit_topology::vertex::Vertex::point);
-    brepkit_math::aabb::Aabb3::from_points(corners)
+    brepkit_math::aabb::Aabb3::try_from_points(corners)
 }
 
 /// Whether any face of a shell has three corners on its outer wire, so the
@@ -1833,7 +1837,9 @@ fn has_corner_fan(topo: &Topology, faces: &[FaceId]) -> bool {
 /// fan's tetrahedra reach the world origin, so its rounding grows with the
 /// shell's distance from it.
 fn fan_is_flat(topo: &Topology, faces: &[FaceId], signed_vol: f64) -> bool {
-    let bbox = shell_corner_box(topo, faces);
+    let Some(bbox) = shell_corner_box(topo, faces) else {
+        return false;
+    };
     let extent = (bbox.max - bbox.min).length();
     let reach = extent + (bbox.center() - Point3::new(0.0, 0.0, 0.0)).length();
     signed_vol.abs() <= 1e-9 * extent * reach * reach

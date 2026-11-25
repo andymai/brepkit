@@ -2032,10 +2032,10 @@ impl FaceExtent {
             // margin instead of one scaled to the wide diagonal — a diagonal
             // margin lets a section overshoot the thin band onto the cylinder
             // seam, so the per-tread arcs never stop at the tread boundary.
-            let bb = brepkit_math::aabb::Aabb3::from_points(
+            let bb = brepkit_math::aabb::Aabb3::try_from_points(
                 poly.iter()
                     .map(|p| brepkit_math::vec::Point3::new(p.x(), p.y(), 0.0)),
-            );
+            )?;
             let extent = bb.max - bb.min;
             let smaller = extent.x().abs().min(extent.y().abs());
             let exact = std::iter::once(face.outer_wire())

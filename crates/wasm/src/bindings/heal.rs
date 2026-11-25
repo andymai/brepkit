@@ -24,12 +24,7 @@ impl BrepKernel {
     #[wasm_bindgen(js_name = "sewFaces")]
     #[allow(clippy::needless_pass_by_value)]
     pub fn sew_faces(&mut self, face_handles: Vec<u32>, tolerance: f64) -> Result<u32, JsError> {
-        let face_ids: Vec<brepkit_topology::face::FaceId> = face_handles
-            .iter()
-            .map(|&h| self.resolve_face(h))
-            .collect::<Result<_, _>>()?;
-        let solid = brepkit_operations::sew::sew_faces(self.topo_mut(), &face_ids, tolerance)?;
-        Ok(solid_id_to_u32(solid))
+        Ok(self.sew_faces_impl(&face_handles, tolerance)?)
     }
 
     /// Create a solid from a set of faces by sewing them together.
@@ -178,6 +173,7 @@ impl BrepKernel {
     /// Returns the number of edges removed.
     #[wasm_bindgen(js_name = "removeDegenerateEdges")]
     pub fn remove_degenerate_edges(&mut self, solid: u32, tolerance: f64) -> Result<u32, JsError> {
+        crate::error::validate_tolerance(tolerance, "tolerance")?;
         let solid_id = self.resolve_solid(solid)?;
         let count = brepkit_operations::heal::remove_degenerate_edges(
             self.topo_mut(),
@@ -228,6 +224,8 @@ impl BrepKernel {
         area_threshold: f64,
         deflection: f64,
     ) -> Result<Vec<u32>, JsError> {
+        crate::error::validate_tolerance(area_threshold, "area_threshold")?;
+        crate::error::validate_positive(deflection, "deflection")?;
         let solid_id = self.resolve_solid(solid)?;
         let faces = brepkit_operations::defeature::detect_small_features(
             &self.topo,
@@ -243,6 +241,7 @@ impl BrepKernel {
     /// Returns a JSON string describing the recognized features.
     #[wasm_bindgen(js_name = "recognizeFeatures")]
     pub fn recognize_features(&self, solid: u32, deflection: f64) -> Result<String, JsError> {
+        crate::error::validate_positive(deflection, "deflection")?;
         let solid_id = self.resolve_solid(solid)?;
         let features = brepkit_operations::feature_recognition::recognize_features(
             &self.topo, solid_id, deflection,

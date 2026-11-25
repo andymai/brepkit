@@ -418,8 +418,9 @@ fn revolution_empty_input_error() {
 /// `evaluate` walks the segment between two neighbouring profile points, so
 /// a profile of one point has none to walk. A radius below zero is no
 /// distance from the axis, and a radius or height that is not finite or is
-/// past the size limit gives points that may not be finite. Each is
-/// refused; a profile through the axis, with a radius of zero, is built.
+/// past the size limit gives points that may not be finite, as does such an
+/// origin. Each is refused; a profile through the axis, with a radius of
+/// zero, is built.
 #[test]
 fn revolution_refuses_a_profile_it_cannot_walk() {
     use crate::curves::SIZE_LIMIT;
@@ -439,6 +440,17 @@ fn revolution_refuses_a_profile_it_cannot_walk() {
     }
     for bad in [f64::NAN, f64::NEG_INFINITY, -SIZE_LIMIT * 2.0] {
         assert!(rev(vec![1.0, 1.0], vec![0.0, bad]).is_err(), "height {bad}");
+    }
+    for bad in [f64::NAN, f64::INFINITY, SIZE_LIMIT * 2.0, -SIZE_LIMIT * 2.0] {
+        for origin in [Point3::new(bad, 0.0, 0.0), Point3::new(0.0, 0.0, bad)] {
+            let at = RevolutionSurface::new(
+                origin,
+                Vec3::new(0.0, 0.0, 1.0),
+                vec![1.0, 1.0],
+                vec![0.0, 1.0],
+            );
+            assert!(at.is_err(), "origin {origin:?}");
+        }
     }
 }
 

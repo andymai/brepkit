@@ -42,9 +42,7 @@ impl BrepKernel {
     /// Returns an error if the solid handle is invalid or tessellation fails.
     #[wasm_bindgen(js_name = "volume")]
     pub fn volume(&self, solid: u32, deflection: f64) -> Result<f64, JsError> {
-        validate_positive(deflection, "deflection")?;
-        let solid_id = self.resolve_solid(solid)?;
-        Ok(measure::solid_volume(&self.topo, solid_id, deflection)?)
+        Ok(self.volume_impl(solid, deflection)?)
     }
 
     /// Compute the total surface area of a solid.
@@ -54,11 +52,7 @@ impl BrepKernel {
     /// Returns an error if the solid handle is invalid or tessellation fails.
     #[wasm_bindgen(js_name = "surfaceArea")]
     pub fn surface_area(&self, solid: u32, deflection: f64) -> Result<f64, JsError> {
-        validate_positive(deflection, "deflection")?;
-        let solid_id = self.resolve_solid(solid)?;
-        Ok(measure::solid_surface_area(
-            &self.topo, solid_id, deflection,
-        )?)
+        Ok(self.surface_area_impl(solid, deflection)?)
     }
 
     /// Compute the area of a single face.
@@ -82,9 +76,7 @@ impl BrepKernel {
     /// Returns an error if the solid has zero volume or tessellation fails.
     #[wasm_bindgen(js_name = "centerOfMass")]
     pub fn center_of_mass(&self, solid: u32, deflection: f64) -> Result<Vec<f64>, JsError> {
-        validate_positive(deflection, "deflection")?;
-        let solid_id = self.resolve_solid(solid)?;
-        let com = measure::solid_center_of_mass(&self.topo, solid_id, deflection)?;
+        let com = self.center_of_mass_impl(solid, deflection)?;
         Ok(vec![com.x(), com.y(), com.z()])
     }
 
@@ -104,11 +96,8 @@ impl BrepKernel {
         z: f64,
         tolerance: f64,
     ) -> Result<String, JsError> {
-        let solid_id = self.resolve_solid(solid)?;
-        let point = brepkit_math::vec::Point3::new(x, y, z);
-        let result = brepkit_operations::classify::classify_point(
-            &self.topo, solid_id, point, 0.1, tolerance,
-        )?;
+        let result =
+            self.classify_point_impl(solid, brepkit_math::vec::Point3::new(x, y, z), tolerance)?;
         Ok(match result {
             brepkit_operations::classify::PointClassification::Inside => "inside".into(),
             brepkit_operations::classify::PointClassification::Outside => "outside".into(),
@@ -220,6 +209,7 @@ impl BrepKernel {
         pz: f64,
         solid: u32,
     ) -> Result<Vec<f64>, JsError> {
+        crate::error::validate_point(brepkit_math::vec::Point3::new(px, py, pz), "the point")?;
         let solid_id = self.resolve_solid(solid)?;
         let result = brepkit_operations::distance::point_to_solid_distance(
             &self.topo,
@@ -272,6 +262,7 @@ impl BrepKernel {
         pz: f64,
         face: u32,
     ) -> Result<Vec<f64>, JsError> {
+        crate::error::validate_point(brepkit_math::vec::Point3::new(px, py, pz), "the point")?;
         let face_id = self.resolve_face(face)?;
         let result = brepkit_operations::distance::point_to_face(
             &self.topo,
@@ -301,6 +292,7 @@ impl BrepKernel {
         pz: f64,
         edge: u32,
     ) -> Result<Vec<f64>, JsError> {
+        crate::error::validate_point(brepkit_math::vec::Point3::new(px, py, pz), "the point")?;
         let edge_id = self.resolve_edge(edge)?;
         let result = brepkit_operations::distance::point_to_edge(
             &self.topo,

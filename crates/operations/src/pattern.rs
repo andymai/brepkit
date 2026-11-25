@@ -10,8 +10,26 @@ use brepkit_topology::Topology;
 use brepkit_topology::compound::{Compound, CompoundId};
 use brepkit_topology::solid::SolidId;
 
-use crate::copy::copy_solid;
-use crate::transform::transform_solid;
+use crate::copy::{build_moved_copy, read_moved_copy};
+
+/// The copies of `solid` moved by each of `matrices`, in order. Each copy's
+/// images are computed and checked before any copy is built: a copy that
+/// fails the load checks leaves no copy behind, and no image is computed
+/// twice.
+fn moved_copies(
+    topo: &mut Topology,
+    solid: SolidId,
+    matrices: impl IntoIterator<Item = Mat4>,
+) -> Result<Vec<SolidId>, crate::OperationsError> {
+    let reads = matrices
+        .into_iter()
+        .map(|matrix| read_moved_copy(topo, solid, &matrix))
+        .collect::<Result<Vec<_>, _>>()?;
+    reads
+        .into_iter()
+        .map(|copy| build_moved_copy(topo, copy))
+        .collect()
+}
 
 /// Create a linear pattern of a solid.
 ///
@@ -49,15 +67,15 @@ pub fn linear_pattern(
 
     let mut solids = Vec::with_capacity(count);
     solids.push(solid);
-
-    for i in 1..count {
-        let copy = copy_solid(topo, solid)?;
-        #[allow(clippy::cast_precision_loss)]
-        let offset = dir * (spacing * i as f64);
-        let matrix = Mat4::translation(offset.x(), offset.y(), offset.z());
-        transform_solid(topo, copy, &matrix)?;
-        solids.push(copy);
-    }
+    solids.extend(moved_copies(
+        topo,
+        solid,
+        (1..count).map(|i| {
+            #[allow(clippy::cast_precision_loss)]
+            let offset = dir * (spacing * i as f64);
+            Mat4::translation(offset.x(), offset.y(), offset.z())
+        }),
+    )?);
 
     let compound = Compound::new(solids);
     Ok(topo.add_compound(compound))
@@ -94,15 +112,15 @@ pub fn circular_pattern(
     #[allow(clippy::cast_precision_loss)]
     let angle_step = 2.0 * std::f64::consts::PI / (count as f64);
 
-    for i in 1..count {
-        let copy = copy_solid(topo, solid)?;
-        #[allow(clippy::cast_precision_loss)]
-        let angle = angle_step * (i as f64);
-
-        let matrix = rotation_matrix(axis, angle);
-        transform_solid(topo, copy, &matrix)?;
-        solids.push(copy);
-    }
+    solids.extend(moved_copies(
+        topo,
+        solid,
+        (1..count).map(|i| {
+            #[allow(clippy::cast_precision_loss)]
+            let angle = angle_step * (i as f64);
+            rotation_matrix(axis, angle)
+        }),
+    )?);
 
     let compound = Compound::new(solids);
     Ok(topo.add_compound(compound))
@@ -159,24 +177,19 @@ pub fn grid_pattern(
     }
 
     let mut solids = Vec::with_capacity(count_x * count_y);
-
-    for iy in 0..count_y {
-        for ix in 0..count_x {
-            if ix == 0 && iy == 0 {
-                solids.push(solid);
-                continue;
-            }
-
-            let copy = copy_solid(topo, solid)?;
-
-            #[allow(clippy::cast_precision_loss)]
-            let offset = dx * (spacing_x * ix as f64) + dy * (spacing_y * iy as f64);
-
-            let matrix = Mat4::translation(offset.x(), offset.y(), offset.z());
-            transform_solid(topo, copy, &matrix)?;
-            solids.push(copy);
-        }
-    }
+    solids.push(solid);
+    solids.extend(moved_copies(
+        topo,
+        solid,
+        (0..count_y)
+            .flat_map(|iy| (0..count_x).map(move |ix| (ix, iy)))
+            .skip(1)
+            .map(|(ix, iy)| {
+                #[allow(clippy::cast_precision_loss)]
+                let offset = dx * (spacing_x * ix as f64) + dy * (spacing_y * iy as f64);
+                Mat4::translation(offset.x(), offset.y(), offset.z())
+            }),
+    )?);
 
     let compound = Compound::new(solids);
     Ok(topo.add_compound(compound))
@@ -303,7 +316,7 @@ mod tests {
 
         // Move box to x=3 so rotations are visible.
         let matrix = Mat4::translation(3.0, 0.0, 0.0);
-        transform_solid(&mut topo, solid, &matrix).unwrap();
+        crate::transform::transform_solid(&mut topo, solid, &matrix).unwrap();
 
         let compound = circular_pattern(&mut topo, solid, Vec3::new(0.0, 0.0, 1.0), 4).unwrap();
 
@@ -471,5 +484,104 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// A solid of one face, as a sheet is.
+    fn one_face_solid(topo: &mut Topology, face: brepkit_topology::face::FaceId) -> SolidId {
+        use brepkit_topology::shell::Shell;
+        use brepkit_topology::solid::Solid;
+        let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+        topo.add_solid(Solid::new(shell, vec![]))
+    }
+
+    /// The entities in `topo`: a refused pattern must add none.
+    fn entity_counts(topo: &Topology) -> [usize; 4] {
+        [
+            topo.num_vertices(),
+            topo.num_edges(),
+            topo.num_faces(),
+            topo.num_solids(),
+        ]
+    }
+
+    /// The triangle through the three unit points lies on the plane with
+    /// normal (1, 1, 1)/sqrt(3) and distance 1/sqrt(3). Its third copy, at
+    /// 6e299 along each axis, has every vertex within the size limit, but its
+    /// plane's distance is 1.04e300: the load checks refuse that copy. The
+    /// pattern is refused before it builds the second copy, or any.
+    #[test]
+    fn a_linear_pattern_whose_last_plane_fails_the_load_checks_builds_no_copy() {
+        use brepkit_math::vec::Point3;
+        let mut topo = Topology::new();
+        let wire = brepkit_topology::builder::make_polygon_wire(
+            &mut topo,
+            &[
+                Point3::new(1.0, 0.0, 0.0),
+                Point3::new(0.0, 1.0, 0.0),
+                Point3::new(0.0, 0.0, 1.0),
+            ],
+            1e-7,
+        )
+        .unwrap();
+        let face = brepkit_topology::builder::make_face_from_wire(&mut topo, wire).unwrap();
+        let solid = one_face_solid(&mut topo, face);
+        let before = entity_counts(&topo);
+        let spacing = 6e299 * 3.0_f64.sqrt() / 2.0;
+        let error =
+            linear_pattern(&mut topo, solid, Vec3::new(1.0, 1.0, 1.0), spacing, 3).unwrap_err();
+        assert!(
+            error.to_string().contains("would not pass the load checks"),
+            "{error}"
+        );
+        assert_eq!(entity_counts(&topo), before);
+        let grid = grid_pattern(
+            &mut topo,
+            solid,
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            spacing,
+            1.0,
+            3,
+            2,
+        );
+        assert!(grid.is_err());
+        assert_eq!(entity_counts(&topo), before);
+    }
+
+    /// A patch with weight 1e10 at each control point, the largest at
+    /// (9e289, 9e289, 0): its largest weight times its largest coordinate is
+    /// 9e299. Turned an eighth of a turn about z, that point is at
+    /// (0, 1.27e290, 0) and the product is 1.27e300, past the weighted
+    /// limit: the pattern is refused before any copy is built.
+    #[test]
+    fn a_circular_pattern_whose_turned_spline_fails_the_weighted_limit_builds_no_copy() {
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::Point3;
+        let mut topo = Topology::new();
+        let a = 9e289;
+        let surface = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![
+                vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, a, 0.0)],
+                vec![Point3::new(a, 0.0, 0.0), Point3::new(a, a, 0.0)],
+            ],
+            vec![vec![1e10; 2]; 2],
+        )
+        .unwrap();
+        let face = brepkit_topology::builder::make_nurbs_face(&mut topo, surface, 1e-7).unwrap();
+        let solid = one_face_solid(&mut topo, face);
+        let before = entity_counts(&topo);
+        assert!(circular_pattern(&mut topo, solid, Vec3::new(0.0, 0.0, 1.0), 4).is_ok());
+        let before_eight = entity_counts(&topo);
+        assert_ne!(before_eight, before);
+        let error = circular_pattern(&mut topo, solid, Vec3::new(0.0, 0.0, 1.0), 8).unwrap_err();
+        assert!(
+            error.to_string().contains("would not pass the load checks"),
+            "{error}"
+        );
+        assert_eq!(entity_counts(&topo), before_eight);
     }
 }

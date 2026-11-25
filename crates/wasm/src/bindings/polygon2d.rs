@@ -27,6 +27,11 @@ impl BrepKernel {
         distance: f64,
         tolerance: f64,
     ) -> Result<Vec<f64>, JsError> {
+        crate::error::validate_size(distance, "distance")?;
+        crate::error::validate_tolerance(tolerance, "tolerance")?;
+        for (i, &c) in coords.iter().enumerate() {
+            crate::error::validate_size(c, &format!("coordinate {i}"))?;
+        }
         if !coords.len().is_multiple_of(2) {
             return Err(WasmError::InvalidInput {
                 reason: format!(
@@ -58,6 +63,11 @@ impl BrepKernel {
         px: f64,
         py: f64,
     ) -> Result<bool, JsError> {
+        crate::error::validate_size(px, "px")?;
+        crate::error::validate_size(py, "py")?;
+        for (i, &c) in polygon_coords.iter().enumerate() {
+            crate::error::validate_size(c, &format!("coordinate {i}"))?;
+        }
         if !polygon_coords.len().is_multiple_of(2) || polygon_coords.len() < 6 {
             return Err(WasmError::InvalidInput {
                 reason: "polygon needs at least 3 points (6 coordinates)".into(),

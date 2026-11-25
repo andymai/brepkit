@@ -45,15 +45,19 @@ impl BrepKernel {
                 let vertex = self
                     .resolve_vertex(handle(&corner["vertex"], "vertex")?)
                     .map_err(|e| e.to_string())?;
-                let kind = match &corner["corner"] {
-                    serde_json::Value::Null => CornerKind::Rolling,
-                    serde_json::Value::String(kind) if kind == "rolling" => CornerKind::Rolling,
-                    serde_json::Value::String(kind) if kind == "g2" => CornerKind::G2,
-                    other => return Err(format!("unknown corner kind {other}")),
+                // A field that is present must hold a value: `null` is not
+                // read as a missing field.
+                let kind = match corner.get("corner") {
+                    None => CornerKind::Rolling,
+                    Some(serde_json::Value::String(kind)) if kind == "rolling" => {
+                        CornerKind::Rolling
+                    }
+                    Some(serde_json::Value::String(kind)) if kind == "g2" => CornerKind::G2,
+                    Some(other) => return Err(format!("unknown corner kind {other}")),
                 };
                 let mut setbacks = Vec::new();
-                if !corner["setbacks"].is_null() {
-                    let given = corner["setbacks"]
+                if let Some(given) = corner.get("setbacks") {
+                    let given = given
                         .as_array()
                         .ok_or_else(|| "a corner's setbacks must be an array".to_string())?;
                     for setback in given {
@@ -62,8 +66,13 @@ impl BrepKernel {
                             .map_err(|e| e.to_string())?;
                         let distance = setback["distance"]
                             .as_f64()
-                            .filter(|d| d.is_finite() && *d > 0.0)
-                            .ok_or_else(|| "a set-back's distance must be positive".to_string())?;
+                            .filter(|d| *d > 0.0 && *d <= brepkit_math::curves::SIZE_LIMIT)
+                            .ok_or_else(|| {
+                                format!(
+                                    "a set-back's distance must be positive and at most {:e}",
+                                    brepkit_math::curves::SIZE_LIMIT
+                                )
+                            })?;
                         setbacks.push((edge, distance));
                     }
                 }

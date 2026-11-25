@@ -809,7 +809,8 @@ fn nurbs_span_bounds(
 
 /// The box of the Bezier poles of a B-spline between the parameters `t0`
 /// and `t1`, which holds the curve there. `None` when a weight is not
-/// positive or the parameters leave the curve's domain.
+/// positive, a pole is not finite, or the parameters leave the curve's
+/// domain or span none of it.
 fn nurbs_pole_box(
     curve: &brepkit_math::nurbs::curve::NurbsCurve,
     (t0, t1): (f64, f64),
@@ -834,7 +835,7 @@ fn nurbs_pole_box(
             poles.push(Point3::new(x / w, y / w, z / w));
         }
     }
-    Some(brepkit_math::aabb::Aabb3::from_points(poles))
+    brepkit_math::aabb::Aabb3::try_from_points(poles)
 }
 
 /// Whether two tangent cones share no line: the lines of their axes part by

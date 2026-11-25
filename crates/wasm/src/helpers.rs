@@ -94,21 +94,25 @@ pub fn well_formed_nurbs_surface(
 
 // ── Parsing helpers ───────────────────────────────────────────────
 
-/// Parse flat `[x,y,z, ...]` coordinates into `Vec<Point3>`.
-pub fn parse_points(coords: &[f64]) -> Result<Vec<Point3>, JsError> {
+/// Parse flat `[x,y,z, ...]` coordinates into `Vec<Point3>`. Each point
+/// must be one [`crate::error::validate_point`] accepts.
+pub fn parse_points(coords: &[f64]) -> Result<Vec<Point3>, WasmError> {
     if !coords.len().is_multiple_of(3) {
         return Err(WasmError::InvalidInput {
             reason: format!(
                 "coordinate array length must be a multiple of 3, got {}",
                 coords.len()
             ),
-        }
-        .into());
+        });
     }
-    Ok(coords
+    let points: Vec<Point3> = coords
         .chunks_exact(3)
         .map(|c| Point3::new(c[0], c[1], c[2]))
-        .collect())
+        .collect();
+    for (i, &p) in points.iter().enumerate() {
+        crate::error::validate_point(p, &format!("point {i}"))?;
+    }
+    Ok(points)
 }
 
 /// Parse flat coordinates into a 2D grid of points.
@@ -116,12 +120,11 @@ pub fn parse_point_grid(
     coords: &[f64],
     rows: usize,
     cols: usize,
-) -> Result<Vec<Vec<Point3>>, JsError> {
+) -> Result<Vec<Vec<Point3>>, WasmError> {
     if rows == 0 || cols == 0 {
         return Err(WasmError::InvalidInput {
             reason: format!("rows and cols must be > 0, got {rows}x{cols}"),
-        }
-        .into());
+        });
     }
     let total = rows
         .checked_mul(cols)
@@ -135,8 +138,7 @@ pub fn parse_point_grid(
                 "expected {total} points ({rows}x{cols}), got {}",
                 points.len()
             ),
-        }
-        .into());
+        });
     }
     Ok(points.chunks(cols).map(<[Point3]>::to_vec).collect())
 }
@@ -146,6 +148,12 @@ pub fn parse_mat4(elems: &[f64]) -> Result<Mat4, JsError> {
     if elems.len() != 16 {
         return Err(WasmError::InvalidInput {
             reason: format!("matrix requires 16 elements, got {}", elems.len()),
+        }
+        .into());
+    }
+    if let Some(pos) = elems.iter().position(|v| !v.is_finite()) {
+        return Err(WasmError::InvalidInput {
+            reason: format!("matrix element at index {pos} is not finite"),
         }
         .into());
     }
@@ -192,17 +200,20 @@ pub fn blend_surface_options(
         }
     };
     let mut options = BlendSurfaceOptions::new(continuity);
-    match &args["weights"] {
-        serde_json::Value::Null => {}
-        serde_json::Value::Array(weights) => {
+    match args.get("weights") {
+        None => {}
+        Some(serde_json::Value::Array(weights)) => {
             let read: Option<Vec<f64>> = weights.iter().map(serde_json::Value::as_f64).collect();
             let Some(&[a, b]) = read.as_deref() else {
                 return Err("a blend's weights must be two numbers".into());
             };
+            for w in [a, b] {
+                crate::error::validate_size(w, "a blend's weight").map_err(|e| e.to_string())?;
+            }
             options.weight_a = a;
             options.weight_b = b;
         }
-        _ => return Err("a blend's weights must be two numbers".into()),
+        Some(_) => return Err("a blend's weights must be two numbers".into()),
     }
     Ok(options)
 }
@@ -235,6 +246,66 @@ pub fn get_u32(args: &serde_json::Value, key: &str) -> Result<u32, String> {
         .as_u64()
         .and_then(|v| u32::try_from(v).ok())
         .ok_or_else(|| format!("missing or invalid '{key}'"))
+}
+
+/// Extract an optional `f64` from a JSON object: `default` when the key is
+/// absent. A value of any other kind is an error, not the default: taken
+/// for no value, it would build another shape than was asked for. That
+/// includes `null`, which is how JSON writes NaN and the infinities.
+pub fn opt_f64(args: &serde_json::Value, key: &str, default: f64) -> Result<f64, String> {
+    match args.get(key) {
+        None => Ok(default),
+        Some(serde_json::Value::Null) => Err(format!(
+            "'{key}' is null, as JSON writes a number that is not finite"
+        )),
+        Some(value) => value
+            .as_f64()
+            .ok_or_else(|| format!("'{key}' must be a number, got {value}")),
+    }
+}
+
+/// Extract an optional `u32` from a JSON object: `default` when the key is
+/// absent. A count past `u32::MAX`, below zero, not whole, or `null` is an
+/// error, not the default.
+pub fn opt_u32(args: &serde_json::Value, key: &str, default: u32) -> Result<u32, String> {
+    match args.get(key) {
+        None => Ok(default),
+        Some(value) => value
+            .as_u64()
+            .and_then(|v| u32::try_from(v).ok())
+            .ok_or_else(|| format!("'{key}' must be a count up to {}, got {value}", u32::MAX)),
+    }
+}
+
+/// Extract an optional array of handles from batch args: empty when the key
+/// is absent or null, and checked as [`handles_in`] checks it otherwise.
+pub fn opt_handles_in(args: &serde_json::Value, key: &str) -> Result<Vec<u32>, String> {
+    if args[key].is_null() {
+        Ok(Vec::new())
+    } else {
+        handles_in(args, key)
+    }
+}
+
+/// Extract a 4x4 matrix from batch args: sixteen numbers, row by row.
+pub fn matrix_in(args: &serde_json::Value, key: &str) -> Result<Vec<f64>, String> {
+    let entries = args[key]
+        .as_array()
+        .ok_or_else(|| format!("missing or invalid '{key}'"))?;
+    if entries.len() != 16 {
+        return Err(format!(
+            "{key} must have 16 elements, got {}",
+            entries.len()
+        ));
+    }
+    entries
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            v.as_f64()
+                .ok_or_else(|| format!("{key}[{i}] is not a number"))
+        })
+        .collect()
 }
 
 /// Extract an array of handles from batch args. Every entry must be one: an
@@ -929,6 +1000,9 @@ pub fn parse_polygon_2d(coords: &[f64]) -> Result<Vec<Point2>, JsError> {
             reason: "polygon needs at least 3 points (6 coordinates)".into(),
         }
         .into());
+    }
+    for (i, &c) in coords.iter().enumerate() {
+        crate::error::validate_size(c, &format!("coordinate {i}"))?;
     }
     Ok(coords
         .chunks_exact(2)

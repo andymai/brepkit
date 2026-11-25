@@ -30,7 +30,7 @@ use brepkit_topology::vertex::Vertex;
 use brepkit_topology::wire::{OrientedEdge, Wire};
 use wasm_bindgen::prelude::*;
 
-use crate::error::{WasmError, validate_finite};
+use crate::error::{WasmError, validate_finite, validate_size};
 use crate::handles::{edge_id_to_u32, solid_id_to_u32};
 use crate::helpers::{TOL, spline_degree, well_formed_curve, well_formed_nurbs};
 use crate::state::{Checkpoint, SketchState};
@@ -109,7 +109,7 @@ impl BrepKernel {
             (end_y, "endY"),
             (end_z, "endZ"),
         ] {
-            validate_finite(v, name)?;
+            validate_size(v, name)?;
         }
 
         let start = Point3::new(start_x, start_y, start_z);
@@ -189,15 +189,15 @@ impl BrepKernel {
         t_start: f64,
         t_end: f64,
     ) -> Result<u32, WasmError> {
-        validate_finite(origin_x, "originX")?;
-        validate_finite(origin_y, "originY")?;
-        validate_finite(origin_z, "originZ")?;
-        validate_finite(x_axis_x, "xAxisX")?;
-        validate_finite(x_axis_y, "xAxisY")?;
-        validate_finite(x_axis_z, "xAxisZ")?;
-        validate_finite(normal_x, "normalX")?;
-        validate_finite(normal_y, "normalY")?;
-        validate_finite(normal_z, "normalZ")?;
+        validate_size(origin_x, "originX")?;
+        validate_size(origin_y, "originY")?;
+        validate_size(origin_z, "originZ")?;
+        validate_size(x_axis_x, "xAxisX")?;
+        validate_size(x_axis_y, "xAxisY")?;
+        validate_size(x_axis_z, "xAxisZ")?;
+        validate_size(normal_x, "normalX")?;
+        validate_size(normal_y, "normalY")?;
+        validate_size(normal_z, "normalZ")?;
         validate_finite(t_start, "tStart")?;
         validate_finite(t_end, "tEnd")?;
 
@@ -208,7 +208,7 @@ impl BrepKernel {
         }
 
         for (i, &v) in curve_params.iter().enumerate() {
-            validate_finite(v, &format!("curveParams[{i}]"))?;
+            validate_size(v, &format!("curveParams[{i}]"))?;
         }
 
         let normal = Vec3::new(normal_x, normal_y, normal_z)
@@ -2055,10 +2055,14 @@ mod js_curve_tests {
             "an ellipse with its smaller axis first",
             args(2, vec![0.0, 0.0, 1.0, 2.0, 0.0]),
         ));
+        // A number past the size limit is refused before the curve is built.
         for (what, bad) in bad {
             let found = batch_one(&mut k, "liftCurve2dToPlane", &bad);
             let error = found["error"].as_str().unwrap_or_default();
-            assert!(error.contains("cannot be evaluated"), "{what}: {found}");
+            assert!(
+                error.contains("cannot be evaluated") || error.contains("must be at most"),
+                "{what}: {found}"
+            );
         }
     }
 
