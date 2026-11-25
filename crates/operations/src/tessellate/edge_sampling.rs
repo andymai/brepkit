@@ -178,6 +178,10 @@ pub(super) fn nurbs_edge_breaks(
     // step over a polynomial piece.
     const MAX_KNOTS: usize = 8;
     const MIN_TURN_LENGTH: f64 = 0.1;
+    // The rounding of a point read off a chord, in units of the largest
+    // coordinate's relative precision: the error of the chord's evaluated
+    // ends and of the distance itself.
+    const ROUNDING: f64 = 4.0;
 
     let (lo, hi) = (t0.min(t1), t0.max(t1));
     let mut knots: Vec<f64> = nurbs
@@ -198,11 +202,42 @@ pub(super) fn nurbs_edge_breaks(
         };
         (p - (a + chord * f)).length()
     };
+    // While its weights are positive, the curve over a span lies in the hull
+    // of the control points whose basis functions reach into the span: no
+    // point of it is farther from the chord than the farthest of them. Also
+    // the largest coordinate there, the scale of its rounding.
+    let hull_off_chord = |span_lo: f64, span_hi: f64, pa: Point3, pb: Point3| {
+        let (all_knots, controls) = (nurbs.knots(), nurbs.control_points());
+        let (degree, last) = (nurbs.degree(), controls.len() - 1);
+        let span_of = |at: usize| at.saturating_sub(1).clamp(degree, last);
+        let first = span_of(all_knots.partition_point(|&k| k <= span_lo)) - degree;
+        let end = span_of(all_knots.partition_point(|&k| k < span_hi));
+        let size = |p: Point3| p.x().abs().max(p.y().abs()).max(p.z().abs());
+        let mut far = 0.0_f64;
+        let mut scale = size(pa).max(size(pb));
+        for i in first..=end {
+            let w = nurbs.weights()[i];
+            if !(w > 0.0 && w.is_finite()) {
+                return (f64::INFINITY, scale);
+            }
+            far = far.max(off_chord(controls[i], pa, pb));
+            scale = scale.max(size(controls[i]));
+        }
+        (far, scale)
+    };
     let parts = |a: f64, b: f64| {
         let (span_lo, span_hi) = (a.min(b), a.max(b));
         let from = knots.partition_point(|&k| k <= span_lo);
         let to = knots.partition_point(|&k| k < span_hi).max(from);
         let (pa, pb) = (nurbs.evaluate(a), nurbs.evaluate(b));
+        // A span whose control points lie within rounding of its chord is
+        // straight as stored: what its probes read off the chord, and the
+        // turn of its tangents, is rounding. It takes one span, as no cut
+        // can bring its samples closer to the curve than their rounding.
+        let (hull, scale) = hull_off_chord(span_lo, span_hi, pa, pb);
+        if hull <= ROUNDING * f64::EPSILON * scale {
+            return 1;
+        }
         // A closed curve has no chord: however small, it takes three spans
         // to enclose anything. A part of the edge whose ends meet is a piece
         // where the curve stands still, not a loop: cut as a closed curve,
@@ -215,10 +250,13 @@ pub(super) fn nurbs_edge_breaks(
         let mut probes = super::nurbs::span_probes(a, b, &knots[from..to]);
         probes.sort_by(f64::total_cmp);
         let points: Vec<Point3> = probes.iter().map(|&t| nurbs.evaluate(t)).collect();
+        // The probes read the sag from below and the hull bounds it from
+        // above: more than the bound is rounding in the probes.
         let sag = points
             .iter()
             .map(|&p| off_chord(p, pa, pb))
-            .fold(0.0, f64::max);
+            .fold(0.0, f64::max)
+            .min(hull);
         // The probes run up the parameter, so from the span's lower end.
         let (first, last) = if a <= b { (pa, pb) } else { (pb, pa) };
         let length = std::iter::once(first)
@@ -871,6 +909,65 @@ mod tests {
             "{:?}",
             big.map(|b| b.len())
         );
+    }
+
+    /// A straight edge in B-spline form, its control points on one line
+    /// (evenly spaced or not), takes one span at any length and far from the
+    /// origin, at a deflection below its coordinates' rounding and an angle
+    /// below its tangents' rounding: its probes and tangents read only
+    /// rounding off the line. Read so, it was cut until its parameters
+    /// stopped moving, or past the limit. A spline bowed 1e-6 off its chord
+    /// is still cut for it.
+    #[test]
+    fn a_straight_spline_takes_one_span() {
+        let spline = |degree: usize, points: Vec<Point3>| {
+            let n = points.len();
+            let mut knots = vec![0.0; degree + 1];
+            let inner = n - degree - 1;
+            #[allow(clippy::cast_precision_loss)]
+            knots.extend((1..=inner).map(|k| k as f64 / (inner + 1) as f64));
+            knots.extend(vec![1.0; degree + 1]);
+            NurbsCurve::new(degree, knots, points, vec![1.0; n]).unwrap()
+        };
+        let along = Vec3::new(1.0, 2.0, 3.0).normalize().unwrap();
+        for degree in [2, 3] {
+            for (length, offset, uneven) in [1e-3, 1.0, 1e6]
+                .into_iter()
+                .flat_map(|l| [0.0, 1e8].map(|o| (l, o)))
+                .flat_map(|(l, o)| [false, true].map(|u| (l, o, u)))
+            {
+                let base = Point3::new(offset, 0.5 * offset, -0.25 * offset);
+                #[allow(clippy::cast_precision_loss)]
+                let points = (0..degree + 2)
+                    .map(|i| {
+                        let f = i as f64 / (degree + 1) as f64;
+                        base + along * (length * if uneven { f * f } else { f })
+                    })
+                    .collect();
+                let curve = spline(degree, points);
+                for deflection in [1e-6, 1e-9, 1e-12] {
+                    for angle in [0.0, 1e-9, 0.35] {
+                        let breaks = nurbs_edge_breaks(&curve, 0.0, 1.0, deflection, angle);
+                        assert!(
+                            matches!(&breaks, Ok(b) if b.len() <= 3),
+                            "degree {degree}, {length} long at {offset} (uneven {uneven}), \
+                             {deflection} and {angle}: {:?}",
+                            breaks.map(|b| b.len())
+                        );
+                    }
+                }
+            }
+        }
+        let bowed = spline(
+            2,
+            vec![
+                Point3::new(0.0, 0.0, 0.0),
+                Point3::new(0.5, 1e-6, 0.0),
+                Point3::new(1.0, 0.0, 0.0),
+            ],
+        );
+        let breaks = nurbs_edge_breaks(&bowed, 0.0, 1.0, 1e-9, 0.0);
+        assert!(matches!(&breaks, Ok(b) if b.len() > 3), "{breaks:?}");
     }
 
     /// A spline that turns a corner on a middle piece that barely moves (its
