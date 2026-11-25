@@ -328,6 +328,50 @@ mod tests {
         }
     }
 
+    /// A rod of radius 2 about (6.5, 5) from z = 0 to 2, and the prism from
+    /// z = -1 to 3: their walls cross at x = 10.25 - sqrt(19.9375), along
+    /// rulings that run only over the rod's height, and the fuse is exact.
+    #[test]
+    fn a_shorter_rod_across_the_prism_fuses_exactly() {
+        let b = 5.4_f64.sqrt();
+        let crossing = 10.25 - 19.9375_f64.sqrt();
+        // The area under half a circle of radius r from its centre out to u.
+        let under = |r: f64, u: f64| 0.5 * (u * (r * r - u * u).sqrt() + r * r * (u / r).asin());
+        // Inside both: the circle left of the crossing, the ellipse right of it.
+        let circle_part = 2.0 * (under(2.0, crossing - 6.5) - under(2.0, -2.0));
+        let ellipse_part = 2.0 * b / 3.0 * (under(3.0, 3.0) - under(3.0, crossing - 4.0));
+        let both = circle_part + ellipse_part;
+        let ellipse = PI * 3.0 * b;
+        let volume = 4.0 * ellipse + 2.0 * (4.0 * PI - both);
+        for (seams, seam) in SEAMS {
+            for (name, pose) in poses() {
+                let mut topo = Topology::new();
+                let [_, _, prism] = parts(&mut topo, seam, &pose);
+                let rod = make_cylinder(&mut topo, 2.0, 2.0).unwrap();
+                transform_solid(
+                    &mut topo,
+                    rod,
+                    &(pose * Mat4::translation(6.5, 5.0, 0.0) * Mat4::rotation_z(seam)),
+                )
+                .unwrap();
+                let what = format!("{seams}, {name}");
+                let fused =
+                    boolean_with_options(&mut topo, BooleanOp::Fuse, rod, prism, exact()).unwrap();
+                assert_exact(
+                    &topo,
+                    fused,
+                    volume,
+                    (
+                        &[Point3::new(8.0, 5.0, 1.0), Point3::new(1.5, 5.0, 2.5)],
+                        &[Point3::new(8.0, 5.0, 2.5), Point3::new(8.0, 5.0, -0.5)],
+                    ),
+                    &pose,
+                    &what,
+                );
+            }
+        }
+    }
+
     #[test]
     fn a_plate_less_a_rod_and_a_prism_fused_is_exact() {
         let volume = 200.0 - 2.0 * union_area();

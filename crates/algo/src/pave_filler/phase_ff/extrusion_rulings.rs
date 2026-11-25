@@ -34,8 +34,9 @@ const MOST_INTERVALS: usize = 4096;
 const WIDEST_GRAZE: f64 = 1e-3;
 
 /// The rulings where `cylinder` crosses the B-spline extrusion `surface`,
-/// trimmed to both faces' boxes and to the extrusion's height, each within
-/// `tol`, the caller's linear tolerance, of both surfaces. `None` where
+/// trimmed to both faces' boxes, to the extrusion's height and to the
+/// cylinder face's span `v_range` along the axis, each within `tol`, the
+/// caller's linear tolerance, of both surfaces. `None` where
 /// `surface` is not an extrusion along the cylinder's axis to within `tol`
 /// over its length, where its profile runs along the circle, so the
 /// section is not a set of isolated lines, or where a ruling is not proved
@@ -48,9 +49,9 @@ const WIDEST_GRAZE: f64 = 1e-3;
 pub(super) fn cylinder_extrusion_rulings(
     cylinder: &CylindricalSurface,
     surface: &NurbsSurface,
-    bbox_a: &Aabb3,
-    bbox_b: &Aabb3,
+    (bbox_a, bbox_b): (&Aabb3, &Aabb3),
     tol: f64,
+    v_range: Option<(f64, f64)>,
 ) -> Option<Vec<RawCurve>> {
     let axis = cylinder.axis().normalize().ok()?;
     let (profile, along, slack) = extrusion(surface)?;
@@ -84,7 +85,13 @@ pub(super) fn cylinder_extrusion_rulings(
             return None;
         }
         let boxed = trim_t_range_to_aabb(base, axis, bbox_a, bbox_b);
-        let t_range = (boxed.0.max(rise.min(0.0)), boxed.1.min(rise.max(0.0)));
+        let mut t_range = (boxed.0.max(rise.min(0.0)), boxed.1.min(rise.max(0.0)));
+        // The cylinder face spans only `v_range` along the axis, measured
+        // from the cylinder's origin; the base stands at `height` there.
+        if let Some((v0, v1)) = v_range {
+            let height = (base - cylinder.origin()).dot(axis);
+            t_range = (t_range.0.max(v0 - height), t_range.1.min(v1 - height));
+        }
         if t_range.1 - t_range.0 <= tol {
             continue;
         }
@@ -394,8 +401,9 @@ impl CircleSection<'_> {
                 }
             }
         }
-        let poles = self.profile.control_points();
-        let closed = (*poles.first()? - *poles.last()?).length() <= self.tol;
+        // An unclamped profile need not start and end at its first and last
+        // poles: it closes where its domain's two ends meet.
+        let closed = (self.profile.evaluate(d0) - self.profile.evaluate(d1)).length() <= self.tol;
         walk.finish(closed, self, &mut roots)?;
         roots.sort_by(f64::total_cmp);
         Some(roots)
@@ -738,10 +746,21 @@ mod tests {
     fn rulings_within(
         cylinder: &CylindricalSurface,
         wall: &NurbsSurface,
-        (bbox_a, bbox_b): (&Aabb3, &Aabb3),
+        boxes: (&Aabb3, &Aabb3),
         tol: f64,
     ) -> Option<Vec<RawCurve>> {
-        let lines = cylinder_extrusion_rulings(cylinder, wall, bbox_a, bbox_b, tol)?;
+        rulings_on_face(cylinder, wall, boxes, (tol, None))
+    }
+
+    /// [`rulings_within`] for a cylinder face that spans `v_range` along
+    /// the axis, each ruling checked inside that span too.
+    fn rulings_on_face(
+        cylinder: &CylindricalSurface,
+        wall: &NurbsSurface,
+        (bbox_a, bbox_b): (&Aabb3, &Aabb3),
+        (tol, v_range): (f64, Option<(f64, f64)>),
+    ) -> Option<Vec<RawCurve>> {
+        let lines = cylinder_extrusion_rulings(cylinder, wall, (bbox_a, bbox_b), tol, v_range)?;
         let axis = cylinder.axis().normalize().unwrap();
         for line in &lines {
             for p in [
@@ -756,6 +775,13 @@ mod tests {
                     off_cylinder <= tol && off_wall <= tol,
                     "{p:?}: {off_cylinder:e} off the cylinder, {off_wall:e} off the wall"
                 );
+                if let Some((v0, v1)) = v_range {
+                    let v = w.dot(axis);
+                    assert!(
+                        v >= v0 - tol && v <= v1 + tol,
+                        "{p:?}: at {v} along the axis, off the face's {v0}..{v1}"
+                    );
+                }
             }
         }
         Some(lines)
@@ -1641,6 +1667,61 @@ mod tests {
             let rod = cylinder_about(0.0, 0.0, 1.0, &pose);
             let lines = rulings(&rod, &wall, &room(), &room()).unwrap();
             one_ruling_at_each(&lines, &[meet(1.0), meet(-1.0)], &pose, name);
+        }
+    }
+
+    /// A cylinder face from z = 0 to 2 against an extrusion from z = -1 to
+    /// 3: each ruling runs only over the face, 0 to 2.
+    #[test]
+    fn rulings_end_where_a_shorter_cylinder_face_ends() {
+        for (name, pose) in poses() {
+            let wall = elliptic_extrusion((4.0, 5.0), (3.0, 5.4_f64.sqrt()), 4.0, 0.0, &pose);
+            let face = CylindricalSurface::new(
+                pose.mul_point(Point3::new(5.0, 5.0, 0.0)),
+                direction(&pose, Vec3::new(0.0, 0.0, 1.0)),
+                2.0,
+            )
+            .unwrap();
+            let tol = brepkit_math::tolerance::Tolerance::new().linear;
+            let lines =
+                rulings_on_face(&face, &wall, (&room(), &room()), (tol, Some((0.0, 2.0)))).unwrap();
+            assert_eq!(lines.len(), 2, "{name}");
+            for line in &lines {
+                assert!(
+                    ((line.p_end - line.p_start).length() - 2.0).abs() < 1e-9,
+                    "{name}: {:?} {:?}",
+                    line.p_start,
+                    line.p_end
+                );
+            }
+        }
+    }
+
+    /// The unclamped quadratic with knots 0 to 8 and poles (0, 0), (2, 0),
+    /// (2, 2), (0, 2), (0, 0), (2, 0) closes at (1, 0), though its first and
+    /// last poles differ. Against a unit cylinder it crosses at its seam,
+    /// (1, 0), and at (0, 1): a ruling at each.
+    #[test]
+    fn an_unclamped_closed_profile_keeps_its_seam_crossing() {
+        let poles = [
+            (0.0, 0.0),
+            (2.0, 0.0),
+            (2.0, 2.0),
+            (0.0, 2.0),
+            (0.0, 0.0),
+            (2.0, 0.0),
+        ];
+        for (name, pose) in poses() {
+            let wall = moved_profile(
+                &poles.map(|(x, y)| Point3::new(x, y, 0.0)),
+                (2, (0..=8).map(f64::from).collect()),
+                &[1.0; 6],
+                Vec3::new(0.0, 0.0, 4.0),
+                &pose,
+            );
+            let rod = cylinder_about(0.0, 0.0, 1.0, &pose);
+            let lines = rulings(&rod, &wall, &room(), &room()).unwrap();
+            one_ruling_at_each(&lines, &[(1.0, 0.0), (0.0, 1.0)], &pose, name);
         }
     }
 }

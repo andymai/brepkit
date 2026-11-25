@@ -414,9 +414,23 @@ pub fn perform(
                     coincident_boundary_curves(topo, (fa, na), (fb, nb))
                 }
                 (FaceSurface::Cylinder(cyl), FaceSurface::Nurbs(nurbs))
-                | (FaceSurface::Nurbs(nurbs), FaceSurface::Cylinder(cyl))
                     if let Some(lines) = extrusion_rulings::cylinder_extrusion_rulings(
-                        cyl, nurbs, bbox_a, bbox_b, tol.linear,
+                        cyl,
+                        nurbs,
+                        (bbox_a, bbox_b),
+                        tol.linear,
+                        v_range_a,
+                    ) =>
+                {
+                    lines
+                }
+                (FaceSurface::Nurbs(nurbs), FaceSurface::Cylinder(cyl))
+                    if let Some(lines) = extrusion_rulings::cylinder_extrusion_rulings(
+                        cyl,
+                        nurbs,
+                        (bbox_a, bbox_b),
+                        tol.linear,
+                        v_range_b,
                     ) =>
                 {
                     lines
