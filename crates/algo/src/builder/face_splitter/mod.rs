@@ -8254,7 +8254,7 @@ fn on_section_arc(
     let along =
         (at - t0).rem_euclid(TAU) <= (t1 - t0) + slack || (at - t0).rem_euclid(TAU) >= TAU - slack;
     let start = circle.project(section.start);
-    let delta = super::pcurve_compute::shorter_arc_delta(circle.project(section.end) - start);
+    let delta = super::pcurve_compute::open_arc_delta(circle.project(section.end) - start);
     let (from, run) = if delta >= 0.0 {
         (start, delta)
     } else {
@@ -14094,12 +14094,14 @@ fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
     // An open arc reads two ways: the shorter way round between its ends,
     // or along its curve from its start. An arc and the rest of its circle
     // stored from the other end are one arc read the first way and two the
-    // second, so the trims must meet both ways.
+    // second, so the trims must meet both ways. A half turn, which either
+    // way reads to rounding, reads the shorter way along its curve from its
+    // start too.
     let readings = |s: &SectionEdge, project: &dyn Fn(Point3) -> f64| {
         let t0 = project(s.start);
         let shorter = (
             t0,
-            crate::builder::pcurve_compute::shorter_arc_delta(project(s.end) - t0),
+            crate::builder::pcurve_compute::open_arc_delta(project(s.end) - t0),
         );
         let (n0, n1) = s.curve_3d.domain_with_endpoints(s.start, s.end);
         [shorter, (n0, n1 - n0)]
@@ -19426,6 +19428,83 @@ mod tests {
                             assert!(
                                 lines == 4 || (arcs == 1 && lines == 1),
                                 "{what}: a region of {arcs} arcs and {lines} lines"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A half turn of a circle of radius 2 about the plate's (5, 5), given
+    /// on its frame and on that frame turned a quarter, or of an ellipse of
+    /// semi-axes 3 and 1.5 given on its frame and on that frame turned a
+    /// half, with its chord: the two are one arc, so the plate splits into
+    /// the half and the rest; the other half from the same ends on the
+    /// turned frame stays a second arc. From several angles, among them one
+    /// where the turned frame's shorter way round tips to the other half, in
+    /// each frame, and about the frame's origin too.
+    #[test]
+    fn a_half_turn_given_on_two_frames_is_one_arc() {
+        use brepkit_math::curves::{Circle3D, Ellipse3D};
+        use std::f64::consts::PI;
+        for (pose, o, u, v) in plate_frames() {
+            let n = u.cross(v);
+            // About the frame's origin the arcs leave the plate, so only
+            // their reading as one curve is checked there.
+            for (centre, on_plate) in [(o + u * 5.0 + v * 5.0, true), (o, false)] {
+                let pairs = [
+                    (
+                        EdgeCurve::Circle(Circle3D::with_axes(centre, n, 2.0, u, v).unwrap()),
+                        EdgeCurve::Circle(Circle3D::with_axes(centre, n, 2.0, v, -u).unwrap()),
+                        4.0,
+                    ),
+                    (
+                        EdgeCurve::Ellipse(
+                            Ellipse3D::with_axes(centre, n, 3.0, 1.5, u, v).unwrap(),
+                        ),
+                        EdgeCurve::Ellipse(
+                            Ellipse3D::with_axes(centre, n, 3.0, 1.5, -u, -v).unwrap(),
+                        ),
+                        4.5,
+                    ),
+                ];
+                for (curve, turned, ab) in &pairs {
+                    let half = 0.5 * PI * ab;
+                    for start in [0.546_609_791_235_062_3, 0.0, 0.3, 1.7, PI] {
+                        let point = |t: f64| curve.evaluate_with_endpoints(t, centre, centre);
+                        let (p, q) = (point(start), point(start + PI));
+                        for opposite in [false, true] {
+                            let second = if opposite {
+                                curve_section(turned.clone(), q, p)
+                            } else {
+                                curve_section(turned.clone(), p, q)
+                            };
+                            let first = curve_section(curve.clone(), p, q);
+                            let what = format!(
+                                "{pose}, {}, from {start}, opposite {opposite}",
+                                curve.type_tag()
+                            );
+                            assert_eq!(
+                                same_section_curve(&first, &second, 1e-6),
+                                !opposite,
+                                "{what}: read as one curve"
+                            );
+                            if !on_plate {
+                                continue;
+                            }
+                            let sections = [first, second, line_section(q, p)];
+                            let mut want = if opposite {
+                                vec![half, half, 100.0 - 2.0 * half]
+                            } else {
+                                vec![half, 100.0 - half]
+                            };
+                            want.sort_by(f64::total_cmp);
+                            let areas = framed_plate_region_areas(o, u, v, &sections);
+                            assert!(
+                                areas.len() == want.len()
+                                    && areas.iter().zip(&want).all(|(a, w)| (a - w).abs() < 1e-9),
+                                "{what}: regions of areas {areas:?}, want {want:?}"
                             );
                         }
                     }

@@ -621,7 +621,7 @@ fn ellipse_sample_span(
     if matches!(surface, FaceSurface::Cone(_)) && gap < 1e-10 {
         (a0, a0 + TAU)
     } else if gap > 1e-12 {
-        (a0, a0 + shorter_arc_delta(ellipse.project(end) - a0))
+        (a0, a0 + open_arc_delta(ellipse.project(end) - a0))
     } else {
         EdgeCurve::Ellipse(ellipse.clone()).domain_with_endpoints(start, end)
     }
@@ -1275,7 +1275,7 @@ pub(super) fn edge_point_at(
 /// The sweep of an open arc from a step `raw` between its ends' parameters:
 /// the shorter way round, or counter-clockwise, the stored way, where both
 /// ways are a half turn to rounding.
-fn open_arc_delta(raw: f64) -> f64 {
+pub(super) fn open_arc_delta(raw: f64) -> f64 {
     let shorter = shorter_arc_delta(raw);
     if (shorter.abs() - std::f64::consts::PI).abs() <= 1e-9 {
         raw.rem_euclid(std::f64::consts::TAU)
