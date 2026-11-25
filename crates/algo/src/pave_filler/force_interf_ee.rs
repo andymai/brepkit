@@ -273,6 +273,11 @@ const ARC_BAND: f64 = 6.0;
 /// where they are [`one_block_as_stored`], or [`arcs_apart`] holds them
 /// within [`ARC_BAND`] tolerances along their whole length. Blocks on other
 /// curves pass.
+///
+/// [`arcs_apart`] reads one curve onto the other, so its two readings of a
+/// pair differ by rounding and by the curves' sizes. Each bounds the same
+/// distance, so the lesser stands, and the answer does not hang on which
+/// block comes first.
 pub(super) fn one_arc(
     a: &EdgeCurve,
     span_a: (f64, f64),
@@ -281,9 +286,17 @@ pub(super) fn one_arc(
     tol: Tolerance,
 ) -> bool {
     let conic = |c: &EdgeCurve| matches!(c, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_));
-    !(conic(a) && conic(b))
-        || one_block_as_stored(a, span_a, b, span_b)
-        || arcs_apart(a, span_a, b, span_b).is_some_and(|d| d <= ARC_BAND * tol.linear)
+    if !(conic(a) && conic(b)) || one_block_as_stored(a, span_a, b, span_b) {
+        return true;
+    }
+    let bound = match (
+        arcs_apart(a, span_a, b, span_b),
+        arcs_apart(b, span_b, a, span_a),
+    ) {
+        (Some(ab), Some(ba)) => Some(ab.min(ba)),
+        (ab, ba) => ab.or(ba),
+    };
+    bound.is_some_and(|d| d <= ARC_BAND * tol.linear)
 }
 
 /// Whether `a` over `span_a` and `b` over `span_b` are one circle or one
@@ -1015,6 +1028,102 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// Circles of radius 1 and 1 + 9e-8 about one centre on one frame, over
+    /// (0, 1) and (0, 1 + g): read from the first, the bound is
+    /// `9e-8 + g`, and from the second `9e-8 + (1 + 9e-8) g`. At the `g`
+    /// where the second reading first passes the band, the first is under
+    /// it. Each reading bounds one Hausdorff distance, so the blocks are one
+    /// either way round.
+    #[test]
+    fn the_arc_bound_reads_alike_either_way_round() {
+        let centre = Point3::new(0.0, 0.0, 0.0);
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let small = EdgeCurve::Circle(Circle3D::with_axes(centre, z, 1.0, x, y).unwrap());
+        let large = EdgeCurve::Circle(Circle3D::with_axes(centre, z, 1.0 + 9e-8, x, y).unwrap());
+        let band = ARC_BAND * Tolerance::default().linear;
+        let read = |from: &EdgeCurve, f: (f64, f64), to: &EdgeCurve, t: (f64, f64)| {
+            arcs_apart(from, f, to, t).unwrap()
+        };
+        // The least g whose reading from the larger circle passes the band.
+        let (mut lo, mut hi) = (0.0_f64, 1e-6_f64);
+        for _ in 0..200 {
+            let mid = 0.5 * (lo + hi);
+            if read(&large, (0.0, 1.0 + mid), &small, (0.0, 1.0)) > band {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        let g = hi;
+        assert!(read(&small, (0.0, 1.0), &large, (0.0, 1.0 + g)) <= band);
+        assert!(read(&large, (0.0, 1.0 + g), &small, (0.0, 1.0)) > band);
+        assert!(one(&small, (0.0, 1.0), &large, (0.0, 1.0 + g)));
+        assert!(one(&large, (0.0, 1.0 + g), &small, (0.0, 1.0)));
+    }
+
+    /// Four copies of an arc of a circle (stored from its start, from its end,
+    /// and both about the reversed normal) and two of the rest, run 20 times,
+    /// each with fresh hash seeds: every run groups the arc's four copies in
+    /// one common block and the rest's two in another.
+    #[test]
+    fn copies_of_an_arc_group_alike_on_every_run() {
+        use std::f64::consts::PI;
+        let centre = Point3::new(1.0, -2.0, 0.5);
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let up = Circle3D::with_axes(centre, z, 2.0, x, y).unwrap();
+        let down = Circle3D::with_axes(centre, -z, 2.0, x, -y).unwrap();
+        let (p, q) = (up.evaluate(0.3), up.evaluate(0.3 + PI / 3.0));
+        let edges = [
+            (p, q, &up),
+            (q, p, &down),
+            (p, q, &up),
+            (q, p, &up),
+            (q, p, &down),
+            (p, q, &down),
+        ];
+        for run in 0..20 {
+            let mut topo = Topology::new();
+            let mut arena = GfaArena::new();
+            let ids: Vec<EdgeId> = edges
+                .iter()
+                .map(|&(from, to, circle)| {
+                    whole_edge(
+                        &mut topo,
+                        &mut arena,
+                        from,
+                        to,
+                        EdgeCurve::Circle(circle.clone()),
+                    )
+                })
+                .collect();
+            perform(&topo, Tolerance::default(), &mut arena).unwrap();
+            let mut groups: Vec<Vec<usize>> = arena
+                .common_blocks
+                .iter()
+                .map(|(_, cb)| {
+                    let mut members: Vec<usize> = cb
+                        .pave_blocks
+                        .iter()
+                        .filter_map(|&pb| arena.pave_blocks.get(pb))
+                        .filter_map(|pb| ids.iter().position(|&e| e == pb.original_edge))
+                        .collect();
+                    members.sort_unstable();
+                    members
+                })
+                .collect();
+            groups.sort();
+            assert_eq!(groups, vec![vec![0, 1, 2, 4], vec![3, 5]], "run {run}");
         }
     }
 }

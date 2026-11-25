@@ -664,4 +664,75 @@ mod tests {
             leaves.len()
         );
     }
+
+    /// A section on a circle from angle 0 to 1, and two boundary edges
+    /// between its ends: first the rest of the circle, then the arc. Run 20
+    /// times, each with fresh hash seeds, the section joins the arc's block
+    /// every time and never the rest's.
+    #[test]
+    fn a_section_joins_the_arc_and_not_the_rest_on_every_run() {
+        let circle = Circle3D::with_axes(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            1.0,
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap();
+        for run in 0..20 {
+            let mut topo = Topology::default();
+            let (p, q) = (
+                topo.add_vertex(Vertex::new(circle.evaluate(0.0), 1e-7)),
+                topo.add_vertex(Vertex::new(circle.evaluate(1.0), 1e-7)),
+            );
+            let edge = |topo: &mut Topology, a, b| {
+                topo.add_edge(Edge::new(a, b, EdgeCurve::Circle(circle.clone())))
+            };
+            let rest = edge(&mut topo, q, p);
+            let arc = edge(&mut topo, p, q);
+            let section = edge(&mut topo, p, q);
+            let wire =
+                topo.add_wire(Wire::new(vec![OrientedEdge::new(section, true)], false).unwrap());
+            let face = topo.add_face(Face::new(
+                wire,
+                vec![],
+                FaceSurface::Plane {
+                    normal: Vec3::new(0.0, 0.0, 1.0),
+                    d: 0.0,
+                },
+            ));
+            let mut arena = GfaArena::new();
+            arena.init_edge_pave_block(rest, q, 1.0, p, std::f64::consts::TAU);
+            arena.init_edge_pave_block(arc, p, 0.0, q, 1.0);
+            let section_pb = arena.pave_blocks.alloc(crate::ds::PaveBlock::new(
+                section,
+                crate::ds::Pave::new(p, 0.0),
+                crate::ds::Pave::new(q, 1.0),
+            ));
+            arena.curves.push(IntersectionCurveDS {
+                curve: EdgeCurve::Circle(circle.clone()),
+                face_a: face,
+                face_b: face,
+                bbox: Aabb3::from_points([
+                    Point3::new(-1.0, -1.0, 0.0),
+                    Point3::new(1.0, 1.0, 0.0),
+                ]),
+                pave_blocks: vec![section_pb],
+                t_range: (0.0, 1.0),
+            });
+
+            super::perform(&topo, Tolerance::default(), &mut arena).unwrap();
+
+            let block = |edge| arena.edge_pave_blocks[&edge][0];
+            let joined = arena.pb_to_cb.get(&section_pb);
+            assert!(
+                joined.is_some() && joined == arena.pb_to_cb.get(&block(arc)),
+                "run {run}: the section joins no block of the arc"
+            );
+            assert!(
+                !arena.pb_to_cb.contains_key(&block(rest)),
+                "run {run}: the rest joins a block"
+            );
+        }
+    }
 }
