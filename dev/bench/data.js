@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795570660441,
+  "lastUpdate": 1795570976775,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -78137,6 +78137,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19858165,
             "range": "± 74970",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "5169f0d00a226c1df66471a4dfe69cc35575c54b",
+          "message": "fix(algo,operations): prove pcurves for B-spline faces in each GFA store, so phase EF boxes a piece by the piece (#2852)\n\n## Summary\n\nOn main, phase EF boxes a NURBS face that has no pcurves by its whole\nsurface's control points (#2814). A small piece of a large spline\nsurface then takes the whole surface's box. Phase EF can find a crossing\non a part of the surface that a former cut removed. Take a box fused\npast a cut-away part of a spline wall. On main, the fuse makes a vertex\nat (46.0, -18.06, 1.0), off the piece, on the removed part of the wall's\nsurface.\n\n`register_pcurves` was not unwired on purpose: its only caller was\ndeleted in #382. Storing pcurves on result faces would not reach phase\nEF anyway. Each GFA store copies its operands through `copy_shells`,\nwhich copies no pcurves. So phase EF never read a pcurve in a real\nboolean.\n\nWith this change, each GFA store proves pcurves for its own copies of\nB-spline faces, and phase EF reads them there. The piece's box shrinks\nto the piece, and the fuse keeps its edges whole. The pose sweep and the\ntruth audit give the same output as main.\n\nFixes #2814.\n\n## The change\n\n- **A proved pcurve for a B-spline face.**\n`builder/nurbs_pcurve.rs::proved_nurbs_pcurve` builds cubic Hermite\npieces on [0, 1]. Each piece is proved within the larger of the linear\ntolerance and the edge's tolerance, at the same fraction of both spans.\n- The bound uses the node gaps, the end-rate gaps, and terms\nc_k·h^k·sup|g^(k)| for k from 1 to 4. The surface's continuity across\nthe knots in the piece's box sets which terms apply.\n- Surface partials are bounded from the control points of the derivative\nsurfaces. A rational surface goes through the Leibniz rule.\n- Partials are read one-sided at C0 knot lines, and nodes snap onto the\nsurface's and the edge's knots.\n- **Each store proves its own.**\n`ds/shape_store.rs::prove_source_pcurves` runs after each store is made,\nat the 5 entry points in `gfa.rs`. A face gets pcurves only where every\nedge proves. Edges that do not prove are not stored, so readers fall\nback as on main. These faces get none:\n  - faces with a seam or on a periodic surface;\n- faces bounded only by their surface's sides, whose box cannot shrink;\n  - faces whose control box misses the other operands' edges.\n- **`register_pcurves`** is removed. The caller's topology does not\nchange, so the tessellator, the validator and the blend engine read\nnothing new.\n\n## Tests\n\n- `a_small_piece_of_a_large_nurbs_sheet_is_boxed_to_the_piece` runs in 3\nposes, one mirrored and moved 1e4. Without pcurves, the box is the whole\nsheet's. With them, it is under 0.1 of that and holds each point of the\npiece.\n-\n`a_box_fused_past_a_cut_away_part_of_a_spline_wall_keeps_its_edges_whole`\nruns upright, turned and mirrored. On main it fails with a vertex off\nthe piece. On main the fuse has 35 edges and 24 vertices, and on this\nbranch 33 and 22.\n- Unit tests prove pcurves on these surfaces:\n- a bent bicubic sheet up to 4e4 from the origin, and a rational quarter\nrod;\n  - edges along, across and up to a fold at a C0 knot line.\n- An edge 1e-5 off the sheet gets no pcurve, and one 5e-8 off gets one.\n- On the wall pieces, the box diagonal is 0.055 to 0.067 and 0.57 to\n0.67 of main's. The second boolean takes 4.9 to 5.3 ms against 5.8 to\n6.1 ms. Twenty cuts in a chain through a spline wall take 2 to 3%\nlonger, 17 µs per edge proved. Over 18 NURBS-heavy test files the time\nis the same within 1%.\n- brepkit-algo (674), brepkit-topology (96), brepkit-check (195) and the\noperations lib tests (1237) pass, and so do all brepkit-operations and\nbrepkit-io tests (3322, 28 skipped).\n\n## Still open\n\n- A box cut through a spline prism falls back to the mesh where its side\nmeets the spline's middle, as on main (#2851).\n- #2813's trim has no bound yet for B-spline edges, so on most section\nfaces it still keeps each crossing outside the loops.\n\n<!-- This is an auto-generated description by cubic. -->\n---\n## Summary by cubic\nFixes the phase EF box a small piece of a large NURBS face takes on main\n(#2814): with no pcurves stored, a B-spline face got its whole surface's\ncontrol box, so a fuse could leave a vertex on a part of the surface a\ncut removed. Each GFA store now proves pcurves for its own copies of\nB-spline faces, and phase EF reads them there, so the piece's box\nshrinks to the piece.\n\n- `proved_nurbs_pcurve` builds cubic Hermite pieces on [0, 1], each\nproved within the larger of the linear tolerance and the edge's\ntolerance, at the same fraction of both spans. The bound reads the\nsurface's partials from the control points of its derivative surfaces,\nacross knots and on rational surfaces.\n- Knots are read over the surface's domain only, and equal knots count\nas one, so `-0.0` and `0.0` are one knot and a sound vector's unused end\nknots do not swallow its spans.\n- Nets' weights are scaled by a power of two to a largest weight between\none and two, and lengths are read on their largest part, so weights\nscaled by 1e-200 or 1e200 give the same bounds as unit weights. The\nbound counts the rounding of reading the stored spline; a patch whose\nparameters round past the tolerance gets no pcurve.\n- Conic edges are bounded by their axes as stored, so a circle of radius\n1e-6 on axes 1e6 long proves within the tolerance.\n- Each GFA store proves pcurves at its five entry points in `gfa.rs`. A\nface gets pcurves only where every edge proves; faces with a seam, on a\nperiodic surface, or bounded only by their surface's sides get none. The\ndead `register_pcurves` is removed.\n\nFixes #2814.\n\n<sup>Written for commit f453f5cbc7309a8c1d675f15cd1a2ecc5c7da371.\nSummary will update on new commits.</sup>\n\n<a\nhref=\"https://cubic.dev/pr/andymai/brepkit/pull/2852?utm_source=github\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"><img\nalt=\"View guided diff\"\nsrc=\"https://www.cubic.dev/buttons/review-in-cubic-light.svg\"></picture></a>\n<a\nhref=\"https://www.cubic.dev/action/auto-fix/pr/andymai/brepkit/2852?returnTo=https%3A%2F%2Fgithub.com%2Fandymai%2Fbrepkit%2Fpull%2F2852&source=description\"\ntarget=\"_blank\" rel=\"noopener noreferrer\"\ndata-no-image-dialog=\"true\"><picture><source\nmedia=\"(prefers-color-scheme: dark)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-dark.svg\"><source\nmedia=\"(prefers-color-scheme: light)\"\nsrcset=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"><img\nalt=\"Turn on auto-fix\"\nsrc=\"https://www.cubic.dev/buttons/turn-on-auto-fix-light.svg\"></picture></a>\n\n<!-- End of auto-generated description by cubic. -->",
+          "timestamp": "2026-11-25T01:39:05Z",
+          "tree_id": "0b93ab0f5051fc93177758dd82ec6ee3dcd68f6a",
+          "url": "https://github.com/andymai/brepkit/commit/5169f0d00a226c1df66471a4dfe69cc35575c54b"
+        },
+        "date": 1795570962538,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 886877,
+            "range": "± 12904",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 940021,
+            "range": "± 9960",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9899,
+            "range": "± 238",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 528410,
+            "range": "± 10214",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 19732462,
+            "range": "± 80536",
             "unit": "ns/iter"
           }
         ]
