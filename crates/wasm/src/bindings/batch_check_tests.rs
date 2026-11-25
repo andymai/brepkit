@@ -890,15 +890,21 @@ fn a_circular_pattern_is_bounded_by_its_distance_from_the_axis() {
         &format!(r#"{{"op": "circularPattern", "args": {{"solid": {far}, "count": 4}}}}"#),
     );
     assert!(four["ok"].is_number(), "{four}");
+    let solids = k.topo.num_solids();
     let refused = run(
         &mut k,
         &format!(r#"{{"op": "circularPattern", "args": {{"solid": {far}, "count": 8}}}}"#),
+    );
+    assert_eq!(
+        k.topo.num_solids(),
+        solids,
+        "a refused pattern builds no copy"
     );
     assert!(
         refused["error"]
             .as_str()
             .unwrap_or_default()
-            .contains("must be at most"),
+            .contains("would not pass the load checks"),
         "{refused}"
     );
 }
@@ -954,4 +960,40 @@ fn a_composition_of_large_and_small_scales_is_built() {
     };
     let product = k.compose_transforms(scale(1e300), scale(1e-300)).unwrap();
     assert_eq!(product, scale(1.0));
+}
+
+/// A triangle on the plane with normal (1, 1, 1)/sqrt(3): its third copy
+/// along that normal, 6e299 out on each axis, keeps every vertex within the
+/// size limit, but its plane's distance is 1.04e300. The pattern is refused,
+/// and no copy of it is left in the arena.
+#[test]
+fn a_pattern_refused_for_its_last_plane_leaves_no_copy() {
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    let mut k = BrepKernel::new();
+    let face = k
+        .make_polygon(vec![1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0])
+        .unwrap();
+    let face_id = k.resolve_face(face).unwrap();
+    let shell = k.topo_mut().add_shell(Shell::new(vec![face_id]).unwrap());
+    let solid = k.topo_mut().add_solid(Solid::new(shell, vec![]));
+    let s = crate::handles::solid_id_to_u32(solid);
+    let before = (k.topo.num_solids(), k.topo.num_faces());
+    let spacing = 6e299 * 3.0_f64.sqrt() / 2.0;
+    for op in [
+        format!(
+            r#"{{"op": "linearPattern", "args": {{"solid": {s}, "dx": 1, "dy": 1, "dz": 1, "spacing": {spacing:e}, "count": 3}}}}"#
+        ),
+        format!(
+            r#"{{"op": "gridPattern", "args": {{"solid": {s}, "dirXx": 1, "dirXy": 1, "dirXz": 1, "dirYx": 0, "dirYy": 0, "dirYz": 1, "spacingX": {spacing:e}, "spacingY": 1, "countX": 3, "countY": 2}}}}"#
+        ),
+    ] {
+        let out = run(&mut k, &op);
+        let message = out["error"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("would not pass the load checks"),
+            "{op}: {out}"
+        );
+        assert_eq!((k.topo.num_solids(), k.topo.num_faces()), before, "{op}");
+    }
 }

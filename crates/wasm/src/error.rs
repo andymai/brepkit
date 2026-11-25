@@ -154,6 +154,44 @@ pub const MAX_COUNT: u32 = 1 << 16;
 /// brepjs are at most 16.
 pub const MAX_GRID_SIDE: u32 = 1 << 8;
 
+/// The highest degree a fit takes from JS.
+///
+/// A fit's work for each point grows with the square of its degree, and an
+/// interpolation's arrays grow with it. The fits in the tests have degree 3
+/// at most, and brepjs asks for degree 3 unless its caller gives another.
+/// This limit is the highest degree an elevation reaches in the engine
+/// (`MAX_ELEVATED_DEGREE`).
+pub const MAX_FIT_DEGREE: u32 = 25;
+
+/// The most `f64` cells a fit's working arrays hold: 2^22 cells, 32 MB.
+///
+/// A least-squares fit holds a cell for each pair of a point and a control
+/// point, and for each pair of control points. An interpolation holds a row
+/// of at most `4 * degree + 2` cells for each point. The largest fit in the
+/// tests, through 1,500 points at degree 3, holds 21,000 cells.
+pub const MAX_FIT_CELLS: usize = 1 << 22;
+
+/// Check that a fit's working arrays, `rows` rows of `cells` cells, hold at
+/// most [`MAX_FIT_CELLS`] cells, before the fit allocates them.
+///
+/// # Errors
+///
+/// Returns [`WasmError::InvalidInput`] if they would hold more.
+pub fn validate_fit_cells(rows: usize, cells: usize, what: &str) -> Result<(), WasmError> {
+    if rows
+        .checked_mul(cells)
+        .is_some_and(|total| total <= MAX_FIT_CELLS)
+    {
+        return Ok(());
+    }
+    Err(WasmError::InvalidInput {
+        reason: format!(
+            "{what} needs {rows} rows of {cells} cells for its fit, and the cells must be at \
+             most {MAX_FIT_CELLS}"
+        ),
+    })
+}
+
 /// Validate a count from JS against its limit `max` before it sizes an
 /// allocation, and give it as a `usize`.
 ///

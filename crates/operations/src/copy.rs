@@ -249,13 +249,40 @@ pub(crate) fn copy_shells(
 ///
 /// # Errors
 ///
-/// Returns an error if any topology lookup fails or the matrix is degenerate.
-#[allow(clippy::too_many_lines)]
+/// Returns an error if any topology lookup fails, the matrix is degenerate,
+/// or an image would not pass the load checks.
 pub fn copy_and_transform_solid(
     topo: &mut Topology,
     solid_id: SolidId,
     matrix: &brepkit_math::mat::Mat4,
 ) -> Result<SolidId, crate::OperationsError> {
+    let copy = read_moved_copy(topo, solid_id, matrix)?;
+    build_moved_copy(topo, copy)
+}
+
+/// A copy of a solid moved by a matrix, read but not built: each image in it
+/// passed the load checks.
+pub(crate) struct MovedCopy {
+    vertex_snaps: Vec<VertexSnap>,
+    edge_snaps: Vec<EdgeSnap>,
+    wire_snaps: Vec<WireSnap>,
+    shell_snaps: Vec<ShellSnap>,
+    stretch: f64,
+}
+
+/// The read phase of [`copy_and_transform_solid`]. A caller that builds
+/// several copies reads them all first, so that a copy that fails the load
+/// checks leaves no copy built.
+///
+/// # Errors
+///
+/// Returns an error if any topology lookup fails, the matrix is degenerate,
+/// or an image would not pass the load checks.
+pub(crate) fn read_moved_copy(
+    topo: &Topology,
+    solid_id: SolidId,
+    matrix: &brepkit_math::mat::Mat4,
+) -> Result<MovedCopy, crate::OperationsError> {
     use crate::transform::{checked_curve_image, checked_point_image, checked_surface_image};
 
     let inverse = crate::transform::checked_inverse(matrix)?;
@@ -358,6 +385,32 @@ pub fn copy_and_transform_solid(
         shell_snaps.push(ShellSnap { faces: face_snaps });
     }
 
+    Ok(MovedCopy {
+        vertex_snaps,
+        edge_snaps,
+        wire_snaps,
+        shell_snaps,
+        stretch: crate::transform::largest_stretch(matrix).unwrap_or(1.0),
+    })
+}
+
+/// The write phase of [`copy_and_transform_solid`]: it builds the copy that
+/// [`read_moved_copy`] read.
+///
+/// # Errors
+///
+/// Returns an error if a copied wire or shell is not valid.
+pub(crate) fn build_moved_copy(
+    topo: &mut Topology,
+    copy: MovedCopy,
+) -> Result<SolidId, crate::OperationsError> {
+    let MovedCopy {
+        vertex_snaps,
+        edge_snaps,
+        wire_snaps,
+        shell_snaps,
+        stretch,
+    } = copy;
     topo.reserve(
         vertex_snaps.len(),
         edge_snaps.len(),
@@ -370,7 +423,6 @@ pub fn copy_and_transform_solid(
         1,
     );
 
-    let stretch = crate::transform::largest_stretch(matrix).unwrap_or(1.0);
     let mut vertex_map: HashMap<usize, VertexId> = HashMap::new();
     for vsnap in &vertex_snaps {
         let new_vid = topo.add_vertex(Vertex::new(vsnap.point, vsnap.tol * stretch));

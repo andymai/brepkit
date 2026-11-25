@@ -96,15 +96,14 @@ pub fn well_formed_nurbs_surface(
 
 /// Parse flat `[x,y,z, ...]` coordinates into `Vec<Point3>`. Each point
 /// must be one [`crate::error::validate_point`] accepts.
-pub fn parse_points(coords: &[f64]) -> Result<Vec<Point3>, JsError> {
+pub fn parse_points(coords: &[f64]) -> Result<Vec<Point3>, WasmError> {
     if !coords.len().is_multiple_of(3) {
         return Err(WasmError::InvalidInput {
             reason: format!(
                 "coordinate array length must be a multiple of 3, got {}",
                 coords.len()
             ),
-        }
-        .into());
+        });
     }
     let points: Vec<Point3> = coords
         .chunks_exact(3)
@@ -121,12 +120,11 @@ pub fn parse_point_grid(
     coords: &[f64],
     rows: usize,
     cols: usize,
-) -> Result<Vec<Vec<Point3>>, JsError> {
+) -> Result<Vec<Vec<Point3>>, WasmError> {
     if rows == 0 || cols == 0 {
         return Err(WasmError::InvalidInput {
             reason: format!("rows and cols must be > 0, got {rows}x{cols}"),
-        }
-        .into());
+        });
     }
     let total = rows
         .checked_mul(cols)
@@ -140,8 +138,7 @@ pub fn parse_point_grid(
                 "expected {total} points ({rows}x{cols}), got {}",
                 points.len()
             ),
-        }
-        .into());
+        });
     }
     Ok(points.chunks(cols).map(<[Point3]>::to_vec).collect())
 }

@@ -362,18 +362,6 @@ impl Reach {
         Ok(reach)
     }
 
-    /// The reach of every face of `solid`, in every shell.
-    pub fn of_solid(
-        topo: &brepkit_topology::Topology,
-        solid: brepkit_topology::solid::SolidId,
-    ) -> Result<Self, WasmError> {
-        let mut reach = Self::default();
-        for face in brepkit_topology::explorer::solid_faces(topo, solid)? {
-            reach.add_face(topo, face)?;
-        }
-        Ok(reach)
-    }
-
     fn add_cube(&mut self, center: Point3, r: f64) {
         for k in 0..8 {
             let side = |bit: i32| if k & bit == 0 { -r } else { r };
@@ -482,57 +470,9 @@ impl Reach {
             what,
         )
     }
-
-    /// Check the copies of the shape turned about the axis through the
-    /// origin along the unit `axis` by each multiple of a `count`-th of a
-    /// turn, as a circular pattern places them. A turn keeps each point `p`
-    /// on the circle about the axis: its coordinate `i` at angle `t` is
-    /// `c_i + A_i cos(t - f_i)`, with `c` the circle's centre, and `A_i` and
-    /// `f_i` from the radial offset `u` and `a x u`. The copy nearest to
-    /// `f_i`, and the one nearest to the opposite angle, give the largest
-    /// and smallest values over the copies: the bound is exact, with no
-    /// copy checked twice.
-    pub fn check_copies(&self, axis: Vec3, count: u32, what: &str) -> Result<(), WasmError> {
-        let step = std::f64::consts::TAU / f64::from(count.max(1));
-        let gap = |angle: f64| angle - (angle / step).round() * step;
-        self.check_by(
-            |p| {
-                let along = (p - Point3::new(0.0, 0.0, 0.0)).dot(axis);
-                let center = Point3::new(0.0, 0.0, 0.0) + axis * along;
-                let u = p - center;
-                let v = axis.cross(u);
-                let (c, u, v) = (
-                    [center.x(), center.y(), center.z()],
-                    [u.x(), u.y(), u.z()],
-                    [v.x(), v.y(), v.z()],
-                );
-                let far: [f64; 3] = std::array::from_fn(|i| {
-                    let amplitude = u[i].hypot(v[i]);
-                    let phase = v[i].atan2(u[i]);
-                    let high = c[i] + amplitude * gap(phase).cos();
-                    let low = c[i] - amplitude * gap(phase + std::f64::consts::PI).cos();
-                    high.abs().max(low.abs())
-                });
-                Point3::new(far[0], far[1], far[2])
-            },
-            what,
-        )
-    }
 }
 
 impl BrepKernel {
-    /// Check that a copy of `solid` moved by `matrix` stays within the size
-    /// limit, before a pattern builds its copies: cheaper than building the
-    /// copy the engine would refuse.
-    fn check_moved_solid(
-        &self,
-        solid: brepkit_topology::solid::SolidId,
-        matrix: &Mat4,
-        what: &str,
-    ) -> Result<(), WasmError> {
-        Reach::of_solid(&self.topo, solid)?.check_moved(matrix, what)
-    }
-
     /// The checked body of `transformSolid` and the batch's `transform`.
     pub(crate) fn transform_solid_impl(
         &mut self,
@@ -608,13 +548,6 @@ impl BrepKernel {
         validate_positive(spacing, "spacing")?;
         validate_pattern_counts(&[count])?;
         let solid_id = self.resolve_solid(solid)?;
-        let reach = spacing * f64::from(count.saturating_sub(1));
-        let last = scaled_unit(direction)? * reach;
-        self.check_moved_solid(
-            solid_id,
-            &Mat4::translation(last.x(), last.y(), last.z()),
-            "the last copy",
-        )?;
         let compound = brepkit_operations::pattern::linear_pattern(
             self.topo_mut(),
             solid_id,
@@ -639,19 +572,6 @@ impl BrepKernel {
         validate_positive(spacings[1], "spacing_y")?;
         validate_pattern_counts(&counts)?;
         let solid_id = self.resolve_solid(solid)?;
-        let reach =
-            |k: usize| -> Result<Vec3, WasmError> {
-                Ok(scaled_unit(directions[k])?
-                    * (spacings[k] * f64::from(counts[k].saturating_sub(1))))
-            };
-        let (along_x, along_y) = (reach(0)?, reach(1)?);
-        for corner in [along_x, along_y, along_x + along_y] {
-            self.check_moved_solid(
-                solid_id,
-                &Mat4::translation(corner.x(), corner.y(), corner.z()),
-                "a corner copy",
-            )?;
-        }
         let compound = brepkit_operations::pattern::grid_pattern(
             self.topo_mut(),
             solid_id,
@@ -676,11 +596,6 @@ impl BrepKernel {
         validate_vector(axis, "the pattern's axis")?;
         validate_pattern_counts(&[count])?;
         let solid_id = self.resolve_solid(solid)?;
-        Reach::of_solid(&self.topo, solid_id)?.check_copies(
-            scaled_unit(axis)?,
-            count,
-            "a turned copy",
-        )?;
         let compound = brepkit_operations::pattern::circular_pattern(
             self.topo_mut(),
             solid_id,
