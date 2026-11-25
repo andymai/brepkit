@@ -1152,3 +1152,184 @@ fn a_vertex_past_a_tenth_of_its_edge_off_its_curve_keeps_its_tolerance() {
         assert_eq!(curve_misses(&topo, solid), 1, "{pose}");
     }
 }
+
+/// A plane face bounded by one closed edge on `curve` from `vertex`, in the
+/// plane of the curve with normal `normal`.
+fn face_on_closed_edge(
+    topo: &mut Topology,
+    curve: EdgeCurve,
+    vertex: Point3,
+    normal: Vec3,
+) -> (FaceId, VertexId) {
+    let v = topo.add_vertex(brepkit_topology::vertex::Vertex::new(vertex, 1e-7));
+    let edge = topo.add_edge(Edge::new(v, v, curve));
+    let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(edge, true)], true).unwrap());
+    let plane = FaceSurface::Plane {
+        normal,
+        d: normal.dot(Vec3::new(vertex.x(), vertex.y(), vertex.z())),
+    };
+    (topo.add_face(Face::new(wire, Vec::new(), plane)), v)
+}
+
+#[test]
+fn a_closed_edge_s_vertex_takes_its_gap_wherever_it_lies_on_the_loop() {
+    use brepkit_math::curves::Circle3D;
+    let off = 1e-3;
+    for (pose, at) in poses() {
+        let normal = linear_image(&at, Vec3::new(0.0, 0.0, 1.0));
+        let circle = Circle3D::new(at.mul_point(Point3::new(0.0, 0.0, 0.0)), normal, 1.0).unwrap();
+        // At the circle's own start, and half a turn round from it, where
+        // the middle of its parameters lies.
+        for t in [0.0, std::f64::consts::PI] {
+            let on = circle.evaluate(t);
+            let vertex = on + (on - circle.center()) * off;
+            let mut topo = Topology::new();
+            let (face, v) =
+                face_on_closed_edge(&mut topo, EdgeCurve::Circle(circle.clone()), vertex, normal);
+            assert_eq!(
+                cover_curve_end_gaps(&mut topo, &[face]).unwrap(),
+                1,
+                "{pose} {t}"
+            );
+            let tolerance = topo.vertex(v).unwrap().tolerance();
+            assert!(
+                (tolerance - (off + 1e-7)).abs() < 1e-12,
+                "{pose} {t}: tolerance {tolerance}"
+            );
+        }
+        // A closed B-spline round a 2 x 2 square, its vertex off the point
+        // at the middle of its parameters.
+        let loop_points = [
+            (1.0, 0.0),
+            (1.0, 1.0),
+            (-1.0, 1.0),
+            (-1.0, -1.0),
+            (1.0, -1.0),
+            (1.0, 0.0),
+        ]
+        .map(|(x, y)| at.mul_point(Point3::new(x, y, 0.0)));
+        let curve = brepkit_math::nurbs::NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0 / 3.0, 2.0 / 3.0, 1.0, 1.0, 1.0, 1.0],
+            loop_points.to_vec(),
+            vec![1.0; 6],
+        )
+        .unwrap();
+        let middle = curve.evaluate(0.5);
+        let centre = at.mul_point(Point3::new(0.0, 0.0, 0.0));
+        let vertex = middle + (middle - centre).normalize().unwrap() * off;
+        let gap = brepkit_math::nurbs::projection::project_point_to_curve(&curve, vertex, 1e-12)
+            .unwrap()
+            .distance;
+        assert!(gap > 0.5 * off, "{pose}: gap {gap}");
+        let mut topo = Topology::new();
+        let (face, v) =
+            face_on_closed_edge(&mut topo, EdgeCurve::NurbsCurve(curve), vertex, normal);
+        assert_eq!(
+            cover_curve_end_gaps(&mut topo, &[face]).unwrap(),
+            1,
+            "{pose}"
+        );
+        let tolerance = topo.vertex(v).unwrap().tolerance();
+        assert!(
+            (tolerance - (gap + 1e-7)).abs() < 1e-12,
+            "{pose}: gap {gap}, tolerance {tolerance}"
+        );
+    }
+}
+
+fn linear_image(at: &brepkit_math::mat::Mat4, v: Vec3) -> Vec3 {
+    let origin = at.mul_point(Point3::new(0.0, 0.0, 0.0));
+    at.mul_point(Point3::new(v.x(), v.y(), v.z())) - origin
+}
+
+#[test]
+fn a_vertex_past_one_edge_s_limit_keeps_its_tolerance_for_every_edge() {
+    // A prism on the triangle (0, 0), (1, 0), (1, 0.1): at (1, 0) the edge
+    // from the origin, 1 long, ends 0.02 below its vertex, and the edge on
+    // to (1, 0.1), 0.1 long, starts 0.015 below it, past a tenth of its
+    // length.
+    for (pose, at) in poses() {
+        let mut topo = Topology::new();
+        let corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 0.1)].map(|(x, y)| {
+            topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+                Point3::new(x, y, 0.0),
+                1e-7,
+            ))
+        });
+        let edges: Vec<_> = (0..3)
+            .map(|i| topo.add_edge(Edge::new(corners[i], corners[(i + 1) % 3], EdgeCurve::Line)))
+            .collect();
+        let wire = topo.add_wire(
+            Wire::new(
+                edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+                true,
+            )
+            .unwrap(),
+        );
+        let base = topo.add_face(Face::new(
+            wire,
+            Vec::new(),
+            FaceSurface::Plane {
+                normal: Vec3::new(0.0, 0.0, 1.0),
+                d: 0.0,
+            },
+        ));
+        let prism =
+            crate::extrude::extrude(&mut topo, base, Vec3::new(0.0, 0.0, 1.0), 1.0).unwrap();
+        crate::transform::transform_solid(&mut topo, prism, &at).unwrap();
+        let point = |topo: &Topology, x: f64, y: f64, z: f64| {
+            let p = at.mul_point(Point3::new(x, y, z));
+            let v = brepkit_topology::explorer::solid_vertices(topo, prism)
+                .unwrap()
+                .into_iter()
+                .find(|&v| (topo.vertex(v).unwrap().point() - p).length() < 1e-9)
+                .unwrap();
+            (v, topo.vertex(v).unwrap().point())
+        };
+        let (a, pa) = point(&topo, 0.0, 0.0, 0.0);
+        let (b, _) = point(&topo, 1.0, 0.0, 0.0);
+        let (c, pc) = point(&topo, 1.0, 0.1, 0.0);
+        let below = |depth: f64| at.mul_point(Point3::new(1.0, 0.0, -depth));
+        for (from, to, near_b) in [(a, b, below(0.02)), (b, c, below(0.015))] {
+            let edge = brepkit_topology::explorer::solid_edges(&topo, prism)
+                .unwrap()
+                .into_iter()
+                .find(|&e| {
+                    let edge = topo.edge(e).unwrap();
+                    [edge.start(), edge.end()] == [from, to]
+                        || [edge.start(), edge.end()] == [to, from]
+                })
+                .unwrap();
+            let other = if from == b { pc } else { pa };
+            let forward = topo.edge(edge).unwrap().start() == b;
+            let points = if forward {
+                vec![near_b, other]
+            } else {
+                vec![other, near_b]
+            };
+            let line = brepkit_math::nurbs::NurbsCurve::new(
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                points,
+                vec![1.0; 2],
+            )
+            .unwrap();
+            topo.edge_mut(edge)
+                .unwrap()
+                .set_curve(EdgeCurve::NurbsCurve(line));
+        }
+        assert_eq!(curve_misses(&topo, prism), 2, "{pose}");
+        let faces = brepkit_topology::explorer::solid_faces(&topo, prism).unwrap();
+        assert_eq!(
+            cover_curve_end_gaps(&mut topo, &faces).unwrap(),
+            0,
+            "{pose}"
+        );
+        assert!(
+            (topo.vertex(b).unwrap().tolerance() - 1e-7).abs() < 1e-20,
+            "{pose}"
+        );
+        assert_eq!(curve_misses(&topo, prism), 2, "{pose}");
+    }
+}

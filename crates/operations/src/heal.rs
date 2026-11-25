@@ -662,11 +662,12 @@ pub fn close_wire_gaps(
 /// control points, so a curve can end off its vertex by more than the
 /// file's tolerance, and a file has no vertex tolerance to cover it.
 ///
-/// A gap of a tenth of the distance between the edge's two vertices or more
-/// is not raised: such a vertex does not lie at its curve's end, and the
-/// edge is read on another part of its curve or is broken. A closed edge's
-/// gap is held to a tenth of the distance from its vertex to the middle of
-/// its curve.
+/// A gap of a tenth of the edge's size or more is not raised: such a vertex
+/// does not lie at its curve's end, and the edge is read on another part of
+/// its curve or is broken. An open edge's size is the distance between its
+/// two vertices, and a closed edge's is the size of its whole curve. A
+/// vertex with such a gap on one edge keeps its tolerance for all its
+/// edges, so that the gap is still reported.
 ///
 /// Returns the number of vertices whose tolerance was raised.
 ///
@@ -679,7 +680,9 @@ pub fn cover_curve_end_gaps(
     const PART_OF_EDGE: f64 = 0.1;
     let linear = Tolerance::new().linear;
     let mut seen = HashSet::new();
-    let mut gaps: HashMap<VertexId, f64> = HashMap::new();
+    // The largest gap at each vertex, or `None` once an edge's gap at it is
+    // past that edge's limit.
+    let mut gaps: HashMap<VertexId, Option<f64>> = HashMap::new();
     for &face in faces {
         for eid in brepkit_topology::explorer::face_edges(topo, face)? {
             if !seen.insert(eid) {
@@ -690,14 +693,10 @@ pub fn cover_curve_end_gaps(
                 continue;
             }
             let (start, end) = (edge.start(), edge.end());
-            let (a, b) = (topo.vertex(start)?.point(), topo.vertex(end)?.point());
-            let (ends, reach) = if start == end {
-                let (t0, t1) = edge.curve().domain_with_endpoints(a, b);
-                let middle = edge
-                    .curve()
-                    .evaluate_with_endpoints(f64::midpoint(t0, t1), a, b);
-                (vec![start], (middle - a).length())
+            let (ends, size) = if start == end {
+                (vec![start], closed_curve_size(edge.curve()))
             } else {
+                let (a, b) = (topo.vertex(start)?.point(), topo.vertex(end)?.point());
                 (vec![start, end], (b - a).length())
             };
             for vid in ends {
@@ -708,17 +707,41 @@ pub fn cover_curve_end_gaps(
                 let Some(gap) = found.first().and_then(|issue| issue.deviation) else {
                     continue;
                 };
-                if gap > topo.vertex(vid)?.tolerance() && gap < PART_OF_EDGE * reach {
-                    let entry = gaps.entry(vid).or_insert(0.0);
-                    *entry = entry.max(gap);
+                if gap <= topo.vertex(vid)?.tolerance() {
+                    continue;
                 }
+                let entry = gaps.entry(vid).or_insert(Some(0.0));
+                *entry = if gap < PART_OF_EDGE * size {
+                    entry.map(|largest| largest.max(gap))
+                } else {
+                    None
+                };
             }
         }
     }
+    let mut raised = 0;
     for (&vid, &gap) in &gaps {
-        topo.vertex_mut(vid)?.set_tolerance(gap + linear);
+        if let Some(gap) = gap {
+            topo.vertex_mut(vid)?.set_tolerance(gap + linear);
+            raised += 1;
+        }
     }
-    Ok(gaps.len())
+    Ok(raised)
+}
+
+/// The size of a closed curve as a whole, wherever its ends lie on it: a
+/// circle's diameter, an ellipse's longer axis, and the diagonal of a
+/// B-spline's control box.
+fn closed_curve_size(curve: &EdgeCurve) -> f64 {
+    match curve {
+        EdgeCurve::Line => 0.0,
+        EdgeCurve::Circle(circle) => 2.0 * circle.radius(),
+        EdgeCurve::Ellipse(ellipse) => 2.0 * ellipse.semi_major().max(ellipse.semi_minor()),
+        EdgeCurve::NurbsCurve(curve) => {
+            let hull = curve.aabb();
+            (hull.max - hull.min).length()
+        }
+    }
 }
 
 /// The control hull of a NURBS curve over `[t0, t1]` alone: the curve is
