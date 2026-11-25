@@ -351,22 +351,33 @@ fn find_edge_edge_crossings(
             )
         });
         let (t_a, t_b, pt) = refined.unwrap_or((hit.t_a, hit.t_b, hit.point));
-        // A touch where a closed curve's domain wraps reads at either end of
-        // it: one place, a whole turn apart in its parameter.
-        let apart = |t: f64, c: f64, curve: &EdgeCurve, data: &EdgeData| {
-            let gap = (t - c).abs();
-            if whole_turn(curve, data) {
-                let turn = gap.rem_euclid(std::f64::consts::TAU);
-                turn.min(std::f64::consts::TAU - turn)
-            } else {
-                gap
-            }
+        // One crossing read from two pairs of chords, or a touch where a
+        // closed curve's domain wraps read at either end of it, lies at one
+        // place on both edges. A parameter has any scale, so the places are
+        // compared in space: within the tolerance, or within four units in
+        // the last place of coordinates that size, below which rounding
+        // cannot tell two places apart.
+        let at_a = |t: f64| {
+            edge_a
+                .curve()
+                .evaluate_with_endpoints(t, ea.start_pos, ea.end_pos)
         };
+        let at_b = |t: f64| {
+            edge_b
+                .curve()
+                .evaluate_with_endpoints(t, eb.start_pos, eb.end_pos)
+        };
+        let one_place = |p: Point3, q: Point3| {
+            let size = [p.x(), p.y(), p.z(), q.x(), q.y(), q.z()]
+                .iter()
+                .fold(0.0_f64, |m, c| m.max(c.abs()));
+            (p - q).length() <= tol.linear.max(4.0 * f64::EPSILON * size)
+        };
+        let (on_a, on_b) = (at_a(t_a), at_b(t_b));
         let is_dup = crossings
             .iter()
             .any(|&(ct_a, ct_b, _): &(f64, f64, Point3)| {
-                apart(t_a, ct_a, edge_a.curve(), ea) < 1e-6
-                    && apart(t_b, ct_b, edge_b.curve(), eb) < 1e-6
+                one_place(on_a, at_a(ct_a)) && one_place(on_b, at_b(ct_b))
             });
         if !is_dup {
             crossings.push((t_a, t_b, pt));
@@ -3376,6 +3387,54 @@ mod tests {
                         );
                     }
                     assert_eq!(hits.len(), ys.len() + 1, "{hits:?}");
+                }
+            }
+        }
+    }
+
+    /// A whole-domain V of two lines that crosses a circle of radius 1e6
+    /// twice, 0.5 apart. On the circle the two crossings are 5e-7 apart in
+    /// angle, and on the V, whose domain is 2e-7 wide, 1e-7: two crossings
+    /// all the same, in each pose and read either way round.
+    #[test]
+    fn two_crossings_close_in_parameter_and_apart_in_space_stay_two() {
+        use brepkit_math::mat::Mat4;
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let poses = [
+            Mat4::identity(),
+            Mat4::translation(3.0, -2.0, 1.0) * Mat4::rotation_x(0.4) * Mat4::rotation_z(0.6),
+            Mat4::translation(1.0, 0.5, -2.0) * Mat4::scale(-1.0, 1.0, 1.0),
+        ];
+        let r = 1e6;
+        for pose in poses {
+            let at = |x: f64, y: f64| pose.mul_point(Point3::new(x, y, 0.0));
+            let (u, v) = (at(1.0, 0.0) - at(0.0, 0.0), at(0.0, 1.0) - at(0.0, 0.0));
+            let circle = Circle3D::with_axes(at(0.0, 0.0), u.cross(v), r, u, v).unwrap();
+            let poles = vec![at(r + 1.0, -0.5), at(r - 1.0, 0.0), at(r + 1.0, 0.5)];
+            let vee = NurbsCurve::new(
+                1,
+                vec![0.0, 0.0, 1e-7, 2e-7, 2e-7],
+                poles.clone(),
+                vec![1.0; 3],
+            )
+            .unwrap();
+            let mut topo = Topology::new();
+            let arc = add_edge(
+                &mut topo,
+                circle.evaluate(-1e-3),
+                circle.evaluate(1e-3),
+                EdgeCurve::Circle(circle),
+            );
+            let other = add_edge(&mut topo, poles[0], poles[2], EdgeCurve::NurbsCurve(vee));
+            for (ea, eb) in [(arc, other), (other, arc)] {
+                let hits = crossings(&topo, ea, eb);
+                assert_eq!(hits.len(), 2, "{hits:?}");
+                for y in [-0.25, 0.25] {
+                    let crossing = at(r, y);
+                    assert!(
+                        hits.iter().any(|h| (h.2 - crossing).length() < 1e-6),
+                        "{y}: {hits:?}"
+                    );
                 }
             }
         }
