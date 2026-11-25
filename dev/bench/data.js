@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795607198009,
+  "lastUpdate": 1795611287028,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -78677,6 +78677,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27498271,
             "range": "± 168195",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9da5c42db0ce5d2a8804ad6be59d8949b2246d0a",
+          "message": "fix(algo): split a face by two curves through the same ends and middle (#2871)\n\n## Summary\n\n#2853 reported a plate split by three sections with the same ends. The\nfirst is a circle arc of radius 2 about (5, 5) from −60° to 60°. The\nothers are an ellipse arc through its three points, and the chord. On\nmain, the split gives 2 regions, 2.4567 and 97.5433. The truth is 4: the\nellipse segment and two thin lenses that touch at (7, 5).\n\nWith this change, the split gives 4 regions, 2.39930, 0.0287200 twice,\nand 97.54326. Each is within 2.9e-14 of the closed form in 3 poses. An\nimprint of the same curves on a box top gives 4 top faces, and the solid\nis valid. The pose sweep, the truth audit and random sweep seeds 1 to 3\ngive the same output as main.\n\nFixes #2853.\n\n## The change\n\nFour faults in a row lost the ellipse:\n\n- **First dedup.** It merged sections whose ends and middles were within\n1e-6. It now merges only where `same_section_curve` holds the two\ntogether along their whole length.\n- **Wire walker.** It skipped a candidate that left the arriving edge's\nstart within 0.1 rad of it, as if it were the reverse edge. The circle\nand the ellipse leave their shared ends 0.08 rad apart. A candidate is\nnow the reverse only in one of three cases. It is the arriving edge's\ntwin, it leaves along the same direction within 1e-9 rad, or it is\nproved the same line, circle or ellipse. B-splines keep the angle test.\n- **Touch point.** Neither curve had a vertex at (7, 5), so the two\nlenses read as one region pinched at a point. The new\n`edge_splitting::section_meeting_points` finds where two sections on a\nplane face meet inside both, and splits both there.\n- **How the finder proves a meeting.** It reads one conic along its\nparameter. There, its distance from the other curve is a trigonometric\nwave of degree two. Bounds from the wave's amplitudes prove each span\nclear, or find its one nearest point.\n- Each stretch proved within the tolerance is one junction. Two\nstretches merge only where the gap between them is proved within it.\n- A pair is skipped only where the two conics are proved within the\ntolerance along their whole length.\n  - A pair it cannot settle within 4096 spans is refused.\n- A pair not in one plane within a quarter of the tolerance is left to\nits ends. A pair whose plane the rounding hides is refused.\n- The wave is read about the arc's middle parameter, and only near the\nother section's trimmed range.\n- Two segments are read in a frame at the first one's start, so a part\nfar from the origin does not hide a gap.\n  - Pairs with a B-spline section stay out of the finder.\n- A point is on an arc's trim if it lies within the tolerance of an end,\nby length. Elsewhere, its foot's wrapped parameter must lie strictly\ninside the trim. A fixed slack in the parameter had let an arc of radius\n1e6 meet a circle 2.5 tolerances past its end.\n- A conic arc within a quarter of the tolerance of its chord is read as\nthat chord, with a proved bound. So an arc of an ellipse whose centre\nlies 1e8 off is settled without its centre's rounding.\n- **Plane loop shortcut.** It takes internal loops only where the finder\nproves every pair apart. Where a pair is not settled, the face goes to\nthe general splitter.\n- **Piece ids.** Split pieces with the same ends shared one source id,\nso a circle piece and an ellipse piece became one edge. A piece cut from\none source between the same ends keeps that source's id. A half-turn\nsection and its twin read the arc from the stored start. Both are split\nat the foot of the split point, so they split alike. Pieces from\ndifferent sources share an id only where `same_section_curve` proves\nthem one curve.\n- **Half turns.** A half turn reads counter-clockwise from its stored\nstart in its pcurve, in `same_section_curve` and in the on-arc test. So\ntwo halves with the same ends stay two, and one half given on two frames\nis one arc.\n- **A circle and a round ellipse.** `same_section_curve` reads a circle\nagainst an ellipse as an ellipse with equal semi-axes. So the two are\none curve where they match.\n\n## Tests\n\n- `a_circle_and_an_ellipse_through_three_points_split_a_plate_in_four`\nchecks the 4 areas against the closed form in 3 poses.\n- `a_circle_and_an_ellipse_touching_imprint_four_faces_on_a_plate`\nimprints the curves on a box top in 3 poses. It checks the top-face\nareas, validity, a closed shell and the volume of 200.\n- Five finder tests run in 3 poses:\n  - a touch nearer an arc's start than the first of 64 samples;\n  - circles 2e-7 apart;\n  - a circle on axes of length 2;\n  - concentric ellipses turned a quarter;\n  - an end point off both curves near a touch.\n- Further finder tests run in 3 poses:\n  - ellipses that cross twice near a long-axis end;\n  - circles 50 tolerances apart;\n  - large ellipses turned a little;\n  - ellipses apart along one axis that touch at the other;\n  - unit circles 1 tolerance apart, which are refused;\n- an arc and a segment whose line touches the arc's circle outside the\nsegment;\n  - arcs whose circles touch outside one of them;\n- a flat arc of an ellipse centred 1e8 off, crossing a line, and the\nsame arc 2 tolerances from a line.\n- `loops_that_cross_beside_a_pair_not_settled_are_refused` covers three\nloops, one pair crossing and one pair not settled.\n- Three more tests cover a piece and its twin on a rational quadratic,\nand segments at 1e10 one ulp apart. The third covers a flat arc beside a\nbowed B-spline.\n- `an_arc_does_not_meet_another_past_its_end` covers radii from 1e-3 to\n1e9, offsets 0 and 1e8, and trim ends at the seam.\n`a_half_turn_section_and_its_twin_split_alike` covers 60 half-turn\ncases. Two more cover an eccentric ellipse arc touched far from its\nends, and crossings just inside and past its ends.\n- `half_turn_arcs_on_a_plate.rs` imprints half-turn circle and ellipse\narcs with their chords at 5 start angles in 3 poses. It covers each\nalone, split by a line at its middle, and around a small disc. It checks\nthe areas, that each built arc edge's midpoint lies on its own half,\nvalidity, a closed mesh and the volume.\n- Further tests cover two half turns with the same ends, on one half and\non two. Others cross segments and flat arcs just past an end.\n- `a_circle_and_a_round_ellipse_on_its_frame_are_one_curve` checks the\nplate regions for matching and disjoint trims.\n- `an_arc_square_to_the_plate_meets_no_line_across_its_plane` covers an\narc whose pcurve is a chord, against a line along the arc's normal.\n- brepkit-algo (728), the boolean lib tests (233) and the whole\nbrepkit-io set (630) pass. All brepkit-operations and brepkit-io tests\npass (3328, 28 skipped). A probe over that run found no face split that\nthe finder refuses.\n\n## Still open\n\n- A rod and an elliptic prism whose walls touch along a line fail or\nlose volume in booleans, on main as well (#2868). So no boolean reaches\nthis fix yet.\n- `validate_solid` takes 0.41 s on the imprinted plate (#2869).\n- Other dedups merge edges by their ends or by samples (#2867).\n- The meeting finder skips boundary edges, B-splines, closed curves,\nhalf-turn arcs and off-plane sections, and cannot settle arcs of huge\nellipses (#2870).\n- The face splitter cannot yet form the regions between near-coincident\ncurves, so those finder tests check the meetings only (#2875).\n- `evaluate_open_edge_at_t` reads a half-turn arc from its ends, so\neither half can come back. No built edge reaches it today (#2881).\n- An ellipse segment with a circle hole inside is refused, on main as\nwell (#2882).",
+          "timestamp": "2026-11-25T12:51:10Z",
+          "tree_id": "0229a50fdbe38315ad18f0a83bf8dc8a7473745f",
+          "url": "https://github.com/andymai/brepkit/commit/9da5c42db0ce5d2a8804ad6be59d8949b2246d0a"
+        },
+        "date": 1795611278242,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 715586,
+            "range": "± 13527",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 757277,
+            "range": "± 15730",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8571,
+            "range": "± 221",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 447972,
+            "range": "± 5584",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 16885330,
+            "range": "± 853066",
             "unit": "ns/iter"
           }
         ]
