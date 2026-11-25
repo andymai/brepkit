@@ -47,6 +47,12 @@ const H: f64 = 6.0;
 /// The polygon `points` in `z = 0`, wound counter-clockwise, extruded `H`
 /// up `z`.
 fn prism(topo: &mut Topology, points: &[Point3]) -> SolidId {
+    prism_of_height(topo, points, H)
+}
+
+/// The polygon `points` in `z = 0`, wound counter-clockwise, extruded `h`
+/// up `z`.
+fn prism_of_height(topo: &mut Topology, points: &[Point3], h: f64) -> SolidId {
     let ids: Vec<_> = points
         .iter()
         .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
@@ -64,7 +70,7 @@ fn prism(topo: &mut Topology, points: &[Point3]) -> SolidId {
         vec![],
         FaceSurface::Plane { normal, d: 0.0 },
     ));
-    extrude(topo, face, normal, H).unwrap()
+    extrude(topo, face, normal, h).unwrap()
 }
 
 /// The edge of `solid` from `a` to `b` (either way round).
@@ -245,6 +251,36 @@ fn rounds_meeting_at_a_corner_not_square_are_mitred() {
                 "{case}: lost {lost}, the mitred rounds {removed}"
             );
             assert_edges_on_faces(&topo, result.solid, &case);
+        }
+    }
+}
+
+/// A kite prism exactly twice the radius high, the two edges at its corner
+/// rounded along both its top and its bottom: each wall beside the corner
+/// is a full round, its top and bottom rounds' contacts lying on each other
+/// at half height, so the walls go. The top and bottom mitres pinch at the
+/// same point, the middle of the corner's vertical edge, which goes too;
+/// each rim's pair of rounds takes off what it takes off alone.
+#[test]
+fn a_kite_twice_the_radius_high_mitres_its_full_rounds() {
+    for theta_deg in [75.0_f64, 120.0, 140.0, 179.6] {
+        let theta = theta_deg.to_radians();
+        for r in [1.0, 2.0] {
+            let case = format!("theta = {theta_deg}, r = {r}");
+            let mut topo = Topology::new();
+            let [v, b, _, a] = kite(theta, L);
+            let solid = prism_of_height(&mut topo, &kite(theta, L), 2.0 * r);
+            let up = Vec3::new(0.0, 0.0, 2.0 * r);
+            let edges = [
+                edge_between(&topo, solid, v, a),
+                edge_between(&topo, solid, v, b),
+                edge_between(&topo, solid, v + up, a + up),
+                edge_between(&topo, solid, v + up, b + up),
+            ];
+            let before = solid_volume(&topo, solid, 1e-3).unwrap();
+            let volume = before - 2.0 * kite_rounds(theta, L, r);
+            // Six faces, the four rounds added and the two walls gone.
+            assert_rounds_to(&mut topo, solid, &edges, r, 8, volume, &case);
         }
     }
 }
