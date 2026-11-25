@@ -584,4 +584,36 @@ mod tests {
         );
         assert_eq!(entity_counts(&topo), before_eight);
     }
+
+    /// A pattern along a direction of any finite size: squared, a component
+    /// of 1e200 overflows and one of 1e-200 underflows.
+    #[test]
+    fn a_pattern_along_a_direction_of_any_finite_size_builds() {
+        for s in [1e200, 1e-200] {
+            let mut topo = Topology::new();
+            let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+            let along = Vec3::new(s, 0.0, 0.0);
+            let line = linear_pattern(&mut topo, solid, along, 2.0, 3).unwrap();
+            let last = topo.compound(line).unwrap().solids()[2];
+            let bb = crate::measure::solid_bounding_box(&topo, last).unwrap();
+            assert!((bb.min.x() - 4.0).abs() < 1e-12, "{s}: {bb:?}");
+            let grid = grid_pattern(
+                &mut topo,
+                solid,
+                along,
+                Vec3::new(0.0, s, 0.0),
+                2.0,
+                2.0,
+                2,
+                2,
+            );
+            assert_eq!(
+                topo.compound(grid.unwrap()).unwrap().solids().len(),
+                4,
+                "{s}"
+            );
+            let ring = circular_pattern(&mut topo, solid, Vec3::new(0.0, 0.0, s), 4).unwrap();
+            assert_eq!(topo.compound(ring).unwrap().solids().len(), 4, "{s}");
+        }
+    }
 }

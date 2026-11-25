@@ -36,6 +36,18 @@ pub type Vec3 = Vector<3>;
 // Shared methods (all dimensions)
 // ---------------------------------------------------------------------------
 
+/// The least sum of squares that [`Vector::length`] takes as it comes,
+/// 2^-1000: each larger square is normal, and the root keeps its digits.
+const SQUARES_LOW: f64 = f64::from_bits(23 << 52);
+
+/// 2^600: a vector whose squares underflow is scaled up by it, which
+/// changes no digit.
+const SCALE_UP: f64 = f64::from_bits(1623 << 52);
+
+/// 2^-600: a vector whose squares overflow is scaled down by it, which
+/// changes no digit of a component large enough to count in its length.
+const SCALE_DOWN: f64 = f64::from_bits(423 << 52);
+
 impl<const N: usize> Vector<N> {
     /// Squared Euclidean length (avoids a sqrt).
     #[must_use]
@@ -49,26 +61,59 @@ impl<const N: usize> Vector<N> {
         sum
     }
 
-    /// Euclidean length.
+    /// Euclidean length, at every finite size: a vector whose squares
+    /// overflow or underflow is measured at a power of two of its size. It
+    /// is infinite only for a length past the largest float.
     #[must_use]
     pub fn length(self) -> f64 {
-        self.length_squared().sqrt()
+        let sum = self.length_squared();
+        if sum.is_finite() && sum >= SQUARES_LOW {
+            return sum.sqrt();
+        }
+        self.rescaled()
+            .map_or_else(|| sum.sqrt(), |(v, back)| v.length_squared().sqrt() * back)
     }
 
-    /// Return a unit-length vector in the same direction.
+    /// The vector times a power of two that brings its largest component
+    /// near one, and the power of two that undoes it; `None` for a zero
+    /// vector or a component that is not finite.
+    fn rescaled(self) -> Option<(Self, f64)> {
+        if !self.0.iter().all(|c| c.is_finite()) {
+            return None;
+        }
+        let most = self.0.iter().fold(0.0_f64, |m, c| m.max(c.abs()));
+        if most <= 0.0 {
+            return None;
+        }
+        let (by, back) = if most > 1.0 {
+            (SCALE_DOWN, SCALE_UP)
+        } else {
+            (SCALE_UP, SCALE_DOWN)
+        };
+        Some((Self(std::array::from_fn(|i| self.0[i] * by)), back))
+    }
+
+    /// Return a unit-length vector in the same direction. A vector of any
+    /// finite, non-zero size has one: one whose squares overflow or
+    /// underflow is scaled by a power of two first.
     ///
     /// # Errors
     ///
-    /// Returns [`MathError::ZeroVector`] if the vector is zero, has
-    /// denormalized length (< [`f64::MIN_POSITIVE`]), or has overflowed
-    /// length (non-finite).
+    /// Returns [`MathError::ZeroVector`] if the vector is zero or a
+    /// component is not finite.
     pub fn normalize(self) -> Result<Self, MathError> {
-        let len = self.length();
+        let sum = self.length_squared();
+        let v = if sum.is_finite() && sum >= SQUARES_LOW {
+            self
+        } else {
+            self.rescaled().ok_or(MathError::ZeroVector)?.0
+        };
+        let len = v.length_squared().sqrt();
         if !len.is_finite() || len < f64::MIN_POSITIVE {
             return Err(MathError::ZeroVector);
         }
         let inv = 1.0 / len;
-        Ok(Self(std::array::from_fn(|i| self.0[i] * inv)))
+        Ok(Self(std::array::from_fn(|i| v.0[i] * inv)))
     }
 }
 
@@ -374,6 +419,66 @@ impl_serde_for_array_newtype!(Position, "Position");
 mod tests {
     use super::*;
 
+    /// A vector's length and direction hold at every finite size: squared,
+    /// a component of 1e200 overflows and one of 1e-200 underflows.
+    #[test]
+    fn a_vector_of_any_finite_size_has_a_length_and_a_direction() {
+        let sizes = [
+            1e200,
+            1e-200,
+            1e-310,
+            f64::MIN_POSITIVE,
+            1.7e308,
+            1e155,
+            1e-160,
+        ];
+        for s in sizes {
+            for (v, length) in [
+                (Vec3::new(s, 0.0, 0.0), s),
+                (Vec3::new(0.0, -s, 0.0), s),
+                (Vec3::new(0.0, 0.0, s), s),
+            ] {
+                assert_eq!(v.length().to_bits(), length.to_bits(), "{v:?}");
+                let unit = v.normalize().unwrap();
+                assert!((unit.length() - 1.0).abs() < 1e-15, "{v:?} gives {unit:?}");
+                assert!(
+                    (unit.dot(v) - v.length()).abs() <= 1e-15 * v.length(),
+                    "{v:?}"
+                );
+            }
+            let tilt = Vec3::new(3.0 * s / 4.0, 0.0, s);
+            if (3.0 * s / 4.0).is_normal() {
+                let unit = tilt.normalize().unwrap();
+                assert!(
+                    (unit.x() - 0.6).abs() < 1e-15 && (unit.z() - 0.8).abs() < 1e-15,
+                    "{s}: {unit:?}"
+                );
+                assert!(
+                    (tilt.length() / (1.25 * s) - 1.0).abs() < 1e-15,
+                    "{s}: {}",
+                    tilt.length()
+                );
+            }
+            let flat = Vec2::new(0.0, s);
+            assert_eq!(flat.length().to_bits(), s.to_bits());
+            assert!((flat.normalize().unwrap().y() - 1.0).abs() < 1e-15);
+        }
+        let past = Vec3::new(1.7e308, 1.7e308, 0.0);
+        assert!(past.length().is_infinite());
+        let unit = past.normalize().unwrap();
+        assert!(
+            (unit.x() - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-15,
+            "{unit:?}"
+        );
+        for bad in [
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(f64::NAN, 1.0, 0.0),
+            Vec3::new(f64::INFINITY, 1.0, 0.0),
+        ] {
+            assert!(bad.normalize().is_err(), "{bad:?}");
+        }
+    }
+
     #[test]
     fn vec3_dot() {
         let a = Vec3::new(1.0, 2.0, 3.0);
@@ -404,11 +509,16 @@ mod tests {
         assert!(v.normalize().is_err());
     }
 
+    /// A vector with a subnormal length still has a direction, and no
+    /// component of it is infinite.
     #[test]
-    fn vec3_denormal_normalize_fails() {
-        // Denormalized-length vector should be rejected (A1 fix)
+    fn vec3_denormal_normalize_gives_a_unit_vector() {
         let v = Vec3::new(1e-320, 0.0, 0.0);
-        assert!(v.normalize().is_err());
+        let unit = v.normalize().unwrap();
+        assert!(
+            (unit.x() - 1.0).abs() < 1e-15 && unit.y().abs() < 1e-15,
+            "{unit:?}"
+        );
     }
 
     #[test]

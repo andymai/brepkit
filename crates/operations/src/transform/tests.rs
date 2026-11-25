@@ -1360,11 +1360,11 @@ fn patch_face(topo: &mut Topology, z: f64) -> FaceId {
     brepkit_topology::builder::make_nurbs_face(topo, surface, 1e-7).unwrap()
 }
 
-/// Three patches, the third with a circular hole: under a scale of 1e200
-/// the patches' images are well formed, but the circle's cannot be built
-/// (its axes square past range). The transform is refused, and nothing it
-/// would have moved has moved: no surface, vertex or curve, though the
-/// patches' images were the first ones built.
+/// Three patches, the third with a circular hole of radius 1e101: under a
+/// scale of 1e200 the patches' images are well formed, but the circle's
+/// would reach 1e301, past the size limit. The transform is refused, and
+/// nothing it would have moved has moved: no surface, vertex or curve,
+/// though the patches' images were the first ones built.
 #[test]
 fn a_transform_that_fails_on_its_third_face_leaves_every_face_unchanged() {
     use brepkit_math::vec::{Point3, Vec3};
@@ -1385,7 +1385,7 @@ fn a_transform_that_fails_on_its_third_face_leaves_every_face_unchanged() {
         &mut topo,
         Point3::new(0.5, 0.5, 2.0),
         Vec3::new(0.0, 0.0, 1.0),
-        0.25,
+        1e101,
         1e-7,
     )
     .unwrap();
@@ -1449,4 +1449,60 @@ fn a_move_computes_each_image_once() {
         "{faces} faces, {} edges",
         edges.len()
     );
+}
+
+/// A box of size 2 under a uniform scale of 1e200 and of 1e-200, upright,
+/// turned and mirrored. Its normals map through the inverse transpose, whose
+/// entries are near 1e-200 and 1e200. The volume of 8e600 or 8e-600 is
+/// outside a float, so the box is checked at its image (each vertex at the
+/// matrix times its old place, each plane normal of unit length) and then
+/// moved back, where it measures 8 and is valid.
+#[test]
+fn a_box_scaled_by_1e200_or_1e_minus_200_keeps_its_faces_and_volume() {
+    use crate::primitives::make_box;
+    let poses = [
+        Mat4::identity(),
+        Mat4::rotation_z(0.7) * Mat4::rotation_x(-1.1),
+        Mat4::rotation_y(0.4) * Mat4::scale(-1.0, 1.0, 1.0),
+    ];
+    for s in [1e200, 1e-200] {
+        for pose in poses {
+            let mut topo = Topology::new();
+            let solid = make_box(&mut topo, 2.0, 2.0, 2.0).unwrap();
+            let vertices = brepkit_topology::explorer::solid_vertices(&topo, solid).unwrap();
+            let before: Vec<_> = vertices
+                .iter()
+                .map(|&v| topo.vertex(v).unwrap().point())
+                .collect();
+            let m = pose * Mat4::scale(s, s, s);
+            transform_solid(&mut topo, solid, &m).unwrap();
+            for (&v, &p) in vertices.iter().zip(&before) {
+                let want = m.mul_point(p);
+                let got = topo.vertex(v).unwrap().point();
+                assert!(
+                    (got - want).length() <= 1e-12 * 2.0 * s,
+                    "scale {s}: {got:?} for {want:?}"
+                );
+            }
+            for fid in brepkit_topology::explorer::solid_faces(&topo, solid).unwrap() {
+                let FaceSurface::Plane { normal, .. } = topo.face(fid).unwrap().surface() else {
+                    panic!("a box face is a plane");
+                };
+                assert!(
+                    (normal.length() - 1.0).abs() < 1e-12,
+                    "scale {s}: {normal:?}"
+                );
+            }
+            let back = Mat4::scale(1.0 / s, 1.0 / s, 1.0 / s) * pose.inverse().unwrap();
+            transform_solid(&mut topo, solid, &back).unwrap();
+            let volume = crate::measure::solid_volume(&topo, solid, 0.01).unwrap();
+            assert!((volume - 8.0).abs() < 1e-9, "scale {s}: volume {volume}");
+            assert!(
+                crate::validate::validate_solid(&topo, solid)
+                    .unwrap()
+                    .is_valid(),
+                "scale {s}"
+            );
+        }
+    }
 }
