@@ -1346,12 +1346,15 @@ fn refine(
         }
         if det.abs() <= 1e-12 * a11 * a22 {
             return if r.length() <= tol {
-                let (ta, tb, point) = touch_point((ca, ea), (cb, eb), (ta, tb), tol)
-                    .unwrap_or_else(|| {
+                // Stalled on parallel tangents: a touch proved about here
+                // is a meeting; otherwise the curves run along each other.
+                touch_point((ca, ea), (cb, eb), (ta, tb), tol).map_or_else(
+                    || {
                         let (pa, pb) = (at_a(ta), at_b(tb));
-                        (ta, tb, pa + (pb - pa) * 0.5)
-                    });
-                Refined::Along(ta, tb, point)
+                        Refined::Along(ta, tb, pa + (pb - pa) * 0.5)
+                    },
+                    |(ta, tb, point)| Refined::Met(ta, tb, point),
+                )
             } else {
                 Refined::Apart
             };
@@ -1364,12 +1367,17 @@ fn refine(
         (ta, tb) = (next_a, next_b);
     }
     let (pa, pb) = (at_a(ta), at_b(tb));
-    if (pa - pb).length() <= tol {
-        let (ta, tb, point) = touch_point((ca, ea), (cb, eb), (ta, tb), tol).unwrap_or((
-            ta,
-            tb,
-            pa + (pb - pa) * 0.5,
-        ));
+    let gap = (pa - pb).length();
+    if gap <= tol {
+        // A crossing the search resolved stays where it is; only a reading
+        // that stopped short of one, or on a touch, is polished.
+        let resolved = gap <= 1e-3 * tol && crosses_at((ca, ea), (cb, eb), (ta, tb), tol);
+        let polished = if resolved {
+            None
+        } else {
+            touch_point((ca, ea), (cb, eb), (ta, tb), tol)
+        };
+        let (ta, tb, point) = polished.unwrap_or((ta, tb, pa + (pb - pa) * 0.5));
         Refined::Met(ta, tb, point)
     } else {
         Refined::Apart
@@ -1390,22 +1398,22 @@ fn whole_turn(curve: &EdgeCurve, data: &EdgeData, tol: f64) -> bool {
 /// meet, they cross rather than touch.
 const TOUCH_SIN: f64 = 1e-3;
 
-/// How many points between a reading and the touch that would stand for it
-/// are read to make sure the curves keep together between them.
-const TOUCH_PATH_SAMPLES: u32 = 32;
-
 /// Where two curves that meet within `tol` near `(ta, tb)`, along all but
-/// parallel tangents, touch: the parameter of `a` where its tangent turns
-/// parallel to `b`'s at the point of `b` nearest it.
+/// parallel tangents, touch: their nearest points, where the separation
+/// between them stands square to both tangents.
 ///
 /// Curves that touch keep within the tolerance of each other over a run of
 /// both, so the point where a search first finds them that near can lie
 /// anywhere along that run, and two searches of one touch can place it
-/// apart. Across the touch the part of `a`'s tangent square to `b`'s
-/// changes sign, a simple root found by bisection. `None` where it keeps
-/// one sign over the bracket (a shallow crossing), or where the curves
-/// stand farther apart than `tol` at the root (two crossings close
-/// together, not a touch).
+/// apart. The touch is read only inside an interval about the seed over
+/// which the curves are proved within the tolerance, by a bound over their
+/// Bezier pieces (see [`proved_within`]), so it stands for the same
+/// contact as the seed. In that interval it is the root of the rate at
+/// which the curves part along `a`, found by bisection, and must be a least
+/// distance. `None` where the tangents at the seed are not all but
+/// parallel, where no interval about the seed is proved, where the curves
+/// keep within the tolerance out to the edge's ends or over a whole turn
+/// (they run along each other), or where the rate keeps one sign there.
 fn touch_point(
     (ca, ea): (&EdgeCurve, &EdgeData),
     (cb, eb): (&EdgeCurve, &EdgeData),
@@ -1421,7 +1429,6 @@ fn touch_point(
     // A closed circle or ellipse runs on past the ends of its domain: a
     // touch at the point where its domain wraps lies inside either end.
     let (turn_a, turn_b) = (whole_turn(ca, ea, tol), whole_turn(cb, eb, tol));
-    let keep_b = |s: f64| if turn_b { s } else { s.clamp(lo_b, hi_b) };
     let wrap = |t: f64, lo: f64, turn: bool| {
         if turn {
             lo + (t - lo).rem_euclid(std::f64::consts::TAU)
@@ -1433,109 +1440,317 @@ fn touch_point(
     if da.cross(db).length() > TOUCH_SIN * da.length() * db.length() {
         return None;
     }
-    // The point of `b` nearest `a` at `t`, from `s`. A circle's tangent is
-    // of unit length, so the step reads `b`'s derivative off its points.
-    let step_b = 1e-6 * (hi_b - lo_b);
-    let foot = |t: f64, mut s: f64| {
-        let p = at_a(t);
-        for _ in 0..16 {
-            let (s0, s1) = if turn_b {
-                (s - step_b, s + step_b)
+    let foot = |t: f64, s: f64| nearest_on((cb, eb), at_a(t), s, turn_b);
+    // The interval about the seed, from a millionth of the edge each way,
+    // each side reaching twice as far again while the curves are proved
+    // within the tolerance over what it adds.
+    let proved = |lo: f64, hi: f64| {
+        let mut budget = PROOF_PIECES;
+        proved_within(
+            ((ca, ea), (cb, eb)),
+            ((lo, hi), (foot(lo, tb), foot(hi, tb))),
+            tol,
+            &foot,
+            &mut budget,
+        )
+    };
+    // Curves within the tolerance at nine points spread over `a` run along
+    // each other, and have no one point of touch; refusing to polish keeps
+    // the reading, so these few samples need prove nothing.
+    let gap_at = |t: f64| (at_a(t) - at_b(foot(t, tb))).length();
+    if (0..=8).all(|k| gap_at(lo_a + (hi_a - lo_a) * f64::from(k) / 8.0) <= tol) {
+        return None;
+    }
+    let keep_a = |t: f64| if turn_a { t } else { t.clamp(lo_a, hi_a) };
+    let first = 1e-6 * (hi_a - lo_a);
+    let (mut lo, mut hi) = (keep_a(ta - first), keep_a(ta + first));
+    if !proved(lo, hi) {
+        return None;
+    }
+    let (mut below, mut above) = (first, first);
+    let (mut open_lo, mut open_hi) = (true, true);
+    while open_lo || open_hi {
+        if open_lo {
+            let next = keep_a(ta - 2.0 * below);
+            if next < lo && proved(next, lo) {
+                (lo, below) = (next, 2.0 * below);
             } else {
-                ((s - step_b).max(lo_b), (s + step_b).min(hi_b))
-            };
-            let d = (at_b(s1) - at_b(s0)) * (1.0 / (s1 - s0));
-            let len2 = d.dot(d);
-            if len2 <= 0.0 {
-                break;
+                open_lo = false;
             }
-            let next = keep_b(s + (p - at_b(s)).dot(d) / len2);
-            if (next - s).abs() <= 1e-15 * (hi_b - lo_b) {
-                s = next;
-                break;
+        }
+        if open_hi {
+            let next = keep_a(ta + 2.0 * above);
+            if next > hi && proved(hi, next) {
+                (hi, above) = (next, 2.0 * above);
+            } else {
+                open_hi = false;
             }
-            s = next;
-        }
-        s
-    };
-    // The part of `a`'s tangent at `t` square to `b`'s at its foot.
-    let square = |t: f64, s: f64| {
-        let (x, y) = (tan_a(t), tan_b(s));
-        let len2 = y.dot(y);
-        if len2 <= 0.0 {
-            return x;
-        }
-        x - y * (x.dot(y) / len2)
-    };
-    // The bracket about the seed, from a thousandth of the edge each way,
-    // doubled until the curves stand farther apart than `tol` at both its
-    // ends: how far a touch's run within the tolerance reaches depends on
-    // how the curves bend, not on the edge's length. Curves that stay
-    // within the tolerance out to the edge's ends, or over a whole turn,
-    // run along each other and have no one point of touch.
-    let clear = |t: f64, s: f64| (at_a(t) - at_b(s)).length() > tol;
-    let mut reach = 1e-3 * (hi_a - lo_a);
-    let (mut s_lo, mut s_hi) = (tb, tb);
-    let (mut lo, mut hi);
-    loop {
-        (lo, hi) = if turn_a {
-            (ta - reach, ta + reach)
-        } else {
-            ((ta - reach).max(lo_a), (ta + reach).min(hi_a))
-        };
-        (s_lo, s_hi) = (foot(lo, s_lo), foot(hi, s_hi));
-        if clear(lo, s_lo) && clear(hi, s_hi) {
-            break;
         }
         let whole = if turn_a {
-            2.0 * reach >= std::f64::consts::TAU
+            hi - lo >= std::f64::consts::TAU
         } else {
             lo <= lo_a && hi >= hi_a
         };
         if whole {
             return None;
         }
-        reach *= 2.0;
     }
-    let side = square(hi, s_hi).normalize().ok()?;
-    if square(lo, s_lo).dot(side) >= 0.0 {
-        return None;
-    }
-    let mut s = tb;
-    for _ in 0..200 {
-        let mid = f64::midpoint(lo, hi);
-        if mid <= lo || mid >= hi {
-            break;
-        }
-        s = foot(mid, s);
-        if square(mid, s).dot(side) < 0.0 {
-            lo = mid;
+    // The part of `a`'s unit tangent at `t` square to `b`'s at `s`: zero
+    // where the tangents run parallel.
+    let square = |t: f64, s: f64| {
+        let (x, y) = (tan_a(t), tan_b(s));
+        let (Ok(x), Ok(y)) = (x.normalize(), y.normalize()) else {
+            return Vec3::new(0.0, 0.0, 0.0);
+        };
+        x - y * x.dot(y)
+    };
+    // How fast the distance from `b` changes along `a`: zero where the
+    // separation stands square to both tangents, the nearest points.
+    let parting = |t: f64, s: f64| {
+        let apart = at_a(t) - at_b(s);
+        let gap = apart.length();
+        if gap > 0.0 {
+            apart.dot(tan_a(t)) / gap
         } else {
-            hi = mid;
+            0.0
         }
-    }
-    let t = f64::midpoint(lo, hi);
-    let s = foot(t, s);
-    let (pa, pb) = (at_a(t), at_b(s));
-    // The touch stands for the reading at the seed only where the curves
-    // keep together between the two: sampled from the seed to the touch,
-    // they stand no farther apart than the tolerance, or than at the seed
-    // where that is farther. Across a wider gap the touch is another
-    // contact, and the reading at the seed stays.
-    let bound = tol.max((at_a(ta) - at_b(foot(ta, tb))).length());
-    let mut along = tb;
-    for k in 1..TOUCH_PATH_SAMPLES {
-        let tk = ta + (t - ta) * (f64::from(k) / f64::from(TOUCH_PATH_SAMPLES));
-        along = foot(tk, along);
-        if (at_a(tk) - at_b(along)).length() > bound {
+    };
+    // The root in the proved interval of a sign read along `a`, by
+    // bisection; `None` where the sign is the same at both ends.
+    let root = |sign: &dyn Fn(f64, f64) -> f64| -> Option<(f64, f64)> {
+        let (mut lo, mut hi) = (lo, hi);
+        let (f_lo, f_hi) = (sign(lo, foot(lo, tb)), sign(hi, foot(hi, tb)));
+        if f_lo == 0.0 || f_hi == 0.0 || (f_lo > 0.0) == (f_hi > 0.0) {
             return None;
         }
+        let mut s = tb;
+        for _ in 0..200 {
+            let mid = f64::midpoint(lo, hi);
+            if mid <= lo || mid >= hi {
+                break;
+            }
+            s = foot(mid, s);
+            if (sign(mid, s) > 0.0) == (f_lo > 0.0) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        let t = f64::midpoint(lo, hi);
+        Some((t, foot(t, s)))
+    };
+    // A touch where the tangents turn through parallel is found where the
+    // part of one square to the other changes sign along a fixed side, and
+    // kept only where that whole part vanishes there, to rounding: two
+    // curves out of one plane can cross that side's zero with their tangents
+    // apart. Otherwise the nearest points, where the separation stands
+    // square to both tangents.
+    let side = square(hi, foot(hi, tb)).normalize().ok();
+    let along_side = |t: f64, s: f64| side.map_or(0.0, |side| square(t, s).dot(side));
+    let (t, s) = root(&along_side)
+        .filter(|&(t, s)| square(t, s).length() <= PARALLEL_ROUNDING)
+        .or_else(|| root(&parting))?;
+    let (pa, pb) = (at_a(t), at_b(s));
+    // A least distance, not a greatest one between two crossings: read a
+    // hundredth of the proved interval each way, far enough for the change
+    // of distance to stand clear of its rounding.
+    let gap = (pa - pb).length();
+    let step = 1e-2 * (hi - lo);
+    let rounding = 64.0 * f64::EPSILON * pa.x().abs().max(pa.y().abs()).max(pa.z().abs());
+    let near = |t: f64| (at_a(t) - at_b(foot(t, s))).length();
+    if near((t - step).max(lo)) < gap - rounding || near((t + step).min(hi)) < gap - rounding {
+        return None;
     }
     let (t, s) = (wrap(t, lo_a, turn_a), wrap(s, lo_b, turn_b));
     if !turn_b && !(lo_b..=hi_b).contains(&s) || !turn_a && !(lo_a..=hi_a).contains(&t) {
         return None;
     }
-    ((pa - pb).length() <= tol).then(|| (t, s, pa + (pb - pa) * 0.5))
+    (gap <= tol).then(|| (t, s, pa + (pb - pa) * 0.5))
+}
+
+/// The sine between two unit tangents below which they run parallel, to
+/// the rounding of their parts square to each other.
+const PARALLEL_ROUNDING: f64 = 1e-9;
+
+/// The most Bezier pieces one proof in [`proved_within`] reads.
+const PROOF_PIECES: usize = 64;
+
+/// The parameter of `curve`'s point nearest `p`, by Newton steps from `s`
+/// that read the derivative off its points; kept in the edge's domain
+/// unless the curve is a whole turn.
+fn nearest_on((curve, data): (&EdgeCurve, &EdgeData), p: Point3, mut s: f64, turn: bool) -> f64 {
+    let at = |t: f64| curve.evaluate_with_endpoints(t, data.start_pos, data.end_pos);
+    let (lo, hi) = (data.t0.min(data.t1), data.t0.max(data.t1));
+    let keep = |t: f64| if turn { t } else { t.clamp(lo, hi) };
+    let step = 1e-6 * (hi - lo);
+    for _ in 0..16 {
+        let (s0, s1) = if turn {
+            (s - step, s + step)
+        } else {
+            ((s - step).max(lo), (s + step).min(hi))
+        };
+        let d = (at(s1) - at(s0)) * (1.0 / (s1 - s0));
+        let len2 = d.dot(d);
+        if len2 <= 0.0 {
+            break;
+        }
+        let next = keep(s + (p - at(s)).dot(d) / len2);
+        if (next - s).abs() <= 1e-15 * (hi - lo) {
+            return next;
+        }
+        s = next;
+    }
+    s
+}
+
+/// Whether curve `a` from `t0` to `t1` keeps within `tol` of curve `b` from
+/// `s0` to `s1`: every point of `a` there lies that near a point of `b`.
+///
+/// Over a piece, the separation `a(u) - b(u)` of the two Bezier forms in one
+/// parameter is a ratio whose numerator is a Bezier form of its own, bounded
+/// by its largest coefficient, and whose denominator is no less than the
+/// smallest weights' product (see [`separation_bound`]). A piece whose bound
+/// is too loose is halved, at `b`'s point nearest `a`'s middle (by `foot`),
+/// until `budget` pieces are read.
+fn proved_within(
+    ((ca, ea), (cb, eb)): ((&EdgeCurve, &EdgeData), (&EdgeCurve, &EdgeData)),
+    ((t0, t1), (s0, s1)): ((f64, f64), (f64, f64)),
+    tol: f64,
+    foot: &dyn Fn(f64, f64) -> f64,
+    budget: &mut usize,
+) -> bool {
+    let Some(left) = budget.checked_sub(1) else {
+        return false;
+    };
+    *budget = left;
+    if let (Some(pa), Some(pb)) = (
+        bezier_piece((ca, ea), t0, t1),
+        bezier_piece((cb, eb), s0, s1),
+    ) && separation_bound(&pa, &pb).is_some_and(|bound| bound <= tol)
+    {
+        return true;
+    }
+    let tm = f64::midpoint(t0, t1);
+    if tm <= t0.min(t1) || tm >= t0.max(t1) {
+        return false;
+    }
+    let sm = foot(tm, f64::midpoint(s0, s1));
+    proved_within(
+        ((ca, ea), (cb, eb)),
+        ((t0, tm), (s0, sm)),
+        tol,
+        foot,
+        budget,
+    ) && proved_within(
+        ((ca, ea), (cb, eb)),
+        ((tm, t1), (sm, s1)),
+        tol,
+        foot,
+        budget,
+    )
+}
+
+/// The Bezier form of an edge's curve from `t0` to `t1`, as homogeneous
+/// points `[w x, w y, w z, w]`: a line's two ends, a circle's or ellipse's
+/// rational quadratic arc over no more than a quarter turn, a B-spline's
+/// piece within one knot span. `None` otherwise.
+fn bezier_piece((curve, data): (&EdgeCurve, &EdgeData), t0: f64, t1: f64) -> Option<Vec<[f64; 4]>> {
+    let at = |t: f64| curve.evaluate_with_endpoints(t, data.start_pos, data.end_pos);
+    let plain = |p: Point3, w: f64| [p.x() * w, p.y() * w, p.z() * w, w];
+    match curve {
+        EdgeCurve::Line => Some(vec![plain(at(t0), 1.0), plain(at(t1), 1.0)]),
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+            let centre = match curve {
+                EdgeCurve::Circle(c) => c.center(),
+                EdgeCurve::Ellipse(e) => e.center(),
+                _ => return None,
+            };
+            let turn = t1 - t0;
+            if turn.abs() > std::f64::consts::FRAC_PI_2 {
+                return None;
+            }
+            // The arc's middle control point lies where its end tangents
+            // meet, out from the centre past its middle point.
+            let w = (0.5 * turn).cos();
+            let middle = centre + (at(f64::midpoint(t0, t1)) - centre) * (1.0 / w);
+            Some(vec![
+                plain(at(t0), 1.0),
+                plain(middle, w),
+                plain(at(t1), 1.0),
+            ])
+        }
+        EdgeCurve::NurbsCurve(n) => {
+            brepkit_math::nurbs::decompose::curve_bezier_between(n, t0, t1).ok()
+        }
+    }
+}
+
+/// A bound on how far apart two rational Bezier forms `pa` and `pb`, in
+/// homogeneous points, stand at one parameter: their separation is
+/// `(A wb - B wa) / (wa wb)`, the numerator a Bezier form of the summed
+/// degree bounded by its largest coefficient, the denominator no less than
+/// the smallest weights' product. Rounding of the coefficients is added.
+/// `None` where a weight is not positive.
+#[allow(clippy::cast_precision_loss)]
+fn separation_bound(pa: &[[f64; 4]], pb: &[[f64; 4]]) -> Option<f64> {
+    let (p, q) = (pa.len().checked_sub(1)?, pb.len().checked_sub(1)?);
+    let least = |points: &[[f64; 4]]| points.iter().map(|c| c[3]).fold(f64::INFINITY, f64::min);
+    let (wa, wb) = (least(pa), least(pb));
+    if wa <= 0.0 || wb <= 0.0 {
+        return None;
+    }
+    let binom = |n: usize, k: usize| -> f64 {
+        (0..k).fold(1.0, |acc, i| acc * (n - i) as f64 / (i + 1) as f64)
+    };
+    let mut numerator = vec![[0.0_f64; 3]; p + q + 1];
+    let mut size: f64 = 0.0;
+    for (i, a) in pa.iter().enumerate() {
+        for (j, b) in pb.iter().enumerate() {
+            let share = binom(p, i) * binom(q, j) / binom(p + q, i + j);
+            for k in 0..3 {
+                numerator[i + j][k] += share * (a[k] * b[3] - b[k] * a[3]);
+                size = size.max((a[k] * b[3]).abs()).max((b[k] * a[3]).abs());
+            }
+        }
+    }
+    let most = numerator
+        .iter()
+        .map(|c| (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt())
+        .fold(0.0, f64::max);
+    let rounding = 64.0 * f64::EPSILON * size * (p + q + 1) as f64;
+    Some((most + rounding) / (wa * wb))
+}
+
+/// Whether the curves, met within a thousandth of `tol` at `(ta, tb)`,
+/// cross there: the separation from `b` stands on opposite sides a little
+/// way along `a` each way, read where it first stands clear of rounding.
+/// Where it never does, the crossing counts as resolved too.
+fn crosses_at(
+    (ca, ea): (&EdgeCurve, &EdgeData),
+    (cb, eb): (&EdgeCurve, &EdgeData),
+    (ta, tb): (f64, f64),
+    tol: f64,
+) -> bool {
+    let at_a = |t: f64| ca.evaluate_with_endpoints(t, ea.start_pos, ea.end_pos);
+    let at_b = |t: f64| cb.evaluate_with_endpoints(t, eb.start_pos, eb.end_pos);
+    let (lo_a, hi_a) = (ea.t0.min(ea.t1), ea.t0.max(ea.t1));
+    let (turn_a, turn_b) = (whole_turn(ca, ea, tol), whole_turn(cb, eb, tol));
+    let keep_a = |t: f64| if turn_a { t } else { t.clamp(lo_a, hi_a) };
+    let apart = |t: f64| {
+        let p = at_a(t);
+        p - at_b(nearest_on((cb, eb), p, tb, turn_b))
+    };
+    // From a thousand-millionth of the edge, doubled 24 times: to about a
+    // sixtieth of it.
+    let mut step = 1e-9 * (hi_a - lo_a);
+    for _ in 0..24 {
+        let (before, after) = (apart(keep_a(ta - step)), apart(keep_a(ta + step)));
+        if before.length() > 1e-3 * tol && after.length() > 1e-3 * tol {
+            return before.dot(after) < 0.0;
+        }
+        step *= 2.0;
+    }
+    true
 }
 
 /// Exact line-segment vs circular-arc intersection.
@@ -1794,6 +2009,7 @@ mod tests {
 
     use super::*;
     use brepkit_math::curves::Circle3D;
+    use brepkit_math::mat::Mat4;
     use brepkit_math::vec::Vec3;
 
     /// Chords in random directions, each with its size, from 0.1 to 100: a
@@ -3743,8 +3959,17 @@ mod tests {
         clippy::cast_possible_wrap
     )]
     fn poly_edge(topo: &mut Topology, ys: &[f64], zs: &[f64], (x0, x1): (f64, f64)) -> EdgeId {
-        use brepkit_math::nurbs::curve::NurbsCurve;
-        let n = ys.len().max(zs.len()).max(2) - 1;
+        posed_curve(topo, &[(ys, zs, (x0, x1))], &Mat4::identity())
+    }
+
+    /// The Bezier poles of `(x, y(x), z(x))` over `[x0, x1]` at degree `n`,
+    /// for `y` and `z` given by their coefficients from the constant up.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_possible_wrap
+    )]
+    fn poly_poles(ys: &[f64], zs: &[f64], (x0, x1): (f64, f64), n: usize) -> Vec<Point3> {
         let w = x1 - x0;
         let binom = |n: usize, k: usize| -> f64 {
             (0..k).fold(1.0, |acc, i| acc * (n - i) as f64 / (i + 1) as f64)
@@ -3765,14 +3990,186 @@ mod tests {
                 .collect()
         };
         let (by, bz) = (bezier(&in_t(ys)), bezier(&in_t(zs)));
-        let poles: Vec<Point3> = (0..=n)
+        (0..=n)
             .map(|k| Point3::new(x0 + w * k as f64 / n as f64, by[k], bz[k]))
-            .collect();
-        let knots: Vec<f64> = std::iter::repeat_n(0.0, n + 1)
-            .chain(std::iter::repeat_n(1.0, n + 1))
-            .collect();
-        let curve = NurbsCurve::new(n, knots, poles.clone(), vec![1.0; n + 1]).unwrap();
-        add_edge(topo, poles[0], poles[n], EdgeCurve::NurbsCurve(curve))
+            .collect()
+    }
+
+    /// A polynomial piece of a curve: `y` and `z` from the constant up, and
+    /// the span of `x` it covers.
+    type Piece<'a> = (&'a [f64], &'a [f64], (f64, f64));
+
+    /// A curve of polynomial pieces `(ys, zs, (x0, x1))`, each as above and
+    /// meeting the next at its end, as one B-spline edge with each joint
+    /// knot `n` times over, placed by `pose`. The parameter is `x`.
+    fn posed_curve(topo: &mut Topology, pieces: &[Piece<'_>], pose: &Mat4) -> EdgeId {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let n = pieces
+            .iter()
+            .map(|(ys, zs, _)| ys.len().max(zs.len()).max(2) - 1)
+            .max()
+            .unwrap();
+        let mut poles: Vec<Point3> = Vec::new();
+        let mut knots: Vec<f64> = vec![pieces[0].2.0; n + 1];
+        for (k, (ys, zs, range)) in pieces.iter().enumerate() {
+            let piece = poly_poles(ys, zs, *range, n);
+            poles.extend(if k == 0 { &piece[..] } else { &piece[1..] });
+            knots.extend(std::iter::repeat_n(
+                range.1,
+                if k + 1 == pieces.len() { n + 1 } else { n },
+            ));
+        }
+        let poles: Vec<Point3> = poles.iter().map(|p| pose.mul_point(*p)).collect();
+        let weights = vec![1.0; poles.len()];
+        let last = poles.len() - 1;
+        let curve = NurbsCurve::new(n, knots, poles.clone(), weights).unwrap();
+        add_edge(topo, poles[0], poles[last], EdgeCurve::NurbsCurve(curve))
+    }
+
+    /// The x axis over `[x0, x1]` as a line edge, placed by `pose`.
+    fn posed_axis(topo: &mut Topology, (x0, x1): (f64, f64), pose: &Mat4) -> EdgeId {
+        add_edge(
+            topo,
+            pose.mul_point(Point3::new(x0, 0.0, 0.0)),
+            pose.mul_point(Point3::new(x1, 0.0, 0.0)),
+            EdgeCurve::Line,
+        )
+    }
+
+    fn ee_poses() -> [Mat4; 3] {
+        [
+            Mat4::identity(),
+            Mat4::translation(3.0, -2.0, 1.0) * Mat4::rotation_x(0.4) * Mat4::rotation_z(0.6),
+            Mat4::translation(1.0, 0.5, -2.0) * Mat4::scale(-1.0, 1.0, 1.0),
+        ]
+    }
+
+    /// The readings of two edges both ways round, each as the point on the x
+    /// axis before `pose`: their parameter along it.
+    fn readings_along(topo: &Topology, a: EdgeId, b: EdgeId, pose: &Mat4) -> [Vec<f64>; 2] {
+        let back = pose.inverse().unwrap();
+        [(a, b), (b, a)].map(|(ea, eb)| {
+            let mut xs: Vec<f64> = crossings(topo, ea, eb)
+                .iter()
+                .map(|h| back.mul_point(h.2).x())
+                .collect();
+            xs.sort_by(f64::total_cmp);
+            xs
+        })
+    }
+
+    /// `y = 0.2 (x^2 - (5e-4)^2)` crosses the x axis at x = -/+ 5e-4, at
+    /// 2e-4 rad. Midway the curves stand only 5e-8 apart, within the
+    /// tolerance, but both crossings are resolved: each keeps its reading
+    /// at its crossing, not one touch between them. A reading that stopped
+    /// midway, at the greatest distance between them, is not a touch either,
+    /// and stays as it was read, within the tolerance.
+    #[test]
+    fn resolved_shallow_crossings_are_not_polished_into_a_touch() {
+        let c: f64 = 5e-4;
+        for pose in ee_poses() {
+            let mut topo = Topology::new();
+            let curve = posed_curve(
+                &mut topo,
+                &[(&[-0.2 * c * c, 0.0, 0.2], &[0.0], (-0.01, 0.01))],
+                &pose,
+            );
+            let axis = posed_axis(&mut topo, (-0.01, 0.01), &pose);
+            for xs in readings_along(&topo, curve, axis, &pose) {
+                let (first, last) = (xs[0], xs[xs.len() - 1]);
+                assert!(
+                    xs.len() <= 3 && (first + c).abs() < 1e-9 && (last - c).abs() < 1e-9,
+                    "{xs:?}"
+                );
+                let gap = |x: f64| (0.2 * (x * x - c * c)).abs();
+                assert!(xs.iter().all(|&x| gap(x) <= 1e-7), "{xs:?}");
+            }
+        }
+    }
+
+    /// `(x, 1e-5 x, 1e-3 x^2)` crosses the x axis at 0, at 1e-5 rad, its
+    /// tangents all but parallel and its separation's component across one
+    /// direction zero at -0.003125: one reading, at the crossing.
+    #[test]
+    fn a_crossing_out_of_the_plane_stays_at_its_point() {
+        for pose in ee_poses() {
+            let mut topo = Topology::new();
+            let curve = posed_curve(
+                &mut topo,
+                &[(&[0.0, 1e-5], &[0.0, 0.0, 1e-3], (-1.0, 1.0))],
+                &pose,
+            );
+            let axis = posed_axis(&mut topo, (-1.0, 1.0), &pose);
+            for xs in readings_along(&topo, curve, axis, &pose) {
+                assert_eq!(xs.len(), 1, "{xs:?}");
+                assert!(xs[0].abs() < 1e-9, "{xs:?}");
+            }
+        }
+    }
+
+    /// `y = 1e-4 x^2 (x - 0.1)^2` touches the x axis at 0 and 0.1 and keeps
+    /// within the tolerance between them, but for a bump `3e-7 * 16 u^2
+    /// (1 - u)^2` over `[0.0445, 0.0455]` that parts them by more: two
+    /// contacts, each read at its own touch.
+    #[test]
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_wrap,
+        clippy::cast_possible_truncation
+    )]
+    fn touches_across_a_narrow_bump_keep_their_own_readings() {
+        let base = [0.0, 0.0, 1e-6, -2e-5, 1e-4];
+        let (left, right): (f64, f64) = (0.0445, 0.0455);
+        let width = right - left;
+        // The bump in u, 3e-7 * 16 (u^2 - 2 u^3 + u^4), and then in x, for
+        // u = (x - left) / width.
+        let in_u = [0.0, 0.0, 16.0 * 3e-7, -32.0 * 3e-7, 16.0 * 3e-7];
+        let binom = |n: usize, k: usize| -> f64 {
+            (0..k).fold(1.0, |acc, i| acc * (n - i) as f64 / (i + 1) as f64)
+        };
+        let mut bump = [0.0; 5];
+        for (m, &cm) in in_u.iter().enumerate() {
+            for (j, b) in bump.iter_mut().enumerate().take(m + 1) {
+                *b += cm / width.powi(m as i32) * binom(m, j) * (-left).powi((m - j) as i32);
+            }
+        }
+        let mid: Vec<f64> = base.iter().zip(bump).map(|(a, b)| a + b).collect();
+        for pose in ee_poses() {
+            let mut topo = Topology::new();
+            let curve = posed_curve(
+                &mut topo,
+                &[
+                    (&base, &[0.0], (-1.0, left)),
+                    (&mid, &[0.0], (left, right)),
+                    (&base, &[0.0], (right, 1.0)),
+                ],
+                &pose,
+            );
+            let axis = posed_axis(&mut topo, (-1.0, 1.0), &pose);
+            for xs in readings_along(&topo, curve, axis, &pose) {
+                assert_eq!(xs.len(), 2, "{xs:?}");
+                assert!(xs[0].abs() < 1e-6 && (xs[1] - 0.1).abs() < 1e-6, "{xs:?}");
+            }
+            // Polished from a reading at x = 0.100001, the touch stays at
+            // 0.1, on this side of the bump.
+            let data = collect_edge_data(&topo, &[curve, axis]).unwrap();
+            let (on_curve, on_axis) = (
+                topo.edge(curve).unwrap().curve().clone(),
+                topo.edge(axis).unwrap().curve().clone(),
+            );
+            let seed = 0.100_001;
+            let read = touch_point(
+                (&on_curve, &data[0]),
+                (&on_axis, &data[1]),
+                (seed, 0.5 * (seed + 1.0)),
+                Tolerance::default().linear,
+            );
+            let back = pose.inverse().unwrap();
+            assert!(
+                read.is_none_or(|(_, _, p)| (back.mul_point(p).x() - 0.1).abs() < 1e-6),
+                "{read:?}"
+            );
+        }
     }
 
     /// The x axis over `[x0, x1]` as a line edge.
