@@ -369,10 +369,11 @@ pub fn copy_and_transform_solid(
         1,
     );
 
+    let stretch = crate::transform::largest_stretch(matrix).unwrap_or(1.0);
     let mut vertex_map: HashMap<usize, VertexId> = HashMap::new();
     for vsnap in &vertex_snaps {
         let new_point = matrix.mul_point(vsnap.point);
-        let new_vid = topo.add_vertex(Vertex::new(new_point, vsnap.tol));
+        let new_vid = topo.add_vertex(Vertex::new(new_point, vsnap.tol * stretch));
         vertex_map.insert(vsnap.old_index, new_vid);
     }
 
@@ -385,7 +386,7 @@ pub fn copy_and_transform_solid(
             new_start,
             new_end,
             new_curve,
-            esnap.tolerance,
+            esnap.tolerance.map(|tolerance| tolerance * stretch),
         ));
         edge_map.insert(esnap.old_index, copied_edge);
     }

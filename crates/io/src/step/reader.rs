@@ -211,6 +211,7 @@ impl<'a> StepBuilder<'a> {
                 }
             }
         }
+        super::settle_tolerances(self.topo, &solid_ids)?;
         Ok(solid_ids)
     }
 
