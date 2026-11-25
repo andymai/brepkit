@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795632221351,
+  "lastUpdate": 1795639518088,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -79001,6 +79001,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22171247,
             "range": "± 53139",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "8ccf4aac96e3ead16f9c0e4235183383aa1288e6",
+          "message": "chore(main): release 4.11.58 (#2901)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.58](https://github.com/andymai/brepkit/compare/v4.11.57...v4.11.58)\n(2026-11-25)\n\n\n### Bug Fixes\n\n* **algo:** cut a rod against an elliptic wall on exact rulings, and\nrefuse an N-way fuse with an unpaired edge\n([#2879](https://github.com/andymai/brepkit/issues/2879))\n([fb27c8d](https://github.com/andymai/brepkit/commit/fb27c8d6dad32f4b9eb898250ab4218d888eadc1))\n* **math,algo,operations:** a box never hides a point that is not\nfinite, and no box panics\n([#2898](https://github.com/andymai/brepkit/issues/2898))\n([33c7b56](https://github.com/andymai/brepkit/commit/33c7b5637f0c8116a688101ab96c0064176d08af))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-25T20:41:49Z",
+          "tree_id": "a242abb90132cc2e53964d0527ed919793736c6b",
+          "url": "https://github.com/andymai/brepkit/commit/8ccf4aac96e3ead16f9c0e4235183383aa1288e6"
+        },
+        "date": 1795639502723,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 687917,
+            "range": "± 24486",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 726799,
+            "range": "± 28586",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 8675,
+            "range": "± 147",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 439042,
+            "range": "± 10847",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 15742465,
+            "range": "± 126634",
             "unit": "ns/iter"
           }
         ]
