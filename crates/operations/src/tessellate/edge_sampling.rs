@@ -970,6 +970,54 @@ mod tests {
         assert!(matches!(&breaks, Ok(b) if b.len() > 3), "{breaks:?}");
     }
 
+    /// A spline whose control points lie on one line but double back (x at
+    /// 0, 10, 10 and 5, or 0, 10 and 5) runs out past its end and back, with
+    /// no knot where it turns: its control points lie off the chord's
+    /// segment, so it is not taken as straight. Upright, turned and
+    /// mirrored, at the origin and 1e8 from it, either way along, its samples
+    /// reach the curve's true extent to within the deflection.
+    #[test]
+    fn a_straight_spline_that_doubles_back_keeps_its_extent() {
+        let poses = [
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(1.0, 2.0, 3.0).normalize().unwrap(),
+            Vec3::new(-3.0, 1.0, -2.0).normalize().unwrap(),
+        ];
+        for (degree, xs) in [(3, vec![0.0, 10.0, 10.0, 5.0]), (2, vec![0.0, 10.0, 5.0])] {
+            for along in poses {
+                for offset in [0.0, 1e8] {
+                    let base = Point3::new(offset, -0.5 * offset, 0.25 * offset);
+                    let n = xs.len();
+                    let mut knots = vec![0.0; degree + 1];
+                    knots.extend(vec![1.0; degree + 1]);
+                    let points = xs.iter().map(|&x| base + along * x).collect();
+                    let curve = NurbsCurve::new(degree, knots, points, vec![1.0; n]).unwrap();
+                    let reach_of = |t: f64| (curve.evaluate(t) - base).dot(along);
+                    #[allow(clippy::cast_precision_loss)]
+                    let extent = (0..=100_000)
+                        .map(|k| reach_of(k as f64 / 100_000.0))
+                        .fold(f64::MIN, f64::max);
+                    for deflection in [1e-3, 1e-6] {
+                        for angle in [0.0, 0.35] {
+                            for (t0, t1) in [(0.0, 1.0), (1.0, 0.0)] {
+                                let breaks =
+                                    nurbs_edge_breaks(&curve, t0, t1, deflection, angle).unwrap();
+                                let reach =
+                                    breaks.iter().map(|&t| reach_of(t)).fold(f64::MIN, f64::max);
+                                assert!(
+                                    reach >= extent - deflection - 1e-7,
+                                    "degree {degree} along {along:?} at {offset}, {deflection} and \
+                                     {angle}, {t0} to {t1}: reach {reach} of {extent} in {} breaks",
+                                    breaks.len()
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// A spline that turns a corner on a middle piece that barely moves (its
     /// three control points there a hair apart, not in line) has parts whose
     /// ends meet. Each is a still piece
