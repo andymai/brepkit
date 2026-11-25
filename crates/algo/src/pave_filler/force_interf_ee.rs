@@ -291,6 +291,12 @@ pub(super) fn one_arc(
 /// bit (a zero of either sign counts as one). Such copies are one block with
 /// no bound to read: a bound can fail where the curve is large, far off, or
 /// stored on axes no bound reads.
+///
+/// One symmetry of the stored frame is read exactly too: with the normal and
+/// the second axis negated, the curve at `-t` is the first at `t` (cosine is
+/// even and sine odd to the bit), so `b`'s span `(s, e)` is `a`'s `(-e, -s)`.
+/// The other symmetries shift the parameter by a part of a turn, which
+/// rounds, and are left to the bound.
 fn one_block_as_stored(
     a: &EdgeCurve,
     span_a: (f64, f64),
@@ -299,7 +305,7 @@ fn one_block_as_stored(
 ) -> bool {
     use brepkit_math::vec::Vec3;
     let xyz = |v: Vec3| [v.x(), v.y(), v.z()];
-    let data = |c: &EdgeCurve| -> Option<Vec<f64>> {
+    let data = |c: &EdgeCurve, reversed: bool| -> Option<Vec<f64>> {
         let (centre, normal, sizes, u, v) = match c {
             EdgeCurve::Circle(c) => (
                 c.center(),
@@ -317,6 +323,7 @@ fn one_block_as_stored(
             ),
             EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return None,
         };
+        let (normal, v) = if reversed { (-normal, -v) } else { (normal, v) };
         let mut all = vec![centre.x(), centre.y(), centre.z()];
         all.extend(xyz(normal));
         all.extend(sizes);
@@ -335,32 +342,50 @@ fn one_block_as_stored(
         (EdgeCurve::Circle(_), EdgeCurve::Circle(_))
             | (EdgeCurve::Ellipse(_), EdgeCurve::Ellipse(_))
     );
-    let (Some(da), Some(db)) = (data(a), data(b)) else {
+    let (Some(da), Some(db), Some(back)) = (data(a, false), data(b, false), data(b, true)) else {
         return false;
     };
     let ours = [span_a.0, span_a.1];
+    let one_span = |(s, e): (f64, f64)| alike(&ours, &[s, e]) || alike(&ours, &[e, s]);
     same_kind
-        && alike(&da, &db)
-        && (alike(&ours, &[span_b.0, span_b.1]) || alike(&ours, &[span_b.1, span_b.0]))
+        && ((alike(&da, &db) && one_span(span_b))
+            || (alike(&da, &back) && one_span((-span_b.1, -span_b.0))))
 }
 
 /// A bound on how far apart the arc of circle or ellipse `a` over `span_a`
 /// and the arc of `b` over `span_b` lie along their whole length, each read
-/// on its form with unit, square axes, that form's gap added. Two whole
-/// turns are each the whole curve, so `a`'s is read from the parameter of
-/// `b`'s start, found from the start's offset from `b`'s centre: a point far
-/// from the origin rounds to more than a tolerance. `None` for other curves,
-/// or where no bound holds.
+/// on its form with unit, square axes, that form's gap added.
+///
+/// Two whole turns are each the whole curve, so `a`'s is read from the
+/// parameter of `b`'s start, found from the start's offset from `b`'s centre:
+/// a point far from the origin rounds to more than a tolerance. A span is a
+/// whole turn where its sweep reads a turn within the rounding of its ends;
+/// the piece a sweep may lack, times the curve's size, is added. An arc
+/// short of a turn by more keeps its own start. `None` for other curves, or
+/// where no bound holds.
 fn arcs_apart(a: &EdgeCurve, span_a: (f64, f64), b: &EdgeCurve, span_b: (f64, f64)) -> Option<f64> {
     use crate::builder::face_splitter::{circle_arcs_apart, ellipse_arcs_apart};
     use crate::builder::pcurve_compute::{unit_conic, unit_conic_arc_gap};
+    use brepkit_math::madd::Madd;
+    use std::f64::consts::TAU;
     let (unit_a, gap_a) = unit_conic(a)?;
     let (unit_b, gap_b) = unit_conic(b)?;
     let sweep = |(t0, t1): (f64, f64)| (t0, t1 - t0);
-    let whole = |(t0, t1): (f64, f64)| (t1 - t0).abs() >= std::f64::consts::TAU - 1e-9;
+    // A span stored as `(t0, t0 + TAU)` reads its sweep a turn within an
+    // ulp or two of its larger end.
+    let lacks = |(t0, t1): (f64, f64)| TAU - (t1 - t0).abs();
+    let whole = |span: (f64, f64)| {
+        lacks(span) <= 4.0 * f64::EPSILON * span.0.abs().max(span.1.abs()).max(TAU)
+    };
+    let relocate = whole(span_a) && whole(span_b);
+    let short = if relocate {
+        lacks(span_a).max(0.0) + lacks(span_b).max(0.0)
+    } else {
+        0.0
+    };
     let (a0, a_sweep) = sweep(span_a);
     let from = |nearest: f64| {
-        if whole(span_a) && whole(span_b) {
+        if relocate {
             (nearest, a_sweep)
         } else {
             (a0, a_sweep)
@@ -370,12 +395,17 @@ fn arcs_apart(a: &EdgeCurve, span_a: (f64, f64), b: &EdgeCurve, span_b: (f64, f6
     let bound = if let (EdgeCurve::Circle(p), EdgeCurve::Circle(q)) = (&*unit_a, &*unit_b) {
         let offset = q.u_axis() * cos + q.v_axis() * sin;
         let nearest = offset.dot(p.v_axis()).atan2(offset.dot(p.u_axis()));
-        circle_arcs_apart(p, from(nearest), q, sweep(span_b))
+        let size = p.radius().max(q.radius());
+        size.madd(short, circle_arcs_apart(p, from(nearest), q, sweep(span_b)))
     } else if let (EdgeCurve::Ellipse(p), EdgeCurve::Ellipse(q)) = (&*unit_a, &*unit_b) {
         let offset = q.u_axis() * (q.semi_major() * cos) + q.v_axis() * (q.semi_minor() * sin);
         let nearest = (offset.dot(p.v_axis()) / p.semi_minor())
             .atan2(offset.dot(p.u_axis()) / p.semi_major());
-        ellipse_arcs_apart(p, from(nearest), q, sweep(span_b))
+        let size = p.semi_major().max(q.semi_major());
+        size.madd(
+            short,
+            ellipse_arcs_apart(p, from(nearest), q, sweep(span_b)),
+        )
     } else {
         return None;
     };
@@ -848,5 +878,64 @@ mod tests {
             &turned,
             (0.0, 3.0 * FRAC_PI_2)
         ));
+    }
+
+    /// The ellipse of [`copies_of_an_ellipse_no_bound_reads_share_their_block`]
+    /// and the circle of radius 1e9, each stored again with its normal and
+    /// second axis negated: the copy at `-t` is the curve at `t`, so the
+    /// copy over (-1, 0) traces the curve's arc over (0, 1) backwards, and
+    /// they are one block. The copy over (0, 2 pi - 1) is the rest.
+    #[test]
+    fn copies_stored_about_the_reversed_normal_share_their_block() {
+        use brepkit_math::curves::Ellipse3D;
+        let centre = Point3::new(0.0, 0.0, 0.0);
+        let (x, z) = (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0));
+        let y = Vec3::new(0.0, 1.0 + 2.0f64.powi(-50), 0.0);
+        let ellipse = |n: Vec3, v: Vec3| {
+            EdgeCurve::Ellipse(Ellipse3D::with_axes(centre, n, 1.0, 1.0, x, v).unwrap())
+        };
+        let unit_y = Vec3::new(0.0, 1.0, 0.0);
+        let circle = |n: Vec3, v: Vec3| {
+            EdgeCurve::Circle(Circle3D::with_axes(centre, n, 1e9, x, v).unwrap())
+        };
+        for (what, up, down) in [
+            ("ellipse", ellipse(z, y), ellipse(-z, -y)),
+            ("circle", circle(z, unit_y), circle(-z, -unit_y)),
+        ] {
+            let at = |c: &EdgeCurve, t: f64| match c {
+                EdgeCurve::Circle(c) => c.evaluate(t),
+                EdgeCurve::Ellipse(e) => e.evaluate(t),
+                EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => unreachable!(),
+            };
+            for t in [0.0, 0.3, 1.0, 2.5, -4.0] {
+                let (p, q) = (at(&up, t), at(&down, -t));
+                let bits = |p: Point3| [p.x(), p.y(), p.z()].map(|x| (x + 0.0).to_bits());
+                assert_eq!(bits(p), bits(q), "{what} at {t}");
+            }
+            assert!(one(&up, (0.0, 1.0), &down, (-1.0, 0.0)), "{what}");
+            assert!(one(&up, (0.0, 1.0), &down, (0.0, -1.0)), "{what}");
+            assert!(!one(&up, (0.0, 1.0), &down, (0.0, TAU - 1.0)), "{what}");
+            assert!(!one(&up, (0.0, 1.0), &down, (1.0, 0.0)), "{what}");
+        }
+    }
+
+    /// A circle of radius 1e4 on the axes (X, Y), and the same circle on
+    /// (X, -Y) about the reversed normal. Over (0, 2 pi - d) and (d, 2 pi),
+    /// `d = 5e-10`, they run one arc short of a whole turn, opposite ways,
+    /// and are one block. The first and the second over (0, d), the rest of
+    /// the turn, are not.
+    #[test]
+    fn an_arc_just_short_of_a_whole_turn_keeps_its_own_start() {
+        let centre = Point3::new(0.0, 0.0, 0.0);
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let up = EdgeCurve::Circle(Circle3D::with_axes(centre, z, 1e4, x, y).unwrap());
+        let down = EdgeCurve::Circle(Circle3D::with_axes(centre, -z, 1e4, x, -y).unwrap());
+        let d = 5e-10;
+        assert!(one(&up, (0.0, TAU - d), &down, (d, TAU)));
+        assert!(!one(&up, (0.0, TAU - d), &down, (0.0, d)));
     }
 }
