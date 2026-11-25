@@ -354,9 +354,10 @@ fn find_edge_edge_crossings(
         // One crossing read from two pairs of chords, or a touch where a
         // closed curve's domain wraps read at either end of it, lies at one
         // place on both edges. A parameter has any scale, so the places are
-        // compared in space: within the tolerance, or within four units in
-        // the last place of coordinates that size, below which rounding
-        // cannot tell two places apart.
+        // compared in space. Each coordinate may differ by the tolerance, or
+        // by four units in its own last place, below which rounding cannot
+        // tell two values apart; the distance, by the tolerance and that
+        // rounding.
         let at_a = |t: f64| {
             edge_a
                 .curve()
@@ -368,10 +369,17 @@ fn find_edge_edge_crossings(
                 .evaluate_with_endpoints(t, eb.start_pos, eb.end_pos)
         };
         let one_place = |p: Point3, q: Point3| {
-            let size = [p.x(), p.y(), p.z(), q.x(), q.y(), q.z()]
-                .iter()
-                .fold(0.0_f64, |m, c| m.max(c.abs()));
-            (p - q).length() <= tol.linear.max(4.0 * f64::EPSILON * size)
+            let rounding = |a: f64, b: f64| 4.0 * f64::EPSILON * a.abs().max(b.abs());
+            let r = Vec3::new(
+                rounding(p.x(), q.x()),
+                rounding(p.y(), q.y()),
+                rounding(p.z(), q.z()),
+            );
+            let d = p - q;
+            d.x().abs() <= tol.linear.max(r.x())
+                && d.y().abs() <= tol.linear.max(r.y())
+                && d.z().abs() <= tol.linear.max(r.z())
+                && d.length() <= tol.linear + r.length()
         };
         let (on_a, on_b) = (at_a(t_a), at_b(t_b));
         let is_dup = crossings
@@ -1347,9 +1355,12 @@ fn refine(
 }
 
 /// Whether `curve` over its edge's domain is a whole circle or ellipse,
-/// whose parameter wraps a turn on.
-fn whole_turn(curve: &EdgeCurve, data: &EdgeData) -> bool {
+/// whose parameter wraps a turn on: its ends meet within `tol` in space,
+/// as well as a turn apart in its parameter. An arc a hair short of a turn
+/// can leave a gap between its ends far wider than the tolerance.
+fn whole_turn(curve: &EdgeCurve, data: &EdgeData, tol: f64) -> bool {
     matches!(curve, EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_))
+        && (data.start_pos - data.end_pos).length() <= tol
         && ((data.t1 - data.t0).abs() - std::f64::consts::TAU).abs() <= 1e-9
 }
 
@@ -1383,7 +1394,7 @@ fn touch_point(
     let (lo_b, hi_b) = (eb.t0.min(eb.t1), eb.t0.max(eb.t1));
     // A closed circle or ellipse runs on past the ends of its domain: a
     // touch at the point where its domain wraps lies inside either end.
-    let (turn_a, turn_b) = (whole_turn(ca, ea), whole_turn(cb, eb));
+    let (turn_a, turn_b) = (whole_turn(ca, ea, tol), whole_turn(cb, eb, tol));
     let keep_b = |s: f64| if turn_b { s } else { s.clamp(lo_b, hi_b) };
     let wrap = |t: f64, lo: f64, turn: bool| {
         if turn {
@@ -3438,5 +3449,101 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A steep parabola that crosses a line at x = -/+ 5e-5, 1e-4 apart, at
+    /// z = 0 and at z = 2e11. Far along z, the rounding of z does not
+    /// reach across x: two crossings.
+    #[test]
+    fn two_crossings_apart_across_a_coordinate_stay_two_far_along_another() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+
+        let height = |x: f64| 1e4 * (x * x - 2.5e-9);
+        for z in [0.0, 2e11] {
+            let ends = (height(-1e-3), height(1e-3));
+            let poles = vec![
+                Point3::new(-1e-3, ends.0, z),
+                Point3::new(0.0, 0.5 * (4.0 * height(0.0) - ends.0 - ends.1), z),
+                Point3::new(1e-3, ends.1, z),
+            ];
+            let mut topo = Topology::new();
+            let line = add_edge(
+                &mut topo,
+                Point3::new(-1e-3, 0.0, z),
+                Point3::new(1e-3, 0.0, z),
+                EdgeCurve::Line,
+            );
+            let parabola = NurbsCurve::new(
+                2,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                poles.clone(),
+                vec![1.0; 3],
+            )
+            .unwrap();
+            let curve = add_edge(
+                &mut topo,
+                poles[0],
+                poles[2],
+                EdgeCurve::NurbsCurve(parabola),
+            );
+            for (ea, eb) in [(line, curve), (curve, line)] {
+                let mut xs: Vec<f64> = crossings(&topo, ea, eb).iter().map(|h| h.2.x()).collect();
+                xs.sort_by(f64::total_cmp);
+                assert_eq!(xs.len(), 2, "{z}: {xs:?}");
+                assert!(
+                    (xs[0] + 5e-5).abs() < 1e-9 && (xs[1] - 5e-5).abs() < 1e-9,
+                    "{z}: {xs:?}"
+                );
+            }
+        }
+    }
+
+    /// An arc of radius 1e6 that stops 5e-10 rad short of a whole turn
+    /// leaves a gap of 5e-4 between its ends. It does not wrap: a circle of
+    /// radius 1e-3 that touches it inside the gap gives no touch on it.
+    #[test]
+    fn an_arc_short_of_a_whole_turn_does_not_wrap() {
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let r = 1e6;
+        let big = Circle3D::new(Point3::new(0.0, 0.0, 0.0), up, r).unwrap();
+        let gap = 5e-10;
+        let mut topo = Topology::new();
+        let arc = add_edge(
+            &mut topo,
+            big.evaluate(0.0),
+            big.evaluate(std::f64::consts::TAU - gap),
+            EdgeCurve::Circle(big.clone()),
+        );
+        let touch = big.evaluate(-0.5 * gap);
+        let centre = Point3::new(
+            touch.x() * (1.0 - 1e-3 / r),
+            touch.y() * (1.0 - 1e-3 / r),
+            0.0,
+        );
+        let small = Circle3D::new(centre, up, 1e-3).unwrap();
+        let tolerance = Tolerance::default().linear;
+        let va = topo.add_vertex(Vertex::new(small.evaluate(0.0), tolerance));
+        let ring = topo.add_edge(brepkit_topology::edge::Edge::new(
+            va,
+            va,
+            EdgeCurve::Circle(small.clone()),
+        ));
+        let data = collect_edge_data(&topo, &[arc, ring]).unwrap();
+        let (arc_curve, ring_curve) = (
+            topo.edge(arc).unwrap().curve().clone(),
+            topo.edge(ring).unwrap().curve().clone(),
+        );
+        assert!(!whole_turn(&arc_curve, &data[0], tolerance));
+        assert!(whole_turn(&ring_curve, &data[1], tolerance));
+        let near = std::f64::consts::TAU - 1.2 * gap;
+        let foot = small.project(big.evaluate(near));
+        let read = touch_point(
+            (&arc_curve, &data[0]),
+            (&ring_curve, &data[1]),
+            (near, foot),
+            tolerance,
+        );
+        assert!(read.is_none(), "{read:?}");
+        assert!(crossings(&topo, arc, ring).is_empty());
     }
 }
