@@ -1314,10 +1314,20 @@ fn refine(
     if ha <= 0.0 || hb <= 0.0 {
         return Refined::Apart;
     }
+    // Once the curves meet within a thousandth of the tolerance, a few more
+    // steps settle the crossing itself: at a shallow crossing the points
+    // that near each other run along both curves for that much over the
+    // sine of the angle, and two searches of one crossing would stop
+    // apart. A step that does not bring the curves nearer ends it.
+    let mut settling = 0;
     for _ in 0..30 {
         let r = at_a(ta) - at_b(tb);
-        if r.length() <= tol * 1e-3 {
-            break;
+        let close = r.length() <= tol * 1e-3;
+        if close {
+            if settling == 3 {
+                break;
+            }
+            settling += 1;
         }
         let da = (at_a((ta + ha).min(hi_a)) - at_a((ta - ha).max(lo_a)))
             * (1.0 / ((ta + ha).min(hi_a) - (ta - ha).max(lo_a)));
@@ -1326,6 +1336,9 @@ fn refine(
         let (a11, a12, a22) = (da.dot(da), da.dot(db), db.dot(db));
         let (g1, g2) = (da.dot(r), db.dot(r));
         let det = a11.madd(a22, -(a12 * a12));
+        if det.abs() <= 1e-12 * a11 * a22 && close {
+            break;
+        }
         if det.abs() <= 1e-12 * a11 * a22 {
             return if r.length() <= tol {
                 let (ta, tb, point) = touch_point((ca, ea), (cb, eb), (ta, tb), tol)
@@ -1338,8 +1351,12 @@ fn refine(
                 Refined::Apart
             };
         }
-        ta = (ta - (a22 * g1 - a12 * g2) / det).clamp(lo_a, hi_a);
-        tb = (tb - (a11 * g2 - a12 * g1) / det).clamp(lo_b, hi_b);
+        let next_a = (ta - (a22 * g1 - a12 * g2) / det).clamp(lo_a, hi_a);
+        let next_b = (tb - (a11 * g2 - a12 * g1) / det).clamp(lo_b, hi_b);
+        if close && (at_a(next_a) - at_b(next_b)).length() >= r.length() {
+            break;
+        }
+        (ta, tb) = (next_a, next_b);
     }
     let (pa, pb) = (at_a(ta), at_b(tb));
     if (pa - pb).length() <= tol {
@@ -1441,17 +1458,35 @@ fn touch_point(
         }
         x - y * (x.dot(y) / len2)
     };
-    let reach = 1e-3 * (hi_a - lo_a);
-    let (mut lo, mut hi) = if turn_a {
-        (ta - reach, ta + reach)
-    } else {
-        ((ta - reach).max(lo_a), (ta + reach).min(hi_a))
-    };
-    let (s_lo, s_hi) = (foot(lo, tb), foot(hi, tb));
-    // Curves that stay within the tolerance over the whole bracket run
-    // along each other there, and have no one point of touch.
-    if (at_a(lo) - at_b(s_lo)).length() <= tol || (at_a(hi) - at_b(s_hi)).length() <= tol {
-        return None;
+    // The bracket about the seed, from a thousandth of the edge each way,
+    // doubled until the curves stand farther apart than `tol` at both its
+    // ends: how far a touch's run within the tolerance reaches depends on
+    // how the curves bend, not on the edge's length. Curves that stay
+    // within the tolerance out to the edge's ends, or over a whole turn,
+    // run along each other and have no one point of touch.
+    let clear = |t: f64, s: f64| (at_a(t) - at_b(s)).length() > tol;
+    let mut reach = 1e-3 * (hi_a - lo_a);
+    let (mut s_lo, mut s_hi) = (tb, tb);
+    let (mut lo, mut hi);
+    loop {
+        (lo, hi) = if turn_a {
+            (ta - reach, ta + reach)
+        } else {
+            ((ta - reach).max(lo_a), (ta + reach).min(hi_a))
+        };
+        (s_lo, s_hi) = (foot(lo, s_lo), foot(hi, s_hi));
+        if clear(lo, s_lo) && clear(hi, s_hi) {
+            break;
+        }
+        let whole = if turn_a {
+            2.0 * reach >= std::f64::consts::TAU
+        } else {
+            lo <= lo_a && hi >= hi_a
+        };
+        if whole {
+            return None;
+        }
+        reach *= 2.0;
     }
     let side = square(hi, s_hi).normalize().ok()?;
     if square(lo, s_lo).dot(side) >= 0.0 {
@@ -3545,5 +3580,121 @@ mod tests {
         );
         assert!(read.is_none(), "{read:?}");
         assert!(crossings(&topo, arc, ring).is_empty());
+    }
+
+    /// The graph of the cubic `y = c0 + c1 x + c2 x^2 + c3 x^3` over
+    /// `[x0, x1]` in `z = 0` as a Bezier edge, with the line `y = 0` over the
+    /// same span: the two edges.
+    fn graph_and_axis(topo: &mut Topology, c: [f64; 4], (x0, x1): (f64, f64)) -> (EdgeId, EdgeId) {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let w = x1 - x0;
+        // The cubic in t, for x = x0 + w t: its power coefficients.
+        let a = [
+            c[0] + x0 * (c[1] + x0 * (c[2] + x0 * c[3])),
+            w * (c[1] + x0 * (2.0 * c[2] + 3.0 * x0 * c[3])),
+            w * w * (c[2] + 3.0 * x0 * c[3]),
+            w * w * w * c[3],
+        ];
+        let b = [
+            a[0],
+            a[0] + a[1] / 3.0,
+            a[0] + 2.0 * a[1] / 3.0 + a[2] / 3.0,
+            a[0] + a[1] + a[2] + a[3],
+        ];
+        let poles: Vec<Point3> = (0..4)
+            .map(|i| Point3::new(x0 + w * f64::from(i) / 3.0, b[i as usize], 0.0))
+            .collect();
+        let graph = NurbsCurve::new(
+            3,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            poles.clone(),
+            vec![1.0; 4],
+        )
+        .unwrap();
+        let curve = add_edge(topo, poles[0], poles[3], EdgeCurve::NurbsCurve(graph));
+        let line = add_edge(
+            topo,
+            Point3::new(x0, 0.0, 0.0),
+            Point3::new(x1, 0.0, 0.0),
+            EdgeCurve::Line,
+        );
+        (curve, line)
+    }
+
+    /// The x of each crossing of two edges, read both ways round, sorted.
+    fn crossing_xs(topo: &Topology, a: EdgeId, b: EdgeId) -> [Vec<f64>; 2] {
+        [(a, b), (b, a)].map(|(ea, eb)| {
+            let mut xs: Vec<f64> = crossings(topo, ea, eb).iter().map(|h| h.2.x()).collect();
+            xs.sort_by(f64::total_cmp);
+            xs
+        })
+    }
+
+    /// The parabola `y = k (x^2 - 1)` crosses `y = 0` at x = -/+ 1 at an
+    /// angle of 1e-3 and 1e-5 rad, where the tangents are all but parallel:
+    /// two crossings, each at its true point.
+    #[test]
+    fn shallow_crossings_stay_crossings_at_their_true_points() {
+        for angle in [1e-3, 1e-5] {
+            let k = 0.5 * angle;
+            let mut topo = Topology::new();
+            let (curve, line) = graph_and_axis(&mut topo, [-k, 0.0, k, 0.0], (-2.0, 2.0));
+            for xs in crossing_xs(&topo, curve, line) {
+                assert_eq!(xs.len(), 2, "{angle}: {xs:?}");
+                assert!(
+                    (xs[0] + 1.0).abs() < 1e-6 && (xs[1] - 1.0).abs() < 1e-6,
+                    "{angle}: {xs:?}"
+                );
+            }
+        }
+    }
+
+    /// Two crossings ten tolerances apart, at x = -/+ 5e-7. At 1 rad the lens
+    /// between them is 2.5 tolerances deep: two crossings at their points.
+    /// At 1e-3 rad it is 2.5e-10 deep, so the curves keep within the
+    /// tolerance all along between them, as at a touch: one touch, at the
+    /// lens's middle, where the tangents run parallel.
+    #[test]
+    fn two_crossings_ten_tolerances_apart_stay_two_around_a_lens_deeper_than_it() {
+        let c = 5e-7;
+        for angle in [1.0, 1e-3] {
+            let k = angle / (2.0 * c);
+            let mut topo = Topology::new();
+            let (curve, line) = graph_and_axis(&mut topo, [-k * c * c, 0.0, k, 0.0], (-1e-3, 1e-3));
+            for xs in crossing_xs(&topo, curve, line) {
+                if angle > 0.1 {
+                    assert_eq!(xs.len(), 2, "{angle}: {xs:?}");
+                    assert!(
+                        (xs[0] + c).abs() < 1e-9 && (xs[1] - c).abs() < 1e-9,
+                        "{angle}: {xs:?}"
+                    );
+                } else {
+                    assert_eq!(xs.len(), 1, "{angle}: {xs:?}");
+                    assert!(xs[0].abs() < 1e-12, "{angle}: {xs:?}");
+                }
+            }
+        }
+    }
+
+    /// The cubic `y = x^2 (x - d)` touches `y = 0` at x = 0 and crosses it at
+    /// x = d, for d = 0.1 (at 1e-2 rad) and d = 0.01 (at 1e-4 rad, with
+    /// tangents all but parallel): one touch, read at its point of
+    /// tangency, though the curves keep within the tolerance for 1e-3 of
+    /// it each way, more than a thousandth of the edge; and one crossing
+    /// at d, settled to its point though at 1e-4 rad the curves meet
+    /// within a thousandth of the tolerance for 1e-6 along them.
+    #[test]
+    fn a_touch_beside_a_crossing_stays_a_touch_and_a_crossing() {
+        for d in [0.1, 0.01] {
+            let mut topo = Topology::new();
+            let (curve, line) = graph_and_axis(&mut topo, [0.0, 0.0, -d, 1.0], (-2.0 * d, 3.0 * d));
+            for xs in crossing_xs(&topo, curve, line) {
+                assert_eq!(xs.len(), 2, "{d}: {xs:?}");
+                assert!(
+                    xs[0].abs() < 1e-12 && (xs[1] - d).abs() < 1e-12,
+                    "{d}: {xs:?}"
+                );
+            }
+        }
     }
 }
