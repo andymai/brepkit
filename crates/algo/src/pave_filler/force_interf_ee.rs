@@ -414,7 +414,11 @@ fn arcs_apart(a: &EdgeCurve, span_a: (f64, f64), b: &EdgeCurve, span_b: (f64, f6
         let offset = q.u_axis() * (q.semi_major() * cos) + q.v_axis() * (q.semi_minor() * sin);
         let nearest = (offset.dot(p.v_axis()) / p.semi_minor())
             .atan2(offset.dot(p.u_axis()) / p.semi_major());
-        let size = p.semi_major().max(q.semi_major());
+        let size = p
+            .semi_major()
+            .max(p.semi_minor())
+            .max(q.semi_major())
+            .max(q.semi_minor());
         size.madd(
             short,
             ellipse_arcs_apart(p, from(nearest), q, sweep(span_b)),

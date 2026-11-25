@@ -3682,11 +3682,10 @@ impl Gauge {
                                     most = most.max(self.round(c.center(), c.normal(), c.radius()));
                                 }
                                 EdgeCurve::Ellipse(e) => {
-                                    most = most.max(self.round(
-                                        e.center(),
-                                        e.normal(),
-                                        e.semi_major(),
-                                    ));
+                                    // A loaded ellipse can store its longer
+                                    // semi-axis as the minor one.
+                                    let longer = e.semi_major().max(e.semi_minor());
+                                    most = most.max(self.round(e.center(), e.normal(), longer));
                                 }
                                 EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => {}
                             }

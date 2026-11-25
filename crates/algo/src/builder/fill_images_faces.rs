@@ -2180,7 +2180,11 @@ pub(super) fn conic_side_of_plane_face(
     // the length of the arc it spans.
     let (center, reach, at): (Point3, f64, Box<dyn Fn(f64) -> Point3 + '_>) = match curve {
         EdgeCurve::Circle(c) => (c.center(), c.radius(), Box::new(|t| c.evaluate(t))),
-        EdgeCurve::Ellipse(e) => (e.center(), e.semi_major(), Box::new(|t| e.evaluate(t))),
+        EdgeCurve::Ellipse(e) => (
+            e.center(),
+            e.semi_major().max(e.semi_minor()),
+            Box::new(|t| e.evaluate(t)),
+        ),
         EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return None,
     };
     let frame = brepkit_math::frame::Frame3::from_normal(center, normal).ok()?;
@@ -4722,7 +4726,7 @@ fn split_runs_across_holes(
             };
             let (center, reach) = match edge.curve() {
                 EdgeCurve::Circle(c) => (c.center(), c.radius()),
-                EdgeCurve::Ellipse(e) => (e.center(), e.semi_major()),
+                EdgeCurve::Ellipse(e) => (e.center(), e.semi_major().max(e.semi_minor())),
                 EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => continue,
             };
             let to_center = center - start;

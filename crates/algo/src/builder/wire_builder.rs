@@ -664,7 +664,7 @@ pub fn runs_off(e: &OrientedPCurveEdge, reach: f64) -> bool {
     match &e.curve_3d {
         EdgeCurve::Line => (to - from).length() > reach,
         EdgeCurve::Circle(c) => conic(c.radius(), c.evaluate(t0)),
-        EdgeCurve::Ellipse(el) => conic(el.semi_major(), el.evaluate(t0)),
+        EdgeCurve::Ellipse(el) => conic(el.semi_major().max(el.semi_minor()), el.evaluate(t0)),
         EdgeCurve::NurbsCurve(n) => {
             let (lo, hi) = (t0.min(t1), t0.max(t1));
             let mut ts = vec![lo];

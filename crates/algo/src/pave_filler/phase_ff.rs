@@ -1200,7 +1200,7 @@ fn edge_hull_box(topo: &Topology, edge: &brepkit_topology::edge::Edge) -> Option
             topo.vertex(edge.end()).ok()?.point(),
         ]),
         EdgeCurve::Circle(c) => Some(reach(c.center(), c.radius())),
-        EdgeCurve::Ellipse(e) => Some(reach(e.center(), e.semi_major())),
+        EdgeCurve::Ellipse(e) => Some(reach(e.center(), e.semi_major().max(e.semi_minor()))),
         EdgeCurve::NurbsCurve(n) => Aabb3::try_from_points(n.control_points().iter().copied()),
     }
 }

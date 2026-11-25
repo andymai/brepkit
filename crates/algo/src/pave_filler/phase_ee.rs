@@ -710,7 +710,8 @@ impl ChordSpan {
                     let (lo, hi) = (from.t.min(to.t), from.t.max(to.t));
                     angle_from(axis, ellipse.tangent(lo)).max(angle_from(axis, ellipse.tangent(hi)))
                 });
-                (ellipse.semi_major() * turn * turn / 8.0, half)
+                let longer = ellipse.semi_major().max(ellipse.semi_minor());
+                (longer * turn * turn / 8.0, half)
             }
             EdgeCurve::NurbsCurve(nurbs) => nurbs_span_bounds(nurbs, (from, to), axis),
         };

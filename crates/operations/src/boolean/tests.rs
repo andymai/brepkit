@@ -10674,3 +10674,93 @@ fn cut_per_piece_drops_a_piece_inside_the_tool() {
         }
     }
 }
+
+/// A rod of radius 1 along x, cut square to a plane 60 degrees off its
+/// axis, ends in an ellipse of semi-axes 1 and 2 whose long axis runs
+/// across the axis of a drum of radius 2.9. Where the rod meets the plane
+/// one side out, it pokes 0.009 past the drum's band. Stored with its
+/// semi-major axis 1 and its semi-minor axis 2, as a loaded ellipse can be,
+/// the ellipse is still read by its longer axis, and the drum's faces do
+/// not hold the rod, in three poses.
+#[test]
+fn an_ellipse_whose_semi_minor_axis_is_the_longer_still_reaches_past_the_band() {
+    use crate::transform::transform_solid;
+    use brepkit_math::curves::Ellipse3D;
+    use brepkit_math::mat::Mat4;
+    use std::f64::consts::{FRAC_PI_2, FRAC_PI_3};
+    let tol = Tolerance::new();
+    let poses = [
+        Mat4::identity(),
+        Mat4::translation(3.0, -2.0, 1.0) * Mat4::rotation_x(0.4) * Mat4::rotation_z(0.6),
+        Mat4::translation(1.0, 0.5, -2.0) * Mat4::scale(-1.0, 1.0, 1.0),
+    ];
+    for (k, pose) in poses.iter().enumerate() {
+        let mut topo = Topology::new();
+        let drum = crate::primitives::make_cylinder(&mut topo, 2.9, 5.0).unwrap();
+        let rod = crate::primitives::make_cylinder(&mut topo, 1.0, 4.2).unwrap();
+        transform_solid(
+            &mut topo,
+            rod,
+            &(Mat4::translation(-1.0, 0.0, 2.5) * Mat4::rotation_y(FRAC_PI_2)),
+        )
+        .unwrap();
+        // Past the plane through (1, 0) whose normal leans 60 degrees from x.
+        let past = crate::primitives::make_box(&mut topo, 10.0, 10.0, 10.0).unwrap();
+        transform_solid(
+            &mut topo,
+            past,
+            &(Mat4::translation(1.0, 0.0, 2.5)
+                * Mat4::rotation_z(FRAC_PI_3)
+                * Mat4::translation(0.0, -5.0, -5.0)),
+        )
+        .unwrap();
+        let cut = boolean(&mut topo, BooleanOp::Cut, rod, past).unwrap();
+        for solid in [drum, cut] {
+            transform_solid(&mut topo, solid, pose).unwrap();
+        }
+        assert!(
+            !outer_faces_hold(&topo, cut, drum, tol),
+            "pose {k}: the rod pokes out"
+        );
+        let mut swapped = 0;
+        for f in brepkit_topology::explorer::solid_faces(&topo, cut).unwrap() {
+            let face = topo.face(f).unwrap();
+            let wires: Vec<_> = std::iter::once(face.outer_wire())
+                .chain(face.inner_wires().iter().copied())
+                .collect();
+            for w in wires {
+                let edges: Vec<_> = topo.wire(w).unwrap().edges().to_vec();
+                for oe in edges {
+                    let EdgeCurve::Ellipse(e) = topo.edge(oe.edge()).unwrap().curve().clone()
+                    else {
+                        continue;
+                    };
+                    if e.semi_major() < e.semi_minor() {
+                        continue;
+                    }
+                    let short_first = Ellipse3D::with_axes(
+                        e.center(),
+                        e.normal(),
+                        e.semi_minor(),
+                        e.semi_major(),
+                        e.v_axis(),
+                        -e.u_axis(),
+                    )
+                    .unwrap();
+                    topo.edge_mut(oe.edge())
+                        .unwrap()
+                        .set_curve(EdgeCurve::Ellipse(short_first));
+                    swapped += 1;
+                }
+            }
+        }
+        assert!(
+            swapped > 0,
+            "pose {k}: no ellipse to store short axis first"
+        );
+        assert!(
+            !outer_faces_hold(&topo, cut, drum, tol),
+            "pose {k}: the rod pokes out, its ellipse stored short axis first"
+        );
+    }
+}

@@ -3844,7 +3844,7 @@ fn split_arc_edges_at_collinear_vertices(
         }
         let radius_scale = match &curve {
             EdgeCurve::Circle(c) => c.radius(),
-            EdgeCurve::Ellipse(e) => e.semi_major(),
+            EdgeCurve::Ellipse(e) => e.semi_major().max(e.semi_minor()),
             EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => continue,
         };
         if radius_scale < snap {

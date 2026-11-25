@@ -251,9 +251,11 @@ fn closed_edge_segments(curve: &EdgeCurve, deflection: f64) -> usize {
                 false,
             )
         }
-        EdgeCurve::Ellipse(e) => {
-            brepkit_math::chord::segments_for_chord_deviation(e.semi_major(), TAU, deflection)
-        }
+        EdgeCurve::Ellipse(e) => brepkit_math::chord::segments_for_chord_deviation(
+            e.semi_major().max(e.semi_minor()),
+            TAU,
+            deflection,
+        ),
         EdgeCurve::NurbsCurve(nc) => {
             // Estimate characteristic radius from control polygon bounding box.
             let pts = nc.control_points();
