@@ -211,6 +211,7 @@ impl<'a> StepBuilder<'a> {
                 }
             }
         }
+        super::settle_tolerances(self.topo, &solid_ids)?;
         Ok(solid_ids)
     }
 
@@ -309,7 +310,6 @@ impl<'a> StepBuilder<'a> {
             face_ids.push(face_id);
         }
         brepkit_operations::heal::close_seams(self.topo, &face_ids, &self.vertex_loops)?;
-        brepkit_operations::heal::cover_curve_end_gaps(self.topo, &face_ids)?;
 
         let shell = Shell::new(face_ids).map_err(|e| IoError::ParseError {
             reason: format!("failed to build shell from STEP: {e}"),
