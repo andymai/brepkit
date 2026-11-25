@@ -8,7 +8,10 @@ use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::Point3;
 
-use crate::error::WasmError;
+use crate::error::{
+    MAX_COUNT, MAX_GRID_SIDE, MAX_ITERATIONS, WasmError, validate_count, validate_finite,
+    validate_tolerance,
+};
 use crate::handles::{edge_id_to_u32, face_id_to_u32};
 use crate::helpers::{parse_point_grid, parse_points};
 use crate::kernel::BrepKernel;
@@ -181,19 +184,7 @@ impl BrepKernel {
     #[wasm_bindgen(js_name = "interpolatePoints")]
     #[allow(clippy::needless_pass_by_value)]
     pub fn interpolate_points(&mut self, coords: Vec<f64>, degree: u32) -> Result<u32, JsError> {
-        if !coords.len().is_multiple_of(3) {
-            return Err(WasmError::InvalidInput {
-                reason: format!(
-                    "coordinate array length must be a multiple of 3, got {}",
-                    coords.len()
-                ),
-            }
-            .into());
-        }
-        let points: Vec<Point3> = coords
-            .chunks_exact(3)
-            .map(|c| Point3::new(c[0], c[1], c[2]))
-            .collect();
+        let points = parse_points(&coords)?;
         if points.len() < 2 {
             return Err(WasmError::InvalidInput {
                 reason: format!("need at least 2 points, got {}", points.len()),
@@ -225,8 +216,9 @@ impl BrepKernel {
             .into());
         }
         let deg = std::cmp::min(degree as usize, points.len() - 1);
-        let curve =
-            brepkit_math::nurbs::fitting::approximate(&points, deg, num_control_points as usize)?;
+        let num_control_points =
+            validate_count(num_control_points, "num_control_points", MAX_COUNT)?;
+        let curve = brepkit_math::nurbs::fitting::approximate(&points, deg, num_control_points)?;
         Ok(edge_id_to_u32(self.nurbs_curve_to_edge(&points, curve)?))
     }
 
@@ -251,12 +243,16 @@ impl BrepKernel {
             .into());
         }
         let deg = std::cmp::min(degree as usize, points.len() - 1);
+        let num_control_points =
+            validate_count(num_control_points, "num_control_points", MAX_COUNT)?;
+        validate_tolerance(tolerance, "tolerance")?;
+        let max_iterations = validate_count(max_iterations, "max_iterations", MAX_ITERATIONS)?;
         let curve = brepkit_math::nurbs::fitting::approximate_lspia(
             &points,
             deg,
-            num_control_points as usize,
+            num_control_points,
             tolerance,
-            max_iterations as usize,
+            max_iterations,
         )?;
         Ok(edge_id_to_u32(self.nurbs_curve_to_edge(&points, curve)?))
     }
@@ -302,14 +298,18 @@ impl BrepKernel {
         max_iterations: u32,
     ) -> Result<u32, JsError> {
         let grid = parse_point_grid(&coords, rows as usize, cols as usize)?;
+        let num_cps_u = validate_count(num_cps_u, "num_cps_u", MAX_GRID_SIDE)?;
+        let num_cps_v = validate_count(num_cps_v, "num_cps_v", MAX_GRID_SIDE)?;
+        validate_tolerance(tolerance, "tolerance")?;
+        let max_iterations = validate_count(max_iterations, "max_iterations", MAX_ITERATIONS)?;
         let surface = brepkit_math::nurbs::surface_fitting::approximate_surface_lspia(
             &grid,
             degree_u as usize,
             degree_v as usize,
-            num_cps_u as usize,
-            num_cps_v as usize,
+            num_cps_u,
+            num_cps_v,
             tolerance,
-            max_iterations as usize,
+            max_iterations,
         )?;
         Ok(face_id_to_u32(self.nurbs_surface_to_face(surface)?))
     }
@@ -319,6 +319,7 @@ impl BrepKernel {
     /// Returns a new edge handle with the refined curve.
     #[wasm_bindgen(js_name = "curveKnotInsert")]
     pub fn curve_knot_insert(&mut self, edge: u32, knot: f64, times: u32) -> Result<u32, JsError> {
+        validate_finite(knot, "knot")?;
         let curve = self.extract_nurbs_curve(edge)?;
         let refined =
             brepkit_math::nurbs::knot_ops::curve_knot_insert(&curve, knot, times as usize)?;

@@ -87,6 +87,73 @@ pub fn validate_positive(value: f64, name: &str) -> Result<(), WasmError> {
         })
 }
 
+/// Validate a tolerance from JS: a size (see [`validate_size`]) that is not
+/// below zero.
+///
+/// # Errors
+///
+/// Returns [`WasmError::InvalidInput`] if `value` is NaN, infinite, below
+/// zero, or larger than [`SIZE_LIMIT`].
+pub fn validate_tolerance(value: f64, name: &str) -> Result<(), WasmError> {
+    validate_size(value, name)?;
+    (value >= 0.0)
+        .then_some(())
+        .ok_or_else(|| WasmError::InvalidInput {
+            reason: format!("{name} must not be below zero, got {value}"),
+        })
+}
+
+/// Validate each coordinate of a point from JS as a size (see
+/// [`validate_size`]).
+///
+/// # Errors
+///
+/// Returns [`WasmError::InvalidInput`] if a coordinate is NaN, infinite, or
+/// larger than [`SIZE_LIMIT`] in magnitude.
+pub fn validate_point(point: brepkit_math::vec::Point3, name: &str) -> Result<(), WasmError> {
+    validate_coordinates([point.x(), point.y(), point.z()], name)
+}
+
+/// Validate each component of a direction or offset from JS as a size (see
+/// [`validate_size`]).
+///
+/// # Errors
+///
+/// Returns [`WasmError::InvalidInput`] if a component is NaN, infinite, or
+/// larger than [`SIZE_LIMIT`] in magnitude.
+pub fn validate_vector(vector: brepkit_math::vec::Vec3, name: &str) -> Result<(), WasmError> {
+    validate_coordinates([vector.x(), vector.y(), vector.z()], name)
+}
+
+fn validate_coordinates(coordinates: [f64; 3], name: &str) -> Result<(), WasmError> {
+    for (axis, c) in ["x", "y", "z"].into_iter().zip(coordinates) {
+        validate_size(c, &format!("{name} {axis}"))?;
+    }
+    Ok(())
+}
+
+/// Validate the box a shape takes once it is built or moved.
+///
+/// Each corner must be a point [`validate_point`] accepts. A move can take
+/// a shape past [`SIZE_LIMIT`] though each of its inputs is within it, as a
+/// scale of 1e200 does to a shape 1e200 across.
+///
+/// # Errors
+///
+/// Returns [`WasmError::InvalidInput`] if a corner of `aabb` is not finite
+/// or is past [`SIZE_LIMIT`].
+pub fn validate_extent(aabb: &brepkit_math::aabb::Aabb3, name: &str) -> Result<(), WasmError> {
+    validate_point(aabb.min, name)?;
+    validate_point(aabb.max, name)
+}
+
+/// The most iterations a solver or fit takes from JS.
+///
+/// Each iteration is a pass over the whole system, so a count of
+/// `u32::MAX` holds the instance for hours. The counts in the tests and in
+/// brepjs are at most 200; this limit is fifty times that.
+pub const MAX_ITERATIONS: u32 = 10_000;
+
 /// The largest count a binding takes from JS for the points, segments or
 /// sides along one curve, polygon or sweep, or the copies of a pattern.
 ///

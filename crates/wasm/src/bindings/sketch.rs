@@ -4,7 +4,7 @@
 
 use wasm_bindgen::prelude::*;
 
-use crate::error::WasmError;
+use crate::error::{MAX_ITERATIONS, WasmError, validate_count, validate_tolerance};
 use crate::helpers::{json_f64, json_usize, parse_sketch_constraint};
 use crate::kernel::BrepKernel;
 use crate::state::SketchState;
@@ -487,6 +487,8 @@ impl BrepKernel {
         max_iterations: u32,
         tolerance: f64,
     ) -> Result<String, JsError> {
+        validate_count(max_iterations, "max_iterations", MAX_ITERATIONS)?;
+        validate_tolerance(tolerance, "tolerance")?;
         let sk = self
             .sketches
             .get_mut(sketch as usize)

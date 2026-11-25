@@ -62,8 +62,13 @@ impl BrepKernel {
                             .map_err(|e| e.to_string())?;
                         let distance = setback["distance"]
                             .as_f64()
-                            .filter(|d| d.is_finite() && *d > 0.0)
-                            .ok_or_else(|| "a set-back's distance must be positive".to_string())?;
+                            .filter(|d| *d > 0.0 && *d <= brepkit_math::curves::SIZE_LIMIT)
+                            .ok_or_else(|| {
+                                format!(
+                                    "a set-back's distance must be positive and at most {:e}",
+                                    brepkit_math::curves::SIZE_LIMIT
+                                )
+                            })?;
                         setbacks.push((edge, distance));
                     }
                 }

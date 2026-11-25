@@ -12,7 +12,8 @@ use brepkit_topology::wire::{OrientedEdge, Wire};
 use wasm_bindgen::prelude::*;
 
 use crate::error::{
-    MAX_COUNT, WasmError, validate_count, validate_finite, validate_positive, validate_size,
+    MAX_COUNT, WasmError, validate_count, validate_finite, validate_point, validate_positive,
+    validate_size, validate_vector,
 };
 use crate::handles::{
     edge_id_to_u32, face_id_to_u32, solid_id_to_u32, vertex_id_to_u32, wire_id_to_u32,
@@ -80,17 +81,7 @@ impl BrepKernel {
             .into());
         }
 
-        if let Some(pos) = coords.iter().position(|v| !v.is_finite()) {
-            return Err(WasmError::InvalidInput {
-                reason: format!("coordinate at index {pos} is not finite"),
-            }
-            .into());
-        }
-
-        let points: Vec<Point3> = coords
-            .chunks_exact(3)
-            .map(|c| Point3::new(c[0], c[1], c[2]))
-            .collect();
+        let points = parse_points(&coords)?;
 
         let face_id = self.make_planar_face(&points)?;
         Ok(face_id_to_u32(face_id))
@@ -118,9 +109,7 @@ impl BrepKernel {
     /// Returns a vertex handle (`u32`).
     #[wasm_bindgen(js_name = "makeVertex")]
     pub fn make_vertex(&mut self, x: f64, y: f64, z: f64) -> Result<u32, JsError> {
-        validate_finite(x, "x")?;
-        validate_finite(y, "y")?;
-        validate_finite(z, "z")?;
+        validate_point(Point3::new(x, y, z), "the vertex")?;
         let id = self
             .topo_mut()
             .add_vertex(Vertex::new(Point3::new(x, y, z), TOL));
@@ -142,6 +131,8 @@ impl BrepKernel {
     ) -> Result<u32, JsError> {
         let start = Point3::new(x1, y1, z1);
         let end = Point3::new(x2, y2, z2);
+        validate_point(start, "the start")?;
+        validate_point(end, "the end")?;
         let eid = brepkit_topology::builder::make_line_edge(self.topo_mut(), start, end, TOL)?;
         Ok(edge_id_to_u32(eid))
     }
@@ -404,6 +395,10 @@ impl BrepKernel {
         let end_pt = Point3::new(end_x, end_y, end_z);
         let center = Point3::new(center_x, center_y, center_z);
         let axis = Vec3::new(axis_x, axis_y, axis_z);
+        validate_point(start_pt, "the start")?;
+        validate_point(end_pt, "the end")?;
+        validate_point(center, "the center")?;
+        validate_vector(axis, "the axis")?;
 
         let n = axis.normalize().map_err(|e| WasmError::InvalidInput {
             reason: format!("invalid axis: {e}"),
@@ -482,13 +477,9 @@ impl BrepKernel {
         semi_major: f64,
         semi_minor: f64,
     ) -> Result<u32, JsError> {
+        validate_point(Point3::new(start_x, start_y, start_z), "the start")?;
+        validate_point(Point3::new(end_x, end_y, end_z), "the end")?;
         for (v, name) in [
-            (start_x, "start_x"),
-            (start_y, "start_y"),
-            (start_z, "start_z"),
-            (end_x, "end_x"),
-            (end_y, "end_y"),
-            (end_z, "end_z"),
             (axis_x, "axis_x"),
             (axis_y, "axis_y"),
             (axis_z, "axis_z"),
@@ -764,10 +755,7 @@ impl BrepKernel {
             }
             .into());
         }
-        let points: Vec<Point3> = coords
-            .chunks_exact(3)
-            .map(|c| Point3::new(c[0], c[1], c[2]))
-            .collect();
+        let points = parse_points(&coords)?;
         if points.len() < 4 {
             return Err(WasmError::InvalidInput {
                 reason: format!(

@@ -4,26 +4,21 @@
 
 use wasm_bindgen::prelude::*;
 
-use brepkit_math::mat::Mat4;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::{Point3, Vec3};
 use brepkit_operations::boolean::{self, BooleanOp, boolean};
-use brepkit_operations::extrude::extrude;
 use brepkit_operations::measure;
-use brepkit_operations::revolve::revolve;
 use brepkit_operations::sweep::sweep;
-use brepkit_operations::transform::transform_solid;
 use brepkit_topology::edge::EdgeCurve;
 
-use crate::error::{WasmError, validate_pattern_counts, validate_size};
+use crate::error::{WasmError, validate_finite, validate_tolerance};
 use crate::handles::{
-    compound_id_to_u32, edge_id_to_u32, face_id_to_u32, shell_id_to_u32, solid_id_to_u32,
-    wire_id_to_u32,
+    edge_id_to_u32, face_id_to_u32, shell_id_to_u32, solid_id_to_u32, wire_id_to_u32,
 };
 use crate::helpers::{
-    TOL, classify_to_string, get_f64, get_u32, handles_in, panic_message, try_fillet,
-    well_formed_nurbs, well_formed_nurbs_surface,
+    TOL, classify_to_string, get_f64, get_u32, handles_in, matrix_in, opt_f64, opt_handles_in,
+    opt_u32, well_formed_nurbs, well_formed_nurbs_surface,
 };
 use crate::kernel::BrepKernel;
 
@@ -84,6 +79,40 @@ impl BrepKernel {
 
 /// A `(u_range, v_range)` pair, each `(min, max)`.
 type UvRanges = ((f64, f64), (f64, f64));
+
+/// A revolve's axis from batch args: `originX..Z` (default the origin) and
+/// `axisX..Z` (default +z).
+fn axis_in(args: &serde_json::Value) -> Result<(Point3, Vec3), String> {
+    Ok((
+        Point3::new(
+            opt_f64(args, "originX", 0.0)?,
+            opt_f64(args, "originY", 0.0)?,
+            opt_f64(args, "originZ", 0.0)?,
+        ),
+        Vec3::new(
+            opt_f64(args, "axisX", 0.0)?,
+            opt_f64(args, "axisY", 0.0)?,
+            opt_f64(args, "axisZ", 1.0)?,
+        ),
+    ))
+}
+
+/// A cutting plane from batch args: `px..pz` (default the origin) and
+/// `nx..nz` (default +z).
+fn plane_in(args: &serde_json::Value) -> Result<(Point3, Vec3), String> {
+    Ok((
+        Point3::new(
+            opt_f64(args, "px", 0.0)?,
+            opt_f64(args, "py", 0.0)?,
+            opt_f64(args, "pz", 0.0)?,
+        ),
+        Vec3::new(
+            opt_f64(args, "nx", 0.0)?,
+            opt_f64(args, "ny", 0.0)?,
+            opt_f64(args, "nz", 1.0)?,
+        ),
+    ))
+}
 
 /// Build the in-plane axes used by `plane_to_nurbs`.
 ///
@@ -360,7 +389,7 @@ impl BrepKernel {
             }
             "makeSphere" => {
                 let r = get_f64(args, "radius")?;
-                let segments = get_u32(args, "segments").unwrap_or(16);
+                let segments = opt_u32(args, "segments", 16)?;
                 let solid = self
                     .make_sphere_impl(r, segments)
                     .map_err(|e| e.to_string())?;
@@ -376,7 +405,7 @@ impl BrepKernel {
             "makeTorus" => {
                 let major = get_f64(args, "majorRadius")?;
                 let minor = get_f64(args, "minorRadius")?;
-                let segments = get_u32(args, "segments").unwrap_or(16);
+                let segments = opt_u32(args, "segments", 16)?;
                 let solid = self
                     .make_torus_impl(major, minor, segments)
                     .map_err(|e| e.to_string())?;
@@ -395,14 +424,14 @@ impl BrepKernel {
                 let edge = self
                     .make_circle_edge_impl(
                         [
-                            get_f64(args, "cx").unwrap_or(0.0),
-                            get_f64(args, "cy").unwrap_or(0.0),
-                            get_f64(args, "cz").unwrap_or(0.0),
+                            opt_f64(args, "cx", 0.0)?,
+                            opt_f64(args, "cy", 0.0)?,
+                            opt_f64(args, "cz", 0.0)?,
                         ],
                         [
-                            get_f64(args, "nx").unwrap_or(0.0),
-                            get_f64(args, "ny").unwrap_or(0.0),
-                            get_f64(args, "nz").unwrap_or(1.0),
+                            opt_f64(args, "nx", 0.0)?,
+                            opt_f64(args, "ny", 0.0)?,
+                            opt_f64(args, "nz", 1.0)?,
                         ],
                         get_f64(args, "radius")?,
                     )
@@ -441,7 +470,7 @@ impl BrepKernel {
                         get_u32(args, "pathEdge")?,
                         args["contactMode"].as_str().unwrap_or("rmf"),
                         &scale_values,
-                        get_u32(args, "segments").unwrap_or(0),
+                        opt_u32(args, "segments", 0)?,
                         args["cornerMode"].as_str().unwrap_or("smooth"),
                     )
                     .map_err(|e| e.to_string())?;
@@ -510,19 +539,9 @@ impl BrepKernel {
             "compoundCut" => {
                 let target = get_u32(args, "target")?;
                 let target_id = self.resolve_solid(target).map_err(|e| e.to_string())?;
-                let tool_arr = args["tools"]
-                    .as_array()
-                    .ok_or("missing or invalid 'tools' array")?;
-                let tools: Vec<brepkit_topology::solid::SolidId> = tool_arr
-                    .iter()
-                    .enumerate()
-                    .map(|(i, v)| {
-                        let h = v
-                            .as_u64()
-                            .ok_or_else(|| format!("tools[{i}] is not a number"))
-                            .map(|n| n as u32)?;
-                        self.resolve_solid(h).map_err(|e| e.to_string())
-                    })
+                let tools: Vec<brepkit_topology::solid::SolidId> = handles_in(args, "tools")?
+                    .into_iter()
+                    .map(|h| self.resolve_solid(h).map_err(|e| e.to_string()))
                     .collect::<Result<Vec<_>, String>>()?;
                 let result = boolean::compound_cut(
                     self.topo_mut(),
@@ -534,19 +553,9 @@ impl BrepKernel {
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
             "fuseAll" => {
-                let solid_arr = args["solids"]
-                    .as_array()
-                    .ok_or("missing or invalid 'solids' array")?;
-                let solids: Vec<brepkit_topology::solid::SolidId> = solid_arr
-                    .iter()
-                    .enumerate()
-                    .map(|(i, v)| {
-                        let h = v
-                            .as_u64()
-                            .ok_or_else(|| format!("solids[{i}] is not a number"))
-                            .map(|n| n as u32)?;
-                        self.resolve_solid(h).map_err(|e| e.to_string())
-                    })
+                let solids: Vec<brepkit_topology::solid::SolidId> = handles_in(args, "solids")?
+                    .into_iter()
+                    .map(|h| self.resolve_solid(h).map_err(|e| e.to_string()))
                     .collect::<Result<Vec<_>, String>>()?;
                 let compound = self
                     .topo_mut()
@@ -557,42 +566,20 @@ impl BrepKernel {
             }
             "transform" => {
                 let s = get_u32(args, "solid")?;
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let matrix = args["matrix"]
-                    .as_array()
-                    .ok_or("missing or invalid 'matrix'")?;
-                if matrix.len() != 16 {
-                    return Err(format!(
-                        "matrix must have 16 elements, got {}",
-                        matrix.len()
-                    ));
-                }
-                let elems: Vec<f64> = matrix
-                    .iter()
-                    .enumerate()
-                    .map(|(i, v)| {
-                        v.as_f64()
-                            .ok_or_else(|| format!("matrix[{i}] is not a number"))
-                    })
-                    .collect::<Result<_, _>>()?;
-                let rows = std::array::from_fn(|i| std::array::from_fn(|j| elems[i * 4 + j]));
-                let mat = Mat4(rows);
-                transform_solid(self.topo_mut(), solid_id, &mat).map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(solid_id)))
+                let matrix = matrix_in(args, "matrix")?;
+                self.transform_solid_impl(s, &matrix)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(s))
             }
             "volume" => {
-                let s = get_u32(args, "solid")?;
-                let deflection = get_f64(args, "deflection").unwrap_or(0.1);
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let v = measure::solid_volume(&self.topo, solid_id, deflection)
+                let v = self
+                    .volume_impl(get_u32(args, "solid")?, opt_f64(args, "deflection", 0.1)?)
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(v))
             }
             "surfaceArea" => {
-                let s = get_u32(args, "solid")?;
-                let deflection = get_f64(args, "deflection").unwrap_or(0.1);
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let a = measure::solid_surface_area(&self.topo, solid_id, deflection)
+                let a = self
+                    .surface_area_impl(get_u32(args, "solid")?, opt_f64(args, "deflection", 0.1)?)
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(a))
             }
@@ -611,10 +598,8 @@ impl BrepKernel {
                 ]))
             }
             "centerOfMass" => {
-                let s = get_u32(args, "solid")?;
-                let deflection = get_f64(args, "deflection").unwrap_or(0.1);
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let com = measure::solid_center_of_mass(&self.topo, solid_id, deflection)
+                let com = self
+                    .center_of_mass_impl(get_u32(args, "solid")?, opt_f64(args, "deflection", 0.1)?)
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!([com.x(), com.y(), com.z()]))
             }
@@ -653,105 +638,66 @@ impl BrepKernel {
             }
             "copyAndTransformSolid" => {
                 let s = get_u32(args, "solid")?;
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let matrix = args["matrix"]
-                    .as_array()
-                    .ok_or("missing or invalid 'matrix'")?;
-                if matrix.len() != 16 {
-                    return Err(format!(
-                        "matrix must have 16 elements, got {}",
-                        matrix.len()
-                    ));
-                }
-                let elems: Vec<f64> = matrix
-                    .iter()
-                    .enumerate()
-                    .map(|(i, v)| {
-                        v.as_f64()
-                            .ok_or_else(|| format!("matrix[{i}] is not a number"))
-                    })
-                    .collect::<Result<_, _>>()?;
-                let rows = std::array::from_fn(|i| std::array::from_fn(|j| elems[i * 4 + j]));
-                let mat = Mat4(rows);
-                let copy = brepkit_operations::copy::copy_and_transform_solid(
-                    self.topo_mut(),
-                    solid_id,
-                    &mat,
-                )
-                .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(copy)))
+                let matrix = matrix_in(args, "matrix")?;
+                let copy = self
+                    .copy_and_transform_solid_impl(s, &matrix)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(copy))
             }
             // ── Batch 8: new batch-dispatched operations ──────────────
             "extrude" => {
-                let f = get_u32(args, "face")?;
-                let dx = get_f64(args, "dx").unwrap_or(0.0);
-                let dy = get_f64(args, "dy").unwrap_or(0.0);
-                let dz = get_f64(args, "dz").unwrap_or(1.0);
-                let dist = get_f64(args, "distance").unwrap_or(1.0);
-                validate_size(dist, "distance").map_err(|e| e.to_string())?;
-                let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
-                let dir = Vec3::new(dx, dy, dz);
-                let solid =
-                    extrude(self.topo_mut(), face_id, dir, dist).map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(solid)))
+                let direction = Vec3::new(
+                    opt_f64(args, "dx", 0.0)?,
+                    opt_f64(args, "dy", 0.0)?,
+                    opt_f64(args, "dz", 1.0)?,
+                );
+                let solid = self
+                    .extrude_impl(
+                        get_u32(args, "face")?,
+                        direction,
+                        opt_f64(args, "distance", 1.0)?,
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid))
             }
             "revolve" => {
-                let f = get_u32(args, "face")?;
-                let angle_degrees = get_f64(args, "angle")?;
-                let ox = get_f64(args, "originX").unwrap_or(0.0);
-                let oy = get_f64(args, "originY").unwrap_or(0.0);
-                let oz = get_f64(args, "originZ").unwrap_or(0.0);
-                let ax = get_f64(args, "axisX").unwrap_or(0.0);
-                let ay = get_f64(args, "axisY").unwrap_or(0.0);
-                let az = get_f64(args, "axisZ").unwrap_or(1.0);
-                let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
-                // Convert degrees to radians to match the direct WASM binding.
-                let solid = revolve(
-                    self.topo_mut(),
-                    face_id,
-                    Point3::new(ox, oy, oz),
-                    Vec3::new(ax, ay, az),
-                    angle_degrees.to_radians(),
-                )
-                .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(solid)))
+                let (origin, axis) = axis_in(args)?;
+                let solid = self
+                    .revolve_impl(
+                        get_u32(args, "face")?,
+                        origin,
+                        axis,
+                        get_f64(args, "angle")?,
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid))
             }
             "extrudeWire" => {
-                let w = get_u32(args, "wire")?;
-                let dx = get_f64(args, "dx").unwrap_or(0.0);
-                let dy = get_f64(args, "dy").unwrap_or(0.0);
-                let dz = get_f64(args, "dz").unwrap_or(1.0);
-                let dist = get_f64(args, "distance").unwrap_or(1.0);
-                validate_size(dist, "distance").map_err(|e| e.to_string())?;
-                let wire_id = self.resolve_wire(w).map_err(|e| e.to_string())?;
-                let shell = brepkit_operations::sheet::extrude_wire(
-                    self.topo_mut(),
-                    wire_id,
-                    Vec3::new(dx, dy, dz),
-                    dist,
-                )
-                .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(shell_id_to_u32(shell)))
+                let direction = Vec3::new(
+                    opt_f64(args, "dx", 0.0)?,
+                    opt_f64(args, "dy", 0.0)?,
+                    opt_f64(args, "dz", 1.0)?,
+                );
+                let shell = self
+                    .extrude_wire_impl(
+                        get_u32(args, "wire")?,
+                        direction,
+                        opt_f64(args, "distance", 1.0)?,
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(shell))
             }
             "revolveWire" => {
-                let w = get_u32(args, "wire")?;
-                let angle_degrees = get_f64(args, "angle")?;
-                let ox = get_f64(args, "originX").unwrap_or(0.0);
-                let oy = get_f64(args, "originY").unwrap_or(0.0);
-                let oz = get_f64(args, "originZ").unwrap_or(0.0);
-                let ax = get_f64(args, "axisX").unwrap_or(0.0);
-                let ay = get_f64(args, "axisY").unwrap_or(0.0);
-                let az = get_f64(args, "axisZ").unwrap_or(1.0);
-                let wire_id = self.resolve_wire(w).map_err(|e| e.to_string())?;
-                let shell = brepkit_operations::sheet::revolve_wire(
-                    self.topo_mut(),
-                    wire_id,
-                    Point3::new(ox, oy, oz),
-                    Vec3::new(ax, ay, az),
-                    angle_degrees.to_radians(),
-                )
-                .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(shell_id_to_u32(shell)))
+                let (origin, axis) = axis_in(args)?;
+                let shell = self
+                    .revolve_wire_impl(
+                        get_u32(args, "wire")?,
+                        origin,
+                        axis,
+                        get_f64(args, "angle")?,
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(shell))
             }
             "loftWires" => {
                 let wire_handles = handles_in(args, "wires")?;
@@ -827,16 +773,9 @@ impl BrepKernel {
             }
             "fairSurface" => {
                 let face = self
-                    .resolve_face(get_u32(args, "face")?)
+                    .fair_surface_impl(get_u32(args, "face")?, get_f64(args, "tolerance")?)
                     .map_err(|e| e.to_string())?;
-                let tolerance = get_f64(args, "tolerance")?;
-                let result = brepkit_operations::blend_surface::fair_surface(
-                    self.topo_mut(),
-                    face,
-                    tolerance,
-                )
-                .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(face_id_to_u32(result)))
+                Ok(serde_json::json!(face))
             }
             "sweepWire" => {
                 let w = get_u32(args, "wire")?;
@@ -867,18 +806,24 @@ impl BrepKernel {
                 Ok(serde_json::json!(solid_id_to_u32(solid)))
             }
             "multiSectionSweep" => {
-                let faces: Vec<u32> = args["faces"]
-                    .as_array()
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|v| v.as_u64().map(|n| n as u32))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let params: Vec<f64> = args["params"]
-                    .as_array()
-                    .map(|a| a.iter().filter_map(serde_json::Value::as_f64).collect())
-                    .unwrap_or_default();
+                let faces = opt_handles_in(args, "faces")?;
+                let params: Vec<f64> = match &args["params"] {
+                    serde_json::Value::Null => Vec::new(),
+                    value => value
+                        .as_array()
+                        .ok_or("'params' must be an array")?
+                        .iter()
+                        .enumerate()
+                        .map(|(i, v)| {
+                            let p = v
+                                .as_f64()
+                                .ok_or_else(|| format!("params[{i}] is not a number"))?;
+                            validate_finite(p, "a section's parameter")
+                                .map_err(|e| e.to_string())?;
+                            Ok(p)
+                        })
+                        .collect::<Result<_, String>>()?,
+                };
                 if faces.len() != params.len() {
                     return Err("multiSectionSweep: faces and params length mismatch".into());
                 }
@@ -945,289 +890,129 @@ impl BrepKernel {
                 Ok(serde_json::json!(solid_id_to_u32(solid)))
             }
             "projectEdges" => {
-                let solid = self
-                    .resolve_solid(get_u32(args, "solid")?)
-                    .map_err(|e| e.to_string())?;
-                let origin = Point3::new(
-                    get_f64(args, "originX")?,
-                    get_f64(args, "originY")?,
-                    get_f64(args, "originZ")?,
+                let frame = (
+                    Point3::new(
+                        get_f64(args, "originX")?,
+                        get_f64(args, "originY")?,
+                        get_f64(args, "originZ")?,
+                    ),
+                    Vec3::new(
+                        get_f64(args, "dirX")?,
+                        get_f64(args, "dirY")?,
+                        get_f64(args, "dirZ")?,
+                    ),
+                    Vec3::new(
+                        get_f64(args, "xAxisX")?,
+                        get_f64(args, "xAxisY")?,
+                        get_f64(args, "xAxisZ")?,
+                    ),
                 );
-                let dir = Vec3::new(
-                    get_f64(args, "dirX")?,
-                    get_f64(args, "dirY")?,
-                    get_f64(args, "dirZ")?,
-                );
-                let x_axis = Vec3::new(
-                    get_f64(args, "xAxisX")?,
-                    get_f64(args, "xAxisY")?,
-                    get_f64(args, "xAxisZ")?,
-                );
-                let hidden_lines = args["hiddenLines"].as_bool().unwrap_or(true);
-                let deflection = get_f64(args, "deflection").unwrap_or(0.1);
-                let result = brepkit_operations::projection::project_edges(
-                    &self.topo,
-                    solid,
-                    origin,
-                    dir,
-                    x_axis,
-                    hidden_lines,
-                    deflection,
+                self.project_edges_impl(
+                    get_u32(args, "solid")?,
+                    frame,
+                    args["hiddenLines"].as_bool().unwrap_or(true),
+                    opt_f64(args, "deflection", 0.1)?,
                 )
-                .map_err(|e| e.to_string())?;
-                let flatten = |polys: &[Vec<brepkit_math::vec::Point2>]| -> Vec<Vec<f64>> {
-                    polys
-                        .iter()
-                        .map(|poly| poly.iter().flat_map(|p| [p.x(), p.y()]).collect())
-                        .collect()
-                };
-                Ok(serde_json::json!({
-                    "visible": flatten(&result.visible),
-                    "hidden": flatten(&result.hidden),
-                }))
+                .map_err(|e| e.to_string())
             }
             "chamfer" => {
-                let s = get_u32(args, "solid")?;
-                let dist = get_f64(args, "distance")?;
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let edge_handles: Vec<u32> = args["edges"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_u64().map(|n| n as u32))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let edge_ids: Vec<_> = edge_handles
-                    .iter()
-                    .map(|&h| self.resolve_edge(h).map_err(|e| e.to_string()))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let result =
-                    crate::helpers::try_chamfer(self.topo_mut(), solid_id, &edge_ids, dist)
-                        .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(result)))
+                let solid = self
+                    .chamfer_impl(
+                        get_u32(args, "solid")?,
+                        &opt_handles_in(args, "edges")?,
+                        get_f64(args, "distance")?,
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid))
             }
             "fillet" => {
-                let s = get_u32(args, "solid")?;
-                let radius = get_f64(args, "radius")?;
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let edge_handles: Vec<u32> = args["edges"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_u64().map(|n| n as u32))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let edge_ids: Vec<_> = edge_handles
-                    .iter()
-                    .map(|&h| self.resolve_edge(h).map_err(|e| e.to_string()))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let fillet_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    try_fillet(self.topo_mut(), solid_id, &edge_ids, radius)
-                }));
-                let result = match fillet_result {
-                    Ok(inner) => inner.map_err(|e| e.to_string())?,
-                    Err(panic_info) => {
-                        return Err(panic_message(&panic_info, "Fillet"));
-                    }
-                };
-                Ok(serde_json::json!(solid_id_to_u32(result)))
+                let solid = self
+                    .fillet_impl(
+                        get_u32(args, "solid")?,
+                        &opt_handles_in(args, "edges")?,
+                        get_f64(args, "radius")?,
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid))
             }
             "filletVariable" => {
-                let s = get_u32(args, "solid")?;
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
                 let specs = args["specs"]
                     .as_array()
                     .ok_or_else(|| "missing 'specs' array".to_string())?;
-                let mut edge_laws = Vec::with_capacity(specs.len());
-                for spec in specs {
-                    let edge_handle = spec["edge"]
-                        .as_u64()
-                        .ok_or_else(|| "missing 'edge' in fillet spec".to_string())?
-                        as u32;
-                    let edge_id = self.resolve_edge(edge_handle).map_err(|e| e.to_string())?;
-                    let start_val = spec["start"]
-                        .as_f64()
-                        .or_else(|| spec["startRadius"].as_f64());
-                    let end_val = spec["end"].as_f64().or_else(|| spec["endRadius"].as_f64());
-                    let law_str =
-                        spec["law"]
-                            .as_str()
-                            .unwrap_or_else(|| match (start_val, end_val) {
-                                (Some(sv), Some(ev)) if (sv - ev).abs() > f64::EPSILON => "linear",
-                                _ => "constant",
-                            });
-                    let law = match law_str {
-                        "linear" => brepkit_operations::fillet::FilletRadiusLaw::Linear {
-                            start: start_val.unwrap_or(1.0),
-                            end: end_val.unwrap_or(1.0),
-                        },
-                        "scurve" => brepkit_operations::fillet::FilletRadiusLaw::SCurve {
-                            start: start_val.unwrap_or(1.0),
-                            end: end_val.unwrap_or(1.0),
-                        },
-                        _ => {
-                            let r = spec["radius"].as_f64().or(start_val).unwrap_or(1.0);
-                            brepkit_operations::fillet::FilletRadiusLaw::Constant(r)
-                        }
-                    };
-                    edge_laws.push((edge_id, law));
-                }
-                let result =
-                    crate::helpers::try_fillet_variable(self.topo_mut(), solid_id, &edge_laws)
-                        .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(result)))
+                let solid = self
+                    .fillet_variable_impl(get_u32(args, "solid")?, specs)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid))
             }
             "filletV2" => {
-                let s = get_u32(args, "solid")?;
-                let radius = get_f64(args, "radius")?;
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let edge_handles: Vec<u32> = args["edges"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_u64().map(|n| n as u32))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let edge_ids: Vec<_> = edge_handles
-                    .iter()
-                    .map(|&h| self.resolve_edge(h).map_err(|e| e.to_string()))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let result = brepkit_operations::blend_ops::fillet_v2(
-                    self.topo_mut(),
-                    solid_id,
-                    &edge_ids,
-                    radius,
-                )
-                .map_err(|e| e.to_string())?;
-                let solid = brepkit_operations::blend_ops::all_blended(result)
+                let solid = self
+                    .fillet_v2_impl(
+                        get_u32(args, "solid")?,
+                        &opt_handles_in(args, "edges")?,
+                        get_f64(args, "radius")?,
+                    )
                     .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(solid)))
+                Ok(serde_json::json!(solid))
             }
             "filletV2Corners" => {
-                let s = get_u32(args, "solid")?;
-                let radius = get_f64(args, "radius")?;
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let edge_ids = handles_in(args, "edges")?
-                    .into_iter()
-                    .map(|h| self.resolve_edge(h).map_err(|e| e.to_string()))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let corners = self.parse_fillet_corners(&args["corners"])?;
-                let solid = brepkit_operations::blend_ops::fillet_v2_with_corners(
-                    self.topo_mut(),
-                    solid_id,
-                    &edge_ids,
-                    radius,
-                    &corners,
-                )
-                .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(solid)))
+                let solid = self
+                    .fillet_v2_corners_impl(
+                        get_u32(args, "solid")?,
+                        &handles_in(args, "edges")?,
+                        get_f64(args, "radius")?,
+                        &args["corners"],
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid))
             }
             "chamferV2" => {
-                let s = get_u32(args, "solid")?;
-                let d1 = get_f64(args, "d1")?;
-                let d2 = get_f64(args, "d2")?;
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let edge_handles: Vec<u32> = args["edges"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_u64().map(|n| n as u32))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let edge_ids: Vec<_> = edge_handles
-                    .iter()
-                    .map(|&h| self.resolve_edge(h).map_err(|e| e.to_string()))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let result = brepkit_operations::blend_ops::chamfer_v2(
-                    self.topo_mut(),
-                    solid_id,
-                    &edge_ids,
-                    d1,
-                    d2,
-                )
-                .map_err(|e| e.to_string())?;
-                let solid = brepkit_operations::blend_ops::all_blended(result)
+                let solid = self
+                    .chamfer_v2_impl(
+                        get_u32(args, "solid")?,
+                        &opt_handles_in(args, "edges")?,
+                        get_f64(args, "d1")?,
+                        get_f64(args, "d2")?,
+                    )
                     .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(solid)))
+                Ok(serde_json::json!(solid))
             }
             "chamferDistanceAngle" => {
-                let s = get_u32(args, "solid")?;
-                let distance = get_f64(args, "distance")?;
-                let angle = get_f64(args, "angle")?;
-                if angle >= std::f64::consts::FRAC_PI_2 {
-                    return Err("angle must be less than π/2".into());
-                }
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let edge_handles: Vec<u32> = args["edges"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_u64().map(|n| n as u32))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let edge_ids: Vec<_> = edge_handles
-                    .iter()
-                    .map(|&h| self.resolve_edge(h).map_err(|e| e.to_string()))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let result = brepkit_operations::blend_ops::chamfer_distance_angle(
-                    self.topo_mut(),
-                    solid_id,
-                    &edge_ids,
-                    distance,
-                    angle,
-                )
-                .map_err(|e| e.to_string())?;
-                let solid = brepkit_operations::blend_ops::all_blended(result)
+                let solid = self
+                    .chamfer_distance_angle_impl(
+                        get_u32(args, "solid")?,
+                        &opt_handles_in(args, "edges")?,
+                        get_f64(args, "distance")?,
+                        get_f64(args, "angle")?,
+                    )
                     .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(solid)))
+                Ok(serde_json::json!(solid))
             }
             "shell" => {
-                let s = get_u32(args, "solid")?;
-                let thickness = get_f64(args, "thickness")?;
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let face_handles: Vec<u32> = args["faces"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_u64().map(|n| n as u32))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let face_ids: Vec<_> = face_handles
-                    .iter()
-                    .map(|&h| self.resolve_face(h).map_err(|e| e.to_string()))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let result = brepkit_operations::shell_op::shell(
-                    self.topo_mut(),
-                    solid_id,
-                    thickness,
-                    &face_ids,
-                )
-                .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(result)))
+                let solid = self
+                    .shell_impl(
+                        get_u32(args, "solid")?,
+                        get_f64(args, "thickness")?,
+                        &opt_handles_in(args, "faces")?,
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid))
             }
             "mirror" => {
                 let s = get_u32(args, "solid")?;
-                let px = get_f64(args, "px").unwrap_or(0.0);
-                let py = get_f64(args, "py").unwrap_or(0.0);
-                let pz = get_f64(args, "pz").unwrap_or(0.0);
-                let nx = get_f64(args, "nx").unwrap_or(1.0);
-                let ny = get_f64(args, "ny").unwrap_or(0.0);
-                let nz = get_f64(args, "nz").unwrap_or(0.0);
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let result = brepkit_operations::mirror::mirror(
-                    self.topo_mut(),
-                    solid_id,
-                    Point3::new(px, py, pz),
-                    Vec3::new(nx, ny, nz),
-                )
-                .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(result)))
+                let point = Point3::new(
+                    opt_f64(args, "px", 0.0)?,
+                    opt_f64(args, "py", 0.0)?,
+                    opt_f64(args, "pz", 0.0)?,
+                );
+                let normal = Vec3::new(
+                    opt_f64(args, "nx", 1.0)?,
+                    opt_f64(args, "ny", 0.0)?,
+                    opt_f64(args, "nz", 0.0)?,
+                );
+                let result = self
+                    .mirror_impl(s, point, normal)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(result))
             }
             "unifyFaces" => {
                 let s = get_u32(args, "solid")?;
@@ -1248,7 +1033,8 @@ impl BrepKernel {
             }
             "convertToElementary" => {
                 let s = get_u32(args, "solid")?;
-                let tol = get_f64(args, "tolerance").unwrap_or(crate::helpers::TOL);
+                let tol = opt_f64(args, "tolerance", crate::helpers::TOL)?;
+                validate_tolerance(tol, "tolerance").map_err(|e| e.to_string())?;
                 let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
                 let count =
                     brepkit_operations::heal::convert_to_elementary(self.topo_mut(), solid_id, tol)
@@ -1260,7 +1046,8 @@ impl BrepKernel {
             }
             "healSolid" => {
                 let s = get_u32(args, "solid")?;
-                let tol = get_f64(args, "tolerance").unwrap_or(1e-7);
+                let tol = opt_f64(args, "tolerance", 1e-7)?;
+                validate_tolerance(tol, "tolerance").map_err(|e| e.to_string())?;
                 let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
                 brepkit_operations::heal::heal_solid(self.topo_mut(), solid_id, tol)
                     .map_err(|e| e.to_string())?;
@@ -1268,7 +1055,8 @@ impl BrepKernel {
             }
             "repairSolid" => {
                 let s = get_u32(args, "solid")?;
-                let tol = get_f64(args, "tolerance").unwrap_or(1e-7);
+                let tol = opt_f64(args, "tolerance", 1e-7)?;
+                validate_tolerance(tol, "tolerance").map_err(|e| e.to_string())?;
                 let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
                 let report = brepkit_operations::heal::repair_solid(self.topo_mut(), solid_id, tol)
                     .map_err(|e| e.to_string())?;
@@ -1280,29 +1068,22 @@ impl BrepKernel {
                 }))
             }
             "classifyPoint" => {
-                let s = get_u32(args, "solid")?;
-                let x = get_f64(args, "x")?;
-                let y = get_f64(args, "y")?;
-                let z = get_f64(args, "z")?;
-                let tol = get_f64(args, "tolerance").unwrap_or(1e-7);
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let pt = Point3::new(x, y, z);
-                let result = brepkit_operations::classify::classify_point(
-                    &self.topo, solid_id, pt, 0.1, tol,
-                )
-                .map_err(|e| e.to_string())?;
+                let point = Point3::new(
+                    get_f64(args, "x")?,
+                    get_f64(args, "y")?,
+                    get_f64(args, "z")?,
+                );
+                let result = self
+                    .classify_point_impl(
+                        get_u32(args, "solid")?,
+                        point,
+                        opt_f64(args, "tolerance", 1e-7)?,
+                    )
+                    .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(classify_to_string(result)))
             }
             "loft" => {
-                let face_handles: Vec<u32> = args["faces"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_u64().map(|n| n as u32))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let face_ids: Vec<_> = face_handles
+                let face_ids: Vec<_> = opt_handles_in(args, "faces")?
                     .iter()
                     .map(|&h| self.resolve_face(h).map_err(|e| e.to_string()))
                     .collect::<Result<Vec<_>, _>>()?;
@@ -1311,15 +1092,7 @@ impl BrepKernel {
                 Ok(serde_json::json!(solid_id_to_u32(result)))
             }
             "loftSmooth" => {
-                let face_handles: Vec<u32> = args["faces"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_u64().map(|n| n as u32))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let face_ids: Vec<_> = face_handles
+                let face_ids: Vec<_> = opt_handles_in(args, "faces")?
                     .iter()
                     .map(|&h| self.resolve_face(h).map_err(|e| e.to_string()))
                     .collect::<Result<Vec<_>, _>>()?;
@@ -1338,62 +1111,43 @@ impl BrepKernel {
                 Ok(serde_json::json!(handle))
             }
             "circularPattern" => {
-                let s = get_u32(args, "solid")?;
-                let ax = get_f64(args, "ax").unwrap_or(0.0);
-                let ay = get_f64(args, "ay").unwrap_or(0.0);
-                let az = get_f64(args, "az").unwrap_or(1.0);
-                let count = get_u32(args, "count")?;
-                validate_pattern_counts(&[count]).map_err(|e| e.to_string())?;
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let axis = Vec3::new(ax, ay, az);
-                let compound = brepkit_operations::pattern::circular_pattern(
-                    self.topo_mut(),
-                    solid_id,
-                    axis,
-                    count as usize,
-                )
-                .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(compound_id_to_u32(compound)))
+                let axis = Vec3::new(
+                    opt_f64(args, "ax", 0.0)?,
+                    opt_f64(args, "ay", 0.0)?,
+                    opt_f64(args, "az", 1.0)?,
+                );
+                let compound = self
+                    .circular_pattern_impl(get_u32(args, "solid")?, axis, get_u32(args, "count")?)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(compound))
             }
             "gridPattern" => {
-                let s = get_u32(args, "solid")?;
-                let dxx = get_f64(args, "dirXx").unwrap_or(1.0);
-                let dxy = get_f64(args, "dirXy").unwrap_or(0.0);
-                let dxz = get_f64(args, "dirXz").unwrap_or(0.0);
-                let dyx = get_f64(args, "dirYx").unwrap_or(0.0);
-                let dyy = get_f64(args, "dirYy").unwrap_or(1.0);
-                let dyz = get_f64(args, "dirYz").unwrap_or(0.0);
-                let sx = get_f64(args, "spacingX")?;
-                let sy = get_f64(args, "spacingY")?;
-                let cx = get_u32(args, "countX")?;
-                let cy = get_u32(args, "countY")?;
-                validate_pattern_counts(&[cx, cy]).map_err(|e| e.to_string())?;
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let compound = brepkit_operations::pattern::grid_pattern(
-                    self.topo_mut(),
-                    solid_id,
-                    Vec3::new(dxx, dxy, dxz),
-                    Vec3::new(dyx, dyy, dyz),
-                    sx,
-                    sy,
-                    cx as usize,
-                    cy as usize,
-                )
-                .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(compound_id_to_u32(compound)))
+                let directions = [
+                    Vec3::new(
+                        opt_f64(args, "dirXx", 1.0)?,
+                        opt_f64(args, "dirXy", 0.0)?,
+                        opt_f64(args, "dirXz", 0.0)?,
+                    ),
+                    Vec3::new(
+                        opt_f64(args, "dirYx", 0.0)?,
+                        opt_f64(args, "dirYy", 1.0)?,
+                        opt_f64(args, "dirYz", 0.0)?,
+                    ),
+                ];
+                let compound = self
+                    .grid_pattern_impl(
+                        get_u32(args, "solid")?,
+                        directions,
+                        [get_f64(args, "spacingX")?, get_f64(args, "spacingY")?],
+                        [get_u32(args, "countX")?, get_u32(args, "countY")?],
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(compound))
             }
             "defeature" => {
                 let s = get_u32(args, "solid")?;
                 let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let face_handles: Vec<u32> = args["faces"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_u64().map(|n| n as u32))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let face_ids: Vec<_> = face_handles
+                let face_ids: Vec<_> = opt_handles_in(args, "faces")?
                     .iter()
                     .map(|&h| self.resolve_face(h).map_err(|e| e.to_string()))
                     .collect::<Result<Vec<_>, _>>()?;
@@ -1417,60 +1171,14 @@ impl BrepKernel {
                 Ok(serde_json::json!(face_id_to_u32(copy)))
             }
             "transformWire" => {
-                let w = get_u32(args, "wire")?;
-                let wire_id = self.resolve_wire(w).map_err(|e| e.to_string())?;
-                let matrix = args["matrix"]
-                    .as_array()
-                    .ok_or("missing or invalid 'matrix'")?;
-                if matrix.len() != 16 {
-                    return Err(format!(
-                        "matrix must have 16 elements, got {}",
-                        matrix.len()
-                    ));
-                }
-                let elems: Vec<f64> = matrix
-                    .iter()
-                    .enumerate()
-                    .map(|(i, v)| {
-                        v.as_f64()
-                            .ok_or_else(|| format!("matrix[{i}] is not a number"))
-                    })
-                    .collect::<Result<_, _>>()?;
-                if let Some(pos) = elems.iter().position(|v| !v.is_finite()) {
-                    return Err(format!("matrix element at index {pos} is not finite"));
-                }
-                let rows = std::array::from_fn(|i| std::array::from_fn(|j| elems[i * 4 + j]));
-                let mat = Mat4(rows);
-                brepkit_operations::transform::transform_wire(self.topo_mut(), wire_id, &mat)
+                let matrix = matrix_in(args, "matrix")?;
+                self.transform_wire_impl(get_u32(args, "wire")?, &matrix)
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(null))
             }
             "transformFace" => {
-                let f = get_u32(args, "face")?;
-                let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
-                let matrix = args["matrix"]
-                    .as_array()
-                    .ok_or("missing or invalid 'matrix'")?;
-                if matrix.len() != 16 {
-                    return Err(format!(
-                        "matrix must have 16 elements, got {}",
-                        matrix.len()
-                    ));
-                }
-                let elems: Vec<f64> = matrix
-                    .iter()
-                    .enumerate()
-                    .map(|(i, v)| {
-                        v.as_f64()
-                            .ok_or_else(|| format!("matrix element {i} is not a number"))
-                    })
-                    .collect::<Result<_, _>>()?;
-                if let Some(pos) = elems.iter().position(|v| !v.is_finite()) {
-                    return Err(format!("matrix element at index {pos} is not finite"));
-                }
-                let rows = std::array::from_fn(|i| std::array::from_fn(|j| elems[i * 4 + j]));
-                let mat = Mat4(rows);
-                brepkit_operations::transform::transform_face(self.topo_mut(), face_id, &mat)
+                let matrix = matrix_in(args, "matrix")?;
+                self.transform_face_impl(get_u32(args, "face")?, &matrix)
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(null))
             }
@@ -1479,70 +1187,37 @@ impl BrepKernel {
                     .offset_face_impl(
                         get_u32(args, "face")?,
                         get_f64(args, "distance")?,
-                        get_u32(args, "samples").unwrap_or(16),
+                        opt_u32(args, "samples", 16)?,
                     )
                     .map_err(|e| e.to_string())?;
                 Ok(serde_json::json!(face))
             }
             "offsetSolid" => {
-                let s = get_u32(args, "solid")?;
-                let dist = get_f64(args, "distance")?;
-                validate_size(dist, "distance").map_err(|e| e.to_string())?;
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let result =
-                    brepkit_operations::offset_v2::offset_solid_v2(self.topo_mut(), solid_id, dist)
-                        .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(result)))
+                let solid = self
+                    .offset_solid_impl(get_u32(args, "solid")?, get_f64(args, "distance")?)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid))
             }
             "offsetSolidV2" => {
-                let s = get_u32(args, "solid")?;
-                let dist = get_f64(args, "distance")?;
-                validate_size(dist, "distance").map_err(|e| e.to_string())?;
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let result =
-                    brepkit_operations::offset_v2::offset_solid_v2(self.topo_mut(), solid_id, dist)
-                        .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(result)))
+                let solid = self
+                    .offset_solid_impl(get_u32(args, "solid")?, get_f64(args, "distance")?)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid))
             }
             "section" => {
-                let s = get_u32(args, "solid")?;
-                let px = get_f64(args, "px").unwrap_or(0.0);
-                let py = get_f64(args, "py").unwrap_or(0.0);
-                let pz = get_f64(args, "pz").unwrap_or(0.0);
-                let nx = get_f64(args, "nx").unwrap_or(0.0);
-                let ny = get_f64(args, "ny").unwrap_or(0.0);
-                let nz = get_f64(args, "nz").unwrap_or(1.0);
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let result = brepkit_operations::section::section(
-                    self.topo_mut(),
-                    solid_id,
-                    Point3::new(px, py, pz),
-                    Vec3::new(nx, ny, nz),
-                )
-                .map_err(|e| e.to_string())?;
-                let face_ids: Vec<u32> = result.faces.iter().map(|&f| face_id_to_u32(f)).collect();
+                let (point, normal) = plane_in(args)?;
+                let faces = self
+                    .section_impl(get_u32(args, "solid")?, point, normal)
+                    .map_err(|e| e.to_string())?;
+                let face_ids: Vec<u32> = faces.iter().map(|&f| face_id_to_u32(f)).collect();
                 Ok(serde_json::json!(face_ids))
             }
             "split" => {
-                let s = get_u32(args, "solid")?;
-                let px = get_f64(args, "px").unwrap_or(0.0);
-                let py = get_f64(args, "py").unwrap_or(0.0);
-                let pz = get_f64(args, "pz").unwrap_or(0.0);
-                let nx = get_f64(args, "nx").unwrap_or(0.0);
-                let ny = get_f64(args, "ny").unwrap_or(0.0);
-                let nz = get_f64(args, "nz").unwrap_or(1.0);
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let result = brepkit_operations::split::split(
-                    self.topo_mut(),
-                    solid_id,
-                    Point3::new(px, py, pz),
-                    Vec3::new(nx, ny, nz),
-                )
-                .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!({
-                    "positive": solid_id_to_u32(result.positive),
-                    "negative": solid_id_to_u32(result.negative),
-                }))
+                let (point, normal) = plane_in(args)?;
+                let (positive, negative) = self
+                    .split_impl(get_u32(args, "solid")?, point, normal)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!({ "positive": positive, "negative": negative }))
             }
             "imprintFaces" => {
                 use brepkit_operations::imprint::{ImprintTool, imprint_faces};
@@ -1580,32 +1255,19 @@ impl BrepKernel {
                 Ok(serde_json::json!(handles))
             }
             "sewFaces" => {
-                let face_handles: Vec<u32> = args["faces"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_u64().map(|n| n as u32))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let tol = get_f64(args, "tolerance").unwrap_or(1e-6);
-                let face_ids: Vec<_> = face_handles
-                    .iter()
-                    .map(|&h| self.resolve_face(h).map_err(|e| e.to_string()))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let solid = brepkit_operations::sew::sew_faces(self.topo_mut(), &face_ids, tol)
+                let solid = self
+                    .sew_faces_impl(
+                        &opt_handles_in(args, "faces")?,
+                        opt_f64(args, "tolerance", 1e-6)?,
+                    )
                     .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(solid)))
+                Ok(serde_json::json!(solid))
             }
             "thicken" => {
-                let f = get_u32(args, "face")?;
-                let thickness = get_f64(args, "thickness")?;
-                validate_size(thickness, "thickness").map_err(|e| e.to_string())?;
-                let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
-                let result =
-                    brepkit_operations::thicken::thicken(self.topo_mut(), face_id, thickness)
-                        .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(result)))
+                let solid = self
+                    .thicken_impl(get_u32(args, "face")?, get_f64(args, "thickness")?)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid))
             }
             "pipe" => {
                 let f = get_u32(args, "face")?;
@@ -1624,58 +1286,42 @@ impl BrepKernel {
                 Ok(serde_json::json!(solid_id_to_u32(solid)))
             }
             "linearPattern" => {
-                let s = get_u32(args, "solid")?;
-                let dx = get_f64(args, "dx").unwrap_or(1.0);
-                let dy = get_f64(args, "dy").unwrap_or(0.0);
-                let dz = get_f64(args, "dz").unwrap_or(0.0);
-                let spacing = get_f64(args, "spacing")?;
-                let count = get_u32(args, "count")?;
-                validate_pattern_counts(&[count]).map_err(|e| e.to_string())?;
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let compound = brepkit_operations::pattern::linear_pattern(
-                    self.topo_mut(),
-                    solid_id,
-                    Vec3::new(dx, dy, dz),
-                    spacing,
-                    count as usize,
-                )
-                .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(compound_id_to_u32(compound)))
+                let direction = Vec3::new(
+                    opt_f64(args, "dx", 1.0)?,
+                    opt_f64(args, "dy", 0.0)?,
+                    opt_f64(args, "dz", 0.0)?,
+                );
+                let compound = self
+                    .linear_pattern_impl(
+                        get_u32(args, "solid")?,
+                        direction,
+                        get_f64(args, "spacing")?,
+                        get_u32(args, "count")?,
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(compound))
             }
             "draft" => {
-                let s = get_u32(args, "solid")?;
-                let angle = get_f64(args, "angle")?;
-                let solid_id = self.resolve_solid(s).map_err(|e| e.to_string())?;
-                let face_handles: Vec<u32> = args["faces"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_u64().map(|n| n as u32))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let face_ids: Vec<_> = face_handles
-                    .iter()
-                    .map(|&h| self.resolve_face(h).map_err(|e| e.to_string()))
-                    .collect::<Result<Vec<_>, _>>()?;
-                let dx = get_f64(args, "dirX").unwrap_or(0.0);
-                let dy = get_f64(args, "dirY").unwrap_or(0.0);
-                let dz = get_f64(args, "dirZ").unwrap_or(1.0);
-                let npx = get_f64(args, "neutralX").unwrap_or(0.0);
-                let npy = get_f64(args, "neutralY").unwrap_or(0.0);
-                let npz = get_f64(args, "neutralZ").unwrap_or(0.0);
-                let dir = Vec3::new(dx, dy, dz);
-                let neutral = Point3::new(npx, npy, npz);
-                let result = brepkit_operations::draft::draft(
-                    self.topo_mut(),
-                    solid_id,
-                    &face_ids,
-                    dir,
-                    neutral,
-                    angle,
-                )
-                .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(solid_id_to_u32(result)))
+                let pull = Vec3::new(
+                    opt_f64(args, "dirX", 0.0)?,
+                    opt_f64(args, "dirY", 0.0)?,
+                    opt_f64(args, "dirZ", 1.0)?,
+                );
+                let neutral = Point3::new(
+                    opt_f64(args, "neutralX", 0.0)?,
+                    opt_f64(args, "neutralY", 0.0)?,
+                    opt_f64(args, "neutralZ", 0.0)?,
+                );
+                let solid = self
+                    .draft_impl(
+                        get_u32(args, "solid")?,
+                        &opt_handles_in(args, "faces")?,
+                        pull,
+                        neutral,
+                        get_f64(args, "angle")?,
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(solid))
             }
             "makeTangentArc3d" => {
                 let sx = get_f64(args, "startX")?;
@@ -1763,52 +1409,32 @@ impl BrepKernel {
                 Ok(serde_json::json!(eid))
             }
             "offsetWire" => {
-                let f = get_u32(args, "face")?;
-                let dist = get_f64(args, "distance")?;
-                let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
-                let wire_id =
-                    brepkit_operations::offset_wire::offset_wire(self.topo_mut(), face_id, dist)
-                        .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(wire_id_to_u32(wire_id)))
+                let wire = self
+                    .offset_wire_impl(get_u32(args, "face")?, get_f64(args, "distance")?, None)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(wire))
             }
             "offsetWireWithJoinType" => {
-                let f = get_u32(args, "face")?;
-                let dist = get_f64(args, "distance")?;
-                let jt_str = args["joinType"]
+                let join = args["joinType"]
                     .as_str()
                     .ok_or("missing or invalid 'joinType' string")?;
-                let jt =
-                    super::operations::parse_join_type_str(jt_str).map_err(|e| e.to_string())?;
-                let face_id = self.resolve_face(f).map_err(|e| e.to_string())?;
-                let wire_id = brepkit_operations::offset_wire::offset_wire_with_join(
-                    self.topo_mut(),
-                    face_id,
-                    dist,
-                    jt,
-                )
-                .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(wire_id_to_u32(wire_id)))
+                let wire = self
+                    .offset_wire_impl(
+                        get_u32(args, "face")?,
+                        get_f64(args, "distance")?,
+                        Some(join),
+                    )
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(wire))
             }
             "offsetWire2DWithJoin" => {
-                let w = get_u32(args, "wire")?;
-                let dist = get_f64(args, "distance")?;
-                let jt_str = args["joinType"]
+                let join = args["joinType"]
                     .as_str()
                     .ok_or("missing or invalid 'joinType' string")?;
-                let jt =
-                    super::operations::parse_join_type_str(jt_str).map_err(|e| e.to_string())?;
-                let wire_id = self.resolve_wire(w).map_err(|e| e.to_string())?;
-                let face_id =
-                    brepkit_topology::builder::make_planar_face_from_wire(self.topo_mut(), wire_id)
-                        .map_err(|e| e.to_string())?;
-                let result = brepkit_operations::offset_wire::offset_wire_with_join(
-                    self.topo_mut(),
-                    face_id,
-                    dist,
-                    jt,
-                )
-                .map_err(|e| e.to_string())?;
-                Ok(serde_json::json!(wire_id_to_u32(result)))
+                let wire = self
+                    .offset_wire_2d_impl(get_u32(args, "wire")?, get_f64(args, "distance")?, join)
+                    .map_err(|e| e.to_string())?;
+                Ok(serde_json::json!(wire))
             }
             "getNurbsCurveData" => {
                 let edge = get_u32(args, "edge")?;

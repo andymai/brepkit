@@ -24,12 +24,7 @@ impl BrepKernel {
     #[wasm_bindgen(js_name = "sewFaces")]
     #[allow(clippy::needless_pass_by_value)]
     pub fn sew_faces(&mut self, face_handles: Vec<u32>, tolerance: f64) -> Result<u32, JsError> {
-        let face_ids: Vec<brepkit_topology::face::FaceId> = face_handles
-            .iter()
-            .map(|&h| self.resolve_face(h))
-            .collect::<Result<_, _>>()?;
-        let solid = brepkit_operations::sew::sew_faces(self.topo_mut(), &face_ids, tolerance)?;
-        Ok(solid_id_to_u32(solid))
+        Ok(self.sew_faces_impl(&face_handles, tolerance)?)
     }
 
     /// Create a solid from a set of faces by sewing them together.

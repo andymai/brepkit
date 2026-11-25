@@ -6,7 +6,7 @@ use wasm_bindgen::prelude::*;
 
 use brepkit_operations::transform::transform_solid;
 
-use crate::error::{WasmError, validate_positive, validate_size};
+use crate::error::{MAX_COUNT, WasmError, validate_count, validate_positive, validate_size};
 use crate::handles::solid_id_to_u32;
 use crate::kernel::BrepKernel;
 
@@ -130,11 +130,9 @@ impl BrepKernel {
         segments: u32,
     ) -> Result<u32, WasmError> {
         validate_positive(radius, "radius")?;
-        let solid_id = brepkit_operations::primitives::make_sphere(
-            self.topo_mut(),
-            radius,
-            segments as usize,
-        )?;
+        let segments = validate_count(segments, "segments", MAX_COUNT)?;
+        let solid_id =
+            brepkit_operations::primitives::make_sphere(self.topo_mut(), radius, segments)?;
         Ok(solid_id_to_u32(solid_id))
     }
 
@@ -164,11 +162,12 @@ impl BrepKernel {
     ) -> Result<u32, WasmError> {
         validate_positive(major_radius, "major_radius")?;
         validate_positive(minor_radius, "minor_radius")?;
+        let segments = validate_count(segments, "segments", MAX_COUNT)?;
         let solid_id = brepkit_operations::primitives::make_torus(
             self.topo_mut(),
             major_radius,
             minor_radius,
-            segments as usize,
+            segments,
         )?;
         Ok(solid_id_to_u32(solid_id))
     }
