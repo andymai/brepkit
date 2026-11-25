@@ -842,7 +842,8 @@ mod tests {
     /// A degree-one zigzag is straight between its knots, so no span of it
     /// is cut and its count is the count of its corners. One of 1,000,001
     /// pieces would take 1,000,002 samples, past the limit for one edge, and
-    /// is refused for its corners; one of 1000 pieces keeps a break at each.
+    /// is refused at the first corner past the limit, before its spans are
+    /// built; one of 1000 pieces keeps a break at each.
     #[test]
     fn a_zigzag_past_the_limit_is_refused_for_its_corners() {
         let zigzag = |pieces: u32| {
@@ -861,18 +862,14 @@ mod tests {
             Some(&(0..=1000).map(f64::from).collect::<Vec<f64>>()),
             "{small:?}"
         );
-        let big = zigzag(1_000_001);
-        let started = std::time::Instant::now();
-        let big = nurbs_edge_breaks(&big, 0.0, 1_000_001.0, 0.01, 0.35);
+        let big = nurbs_edge_breaks(&zigzag(1_000_001), 0.0, 1_000_001.0, 0.01, 0.35);
+        // The refusal carries the count it stopped at: no more corners were
+        // read than the limit and the edge's two ends.
         assert!(
-            matches!(big, Err(crate::OperationsError::TooManySamples { .. })),
+            matches!(big, Err(crate::OperationsError::TooManySamples { samples, limit, .. })
+                if samples > limit && samples <= limit + 2.0),
             "{:?}",
             big.map(|b| b.len())
-        );
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(1),
-            "{:?}",
-            started.elapsed()
         );
     }
 
