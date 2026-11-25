@@ -17,9 +17,7 @@ use crate::error::{
     MAX_COUNT, MAX_GRID_SIDE, WasmError, validate_count, validate_finite, validate_positive,
     validate_size,
 };
-use crate::handles::{
-    edge_id_to_u32, face_id_to_u32, shell_id_to_u32, solid_id_to_u32, wire_id_to_u32,
-};
+use crate::handles::{edge_id_to_u32, face_id_to_u32, shell_id_to_u32, solid_id_to_u32};
 use brepkit_geometry::extrema::point_to_nurbs_surface;
 
 use crate::helpers::{
@@ -28,10 +26,8 @@ use crate::helpers::{
 };
 use crate::kernel::BrepKernel;
 
-use brepkit_operations::extrude::extrude;
 use brepkit_operations::loft::{LoftEnd, LoftOptions, LoftRail};
 use brepkit_operations::offset_wire::JoinType;
-use brepkit_operations::revolve::revolve;
 use brepkit_operations::sweep::sweep;
 
 /// Parse a join type string into a [`JoinType`] enum value.
@@ -74,21 +70,9 @@ impl BrepKernel {
         ny: f64,
         nz: f64,
     ) -> Result<Vec<u32>, JsError> {
-        validate_finite(px, "px")?;
-        validate_finite(py, "py")?;
-        validate_finite(pz, "pz")?;
-        validate_finite(nx, "nx")?;
-        validate_finite(ny, "ny")?;
-        validate_finite(nz, "nz")?;
-        let solid_id = self.resolve_solid(solid)?;
-        let result = brepkit_operations::section::section(
-            self.topo_mut(),
-            solid_id,
-            Point3::new(px, py, pz),
-            Vec3::new(nx, ny, nz),
-        )?;
+        let faces = self.section_impl(solid, Point3::new(px, py, pz), Vec3::new(nx, ny, nz))?;
         #[allow(clippy::cast_possible_truncation)]
-        Ok(result.faces.iter().map(|f| f.index() as u32).collect())
+        Ok(faces.iter().map(|f| f.index() as u32).collect())
     }
 
     // ── Loft ──────────────────────────────────────────────────────
@@ -207,19 +191,7 @@ impl BrepKernel {
         thickness: f64,
         open_faces: Vec<u32>,
     ) -> Result<u32, JsError> {
-        validate_positive(thickness, "thickness")?;
-        let solid_id = self.resolve_solid(solid)?;
-        let open_face_ids: Vec<brepkit_topology::face::FaceId> = open_faces
-            .iter()
-            .map(|&h| self.resolve_face(h))
-            .collect::<Result<_, _>>()?;
-        let result = brepkit_operations::shell_op::shell(
-            self.topo_mut(),
-            solid_id,
-            thickness,
-            &open_face_ids,
-        )?;
-        Ok(solid_id_to_u32(result))
+        Ok(self.shell_impl(solid, thickness, &open_faces)?)
     }
 
     // ── Chamfer ───────────────────────────────────────────────────
@@ -239,14 +211,7 @@ impl BrepKernel {
         edge_handles: Vec<u32>,
         distance: f64,
     ) -> Result<u32, JsError> {
-        validate_positive(distance, "distance")?;
-        let solid_id = self.resolve_solid(solid)?;
-        let edge_ids: Vec<brepkit_topology::edge::EdgeId> = edge_handles
-            .iter()
-            .map(|&h| self.resolve_edge(h))
-            .collect::<Result<_, _>>()?;
-        let result = crate::helpers::try_chamfer(self.topo_mut(), solid_id, &edge_ids, distance)?;
-        Ok(solid_id_to_u32(result))
+        Ok(self.chamfer_impl(solid, &edge_handles, distance)?)
     }
 
     // ── Fillet ────────────────────────────────────────────────────
@@ -267,37 +232,7 @@ impl BrepKernel {
         edge_handles: Vec<u32>,
         radius: f64,
     ) -> Result<u32, JsError> {
-        validate_positive(radius, "radius")?;
-        let solid_id = self.resolve_solid(solid)?;
-        let edge_ids: Vec<brepkit_topology::edge::EdgeId> = edge_handles
-            .iter()
-            .map(|&h| self.resolve_edge(h))
-            .collect::<Result<_, _>>()?;
-        // Use the rolling-ball fillet algorithm for true G1-continuous NURBS
-        // blend surfaces. Falls back to the planar fillet if rolling-ball fails.
-        // If the full set of edges fails (e.g. edges adjacent to NURBS faces from
-        // a prior fillet), filter to edges between two planar faces and retry.
-        //
-        // Wrap in catch_unwind to prevent panics from propagating across the
-        // WASM FFI boundary, which would abort the entire WASM instance.
-        let result =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<u32, JsError> {
-                let solid = crate::helpers::try_fillet_or_its_planar_edges(
-                    self.topo_mut(),
-                    solid_id,
-                    &edge_ids,
-                    radius,
-                )
-                .map_err(|error| JsError::new(&error.to_string()))?;
-                Ok(solid_id_to_u32(solid))
-            }));
-        match result {
-            Ok(inner) => inner,
-            Err(panic_info) => {
-                let msg = panic_message(&panic_info, "Fillet");
-                Err(JsError::new(&msg))
-            }
-        }
+        Ok(self.fillet_impl(solid, &edge_handles, radius)?)
     }
 
     /// Apply a constant-radius fillet and return face-evolution tracking data.
@@ -371,16 +306,7 @@ impl BrepKernel {
         dir_z: f64,
         distance: f64,
     ) -> Result<u32, JsError> {
-        validate_finite(dir_x, "dir_x")?;
-        validate_finite(dir_y, "dir_y")?;
-        validate_finite(dir_z, "dir_z")?;
-        validate_size(distance, "distance")?;
-
-        let face_id = self.resolve_face(face)?;
-        let direction = Vec3::new(dir_x, dir_y, dir_z);
-        let solid_id = extrude(self.topo_mut(), face_id, direction, distance)?;
-
-        Ok(solid_id_to_u32(solid_id))
+        Ok(self.extrude_impl(face, Vec3::new(dir_x, dir_y, dir_z), distance)?)
     }
 
     /// Extrude an open wire along a direction vector into an open shell.
@@ -401,17 +327,7 @@ impl BrepKernel {
         dir_z: f64,
         distance: f64,
     ) -> Result<u32, JsError> {
-        validate_finite(dir_x, "dir_x")?;
-        validate_finite(dir_y, "dir_y")?;
-        validate_finite(dir_z, "dir_z")?;
-        validate_size(distance, "distance")?;
-
-        let wire_id = self.resolve_wire(wire)?;
-        let direction = Vec3::new(dir_x, dir_y, dir_z);
-        let shell =
-            brepkit_operations::sheet::extrude_wire(self.topo_mut(), wire_id, direction, distance)?;
-
-        Ok(shell_id_to_u32(shell))
+        Ok(self.extrude_wire_impl(wire, Vec3::new(dir_x, dir_y, dir_z), distance)?)
     }
 
     /// Revolve a planar face around an axis to create a solid of revolution.
@@ -439,31 +355,12 @@ impl BrepKernel {
         dz: f64,
         angle_degrees: f64,
     ) -> Result<u32, JsError> {
-        validate_finite(ox, "ox")?;
-        validate_finite(oy, "oy")?;
-        validate_finite(oz, "oz")?;
-        validate_finite(dx, "dx")?;
-        validate_finite(dy, "dy")?;
-        validate_finite(dz, "dz")?;
-        validate_finite(angle_degrees, "angle_degrees")?;
-        let in_range = angle_degrees.abs() > 0.0 && angle_degrees.abs() <= 360.0;
-        if !in_range {
-            return Err(WasmError::InvalidInput {
-                reason: format!(
-                    "angle_degrees must be in [-360, 0) or (0, 360], got {angle_degrees}"
-                ),
-            }
-            .into());
-        }
-
-        let face_id = self.resolve_face(face)?;
-        let origin = Point3::new(ox, oy, oz);
-        let direction = Vec3::new(dx, dy, dz);
-        let angle_radians = angle_degrees.to_radians();
-
-        let solid_id = revolve(self.topo_mut(), face_id, origin, direction, angle_radians)?;
-
-        Ok(solid_id_to_u32(solid_id))
+        Ok(self.revolve_impl(
+            face,
+            Point3::new(ox, oy, oz),
+            Vec3::new(dx, dy, dz),
+            angle_degrees,
+        )?)
     }
 
     /// Revolve an open wire around an axis into an open shell.
@@ -492,33 +389,12 @@ impl BrepKernel {
         dz: f64,
         angle_degrees: f64,
     ) -> Result<u32, JsError> {
-        validate_finite(ox, "ox")?;
-        validate_finite(oy, "oy")?;
-        validate_finite(oz, "oz")?;
-        validate_finite(dx, "dx")?;
-        validate_finite(dy, "dy")?;
-        validate_finite(dz, "dz")?;
-        validate_finite(angle_degrees, "angle_degrees")?;
-        let in_range = angle_degrees.abs() > 0.0 && angle_degrees.abs() <= 360.0;
-        if !in_range {
-            return Err(WasmError::InvalidInput {
-                reason: format!(
-                    "angle_degrees must be in [-360, 0) or (0, 360], got {angle_degrees}"
-                ),
-            }
-            .into());
-        }
-
-        let wire_id = self.resolve_wire(wire)?;
-        let shell = brepkit_operations::sheet::revolve_wire(
-            self.topo_mut(),
-            wire_id,
+        Ok(self.revolve_wire_impl(
+            wire,
             Point3::new(ox, oy, oz),
             Vec3::new(dx, dy, dz),
-            angle_degrees.to_radians(),
-        )?;
-
-        Ok(shell_id_to_u32(shell))
+            angle_degrees,
+        )?)
     }
 
     /// Sweep a planar face along a NURBS curve path to create a solid.
@@ -661,6 +537,25 @@ impl BrepKernel {
         pitch: f64,
         turns: f64,
     ) -> Result<u32, JsError> {
+        crate::error::validate_point(
+            brepkit_math::vec::Point3::new(axis_origin_x, axis_origin_y, axis_origin_z),
+            "the axis' origin",
+        )?;
+        crate::error::validate_vector(
+            brepkit_math::vec::Vec3::new(axis_dir_x, axis_dir_y, axis_dir_z),
+            "the axis' direction",
+        )?;
+        crate::error::validate_positive(turns, "turns")?;
+        if turns > f64::from(crate::error::MAX_COUNT) {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "turns must be at most {}, got {turns}",
+                    crate::error::MAX_COUNT
+                ),
+            }
+            .into());
+        }
+        crate::error::validate_size(pitch * turns, "the helix's height")?;
         validate_positive(radius, "radius")?;
         validate_positive(pitch, "pitch")?;
         let face_id = self.resolve_face(profile)?;
@@ -702,23 +597,9 @@ impl BrepKernel {
         ny: f64,
         nz: f64,
     ) -> Result<Vec<u32>, JsError> {
-        validate_finite(px, "px")?;
-        validate_finite(py, "py")?;
-        validate_finite(pz, "pz")?;
-        validate_finite(nx, "nx")?;
-        validate_finite(ny, "ny")?;
-        validate_finite(nz, "nz")?;
-        let solid_id = self.resolve_solid(solid)?;
-        let result = brepkit_operations::split::split(
-            self.topo_mut(),
-            solid_id,
-            Point3::new(px, py, pz),
-            Vec3::new(nx, ny, nz),
-        )?;
-        Ok(vec![
-            solid_id_to_u32(result.positive),
-            solid_id_to_u32(result.negative),
-        ])
+        let (positive, negative) =
+            self.split_impl(solid, Point3::new(px, py, pz), Vec3::new(nx, ny, nz))?;
+        Ok(vec![positive, negative])
     }
 
     /// A copy of a solid with its faces split where the given faces and edges
@@ -806,20 +687,13 @@ impl BrepKernel {
         angle_degrees: f64,
     ) -> Result<u32, JsError> {
         validate_finite(angle_degrees, "angle_degrees")?;
-        let solid_id = self.resolve_solid(solid)?;
-        let face_ids: Vec<brepkit_topology::face::FaceId> = face_handles
-            .iter()
-            .map(|&h| self.resolve_face(h))
-            .collect::<Result<_, _>>()?;
-        let result = brepkit_operations::draft::draft(
-            self.topo_mut(),
-            solid_id,
-            &face_ids,
+        Ok(self.draft_impl(
+            solid,
+            &face_handles,
             Vec3::new(pull_x, pull_y, pull_z),
             Point3::new(neutral_x, neutral_y, neutral_z),
             angle_degrees.to_radians(),
-        )?;
-        Ok(solid_id_to_u32(result))
+        )?)
     }
 
     // ── Pipe ──────────────────────────────────────────────────────
@@ -917,11 +791,7 @@ impl BrepKernel {
     /// Returns an error if the distance is zero or the solid is invalid.
     #[wasm_bindgen(js_name = "offsetSolid")]
     pub fn offset_solid(&mut self, solid: u32, distance: f64) -> Result<u32, JsError> {
-        validate_size(distance, "distance")?;
-        let solid_id = self.resolve_solid(solid)?;
-        let result =
-            brepkit_operations::offset_v2::offset_solid_v2(self.topo_mut(), solid_id, distance)?;
-        Ok(solid_id_to_u32(result))
+        Ok(self.offset_solid_impl(solid, distance)?)
     }
 
     /// Offset all faces of a solid outward or inward (V2 pipeline).
@@ -933,11 +803,7 @@ impl BrepKernel {
     /// Returns an error if the distance is not finite or the solid is invalid.
     #[wasm_bindgen(js_name = "offsetSolidV2")]
     pub fn offset_solid_v2(&mut self, solid: u32, distance: f64) -> Result<u32, JsError> {
-        validate_size(distance, "distance")?;
-        let sid = self.resolve_solid(solid)?;
-        let result =
-            brepkit_operations::offset_v2::offset_solid_v2(self.topo_mut(), sid, distance)?;
-        Ok(solid_id_to_u32(result))
+        Ok(self.offset_solid_impl(solid, distance)?)
     }
 
     /// Thicken a face into a solid by offsetting it by the given distance.
@@ -950,10 +816,7 @@ impl BrepKernel {
     /// Returns an error if the face handle is invalid or thickness is zero.
     #[wasm_bindgen(js_name = "thicken")]
     pub fn thicken_face(&mut self, face: u32, thickness: f64) -> Result<u32, JsError> {
-        validate_size(thickness, "thickness")?;
-        let face_id = self.resolve_face(face)?;
-        let result = brepkit_operations::thicken::thicken(self.topo_mut(), face_id, thickness)?;
-        Ok(solid_id_to_u32(result))
+        Ok(self.thicken_impl(face, thickness)?)
     }
 
     // ── Variable Fillet ───────────────────────────────────────────
@@ -968,52 +831,11 @@ impl BrepKernel {
     /// Returns a new solid handle.
     #[wasm_bindgen(js_name = "filletVariable")]
     pub fn fillet_variable(&mut self, solid: u32, json: &str) -> Result<u32, JsError> {
-        let solid_id = self.resolve_solid(solid)?;
         let specs: Vec<serde_json::Value> =
             serde_json::from_str(json).map_err(|e| WasmError::InvalidInput {
                 reason: format!("invalid JSON: {e}"),
             })?;
-        let mut edge_laws = Vec::with_capacity(specs.len());
-        for spec in &specs {
-            let edge_handle = spec["edge"]
-                .as_u64()
-                .ok_or_else(|| WasmError::InvalidInput {
-                    reason: "missing 'edge' in fillet spec".into(),
-                })? as u32;
-            let edge_id = self.resolve_edge(edge_handle)?;
-            // Accept both brepkit-native ("start"/"end") and brepjs ("startRadius"/"endRadius")
-            let start_val = spec["start"]
-                .as_f64()
-                .or_else(|| spec["startRadius"].as_f64());
-            let end_val = spec["end"].as_f64().or_else(|| spec["endRadius"].as_f64());
-
-            // Auto-detect law: if no "law" field but start != end, use "linear"
-            let law_str = spec["law"]
-                .as_str()
-                .unwrap_or_else(|| match (start_val, end_val) {
-                    (Some(s), Some(e)) if (s - e).abs() > f64::EPSILON => "linear",
-                    _ => "constant",
-                });
-            let law = match law_str {
-                "linear" => {
-                    let s = start_val.unwrap_or(1.0);
-                    let e = end_val.unwrap_or(1.0);
-                    brepkit_operations::fillet::FilletRadiusLaw::Linear { start: s, end: e }
-                }
-                "scurve" => {
-                    let s = start_val.unwrap_or(1.0);
-                    let e = end_val.unwrap_or(1.0);
-                    brepkit_operations::fillet::FilletRadiusLaw::SCurve { start: s, end: e }
-                }
-                _ => {
-                    let r = spec["radius"].as_f64().or(start_val).unwrap_or(1.0);
-                    brepkit_operations::fillet::FilletRadiusLaw::Constant(r)
-                }
-            };
-            edge_laws.push((edge_id, law));
-        }
-        let result = crate::helpers::try_fillet_variable(self.topo_mut(), solid_id, &edge_laws)?;
-        Ok(solid_id_to_u32(result))
+        Ok(self.fillet_variable_impl(solid, &specs)?)
     }
 
     /// Sweep a face along a NURBS path with advanced options.
@@ -1132,40 +954,16 @@ impl BrepKernel {
         hidden_lines: bool,
         deflection: f64,
     ) -> Result<JsValue, JsError> {
-        validate_positive(deflection, "deflection")?;
-        for (v, name) in [
-            (origin_x, "origin_x"),
-            (origin_y, "origin_y"),
-            (origin_z, "origin_z"),
-            (dir_x, "dir_x"),
-            (dir_y, "dir_y"),
-            (dir_z, "dir_z"),
-            (x_axis_x, "x_axis_x"),
-            (x_axis_y, "x_axis_y"),
-            (x_axis_z, "x_axis_z"),
-        ] {
-            validate_finite(v, name)?;
-        }
-        let solid_id = self.resolve_solid(solid)?;
-        let result = brepkit_operations::projection::project_edges(
-            &self.topo,
-            solid_id,
-            Point3::new(origin_x, origin_y, origin_z),
-            Vec3::new(dir_x, dir_y, dir_z),
-            Vec3::new(x_axis_x, x_axis_y, x_axis_z),
+        let json = self.project_edges_impl(
+            solid,
+            (
+                Point3::new(origin_x, origin_y, origin_z),
+                Vec3::new(dir_x, dir_y, dir_z),
+                Vec3::new(x_axis_x, x_axis_y, x_axis_z),
+            ),
             hidden_lines,
             deflection,
         )?;
-        let flatten = |polys: &[Vec<brepkit_math::vec::Point2>]| -> Vec<Vec<f64>> {
-            polys
-                .iter()
-                .map(|poly| poly.iter().flat_map(|p| [p.x(), p.y()]).collect())
-                .collect()
-        };
-        let json = serde_json::json!({
-            "visible": flatten(&result.visible),
-            "hidden": flatten(&result.hidden),
-        });
         Ok(JsValue::from_str(&json.to_string()))
     }
 
@@ -1249,6 +1047,8 @@ impl BrepKernel {
         z: f64,
         tolerance: f64,
     ) -> Result<String, JsError> {
+        crate::error::validate_point(brepkit_math::vec::Point3::new(x, y, z), "the point")?;
+        crate::error::validate_tolerance(tolerance, "tolerance")?;
         let solid_id = self.resolve_solid(solid)?;
         let point = Point3::new(x, y, z);
         let result = brepkit_operations::classify::classify_point_winding(
@@ -1270,6 +1070,8 @@ impl BrepKernel {
         z: f64,
         tolerance: f64,
     ) -> Result<String, JsError> {
+        crate::error::validate_point(brepkit_math::vec::Point3::new(x, y, z), "the point")?;
+        crate::error::validate_tolerance(tolerance, "tolerance")?;
         let solid_id = self.resolve_solid(solid)?;
         let point = Point3::new(x, y, z);
         let result = brepkit_operations::classify::classify_point_robust(
@@ -1438,10 +1240,7 @@ impl BrepKernel {
     /// Returns an error if the handle is invalid or `tolerance` is not positive.
     #[wasm_bindgen(js_name = "fairSurface")]
     pub fn fair_surface(&mut self, face: u32, tolerance: f64) -> Result<u32, JsError> {
-        let face = self.resolve_face(face)?;
-        let result =
-            brepkit_operations::blend_surface::fair_surface(self.topo_mut(), face, tolerance)?;
-        Ok(face_id_to_u32(result))
+        Ok(self.fair_surface_impl(face, tolerance)?)
     }
 
     /// Untrim a NURBS face by fitting a new surface to the trimmed region.
@@ -1468,10 +1267,7 @@ impl BrepKernel {
     /// Returns a new wire handle.
     #[wasm_bindgen(js_name = "offsetWire")]
     pub fn offset_wire(&mut self, face: u32, distance: f64) -> Result<u32, JsError> {
-        let face_id = self.resolve_face(face)?;
-        let wire_id =
-            brepkit_operations::offset_wire::offset_wire(self.topo_mut(), face_id, distance)?;
-        Ok(wire_id_to_u32(wire_id))
+        Ok(self.offset_wire_impl(face, distance, None)?)
     }
 
     /// Offset a wire on a planar face with a specific join type.
@@ -1490,15 +1286,7 @@ impl BrepKernel {
         distance: f64,
         join_type: &str,
     ) -> Result<u32, JsError> {
-        let face_id = self.resolve_face(face)?;
-        let jt = parse_join_type_str(join_type)?;
-        let wire_id = brepkit_operations::offset_wire::offset_wire_with_join(
-            self.topo_mut(),
-            face_id,
-            distance,
-            jt,
-        )?;
-        Ok(wire_id_to_u32(wire_id))
+        Ok(self.offset_wire_impl(face, distance, Some(join_type))?)
     }
 
     /// Offset a planar wire directly by a distance with a specific join type.
@@ -1525,17 +1313,7 @@ impl BrepKernel {
         distance: f64,
         join_type: &str,
     ) -> Result<u32, JsError> {
-        let wire_id = self.resolve_wire(wire)?;
-        let jt = parse_join_type_str(join_type)?;
-        let face_id =
-            brepkit_topology::builder::make_planar_face_from_wire(self.topo_mut(), wire_id)?;
-        let result = brepkit_operations::offset_wire::offset_wire_with_join(
-            self.topo_mut(),
-            face_id,
-            distance,
-            jt,
-        )?;
-        Ok(wire_id_to_u32(result))
+        Ok(self.offset_wire_2d_impl(wire, distance, join_type)?)
     }
 
     // ── Orientation ───────────────────────────────────────────────
@@ -1616,34 +1394,11 @@ impl BrepKernel {
         radius: f64,
         corners_json: &str,
     ) -> Result<u32, JsError> {
-        validate_positive(radius, "radius")?;
-        let solid_id = self.resolve_solid(solid)?;
-        let edge_ids: Vec<_> = edge_handles
-            .iter()
-            .map(|&h| self.resolve_edge(h))
-            .collect::<Result<_, _>>()?;
         let parsed: serde_json::Value =
             serde_json::from_str(corners_json).map_err(|e| WasmError::InvalidInput {
                 reason: format!("corners are not JSON: {e}"),
             })?;
-        let corners = self
-            .parse_fillet_corners(&parsed)
-            .map_err(|reason| WasmError::InvalidInput { reason })?;
-        let outcome =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<u32, JsError> {
-                let result = brepkit_operations::blend_ops::fillet_v2_with_corners(
-                    self.topo_mut(),
-                    solid_id,
-                    &edge_ids,
-                    radius,
-                    &corners,
-                )?;
-                Ok(solid_id_to_u32(result))
-            }));
-        match outcome {
-            Ok(inner) => inner,
-            Err(panic_info) => Err(JsError::new(&panic_message(&panic_info, "FilletV2Corners"))),
-        }
+        Ok(self.fillet_v2_corners_impl(solid, &edge_handles, radius, &parsed)?)
     }
 
     /// Fillet edges using the v2 walking-based blend engine.
@@ -1662,30 +1417,7 @@ impl BrepKernel {
         edge_handles: Vec<u32>,
         radius: f64,
     ) -> Result<u32, JsError> {
-        validate_positive(radius, "radius")?;
-        let solid_id = self.resolve_solid(solid)?;
-        let edge_ids: Vec<_> = edge_handles
-            .iter()
-            .map(|&h| self.resolve_edge(h))
-            .collect::<Result<_, _>>()?;
-        // Wrap in catch_unwind like `fillet` does: a blend panic must not cross
-        // the WASM FFI boundary, which would abort the entire WASM instance.
-        let outcome =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<u32, JsError> {
-                let result = brepkit_operations::blend_ops::fillet_v2(
-                    self.topo_mut(),
-                    solid_id,
-                    &edge_ids,
-                    radius,
-                )?;
-                Ok(solid_id_to_u32(brepkit_operations::blend_ops::all_blended(
-                    result,
-                )?))
-            }));
-        match outcome {
-            Ok(inner) => inner,
-            Err(panic_info) => Err(JsError::new(&panic_message(&panic_info, "FilletV2"))),
-        }
+        Ok(self.fillet_v2_impl(solid, &edge_handles, radius)?)
     }
 
     /// Chamfer edges with two distances using the v2 blend engine.
@@ -1705,32 +1437,7 @@ impl BrepKernel {
         d1: f64,
         d2: f64,
     ) -> Result<u32, JsError> {
-        validate_positive(d1, "d1")?;
-        validate_positive(d2, "d2")?;
-        let solid_id = self.resolve_solid(solid)?;
-        let edge_ids: Vec<_> = edge_handles
-            .iter()
-            .map(|&h| self.resolve_edge(h))
-            .collect::<Result<_, _>>()?;
-        // Wrap in catch_unwind like `fillet` does: a blend panic must not cross
-        // the WASM FFI boundary, which would abort the entire WASM instance.
-        let outcome =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<u32, JsError> {
-                let result = brepkit_operations::blend_ops::chamfer_v2(
-                    self.topo_mut(),
-                    solid_id,
-                    &edge_ids,
-                    d1,
-                    d2,
-                )?;
-                Ok(solid_id_to_u32(brepkit_operations::blend_ops::all_blended(
-                    result,
-                )?))
-            }));
-        match outcome {
-            Ok(inner) => inner,
-            Err(panic_info) => Err(JsError::new(&panic_message(&panic_info, "ChamferV2"))),
-        }
+        Ok(self.chamfer_v2_impl(solid, &edge_handles, d1, d2)?)
     }
 
     /// Chamfer edges with distance and angle using the v2 blend engine.
@@ -1750,26 +1457,7 @@ impl BrepKernel {
         distance: f64,
         angle: f64,
     ) -> Result<u32, JsError> {
-        validate_positive(distance, "distance")?;
-        validate_positive(angle, "angle")?;
-        if angle >= std::f64::consts::FRAC_PI_2 {
-            return Err(JsError::new("angle must be less than π/2"));
-        }
-        let solid_id = self.resolve_solid(solid)?;
-        let edge_ids: Vec<_> = edge_handles
-            .iter()
-            .map(|&h| self.resolve_edge(h))
-            .collect::<Result<_, _>>()?;
-        let result = brepkit_operations::blend_ops::chamfer_distance_angle(
-            self.topo_mut(),
-            solid_id,
-            &edge_ids,
-            distance,
-            angle,
-        )?;
-        Ok(solid_id_to_u32(brepkit_operations::blend_ops::all_blended(
-            result,
-        )?))
+        Ok(self.chamfer_distance_angle_impl(solid, &edge_handles, distance, angle)?)
     }
 }
 

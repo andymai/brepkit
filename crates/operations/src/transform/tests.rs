@@ -1340,3 +1340,113 @@ fn the_largest_stretch_bounds_the_largest_singular_value_at_any_size() {
         assert!(largest_stretch(&matrix).is_none());
     }
 }
+
+/// A unit patch of degree one at height `z`, as a face.
+fn patch_face(topo: &mut Topology, z: f64) -> FaceId {
+    use brepkit_math::vec::Point3;
+    let points = vec![
+        vec![Point3::new(0.0, 0.0, z), Point3::new(0.0, 1.0, z)],
+        vec![Point3::new(1.0, 0.0, z), Point3::new(1.0, 1.0, z)],
+    ];
+    let surface = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        points,
+        vec![vec![1.0; 2]; 2],
+    )
+    .unwrap();
+    brepkit_topology::builder::make_nurbs_face(topo, surface, 1e-7).unwrap()
+}
+
+/// Three patches, the third with a circular hole: under a scale of 1e200
+/// the patches' images are well formed, but the circle's cannot be built
+/// (its axes square past range). The transform is refused, and nothing it
+/// would have moved has moved: no surface, vertex or curve, though the
+/// patches' images were the first ones built.
+#[test]
+fn a_transform_that_fails_on_its_third_face_leaves_every_face_unchanged() {
+    use brepkit_math::vec::{Point3, Vec3};
+    use brepkit_topology::face::Face;
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    use brepkit_topology::wire::Wire;
+
+    let mut topo = Topology::new();
+    let first = patch_face(&mut topo, 0.0);
+    let second = patch_face(&mut topo, 1.0);
+    let plain = patch_face(&mut topo, 2.0);
+    let (outer, surface) = {
+        let face = topo.face(plain).unwrap();
+        (face.outer_wire(), face.surface().clone())
+    };
+    let circle = brepkit_topology::builder::make_circle_edge(
+        &mut topo,
+        Point3::new(0.5, 0.5, 2.0),
+        Vec3::new(0.0, 0.0, 1.0),
+        0.25,
+        1e-7,
+    )
+    .unwrap();
+    let hole = topo.add_wire(Wire::new(vec![OrientedEdge::new(circle, true)], true).unwrap());
+    let third = topo.add_face(Face::new(outer, vec![hole], surface));
+    let shell = topo.add_shell(Shell::new(vec![first, second, third]).unwrap());
+    let solid = topo.add_solid(Solid::new(shell, vec![]));
+
+    let snapshot = |topo: &Topology| {
+        let points: Vec<_> = topo.vertices().iter().map(|(_, v)| v.point()).collect();
+        let surfaces: Vec<_> = [first, second, third]
+            .iter()
+            .map(|&f| format!("{:?}", topo.face(f).unwrap().surface()))
+            .collect();
+        let curve = format!("{:?}", topo.edge(circle).unwrap().curve());
+        (points, surfaces, curve)
+    };
+    let before = snapshot(&topo);
+    let scale = Mat4::scale(1e200, 1e200, 1e200);
+    assert!(transform_solid(&mut topo, solid, &scale).is_err());
+    assert!(snapshot(&topo) == before, "the solid was moved in part");
+    assert!(transform_face(&mut topo, third, &scale).is_err());
+    assert!(snapshot(&topo) == before, "the face was moved in part");
+    assert!(transform_wire(&mut topo, hole, &scale).is_err());
+    assert!(snapshot(&topo) == before, "the wire was moved in part");
+}
+
+/// A move computes each surface and curve image once: a cylinder's three
+/// faces and two rim circles (its seam is a line, with no curve image) make
+/// five images for a transform; a copy maps each of its three edges.
+#[test]
+fn a_move_computes_each_image_once() {
+    let mut topo = Topology::new();
+    let solid = crate::primitives::make_cylinder(&mut topo, 1.0, 2.0).unwrap();
+    let faces = brepkit_topology::explorer::solid_faces(&topo, solid)
+        .unwrap()
+        .len();
+    let edges = brepkit_topology::explorer::solid_edges(&topo, solid).unwrap();
+    let curved = edges
+        .iter()
+        .filter(|&&e| !matches!(topo.edge(e).unwrap().curve(), EdgeCurve::Line))
+        .count();
+    let counted = |run: &mut dyn FnMut()| {
+        IMAGES.with(|n| n.set(0));
+        run();
+        IMAGES.with(std::cell::Cell::get)
+    };
+    let shift = Mat4::translation(1.0, 2.0, 3.0);
+    let moved = counted(&mut || transform_solid(&mut topo, solid, &shift).unwrap());
+    assert_eq!(
+        moved,
+        faces + curved,
+        "{faces} faces, {curved} curved edges"
+    );
+    let copied = counted(&mut || {
+        crate::copy::copy_and_transform_solid(&mut topo, solid, &shift).unwrap();
+    });
+    assert_eq!(
+        copied,
+        faces + edges.len(),
+        "{faces} faces, {} edges",
+        edges.len()
+    );
+}

@@ -249,20 +249,48 @@ pub(crate) fn copy_shells(
 ///
 /// # Errors
 ///
-/// Returns an error if any topology lookup fails or the matrix is degenerate.
-#[allow(clippy::too_many_lines)]
+/// Returns an error if any topology lookup fails, the matrix is degenerate,
+/// or an image would not pass the load checks.
 pub fn copy_and_transform_solid(
     topo: &mut Topology,
     solid_id: SolidId,
     matrix: &brepkit_math::mat::Mat4,
 ) -> Result<SolidId, crate::OperationsError> {
-    use crate::transform::{curve_image, surface_image};
+    let copy = read_moved_copy(topo, solid_id, matrix)?;
+    build_moved_copy(topo, copy)
+}
+
+/// A copy of a solid moved by a matrix, read but not built: each image in it
+/// passed the load checks.
+pub(crate) struct MovedCopy {
+    vertex_snaps: Vec<VertexSnap>,
+    edge_snaps: Vec<EdgeSnap>,
+    wire_snaps: Vec<WireSnap>,
+    shell_snaps: Vec<ShellSnap>,
+    stretch: f64,
+}
+
+/// The read phase of [`copy_and_transform_solid`]. A caller that builds
+/// several copies reads them all first, so that a copy that fails the load
+/// checks leaves no copy built.
+///
+/// # Errors
+///
+/// Returns an error if any topology lookup fails, the matrix is degenerate,
+/// or an image would not pass the load checks.
+pub(crate) fn read_moved_copy(
+    topo: &Topology,
+    solid_id: SolidId,
+    matrix: &brepkit_math::mat::Mat4,
+) -> Result<MovedCopy, crate::OperationsError> {
+    use crate::transform::{checked_curve_image, checked_point_image, checked_surface_image};
 
     let inverse = crate::transform::checked_inverse(matrix)?;
     let mirrored = crate::transform::is_mirror(matrix);
 
-    // Read phase mirrors copy_solid, and maps each surface while the source
-    // face's boundary is still in place.
+    // Read phase mirrors copy_solid, and maps each surface, curve and point
+    // while the source face's boundary is still in place. Each image must
+    // pass the load checks before anything is built.
     let solid = topo.solid(solid_id)?;
     let outer_shell_id = solid.outer_shell();
     let inner_shell_ids: Vec<_> = solid.inner_shells().to_vec();
@@ -286,7 +314,7 @@ pub fn copy_and_transform_solid(
 
         for &face_id in shell.faces() {
             let face = topo.face(face_id)?;
-            let image = surface_image(topo, face_id, matrix, &inverse)?;
+            let image = checked_surface_image(topo, face_id, matrix, &inverse)?;
             let reverse_wires = mirrored && !image.flips_face;
             let outer_wire_index = face.outer_wire().index();
             let inner_wire_indices: Vec<usize> =
@@ -322,7 +350,7 @@ pub fn copy_and_transform_solid(
                             let v = topo.vertex(vid)?;
                             vertex_snaps.push(VertexSnap {
                                 old_index: vid_idx,
-                                point: v.point(),
+                                point: checked_point_image(v.point(), matrix)?,
                                 tol: v.tolerance(),
                             });
                         }
@@ -332,7 +360,7 @@ pub fn copy_and_transform_solid(
                         old_index: edge_idx,
                         start_index: start_idx,
                         end_index: end_idx,
-                        curve: edge.curve().clone(),
+                        curve: checked_curve_image(edge.curve(), matrix)?.0,
                         tolerance: edge.tolerance(),
                     });
                 }
@@ -357,6 +385,32 @@ pub fn copy_and_transform_solid(
         shell_snaps.push(ShellSnap { faces: face_snaps });
     }
 
+    Ok(MovedCopy {
+        vertex_snaps,
+        edge_snaps,
+        wire_snaps,
+        shell_snaps,
+        stretch: crate::transform::largest_stretch(matrix).unwrap_or(1.0),
+    })
+}
+
+/// The write phase of [`copy_and_transform_solid`]: it builds the copy that
+/// [`read_moved_copy`] read.
+///
+/// # Errors
+///
+/// Returns an error if a copied wire or shell is not valid.
+pub(crate) fn build_moved_copy(
+    topo: &mut Topology,
+    copy: MovedCopy,
+) -> Result<SolidId, crate::OperationsError> {
+    let MovedCopy {
+        vertex_snaps,
+        edge_snaps,
+        wire_snaps,
+        shell_snaps,
+        stretch,
+    } = copy;
     topo.reserve(
         vertex_snaps.len(),
         edge_snaps.len(),
@@ -369,23 +423,20 @@ pub fn copy_and_transform_solid(
         1,
     );
 
-    let stretch = crate::transform::largest_stretch(matrix).unwrap_or(1.0);
     let mut vertex_map: HashMap<usize, VertexId> = HashMap::new();
     for vsnap in &vertex_snaps {
-        let new_point = matrix.mul_point(vsnap.point);
-        let new_vid = topo.add_vertex(Vertex::new(new_point, vsnap.tol * stretch));
+        let new_vid = topo.add_vertex(Vertex::new(vsnap.point, vsnap.tol * stretch));
         vertex_map.insert(vsnap.old_index, new_vid);
     }
 
     let mut edge_map: HashMap<usize, brepkit_topology::edge::EdgeId> = HashMap::new();
-    for esnap in &edge_snaps {
+    for esnap in edge_snaps {
         let new_start = vertex_map[&esnap.start_index];
         let new_end = vertex_map[&esnap.end_index];
-        let (new_curve, _) = curve_image(&esnap.curve, matrix)?;
         let copied_edge = topo.add_edge(Edge::with_tolerance(
             new_start,
             new_end,
-            new_curve,
+            esnap.curve,
             esnap.tolerance.map(|tolerance| tolerance * stretch),
         ));
         edge_map.insert(esnap.old_index, copied_edge);
