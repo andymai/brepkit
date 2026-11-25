@@ -23,6 +23,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::f64::consts::{PI, TAU};
 
 use brepkit_geometry::extrema::segment_segment_distance;
+use brepkit_math::aabb::Aabb3;
+use brepkit_math::bvh::Bvh;
 use brepkit_math::curves::Circle3D;
 use brepkit_math::frame::Frame3;
 use brepkit_math::nurbs::curve::NurbsCurve;
@@ -623,88 +625,127 @@ impl Plan {
 
     /// Whether `p`, on `cap`, lies in the strip a chamfer takes from it.
     fn strip_holds(&self, cap: FaceId, p: Point3, tol: f64) -> Result<bool, OperationsError> {
-        for (piece, sections) in self.pieces.iter().zip(&self.piece_sections) {
-            if piece.cap != cap {
-                continue;
-            }
-            let section = sections[0];
-            let held = match &piece.curve {
-                EdgeCurve::Line => {
-                    let along = piece.end_point - piece.start_point;
-                    let length = along.length();
-                    let tangent = along.normalize()?;
-                    let offset = p - piece.start_point;
-                    let s = offset.dot(tangent);
-                    let h = offset.dot(section.cap_dir);
-                    s > tol && s < length - tol && h > tol && h <= piece.cap_d + tol
-                }
-                EdgeCurve::Circle(c) => {
-                    let radial = (piece.start_point - c.center()).normalize()?;
-                    let toward = section.cap_dir.dot(radial);
-                    let h = ((p - c.center()).length() - c.radius()) * toward;
-                    let (t0, t1) = piece
-                        .curve
-                        .domain_with_endpoints(piece.start_point, piece.end_point);
-                    let swept = (c.project(p) - t0).rem_euclid(TAU);
-                    swept < t1 - t0 && h > tol && h <= piece.cap_d + tol
-                }
-                EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => false,
-            };
-            if held {
+        for (index, piece) in self.pieces.iter().enumerate() {
+            if piece.cap == cap && self.cap_holds(index, p, tol)? {
                 return Ok(true);
             }
         }
         Ok(false)
     }
 
-    /// Whether `p`, on `face`, lies in the strip a chamfer takes from it as
-    /// a cap ([`Plan::strip_holds`]) or as a wall: beside a line on a plane
-    /// wall, under an arc on its cylinder, or beside a ruling.
-    fn takes(&self, face: FaceId, p: Point3, tol: f64) -> Result<bool, OperationsError> {
-        if self.strip_holds(face, p, tol)? {
+    /// Whether `p`, on piece `index`'s cap, lies in the strip its chamfer
+    /// takes from the cap.
+    fn cap_holds(&self, index: usize, p: Point3, tol: f64) -> Result<bool, OperationsError> {
+        let piece = &self.pieces[index];
+        let section = self.piece_sections[index][0];
+        Ok(match &piece.curve {
+            EdgeCurve::Line => {
+                let along = piece.end_point - piece.start_point;
+                let length = along.length();
+                let tangent = along.normalize()?;
+                let offset = p - piece.start_point;
+                let s = offset.dot(tangent);
+                let h = offset.dot(section.cap_dir);
+                s > tol && s < length - tol && h > tol && h <= piece.cap_d + tol
+            }
+            EdgeCurve::Circle(c) => {
+                let radial = (piece.start_point - c.center()).normalize()?;
+                let toward = section.cap_dir.dot(radial);
+                let h = ((p - c.center()).length() - c.radius()) * toward;
+                let (t0, t1) = piece
+                    .curve
+                    .domain_with_endpoints(piece.start_point, piece.end_point);
+                let swept = (c.project(p) - t0).rem_euclid(TAU);
+                swept < t1 - t0 && h > tol && h <= piece.cap_d + tol
+            }
+            EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => false,
+        })
+    }
+
+    /// Whether `p`, on `face`, lies in the strip piece `index`'s chamfer
+    /// takes from it as its cap ([`Plan::cap_holds`]) or as its wall: beside
+    /// a line on a plane wall, under an arc on its cylinder, or beside a
+    /// ruling.
+    fn takes(
+        &self,
+        index: usize,
+        face: FaceId,
+        p: Point3,
+        tol: f64,
+    ) -> Result<bool, OperationsError> {
+        let piece = &self.pieces[index];
+        if piece.cap == face && self.cap_holds(index, p, tol)? {
             return Ok(true);
         }
-        for (piece, sections) in self.pieces.iter().zip(&self.piece_sections) {
-            if piece.wall != face {
-                continue;
-            }
-            let rise = (p - piece.start_point).dot(sections[0].wall_dir);
-            let held = match (&piece.curve, &piece.wall_side) {
-                (EdgeCurve::Line, WallSide::Plane { .. }) => {
-                    let along = piece.end_point - piece.start_point;
-                    let s = (p - piece.start_point).dot(along.normalize()?);
-                    s > tol && s < along.length() - tol && rise > tol && rise <= piece.wall_d + tol
-                }
-                (EdgeCurve::Circle(c), WallSide::Axis(_)) => {
-                    let (t0, t1) = piece
-                        .curve
-                        .domain_with_endpoints(piece.start_point, piece.end_point);
-                    let swept = (c.project(p) - t0).rem_euclid(TAU);
-                    swept < t1 - t0 && rise > tol && rise <= piece.wall_d + tol
-                }
-                (EdgeCurve::Line, WallSide::Ruling { cylinder, turn }) => {
-                    let Some((from, width, low, high)) = cylinder_strip(cylinder, piece) else {
-                        continue;
-                    };
-                    let (u, _) = cylinder.project_point(p);
-                    let height = cylinder.axis().dot(p - cylinder.origin());
-                    let slack = tol / cylinder.radius();
-                    let off = (u - from).rem_euclid(TAU);
-                    // Past the edge, up to and on the contact.
-                    let in_angles = if *turn < 0.0 {
-                        off < width - slack || off > TAU - slack
-                    } else {
-                        off > slack && off <= width + slack
-                    };
-                    in_angles && height > low + tol && height < high - tol
-                }
-                _ => false,
-            };
-            if held {
-                return Ok(true);
-            }
+        if piece.wall != face {
+            return Ok(false);
         }
-        Ok(false)
+        let rise = (p - piece.start_point).dot(self.piece_sections[index][0].wall_dir);
+        Ok(match (&piece.curve, &piece.wall_side) {
+            (EdgeCurve::Line, WallSide::Plane { .. }) => {
+                let along = piece.end_point - piece.start_point;
+                let s = (p - piece.start_point).dot(along.normalize()?);
+                s > tol && s < along.length() - tol && rise > tol && rise <= piece.wall_d + tol
+            }
+            (EdgeCurve::Circle(c), WallSide::Axis(_)) => {
+                let (t0, t1) = piece
+                    .curve
+                    .domain_with_endpoints(piece.start_point, piece.end_point);
+                let swept = (c.project(p) - t0).rem_euclid(TAU);
+                swept < t1 - t0 && rise > tol && rise <= piece.wall_d + tol
+            }
+            (EdgeCurve::Line, WallSide::Ruling { cylinder, turn }) => {
+                let Some((from, width, low, high)) = cylinder_strip(cylinder, piece) else {
+                    return Ok(false);
+                };
+                let (u, _) = cylinder.project_point(p);
+                let height = cylinder.axis().dot(p - cylinder.origin());
+                let slack = tol / cylinder.radius();
+                let off = (u - from).rem_euclid(TAU);
+                // Past the edge, up to and on the contact.
+                let in_angles = if *turn < 0.0 {
+                    off < width - slack || off > TAU - slack
+                } else {
+                    off > slack && off <= width + slack
+                };
+                in_angles && height > low + tol && height < high - tol
+            }
+            _ => false,
+        })
+    }
+
+    /// A box that holds the strip piece `index`'s chamfer takes from its cap
+    /// (`side` 0) or its wall (`side` 1), where [`Plan::takes`] can hold a
+    /// point: the edge and the contact at its sections, the arcs between
+    /// their ends and, beside a ruling, the bulge of the wall's arc between
+    /// the edge and the contact.
+    fn strip_box(&self, index: usize, side: usize) -> Result<Aabb3, OperationsError> {
+        let tol = Tolerance::new().linear;
+        let piece = &self.pieces[index];
+        let [s0, s1] = self.piece_sections[index];
+        let (a, b) = if side == 0 {
+            (s0.cap, s1.cap)
+        } else {
+            (s0.wall, s1.wall)
+        };
+        let mut corners = vec![piece.start_point, piece.end_point, a, b];
+        let mut margin = tol;
+        if let EdgeCurve::Circle(c) = &piece.curve {
+            let (t0, t1) = piece
+                .curve
+                .domain_with_endpoints(piece.start_point, piece.end_point);
+            let contact = &piece.contact_curves(&s0)?[side];
+            for arc in std::iter::once(c).chain(match contact {
+                EdgeCurve::Circle(on) => Some(on),
+                EdgeCurve::Line | EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => None,
+            }) {
+                let bounds = arc.arc_aabb(t0, t1);
+                corners.extend([bounds.min, bounds.max]);
+            }
+        } else if let (1, WallSide::Ruling { cylinder, turn }) = (side, &piece.wall_side) {
+            margin += cylinder.radius() * (1.0 - (0.5 * turn).cos());
+        }
+        Ok(Aabb3::from_points(corners).expanded(margin))
     }
 }
 
@@ -742,6 +783,14 @@ impl Span {
                 })
             }
             EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => None,
+        }
+    }
+
+    /// The span's box.
+    fn bounds(&self) -> Aabb3 {
+        match self {
+            Self::Segment(a, b) => Aabb3::from_points([*a, *b]),
+            Self::Arc { circle, t0, sweep } => circle.arc_aabb(*t0, *t0 + *sweep),
         }
     }
 
@@ -1021,6 +1070,7 @@ fn plan_chain(
     faces: &[FaceId],
     group: &[EdgeId],
     distances: &Distances,
+    far_sides: &mut FarSides,
 ) -> Result<Reading, OperationsError> {
     let adjacency = AdjacencyIndex::build_from_faces(topo, faces)?;
     // The faces along every edge of the group.
@@ -1050,7 +1100,7 @@ fn plan_chain(
         if matches!(along, Common::Cap(_)) && plane_normal(topo, face)?.is_none() {
             continue;
         }
-        match plan_on(topo, faces, &adjacency, group, along, distances)? {
+        match plan_on(topo, faces, &adjacency, group, along, distances, far_sides)? {
             Reading::Chain(plan) => return Ok(Reading::Chain(plan)),
             Reading::Misfit(reason) => {
                 misfit.get_or_insert(reason);
@@ -1119,11 +1169,12 @@ fn plan_on(
     group: &[EdgeId],
     common: Common,
     distances: &Distances,
+    far_sides: &mut FarSides,
 ) -> Result<Reading, OperationsError> {
     let Some(pieces) = read_pieces(topo, adjacency, group, common, distances)? else {
         return Ok(Reading::Other);
     };
-    if let Some(reason) = misfit(topo, adjacency, &pieces)? {
+    if let Some(reason) = misfit(topo, adjacency, &pieces, far_sides)? {
         return Ok(Reading::Misfit(reason));
     }
     Ok(match plan_pieces(topo, faces, adjacency, pieces)? {
@@ -1136,14 +1187,15 @@ fn plan_on(
 /// a cap's contact past an arc's axis, where it has no circle to run on, or
 /// a contact at or past the far side of its face, so that the face, and any
 /// face that carries it on smoothly, ends before the chamfer does (see
-/// [`far_side`]). Each face's far side is read from its box, which holds the
-/// whole face, so a face that may reach farther is not refused. A chain of
-/// lines between planes that meets no curved face is not read, as the other
-/// engines take it.
+/// [`FarSides::reach`]). Each face's far side is read from its box, which
+/// holds the whole face, so a face that may reach farther is not refused. A
+/// chain of lines between planes that meets no curved face is not read, as
+/// the other engines take it.
 fn misfit(
     topo: &Topology,
     adjacency: &AdjacencyIndex,
     pieces: &[Piece],
+    far_sides: &mut FarSides,
 ) -> Result<Option<String>, OperationsError> {
     let tol = Tolerance::new().linear;
     if !meets_a_curved_face(topo, adjacency, pieces)? {
@@ -1175,7 +1227,7 @@ fn misfit(
             WallSide::Ruling { .. } => {}
         }
         for (face, dir, d) in sides {
-            if let Some(far) = far_side(topo, adjacency, face, piece.start_point, dir)?
+            if let Some(far) = far_sides.reach(topo, adjacency, face, piece.start_point, dir)?
                 && d >= far - tol
             {
                 return Ok(Some(format!(
@@ -1189,26 +1241,29 @@ fn misfit(
 }
 
 /// Whether a chain holds an arc or a line along a ruling, or a face that is
-/// not a plane lies beside one of its ends.
+/// not a plane lies beside one of its ends. Each cap and wall is read once.
 fn meets_a_curved_face(
     topo: &Topology,
     adjacency: &AdjacencyIndex,
     pieces: &[Piece],
 ) -> Result<bool, OperationsError> {
-    for piece in pieces {
-        if matches!(piece.curve, EdgeCurve::Circle(_))
+    if pieces.iter().any(|piece| {
+        matches!(piece.curve, EdgeCurve::Circle(_))
             || matches!(piece.wall_side, WallSide::Ruling { .. })
-        {
-            return Ok(true);
-        }
-        for vertex in [piece.start, piece.end] {
-            for face in [piece.cap, piece.wall] {
-                for edge in edges_at(topo, face, vertex)? {
-                    for &beside in adjacency.faces_for_edge(edge) {
-                        if plane_normal(topo, beside)?.is_none() {
-                            return Ok(true);
-                        }
-                    }
+    }) {
+        return Ok(true);
+    }
+    let ends: HashSet<VertexId> = pieces.iter().flat_map(|p| [p.start, p.end]).collect();
+    let faces: HashSet<FaceId> = pieces.iter().flat_map(|p| [p.cap, p.wall]).collect();
+    for face in faces {
+        for edge in brepkit_topology::explorer::face_edges(topo, face)? {
+            let data = topo.edge(edge)?;
+            if !ends.contains(&data.start()) && !ends.contains(&data.end()) {
+                continue;
+            }
+            for &beside in adjacency.faces_for_edge(edge) {
+                if plane_normal(topo, beside)?.is_none() {
+                    return Ok(true);
                 }
             }
         }
@@ -1216,54 +1271,84 @@ fn meets_a_curved_face(
     Ok(false)
 }
 
-/// How far `face` reaches from `origin` along `dir` at most, with each face
-/// that carries it on past an edge where the two faces' normals agree (a
-/// flat seam or a tangent join), where a contact can run on. Read from each
-/// face's box in a frame along `dir`; `None` where a box is not known.
-fn far_side(
-    topo: &Topology,
-    adjacency: &AdjacencyIndex,
-    face: FaceId,
-    origin: Point3,
-    dir: Vec3,
-) -> Result<Option<f64>, OperationsError> {
-    let dir = dir.normalize()?;
-    let frame = Frame3::from_normal(origin, dir)?;
-    let frame = Reach {
-        origin,
-        axes: [frame.x, frame.y, dir],
-        lo: [0.0; 3],
-        hi: [0.0; 3],
-        pieces: Vec::new(),
-    };
-    let mut far = f64::NEG_INFINITY;
-    let mut seen = vec![face];
-    let mut next = vec![face];
-    while let Some(at) = next.pop() {
-        let Some((_, hi)) = frame.face_box(topo, at)? else {
-            return Ok(None);
+/// How far faces reach along directions, each run of faces that carry each
+/// other on read once along each direction (see [`FarSides::reach`]).
+#[derive(Default)]
+struct FarSides {
+    /// For each face read, each direction and the farthest `p . dir` of its
+    /// run, `None` where a box is not known.
+    known: HashMap<FaceId, Vec<(Vec3, Option<f64>)>>,
+    /// How many face boxes have been read.
+    boxes: usize,
+}
+
+impl FarSides {
+    /// How far `face` reaches from `origin` along `dir` at most, with each
+    /// face that carries it on past an edge where the two faces' normals
+    /// agree (a flat seam or a tangent join), where a contact can run on.
+    /// Read from each face's box in a frame along `dir`; `None` where a box
+    /// is not known. The run is the same from any of its faces, so each
+    /// face of it keeps what was read for the next.
+    fn reach(
+        &mut self,
+        topo: &Topology,
+        adjacency: &AdjacencyIndex,
+        face: FaceId,
+        origin: Point3,
+        dir: Vec3,
+    ) -> Result<Option<f64>, OperationsError> {
+        let dir = dir.normalize()?;
+        let base = to_vec(origin).dot(dir);
+        if let Some(&(_, far)) = self
+            .known
+            .get(&face)
+            .and_then(|read| read.iter().find(|(d, _)| (*d - dir).length() < JOIN_TOL))
+        {
+            return Ok(far.map(|far| far - base));
+        }
+        let frame = Frame3::from_normal(origin, dir)?;
+        let frame = Reach {
+            origin,
+            axes: [frame.x, frame.y, dir],
+            lo: [0.0; 3],
+            hi: [0.0; 3],
+            pieces: Vec::new(),
         };
-        far = far.max(hi[2]);
-        for edge in brepkit_topology::explorer::face_edges(topo, at)? {
-            let Some(beyond) = other_face(adjacency, edge, at) else {
-                continue;
-            };
-            if seen.contains(&beyond) {
-                continue;
+        let mut far = Some(f64::NEG_INFINITY);
+        let mut seen = HashSet::from([face]);
+        let mut next = vec![face];
+        while let Some(at) = next.pop() {
+            if let Some(so_far) = far {
+                self.boxes += 1;
+                far = frame.face_box(topo, at)?.map(|(_, hi)| so_far.max(hi[2]));
             }
-            let data = topo.edge(edge)?;
-            let (a, b) = (
-                topo.vertex(data.start())?.point(),
-                topo.vertex(data.end())?.point(),
-            );
-            let mid = edge_samples(data.curve(), a, b)[STRIP_SAMPLES as usize / 2];
-            if (outward_at(topo, at, mid)? - outward_at(topo, beyond, mid)?).length() < JOIN_TOL {
-                seen.push(beyond);
-                next.push(beyond);
+            for edge in brepkit_topology::explorer::face_edges(topo, at)? {
+                let Some(beyond) = other_face(adjacency, edge, at) else {
+                    continue;
+                };
+                if seen.contains(&beyond) {
+                    continue;
+                }
+                let data = topo.edge(edge)?;
+                let (a, b) = (
+                    topo.vertex(data.start())?.point(),
+                    topo.vertex(data.end())?.point(),
+                );
+                let (t0, t1) = data.curve().domain_with_endpoints(a, b);
+                let mid = data.curve().evaluate_with_endpoints(0.5 * (t0 + t1), a, b);
+                if (outward_at(topo, at, mid)? - outward_at(topo, beyond, mid)?).length() < JOIN_TOL
+                {
+                    seen.insert(beyond);
+                    next.push(beyond);
+                }
             }
         }
+        let absolute = far.map(|far| far + base);
+        for read in seen {
+            self.known.entry(read).or_default().push((dir, absolute));
+        }
+        Ok(far)
     }
-    Ok(Some(far))
 }
 
 /// The outward normal of `face` at `p` on it.
@@ -2493,17 +2578,25 @@ fn contact_span(plan: &Plan, index: usize, side: usize) -> Result<Option<Span>, 
 /// Whether two chains, each clear on its own, take strips of one face that
 /// overlap: a contact or a tangent end's cross edge of one runs into the
 /// other's strip, or two contacts touch. A chain cannot clear another's
-/// strip, which the other's chamfer takes.
-fn chains_overlap(plans: &[Plan]) -> Result<bool, OperationsError> {
+/// strip, which the other's chamfer takes. Only a span and a strip, or two
+/// spans, whose boxes meet are read, so the work grows with the pieces that
+/// lie near each other rather than with every pair; `tests` counts the
+/// pairs read.
+fn chains_overlap(plans: &[Plan], tests: &mut usize) -> Result<bool, OperationsError> {
     let tol = Tolerance::new().linear;
-    let mut boundaries: Vec<Vec<(FaceId, Span)>> = Vec::with_capacity(plans.len());
-    for plan in plans {
-        let mut spans = Vec::new();
+    // Each new span with its chain and face, and each strip with its chain,
+    // piece and face.
+    let mut spans: Vec<(usize, FaceId, Span)> = Vec::new();
+    let mut strips: Vec<(usize, usize, FaceId)> = Vec::new();
+    let mut strip_boxes: Vec<(usize, Aabb3)> = Vec::new();
+    for (owner, plan) in plans.iter().enumerate() {
         for (index, piece) in plan.pieces.iter().enumerate() {
             for (side, face) in [piece.cap, piece.wall].into_iter().enumerate() {
                 if let Some(span) = contact_span(plan, index, side)? {
-                    spans.push((face, span));
+                    spans.push((owner, face, span));
                 }
+                strip_boxes.push((strips.len(), plan.strip_box(index, side)?));
+                strips.push((owner, index, face));
             }
         }
         for end in &plan.ends {
@@ -2514,29 +2607,42 @@ fn chains_overlap(plans: &[Plan]) -> Result<bool, OperationsError> {
                     .find(|p| p.start == end.vertex || p.end == end.vertex),
             ) {
                 let at = piece.at(end.vertex);
-                spans.push((piece.cap, Span::Segment(at, section.cap)));
+                spans.push((owner, piece.cap, Span::Segment(at, section.cap)));
             }
         }
-        boundaries.push(spans);
     }
-    for (i, plan) in plans.iter().enumerate() {
-        for (j, spans) in boundaries.iter().enumerate() {
-            if i == j {
+    let span_boxes: Vec<(usize, Aabb3)> = spans
+        .iter()
+        .enumerate()
+        .map(|(k, (_, _, span))| (k, span.bounds().expanded(tol)))
+        .collect();
+    let (strip_tree, span_tree) = (Bvh::build(&strip_boxes), Bvh::build(&span_boxes));
+    let mut found = Vec::new();
+    for (k, (owner, face, span)) in spans.iter().enumerate() {
+        let bounds = span_boxes[k].1;
+        strip_tree.query_overlap_into(&bounds, &mut found);
+        let mut samples = None;
+        for &s in &found {
+            let (other, index, strip_face) = strips[s];
+            if other == *owner || strip_face != *face {
                 continue;
             }
-            for (face, span) in spans {
-                for p in span.samples() {
-                    if plan.takes(*face, p, tol)? {
-                        return Ok(true);
-                    }
-                }
-                if j > i
-                    && boundaries[i]
-                        .iter()
-                        .any(|(own, mine)| own == face && !mine.touches(span, tol).is_empty())
-                {
+            *tests += 1;
+            for &p in samples.get_or_insert_with(|| span.samples()).iter() {
+                if plans[other].takes(index, *face, p, tol)? {
                     return Ok(true);
                 }
+            }
+        }
+        span_tree.query_overlap_into(&bounds, &mut found);
+        for &m in &found {
+            let (other, other_face, other_span) = &spans[m];
+            if m <= k || other == owner || other_face != face {
+                continue;
+            }
+            *tests += 1;
+            if !span.touches(other_span, tol).is_empty() {
+                return Ok(true);
             }
         }
     }
@@ -4270,8 +4376,9 @@ fn chamfer_chains(
     let groups = connected_groups(topo, edges)?;
     let mut plans = Vec::with_capacity(groups.len());
     let mut other = false;
+    let mut far_sides = FarSides::default();
     for group in &groups {
-        match plan_chain(topo, &outer_faces, group, distances)? {
+        match plan_chain(topo, &outer_faces, group, distances, &mut far_sides)? {
             Reading::Chain(plan) => plans.push(*plan),
             Reading::Other => other = true,
             Reading::Misfit(reason) => return Err(OperationsError::InvalidInput { reason }),
@@ -4280,7 +4387,7 @@ fn chamfer_chains(
     if other || !plans.iter().any(|p| p.curved) {
         return Ok(None);
     }
-    if chains_overlap(&plans)? {
+    if chains_overlap(&plans, &mut 0)? {
         return Err(OperationsError::InvalidInput {
             reason: "the chamfers of two chains take strips of one face that overlap".into(),
         });
@@ -4322,8 +4429,10 @@ fn chamfer_chains(
         }
         // Read after the chains before it, which shorten rulings this one
         // shares and leave new edges on a cap or wall it shares, which it
-        // must clear.
-        let plan = match plan_chain(topo, &faces, &image, &image_distances)? {
+        // must clear. Those chains reshape faces, so the far sides are read
+        // afresh.
+        let mut far_sides = FarSides::default();
+        let plan = match plan_chain(topo, &faces, &image, &image_distances, &mut far_sides)? {
             Reading::Chain(plan) => plan,
             Reading::Other => return Ok(None),
             // It fits the solid alone, so the chains before it leave it no room.
@@ -4460,14 +4569,179 @@ mod tests {
         );
         let adjacency = AdjacencyIndex::build_from_faces(&topo, &[square, beyond, wall]).unwrap();
         let origin = Point3::new(0.5, 0.0, 0.0);
-        let far = |face, dir| {
-            far_side(&topo, &adjacency, face, origin, dir)
+        let mut far_sides = FarSides::default();
+        let mut far = |face, from, dir| {
+            far_sides
+                .reach(&topo, &adjacency, face, from, dir)
                 .unwrap()
                 .unwrap()
         };
-        assert!((far(square, Vec3::new(0.0, 1.0, 0.0)) - 3.0).abs() < 1e-12);
-        assert!(far(square, Vec3::new(0.0, 0.0, -1.0)).abs() < 1e-12);
-        assert!((far(wall, Vec3::new(0.0, 0.0, -1.0)) - 2.0).abs() < 1e-12);
+        let (across, down) = (Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 0.0, -1.0));
+        assert!((far(square, origin, across) - 3.0).abs() < 1e-12);
+        assert!(far(square, origin, down).abs() < 1e-12);
+        assert!((far(wall, origin, down) - 2.0).abs() < 1e-12);
+        // The run read from the square along `across` serves the face beyond.
+        assert!((far(beyond, Point3::new(0.5, 2.0, 0.0), across) - 1.0).abs() < 1e-12);
+        assert_eq!(far_sides.boxes, 5);
+    }
+
+    /// A rod of radius 8, 10 high, whose wall is `n` faces of one cylinder,
+    /// each under one arc of the floor's rim and one of the top's, joined
+    /// along rulings. Returns the rod, its floor, and the floor's and the
+    /// top's arcs.
+    fn split_rod(topo: &mut Topology, n: usize) -> (SolidId, FaceId, Vec<EdgeId>, Vec<EdgeId>) {
+        let (r, h) = (8.0, 10.0);
+        let at = |k: usize, z: f64| {
+            let t = TAU * k as f64 / n as f64;
+            Point3::new(r * t.cos(), r * t.sin(), z)
+        };
+        let mut ring = |z: f64| -> Vec<VertexId> {
+            (0..n)
+                .map(|k| topo.add_vertex(Vertex::new(at(k, z), 1e-7)))
+                .collect()
+        };
+        let (low, high) = (ring(0.0), ring(h));
+        let mut arcs = |ring: &[VertexId], z: f64| -> Vec<EdgeId> {
+            let circle =
+                Circle3D::new(Point3::new(0.0, 0.0, z), Vec3::new(0.0, 0.0, 1.0), r).unwrap();
+            (0..n)
+                .map(|k| {
+                    let curve = EdgeCurve::Circle(circle.clone());
+                    topo.add_edge(Edge::new(ring[k], ring[(k + 1) % n], curve))
+                })
+                .collect()
+        };
+        let (floor_rim, top_rim) = (arcs(&low, 0.0), arcs(&high, h));
+        let rulings: Vec<EdgeId> = (0..n)
+            .map(|k| topo.add_edge(Edge::new(low[k], high[k], EdgeCurve::Line)))
+            .collect();
+        let cylinder =
+            CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), Vec3::new(0.0, 0.0, 1.0), r)
+                .unwrap();
+        let mut loop_of = |uses: Vec<(EdgeId, bool)>| {
+            let edges = uses
+                .into_iter()
+                .map(|(e, f)| OrientedEdge::new(e, f))
+                .collect();
+            topo.add_wire(Wire::new(edges, true).unwrap())
+        };
+        let mut wires: Vec<WireId> = (0..n)
+            .map(|k| {
+                loop_of(vec![
+                    (floor_rim[k], true),
+                    (rulings[(k + 1) % n], true),
+                    (top_rim[k], false),
+                    (rulings[k], false),
+                ])
+            })
+            .collect();
+        wires.push(loop_of(
+            floor_rim.iter().rev().map(|&e| (e, false)).collect(),
+        ));
+        wires.push(loop_of(top_rim.iter().map(|&e| (e, true)).collect()));
+        let mut faces: Vec<FaceId> = wires[..n]
+            .iter()
+            .map(|&w| {
+                let surface = FaceSurface::Cylinder(cylinder.clone());
+                topo.add_face(Face::new(w, Vec::new(), surface))
+            })
+            .collect();
+        let plane = |z: f64, up: f64| FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, up),
+            d: z * up,
+        };
+        let floor = topo.add_face(Face::new(wires[n], Vec::new(), plane(0.0, -1.0)));
+        faces.push(floor);
+        faces.push(topo.add_face(Face::new(wires[n + 1], Vec::new(), plane(h, 1.0))));
+        let shell = topo.add_shell(Shell::new(faces).unwrap());
+        let solid = topo.add_solid(Solid::new(shell, Vec::new()));
+        (solid, floor, floor_rim, top_rim)
+    }
+
+    /// A rim of 1000 arcs, each under a wall face of its own, the walls one
+    /// run joined along their rulings: each arc's far side along the axis is
+    /// that run's, which is read once for the chain, not once for each arc.
+    #[test]
+    fn a_rim_of_many_arcs_reads_its_walls_once() {
+        let n = 1000;
+        let mut topo = Topology::new();
+        let (solid, floor, rim, _) = split_rod(&mut topo, n);
+        let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+        let adjacency = AdjacencyIndex::build_from_faces(&topo, &faces).unwrap();
+        let distances = Distances {
+            near: 1.0,
+            far: 1.0,
+            reference: HashMap::new(),
+        };
+        let pieces = read_pieces(&topo, &adjacency, &rim, Common::Cap(floor), &distances)
+            .unwrap()
+            .unwrap();
+        assert_eq!(pieces.len(), n);
+        let mut far_sides = FarSides::default();
+        assert!(
+            misfit(&topo, &adjacency, &pieces, &mut far_sides)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(far_sides.boxes, n);
+    }
+
+    /// A complexity guard, run with `--features perf-counters` as the other
+    /// `scaling_` guards are. The rod's two rims of 1000 arcs each are two
+    /// chains on the one run of walls, and each chain reads that run once. A
+    /// span of one chain is read against a strip or a span of the other only
+    /// where their boxes meet: at 1, where the rims' strips lie 8 apart, no
+    /// pair is read and both rims come off; at 5.5, where they overlap by 1,
+    /// the first wall's pair finds the overlap and the chamfer is refused for
+    /// it.
+    #[cfg(feature = "perf-counters")]
+    #[test]
+    fn scaling_two_rims_of_many_arcs_read_each_wall_once() {
+        let n = 1000;
+        for (d, overlap) in [(1.0, false), (5.5, true)] {
+            let mut topo = Topology::new();
+            let (solid, _, floor_rim, top_rim) = split_rod(&mut topo, n);
+            let faces = brepkit_topology::explorer::solid_faces(&topo, solid).unwrap();
+            let distances = Distances {
+                near: d,
+                far: d,
+                reference: HashMap::new(),
+            };
+            let mut plans = Vec::new();
+            for rim in [&floor_rim, &top_rim] {
+                let mut far_sides = FarSides::default();
+                let Reading::Chain(plan) =
+                    plan_chain(&topo, &faces, rim, &distances, &mut far_sides).unwrap()
+                else {
+                    panic!("d = {d}: a rim is a chain");
+                };
+                assert_eq!(far_sides.boxes, n, "d = {d}");
+                plans.push(*plan);
+            }
+            let mut tests = 0;
+            assert_eq!(
+                chains_overlap(&plans, &mut tests).unwrap(),
+                overlap,
+                "d = {d}"
+            );
+            assert!(tests <= 8, "d = {d}: {tests} pairs read");
+
+            let both: Vec<EdgeId> = floor_rim.iter().chain(&top_rim).copied().collect();
+            let built = chamfer_tangent_chains(&mut topo, solid, &both, d);
+            if overlap {
+                let reason = built.unwrap_err().to_string();
+                assert!(
+                    reason.contains("take strips of one face that overlap"),
+                    "{reason}"
+                );
+            } else {
+                let result = built.unwrap().unwrap();
+                let rod = PI * 64.0 * 10.0;
+                let rings = 2.0 * PI * d * d * (8.0 - d / 3.0);
+                let volume = crate::measure::solid_volume(&topo, result, 0.001).unwrap();
+                assert!((volume - (rod - rings)).abs() < 1e-6, "{volume}");
+            }
+        }
     }
 
     /// An arc meets a region where it passes through it, even where no end
