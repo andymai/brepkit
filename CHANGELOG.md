@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.55](https://github.com/andymai/brepkit/compare/v4.11.54...v4.11.55) (2026-11-25)
+
+
+### Bug Fixes
+
+* **operations,io,math,wasm:** bound mesh samples, JS sizes and counts, and points read from files ([#2859](https://github.com/andymai/brepkit/issues/2859)) ([02ac534](https://github.com/andymai/brepkit/commit/02ac534c80e47993472c1d1c5fdcc3e8ef2cae96))
+
 ## [4.11.54](https://github.com/andymai/brepkit/compare/v4.11.53...v4.11.54) (2026-11-25)
 
 
