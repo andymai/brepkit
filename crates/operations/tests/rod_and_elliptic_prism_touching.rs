@@ -295,8 +295,9 @@ mod tests {
         }
     }
 
-    /// The fuse of all three and the plate less the rod and then the prism
-    /// give the exact solid or refuse, never a wrong one.
+    /// The fuse of all three is exact upright and mirrored. Turned, it is
+    /// exact or refused (#2878), and so are the plate less the rod and then
+    /// the prism in every pose: never a wrong solid.
     #[test]
     fn the_three_way_fuse_and_the_two_cuts_are_exact_or_refused() {
         let u = union_area();
@@ -306,7 +307,13 @@ mod tests {
                 let mut topo = Topology::new();
                 let [plate, rod, prism] = parts(&mut topo, seam, &pose);
                 let compound = topo.add_compound(Compound::new(vec![plate, rod, prism]));
-                if let Ok(fused) = fuse_all(&mut topo, compound) {
+                let fused = fuse_all(&mut topo, compound);
+                assert!(
+                    fused.is_ok() || name == "turned",
+                    "fuse, {what}: {:?}",
+                    fused.as_ref().err()
+                );
+                if let Ok(fused) = fused {
                     assert_exact(
                         &topo,
                         fused,
@@ -344,7 +351,8 @@ mod tests {
     }
 
     /// The GFA's own fuse of all three, with no layer above it to check its
-    /// result: the exact solid or an error, never an invalid solid.
+    /// result: the exact solid upright and mirrored, and turned the exact
+    /// solid or an error (#2878), never an invalid solid.
     #[test]
     fn the_gfa_fuse_of_all_three_is_exact_or_an_error() {
         let u = union_area();
@@ -353,7 +361,13 @@ mod tests {
                 let what = format!("{seams}, {name}");
                 let mut topo = Topology::new();
                 let parts = parts(&mut topo, seam, &pose);
-                if let Ok(fused) = brepkit_algo::gfa::fuse_n(&mut topo, &parts) {
+                let fused = brepkit_algo::gfa::fuse_n(&mut topo, &parts);
+                assert!(
+                    fused.is_ok() || name == "turned",
+                    "fuse_n, {what}: {:?}",
+                    fused.as_ref().err()
+                );
+                if let Ok(fused) = fused {
                     assert_exact(
                         &topo,
                         fused,
