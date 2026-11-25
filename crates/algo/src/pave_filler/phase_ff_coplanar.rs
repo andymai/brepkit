@@ -332,12 +332,12 @@ fn process_coplanar_pair(
     let mut pieces: Vec<SectionPiece> = Vec::new();
     for e in &region_b.edges {
         if coincident_boundary_edge(e, &region_a.edges, tol.linear).is_none() {
-            clip_to_region(e, (face_a, region_a), frame, tol.linear, &mut pieces);
+            clip_to_region(e, (face_a, region_a), frame, tol.linear, &mut pieces)?;
         }
     }
     for e in &region_a.edges {
         if coincident_boundary_edge(e, &region_b.edges, tol.linear).is_none() {
-            clip_to_region(e, (face_b, region_b), frame, tol.linear, &mut pieces);
+            clip_to_region(e, (face_b, region_b), frame, tol.linear, &mut pieces)?;
         }
     }
     let faces = [face_a, face_b];
@@ -456,6 +456,8 @@ struct BoundaryEdge {
     /// The paves an ellipse edge has from the earlier phases, each a point
     /// and its parameter: where it crosses or touches another edge.
     paves: Vec<(Point3, f64)>,
+    /// The edge's curve and its ends in the edge's own order.
+    own: (EdgeCurve, Point3, Point3),
 }
 
 /// An edge's curve over the edge, read in its wire's direction: the
@@ -482,6 +484,18 @@ impl CurveSpan {
     fn point(&self, t: f64) -> Point3 {
         self.curve
             .evaluate_with_endpoints(t, self.ends.0, self.ends.1)
+    }
+
+    /// The parameter in the span of the ellipse's point nearest `p`, where
+    /// `p` lies within `reach` of it. `None` for any other curve.
+    fn through(&self, p: Point3, reach: f64) -> Option<f64> {
+        let EdgeCurve::Ellipse(e) = &self.curve else {
+            return None;
+        };
+        let t = e.project(p);
+        ((e.evaluate(t) - p).length() <= reach)
+            .then(|| self.param_of(p, t))
+            .flatten()
     }
 
     /// The parameter in the span of a pave at `p` whose own parameter is
@@ -704,6 +718,7 @@ fn face_region_2d(
                 shape,
                 along,
                 paves: Vec::new(),
+                own: (edge.curve().clone(), v_start, v_end),
             });
         }
     }
@@ -1210,7 +1225,7 @@ fn clip_to_region(
     frame: &PlaneFrame2D,
     tol: f64,
     out: &mut Vec<SectionPiece>,
-) {
+) -> Result<(), AlgoError> {
     match &e.shape {
         Shape2::Arc(arc) => {
             let len = arc.sweep.abs();
@@ -1258,7 +1273,7 @@ fn clip_to_region(
             let d = Point2::new(b.x() - a.x(), b.y() - a.y());
             let seg_len = d.x().hypot(d.y());
             if seg_len < tol {
-                return;
+                return Ok(());
             }
             let mut ts = vec![0.0, 1.0];
             for t in &target.edges {
@@ -1284,44 +1299,44 @@ fn clip_to_region(
             }
         }
         Shape2::Poly(poly) => {
-            // A sampled curve is walked sample by sample for its crossings
-            // and its in-region runs. An ellipse's crossings are then moved
-            // onto the ellipse, bisected between the samples either side
-            // where its points read on two sides of the partner's boundary,
-            // and each run follows the ellipse: its chord stands off the
-            // ellipse by its sag, and the partner's split along it would meet
-            // no edge of the face the ellipse bounds.
             let n = poly.len().saturating_sub(1);
             if n == 0 {
-                return;
+                return Ok(());
             }
-            // Cumulative parameter: sub-segment k spans [k, k + 1].
-            let mut ss: Vec<f64> = vec![0.0, n as f64];
-            for (k, w) in poly.windows(2).enumerate() {
-                let mut local = Vec::new();
-                for t in &target.edges {
-                    seg_crossings(w[0], w[1], t, tol, &mut local);
+            let nf = n as f64;
+            // Where the samples cross `edges`, as the polyline's parameter:
+            // sub-segment k spans [k, k + 1].
+            let sampled = |edges: &[&BoundaryEdge]| -> Vec<f64> {
+                let mut ss = Vec::new();
+                for (k, w) in poly.windows(2).enumerate() {
+                    let mut local = Vec::new();
+                    for t in edges {
+                        seg_crossings(w[0], w[1], t, tol, &mut local);
+                    }
+                    ss.extend(local.into_iter().map(|x| x + k as f64));
                 }
-                ss.extend(local.into_iter().map(|x| x + k as f64));
-            }
-            ss.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
-            let at = |s: f64| -> Point2 {
-                let k = (s.floor() as usize).min(n - 1);
-                let f = s - k as f64;
-                let (c, d) = (poly[k], poly[k + 1]);
-                Point2::new(
-                    (d.x() - c.x()).madd(f, c.x()),
-                    (d.y() - c.y()).madd(f, c.y()),
-                )
+                ss
             };
-            let dist = |s0: f64, s1: f64| {
-                let (p, q) = (at(s0), at(s1));
-                (q.x() - p.x()).hypot(q.y() - p.y())
-            };
-            ss.dedup_by(|x, y| dist(*x, *y) < tol);
-            // A B-spline keeps its chords: the regular FF phase gives its
-            // true pieces, and this only partitions the partner alike.
             let Some(along) = &e.along else {
+                // A B-spline keeps its chords: the regular FF phase gives its
+                // true pieces, and this only partitions the partner alike.
+                let mut ss: Vec<f64> = vec![0.0, nf];
+                ss.extend(sampled(&target.edges.iter().collect::<Vec<_>>()));
+                ss.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+                let at = |s: f64| -> Point2 {
+                    let k = (s.floor() as usize).min(n - 1);
+                    let f = s - k as f64;
+                    let (c, d) = (poly[k], poly[k + 1]);
+                    Point2::new(
+                        (d.x() - c.x()).madd(f, c.x()),
+                        (d.y() - c.y()).madd(f, c.y()),
+                    )
+                };
+                let dist = |s0: f64, s1: f64| {
+                    let (p, q) = (at(s0), at(s1));
+                    (q.x() - p.x()).hypot(q.y() - p.y())
+                };
+                ss.dedup_by(|x, y| dist(*x, *y) < tol);
                 for w in ss.windows(2) {
                     let (sa, sb) = (w[0], w[1]);
                     if dist(sa, sb) < tol {
@@ -1336,7 +1351,7 @@ fn clip_to_region(
                     } else {
                         frame.unproject(at(sa))
                     };
-                    let end = if sb >= n as f64 {
+                    let end = if sb >= nf {
                         e.p3_end
                     } else {
                         frame.unproject(at(sb))
@@ -1347,44 +1362,75 @@ fn clip_to_region(
                         end,
                     });
                 }
-                return;
+                return Ok(());
             };
-            let nf = n as f64;
-            let inside = |t: f64| inside_region(frame.project(along.point(t)), target, tol);
-            // Each cut's parameter on the curve, its point, and its rank: an
-            // end of the edge, one of its paves, or a sampled crossing.
-            let mut cuts: Vec<(f64, Point3, u8)> = ss
+            // An ellipse is cut where it meets the partner's boundary, each
+            // place proved: against a line, a circle or an ellipse of the
+            // boundary by `section_meetings`, read in pieces of at most a
+            // half turn, whose ends are checked on the other curve, and at
+            // its own paves, where it crosses or touches the other solid's
+            // edges. A B-spline of the boundary is met where the samples
+            // cross it. Each run between the cuts follows the ellipse: its
+            // chord stands off the ellipse by its sag, and the partner's
+            // split along it would meet no edge of the face the ellipse
+            // bounds. A meeting no bound settles refuses the pair.
+            let mut cuts: Vec<(f64, Point3, u8)> = vec![
+                (along.at(0.0, nf), e.p3_start, 2),
+                (along.at(nf, nf), e.p3_end, 2),
+            ];
+            let own = half_turns(&along.curve, along.ends);
+            let unproved: Vec<&BoundaryEdge> = target
+                .edges
                 .iter()
-                .map(|&s| {
-                    if s <= 0.0 {
-                        return (along.at(0.0, nf), e.p3_start, 2);
+                .filter(|t| matches!(t.own.0, EdgeCurve::NurbsCurve(_)))
+                .collect();
+            for s in sampled(&unproved) {
+                let t = along.at(s, nf);
+                cuts.push((t, along.point(t), 0));
+            }
+            for t in &target.edges {
+                if matches!(t.own.0, EdgeCurve::NurbsCurve(_)) {
+                    continue;
+                }
+                let theirs = half_turns(&t.own.0, (t.own.1, t.own.2));
+                for &(_, p, _) in &theirs {
+                    if let Some(at) = along.through(p, tol) {
+                        cuts.push((at, p, 1));
                     }
-                    if s >= nf {
-                        return (along.at(nf, nf), e.p3_end, 2);
+                }
+                for &(_, p, _) in &own {
+                    if on_edge(p, t, frame, tol)
+                        && let Some(at) = along.through(p, tol)
+                    {
+                        cuts.push((at, p, 1));
                     }
-                    let k = s.floor().min(nf - 1.0);
-                    let (mut lo, mut hi) = (along.at(k, nf), along.at(k + 1.0, nf));
-                    let below = inside(lo);
-                    if below == inside(hi) {
-                        let t = along.at(s, nf);
-                        return (t, along.point(t), 0);
-                    }
-                    for _ in 0..60 {
-                        let mid = f64::midpoint(lo, hi);
-                        if inside(mid) == below {
-                            lo = mid;
-                        } else {
-                            hi = mid;
+                }
+                for mine in &own {
+                    for other in &theirs {
+                        let met = crate::builder::face_splitter::section_meetings(
+                            (&mine.0, mine.1, mine.2),
+                            (&other.0, other.1, other.2),
+                            tol,
+                        )
+                        .ok_or_else(|| {
+                            AlgoError::IntersectionFailed(
+                                "an ellipse edge's meeting with a coplanar face's boundary \
+                                 is not settled"
+                                    .into(),
+                            )
+                        })?;
+                        for p in met {
+                            if let Some(at) = along.through(p, 10.0 * tol) {
+                                cuts.push((at, p, 1));
+                            }
                         }
                     }
-                    let t = f64::midpoint(lo, hi);
-                    (t, along.point(t), 0)
-                })
-                .collect();
+                }
+            }
             // The edge's own paves cut it too, at their points: where it
-            // touches the partner's boundary no sampled crossing shows, and a
-            // section running on through the touch would leave the partner's
-            // face pinched there, round no vertex.
+            // touches the partner's boundary no crossing shows, and a section
+            // running on through the touch would leave the partner's face
+            // pinched there, round no vertex.
             cuts.extend(
                 e.paves
                     .iter()
@@ -1433,6 +1479,49 @@ fn clip_to_region(
                 });
             }
         }
+    }
+    Ok(())
+}
+
+/// `curve` from `start` to `end` in pieces of at most a half turn, each as
+/// the curve and its two ends: a line whole, a circle or an ellipse cut at
+/// equal steps of its parameter. Nothing for a B-spline.
+fn half_turns(
+    curve: &EdgeCurve,
+    (start, end): (Point3, Point3),
+) -> Vec<(EdgeCurve, Point3, Point3)> {
+    match curve {
+        EdgeCurve::Line => vec![(EdgeCurve::Line, start, end)],
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+            let (t0, t1) = curve.domain_with_endpoints(start, end);
+            let pieces = ((t1 - t0).abs() / (0.99 * std::f64::consts::PI))
+                .ceil()
+                .max(1.0);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let count = pieces as usize;
+            let at = |k: usize| {
+                if k == 0 {
+                    start
+                } else if k == count {
+                    end
+                } else {
+                    curve.evaluate_with_endpoints((t1 - t0).madd(k as f64 / pieces, t0), start, end)
+                }
+            };
+            (0..count)
+                .map(|k| (curve.clone(), at(k), at(k + 1)))
+                .collect()
+        }
+        EdgeCurve::NurbsCurve(_) => Vec::new(),
+    }
+}
+
+/// Whether `p` lies on the boundary edge `t`: on its ellipse, read by the
+/// ellipse's nearest point, or on its 2D shape.
+fn on_edge(p: Point3, t: &BoundaryEdge, frame: &PlaneFrame2D, tol: f64) -> bool {
+    match &t.along {
+        Some(along) => along.through(p, tol).is_some(),
+        None => point_on_edge_2d(frame.project(p), t, tol),
     }
 }
 

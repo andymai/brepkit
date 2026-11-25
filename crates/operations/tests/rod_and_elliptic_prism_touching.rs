@@ -378,6 +378,161 @@ mod tests {
         }
     }
 
+    /// The area shared by the disc of radius `r` about `(cx, cy)` and the
+    /// ellipse of semi-axes 3 and 2 about (4, 5), where the circle crosses
+    /// the ellipse twice and stands off it elsewhere: the length of each
+    /// vertical line in both, read over the disc's width as `x = cx + r sin
+    /// u`, cut where the curves cross, by Gauss-Legendre rules.
+    fn disc_and_ellipse_overlap(cx: f64, cy: f64, r: f64) -> f64 {
+        let (ex, ey, a, b) = (4.0, 5.0, 3.0, 2.0);
+        let off = |psi: f64| {
+            let (x, y) = (r.mul_add(psi.cos(), cx), r.mul_add(psi.sin(), cy));
+            ((x - ex) / a).powi(2) + ((y - ey) / b).powi(2) - 1.0
+        };
+        let mut cuts = vec![-PI / 2.0, PI / 2.0];
+        let steps = 4096;
+        for k in 0..steps {
+            let (mut lo, mut hi) = (
+                2.0 * PI * f64::from(k) / f64::from(steps),
+                2.0 * PI * f64::from(k + 1) / f64::from(steps),
+            );
+            if (off(lo) < 0.0) == (off(hi) < 0.0) {
+                continue;
+            }
+            for _ in 0..200 {
+                let mid = 0.5 * (lo + hi);
+                if (off(mid) < 0.0) == (off(lo) < 0.0) {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let x = r.mul_add((0.5 * (lo + hi)).cos(), cx);
+            cuts.push(((x - cx) / r).clamp(-1.0, 1.0).asin());
+        }
+        cuts.sort_by(f64::total_cmp);
+        let length = |u: f64| {
+            let x = r.mul_add(u.sin(), cx);
+            let half_c = (r * r - (x - cx).powi(2)).max(0.0).sqrt();
+            let q = 1.0 - ((x - ex) / a).powi(2);
+            if q <= 0.0 {
+                return 0.0;
+            }
+            let half_e = b * q.sqrt();
+            ((cy + half_c).min(ey + half_e) - (cy - half_c).max(ey - half_e)).max(0.0) * r * u.cos()
+        };
+        // 20-point Gauss-Legendre, its nodes by Newton's steps on P20.
+        let n = 20;
+        let mut rule = Vec::with_capacity(n);
+        for i in 1..=n {
+            let mut z = (PI * (i as f64 - 0.25) / (n as f64 + 0.5)).cos();
+            let mut dp = 0.0;
+            for _ in 0..100 {
+                let (mut p0, mut p1) = (1.0, z);
+                for k in 2..=n {
+                    let p2 = ((2 * k - 1) as f64 * z * p1 - (k - 1) as f64 * p0) / k as f64;
+                    p0 = p1;
+                    p1 = p2;
+                }
+                dp = n as f64 * (z * p1 - p0) / (z * z - 1.0);
+                let dz = p1 / dp;
+                z -= dz;
+                if dz.abs() < 1e-16 {
+                    break;
+                }
+            }
+            rule.push((z, 2.0 / ((1.0 - z * z) * dp * dp)));
+        }
+        let mut area = 0.0;
+        for w in cuts.windows(2) {
+            let pieces = 64;
+            for k in 0..pieces {
+                let lo = w[0] + (w[1] - w[0]) * k as f64 / pieces as f64;
+                let hi = w[0] + (w[1] - w[0]) * (k + 1) as f64 / pieces as f64;
+                let (mid, half) = (0.5 * (lo + hi), 0.5 * (hi - lo));
+                area += rule
+                    .iter()
+                    .map(|&(z, weight)| weight * length(half.mul_add(z, mid)))
+                    .sum::<f64>()
+                    * half;
+            }
+        }
+        area
+    }
+
+    /// The prism of semi-axes 3 and 2 about (4, 5) and a rod of radius 0.03
+    /// from z = -1 to 3, flush with it, whose axis stands 0.01 out from the
+    /// prism's wall at the ellipse's parameter 0.344: its rims cross the
+    /// prism's twice, 0.027 of the ellipse's parameter apart, between two of
+    /// the 16 places a quarter of the rim was read at, pi / 32 apart. Each
+    /// crossing is proved on the ellipse, and the fuse, the prism less the
+    /// rod and their common part are exact.
+    #[test]
+    fn a_thin_rod_crossing_a_flush_prism_rim_twice_between_samples_is_exact() {
+        let theta: f64 = 0.344;
+        let (a, b): (f64, f64) = (3.0, 2.0);
+        let foot = (a.mul_add(theta.cos(), 4.0), b.mul_add(theta.sin(), 5.0));
+        let normal = {
+            let (nx, ny) = (theta.cos() / a, theta.sin() / b);
+            let len = nx.hypot(ny);
+            (nx / len, ny / len)
+        };
+        let r = 0.03;
+        let centre = (
+            0.01_f64.mul_add(normal.0, foot.0),
+            0.01_f64.mul_add(normal.1, foot.1),
+        );
+        let overlap = disc_and_ellipse_overlap(centre.0, centre.1, r);
+        let ellipse = PI * a * b;
+        let disc = PI * r * r;
+        let in_rod = Point3::new(centre.0, centre.1, 1.0);
+        let in_both = Point3::new(
+            (-0.01_f64).mul_add(normal.0, foot.0),
+            (-0.01_f64).mul_add(normal.1, foot.1),
+            1.0,
+        );
+        let past = Point3::new(
+            0.05_f64.mul_add(normal.0, foot.0),
+            0.05_f64.mul_add(normal.1, foot.1),
+            1.0,
+        );
+        let in_prism = Point3::new(4.0, 5.0, 1.0);
+        for (name, pose) in poses() {
+            for (op, volume) in [
+                (BooleanOp::Fuse, 4.0 * (ellipse + disc - overlap)),
+                (BooleanOp::Cut, 4.0 * (ellipse - overlap)),
+                (BooleanOp::Intersect, 4.0 * overlap),
+            ] {
+                let mut topo = Topology::new();
+                let [_, _, prism] = parts_with(&mut topo, b, 0.0, &pose);
+                let rod = make_cylinder(&mut topo, r, 4.0).unwrap();
+                transform_solid(
+                    &mut topo,
+                    rod,
+                    &(pose
+                        * Mat4::translation(centre.0, centre.1, -1.0)
+                        * Mat4::rotation_z(normal.1.atan2(normal.0))),
+                )
+                .unwrap();
+                let what = format!("{op:?}, {name}");
+                let (x, y) = if op == BooleanOp::Cut {
+                    (prism, rod)
+                } else {
+                    (rod, prism)
+                };
+                let result = boolean_with_options(&mut topo, op, x, y, exact());
+                assert!(result.is_ok(), "{what}: {result:?}");
+                let result = result.unwrap();
+                let (inside, outside): (Vec<Point3>, Vec<Point3>) = match op {
+                    BooleanOp::Fuse => (vec![in_rod, in_both, in_prism], vec![past]),
+                    BooleanOp::Cut => (vec![in_prism], vec![in_rod, in_both, past]),
+                    BooleanOp::Intersect => (vec![in_both], vec![in_rod, in_prism, past]),
+                };
+                assert_exact(&topo, result, volume, (&inside, &outside), &pose, &what);
+            }
+        }
+    }
+
     /// The rod from z = 0 to 2 only, and the prism from z = -1 to 3: the rod
     /// lies in the prism but for the two thin lenses beside the touch, so
     /// neither holds the other. The fuse, the prism less the rod and their

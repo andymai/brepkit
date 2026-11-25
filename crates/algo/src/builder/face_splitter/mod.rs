@@ -14035,6 +14035,34 @@ pub fn edges_one_curve(a: &OrientedPCurveEdge, b: &OrientedPCurveEdge, tol: f64)
     Some(same_section_curve(&section(a), &section(b), tol))
 }
 
+/// Where a section along `a` meets one along `b`, each given as its curve
+/// and its two ends: a line, or a circle or an ellipse arc of at most a half
+/// turn. Each point is proved where the two come within `tol` of each other
+/// inside both (see `edge_splitting::section_meeting_points`), but not at
+/// an end of either, which stands for itself. `None` where the meetings are
+/// not settled.
+pub fn section_meetings(
+    (curve_a, start_a, end_a): (&EdgeCurve, Point3, Point3),
+    (curve_b, start_b, end_b): (&EdgeCurve, Point3, Point3),
+    tol: f64,
+) -> Option<Vec<Point3>> {
+    let spans = [
+        edge_splitting::SectionSpan {
+            curve: curve_a,
+            start: start_a,
+            end: end_a,
+        },
+        edge_splitting::SectionSpan {
+            curve: curve_b,
+            start: start_b,
+            end: end_b,
+        },
+    ];
+    edge_splitting::section_meeting_points(&spans, tol)
+        .ok()
+        .map(|found| found.into_iter().map(|m| m.at).collect())
+}
+
 /// Whether sections `a` and `b`, whose ends lie within `tol` of each other
 /// (either way round), are one curve within `tol`, by a bound over their
 /// whole length. Two lines are. Two circular or elliptic arcs are where
