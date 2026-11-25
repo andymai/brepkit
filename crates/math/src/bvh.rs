@@ -31,15 +31,23 @@ impl Bvh {
     ///
     /// Uses SAH-based construction for good query performance. If `aabbs`
     /// is empty, returns an empty BVH.
+    ///
+    /// A box with a coordinate that is not a number holds all of space
+    /// here: each query returns its primitive, and the boxes above it are
+    /// numbers, so no other primitive is lost.
     #[must_use]
     pub fn build(aabbs: &[(usize, Aabb3)]) -> Self {
         if aabbs.is_empty() {
             return Self { nodes: Vec::new() };
         }
 
+        let aabbs: Vec<(usize, Aabb3)> = aabbs
+            .iter()
+            .map(|&(id, b)| (id, if b.is_number() { b } else { Aabb3::WHOLE }))
+            .collect();
         let mut indices: Vec<usize> = (0..aabbs.len()).collect();
         let mut nodes = Vec::with_capacity(2 * aabbs.len());
-        build_recursive(aabbs, &mut indices, &mut nodes);
+        build_recursive(&aabbs, &mut indices, &mut nodes);
         Self { nodes }
     }
 
@@ -359,6 +367,27 @@ mod tests {
                 Point3::new(x + size, y + size, z + size),
             ]),
         )
+    }
+
+    /// A primitive whose box hides where it lies is a candidate for each
+    /// query, and the others are found as before.
+    #[test]
+    fn a_box_that_is_not_a_number_is_a_candidate_and_loses_no_other() {
+        let mut boxes: Vec<(usize, Aabb3)> = (0..8)
+            .map(|i| make_box(i, i as f64 * 3.0, 0.0, 0.0, 1.0))
+            .collect();
+        boxes.push((8, Aabb3::from_points([Point3::new(f64::NAN, 0.0, 0.0)])));
+        let bvh = Bvh::build(&boxes);
+        let near = |x: f64| Aabb3::from_points([Point3::new(x, 0.5, 0.5)]);
+        let mut hits = bvh.query_overlap(&near(6.5));
+        hits.sort_unstable();
+        assert_eq!(hits, vec![2, 8]);
+        let mut far = bvh.query_overlap(&near(1e6));
+        far.sort_unstable();
+        assert_eq!(far, vec![8]);
+        let mut along = bvh.query_ray(Point3::new(-5.0, 0.5, 0.5), Vec3::new(1.0, 0.0, 0.0));
+        along.sort_unstable();
+        assert_eq!(along, (0..9).collect::<Vec<_>>());
     }
 
     #[test]
