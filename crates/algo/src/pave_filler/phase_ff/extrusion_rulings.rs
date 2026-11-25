@@ -61,10 +61,12 @@ pub(super) fn cylinder_extrusion_rulings(
     bbox_b: &Aabb3,
 ) -> Option<Vec<RawCurve>> {
     let axis = cylinder.axis().normalize().ok()?;
-    let (profile, along) = extrusion(surface)?;
+    let (profile, along, slack) = extrusion(surface)?;
     let length = along.length();
     let drift = along.cross(axis).length();
-    if length <= 0.0 || drift > PARALLEL_SIN * length || drift + 4.0 * f64::EPSILON * length > DRIFT
+    if length <= 0.0
+        || drift > PARALLEL_SIN * length
+        || drift + slack + 4.0 * f64::EPSILON * length > DRIFT
     {
         return None;
     }
@@ -101,8 +103,11 @@ pub(super) fn cylinder_extrusion_rulings(
 
 /// `surface` as a profile moved along a vector: degree one with two control
 /// rows (or columns) across one direction, the second row the first moved
-/// by one vector, with the same weights.
-fn extrusion(surface: &NurbsSurface) -> Option<(NurbsCurve, Vec3)> {
+/// by about one vector, with the same weights. With the profile and the
+/// first pole's move, how far any pole's move may stray from that one, in
+/// model units: each line of the patch across the rows strays from it by
+/// a blend of those, so by no more.
+fn extrusion(surface: &NurbsSurface) -> Option<(NurbsCurve, Vec3, f64)> {
     let cps = surface.control_points();
     let weights = surface.weights();
     let (first, first_w, second, second_w, degree, knots) =
@@ -132,26 +137,28 @@ fn extrusion(surface: &NurbsSurface) -> Option<(NurbsCurve, Vec3)> {
         };
     let (&start, &moved) = (first.first()?, second.first()?);
     let along = moved - start;
-    let size = first
-        .iter()
-        .map(|p| (*p - start).length())
-        .fold(along.length(), f64::max);
-    let exact = |a: f64, b: f64, scale: f64| (a - b).abs() <= 8.0 * f64::EPSILON * scale;
-    let same_move = first.iter().zip(&second).all(|(a, b)| {
-        let step = *b - *a;
-        exact(step.x(), along.x(), size + a.x().abs())
-            && exact(step.y(), along.y(), size + a.y().abs())
-            && exact(step.z(), along.z(), size + a.z().abs())
+    // Each pole's move less the first's, and what the rounding of the
+    // subtractions can hide of it, coordinate by coordinate.
+    let rounding = |a: f64, b: f64, c: f64, d: f64| {
+        2.0 * f64::EPSILON * (a.abs() + b.abs() + c.abs() + d.abs())
+    };
+    let slack = first.iter().zip(&second).fold(0.0_f64, |most, (a, b)| {
+        let hidden = Vec3::new(
+            rounding(a.x(), b.x(), start.x(), moved.x()),
+            rounding(a.y(), b.y(), start.y(), moved.y()),
+            rounding(a.z(), b.z(), start.z(), moved.z()),
+        );
+        most.max(((*b - *a) - along).length() + hidden.length())
     });
     let same_weights = first_w
         .iter()
         .zip(&second_w)
-        .all(|(a, b)| exact(*a, *b, a.abs()));
-    if !same_move || !same_weights || first_w.iter().any(|w| *w <= 0.0) {
+        .all(|(a, b)| (a - b).abs() <= 8.0 * f64::EPSILON * a.abs());
+    if !same_weights || first_w.iter().any(|w| *w <= 0.0) {
         return None;
     }
     let profile = NurbsCurve::new(degree, knots, first, first_w).ok()?;
-    Some((profile, along))
+    Some((profile, along, slack))
 }
 
 /// A profile curve against the circle a cylinder cuts across its axis.
@@ -285,8 +292,9 @@ impl CircleSection<'_> {
         self.spread(run) <= SPREAD || off <= SPREAD
     }
 
-    /// The Bernstein coefficients over `[a, b]` of `reach` in the profile's
-    /// Bezier form there, and what rounding can move each by. The control
+    /// The Bernstein coefficients over `[a, b]` of `reach` times the weight
+    /// function squared, in the profile's Bezier form there, and what
+    /// rounding can move each by. The control
     /// points are read across the axis from the cylinder's origin, so the
     /// coefficients grow with the profile's size about the axis; the
     /// rounding of that subtraction grows with where the part sits.
@@ -314,6 +322,7 @@ impl CircleSection<'_> {
             across.push((v * w, w));
         }
         let max_w = across.iter().map(|&(_, w)| w).fold(0.0, f64::max);
+        let min_w = across.iter().map(|&(_, w)| w).fold(f64::INFINITY, f64::min);
         let r2 = self.radius * self.radius;
         let n = 2 * p;
         let mut c = vec![0.0; n + 1];
@@ -329,7 +338,11 @@ impl CircleSection<'_> {
             * max_w
             * reach.madd(place, reach.madd(reach, r2))
             * (n + 1) as f64;
-        Some(Bernstein { c, band })
+        Some(Bernstein {
+            c,
+            band,
+            least_w2: min_w * min_w,
+        })
     }
     /// The root of `reach` in `[a, b]`, where it is monotone and changes
     /// sign beyond rounding between the ends.
@@ -454,11 +467,14 @@ impl Walk {
     }
 }
 
-/// The Bernstein coefficients of `reach` over an interval, and what
-/// rounding can move each by.
+/// The Bernstein coefficients over an interval of `reach` times the
+/// square of the profile's weight function, what rounding can move each
+/// by, and the square of the smallest weight of the interval's Bezier
+/// form: the weight function, a blend of those weights, is no smaller.
 struct Bernstein {
     c: Vec<f64>,
     band: f64,
+    least_w2: f64,
 }
 
 impl Bernstein {
@@ -477,10 +493,11 @@ impl Bernstein {
         (value.abs() > self.band).then_some(value > 0.0)
     }
 
-    /// A bound on `reach` over the interval: the coefficients bound it,
-    /// each within the band.
+    /// A bound on `reach` over the interval: the coefficients, each within
+    /// the band, bound it times the weight function squared, which is no
+    /// less than the smallest weight squared.
     fn most(&self) -> f64 {
-        self.c.iter().fold(0.0, |m: f64, x| m.max(x.abs())) + self.band
+        (self.c.iter().fold(0.0, |m: f64, x| m.max(x.abs())) + self.band) / self.least_w2
     }
 
     /// What the coefficients prove, which bound `reach` and whose
@@ -840,7 +857,7 @@ mod tests {
     fn moved_polyline(
         points: &[(f64, f64)],
         knots: Vec<f64>,
-        height: f64,
+        (height, weight): (f64, f64),
         along: Vec3,
         pose: &Mat4,
     ) -> NurbsSurface {
@@ -856,7 +873,7 @@ mod tests {
             vec![0.0, 0.0, 1.0, 1.0],
             knots,
             vec![row(Vec3::new(0.0, 0.0, 0.0)), row(along)],
-            vec![vec![1.0; points.len()]; 2],
+            vec![vec![weight; points.len()]; 2],
         )
         .unwrap()
     }
@@ -870,7 +887,7 @@ mod tests {
             let wall = moved_polyline(
                 &[(0.5, -2.0), (0.5, 2.0)],
                 vec![0.0, 0.0, 1.0, 1.0],
-                0.0,
+                (0.0, 1.0),
                 Vec3::new(5e-5, 0.0, 1e8),
                 &pose,
             );
@@ -882,12 +899,14 @@ mod tests {
         }
     }
 
-    /// The line x = 0.99999 crosses a unit circle a thousand million from
-    /// the origin at y = -/+ 0.004472, where the profile keeps within 2e-5
-    /// of the circle: rounding there hides the side, and the run between
-    /// the crossings has the same side at both ends. Either both crossings
-    /// are found or the section is left to the marcher, for the line and
-    /// for a closed profile whose seam lies between them.
+    /// The line x = 0.99999 crosses a unit circle at y = -/+ 0.004472, where
+    /// it keeps within 1e-5 of the circle. With the part a thousand million
+    /// from the origin, or with the cylinder's origin that far along its
+    /// axis, rounding hides the side there, and the run between the
+    /// crossings has the same side at both ends. Either both crossings are
+    /// found or the section is left to the marcher, for the line and for a
+    /// closed profile whose seam lies between them, whatever one weight all
+    /// the poles share.
     #[test]
     fn crossings_hidden_in_a_run_with_one_side_at_both_ends_are_not_lost() {
         type Profile<'a> = (&'a [(f64, f64)], Vec<f64>);
@@ -908,29 +927,93 @@ mod tests {
                 vec![0.0, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.0],
             ),
         ];
+        let room = Aabb3 {
+            min: Point3::new(-1e10, -1e10, -1e10),
+            max: Point3::new(1e10, 1e10, 1e10),
+        };
         for (name, pose) in poses() {
-            let pose = pose * Mat4::translation(0.0, 0.0, far);
-            for (points, knots) in &profiles {
-                let wall =
-                    moved_polyline(points, knots.clone(), 0.0, Vec3::new(0.0, 0.0, 4.0), &pose);
-                let rod = cylinder_about(0.0, 0.0, 1.0, &pose);
-                let room = Aabb3 {
-                    min: Point3::new(-1e10, -1e10, -1e10),
-                    max: Point3::new(1e10, 1e10, 1e10),
-                };
-                let Some(lines) = cylinder_extrusion_rulings(&rod, &wall, &room, &room) else {
-                    continue;
-                };
-                assert_eq!(lines.len(), 2, "{name}: {} poles", points.len());
-                for y in [-y, y] {
-                    let crossing = pose.mul_point(Point3::new(x, y, 0.0));
-                    assert!(
-                        lines.iter().any(|l| (l.p_start - crossing).length() < 1e-6
-                            || (l.p_end - crossing).length() < 1e-6),
-                        "{name}: no ruling at {y}"
-                    );
+            // The part far away, or only the cylinder's origin along its axis.
+            for (part, origin) in [(far, 0.0), (0.0, far)] {
+                let pose = pose * Mat4::translation(0.0, 0.0, part);
+                let rod = CylindricalSurface::new(
+                    pose.mul_point(Point3::new(0.0, 0.0, origin)),
+                    direction(&pose, Vec3::new(0.0, 0.0, 1.0)),
+                    1.0,
+                )
+                .unwrap();
+                for (points, knots) in &profiles {
+                    let read = |weight: f64| {
+                        let wall = moved_polyline(
+                            points,
+                            knots.clone(),
+                            (0.0, weight),
+                            Vec3::new(0.0, 0.0, 4.0),
+                            &pose,
+                        );
+                        cylinder_extrusion_rulings(&rod, &wall, &room, &room)
+                    };
+                    let what = format!("{name}, part at {part}, {} poles", points.len());
+                    let found = read(1.0);
+                    for weight in [1e-3, 1e3] {
+                        assert_eq!(
+                            read(weight).map(|l| l.len()),
+                            found.as_ref().map(Vec::len),
+                            "{what}, weight {weight}"
+                        );
+                    }
+                    let Some(lines) = found else {
+                        continue;
+                    };
+                    assert_eq!(lines.len(), 2, "{what}");
+                    for y in [-y, y] {
+                        let crossing = pose.mul_point(Point3::new(x, y, 0.0));
+                        assert!(
+                            lines.iter().any(|l| (l.p_start - crossing).length() < 1e-6
+                                || (l.p_end - crossing).length() < 1e-6),
+                            "{what}: no ruling at {y}"
+                        );
+                    }
                 }
             }
+        }
+    }
+
+    /// A profile through (0.5, -2), (0.5, 2) and (1e12, 2), whose middle
+    /// pole moves 0.001 farther across than the others as it rises by 4.
+    /// The ruling at x = 0.5 would miss the wall's top by up to 0.001:
+    /// the section is left to the marcher.
+    #[test]
+    fn an_extrusion_whose_poles_move_apart_is_left_to_the_marcher() {
+        for (name, pose) in poses() {
+            let points = [(0.5, -2.0), (0.5, 2.0), (1e12, 2.0)];
+            let row = |shift: &dyn Fn(usize) -> Vec3| -> Vec<Point3> {
+                points
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &(x, y))| pose.mul_point(Point3::new(x, y, 0.0) + shift(i)))
+                    .collect()
+            };
+            let wall = NurbsSurface::new(
+                1,
+                1,
+                vec![0.0, 0.0, 1.0, 1.0],
+                vec![0.0, 0.0, 0.5, 1.0, 1.0],
+                vec![
+                    row(&|_| Vec3::new(0.0, 0.0, 0.0)),
+                    row(&|i| Vec3::new(if i == 1 { 1e-3 } else { 0.0 }, 0.0, 4.0)),
+                ],
+                vec![vec![1.0; 3]; 2],
+            )
+            .unwrap();
+            let rod = cylinder_about(0.0, 0.0, 1.0, &pose);
+            let room = Aabb3 {
+                min: Point3::new(-1e13, -1e13, -1e13),
+                max: Point3::new(1e13, 1e13, 1e13),
+            };
+            assert!(
+                cylinder_extrusion_rulings(&rod, &wall, &room, &room).is_none(),
+                "{name}"
+            );
         }
     }
 }
