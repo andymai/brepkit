@@ -23,13 +23,18 @@ const H: f64 = 30.0;
 /// A seamed cylinder of radius `R` and height `H` up its local +Z, in the
 /// file's unit: the solid, and its vertices at `(R, 0, 0)` and `(R, 0, H)`.
 fn cylinder(s: &mut StepText) -> u64 {
+    cylinder_of(s, R, H)
+}
+
+/// [`cylinder`] of radius `r` and height `h`.
+fn cylinder_of(s: &mut StepText, r: f64, h: f64) -> u64 {
     let a = s.placement([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
-    let surface = s.add(format!("CYLINDRICAL_SURFACE('',#{a},{R:?})"));
-    let (v0, v1) = (s.vertex([R, 0.0, 0.0]), s.vertex([R, 0.0, H]));
-    let c0 = s.circle([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0], R);
-    let c1 = s.circle([0.0, 0.0, H], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0], R);
+    let surface = s.add(format!("CYLINDRICAL_SURFACE('',#{a},{r:?})"));
+    let (v0, v1) = (s.vertex([r, 0.0, 0.0]), s.vertex([r, 0.0, h]));
+    let c0 = s.circle([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0], r);
+    let c1 = s.circle([0.0, 0.0, h], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0], r);
     let (e0, e1) = (s.edge(v0, v0, c0), s.edge(v1, v1, c1));
-    let up = s.line([R, 0.0, 0.0], [0.0, 0.0, 1.0]);
+    let up = s.line([r, 0.0, 0.0], [0.0, 0.0, 1.0]);
     let seam = s.edge(v0, v1, up);
     let floor_loop = s.edge_loop(&[(e0, false)]);
     let floor_plane = s.plane([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
@@ -37,9 +42,59 @@ fn cylinder(s: &mut StepText) -> u64 {
     let wall_loop = s.edge_loop(&[(e0, true), (seam, true), (e1, false), (seam, false)]);
     let wall = s.face(&[wall_loop], surface, true);
     let roof_loop = s.edge_loop(&[(e1, true)]);
-    let roof_plane = s.plane([0.0, 0.0, H], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+    let roof_plane = s.plane([0.0, 0.0, h], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
     let roof = s.face(&[roof_loop], roof_plane, true);
     s.solid(&[floor, wall, roof])
+}
+
+/// A tetrahedron of planes and lines with its corner at the origin and its
+/// other vertices `a` along each axis, in the file's unit. No curve or
+/// surface of it has a size, so a placement moves it without refusing it.
+fn tetrahedron_of(s: &mut StepText, a: f64) -> u64 {
+    let corners = [[0.0; 3], [a, 0.0, 0.0], [0.0, a, 0.0], [0.0, 0.0, a]];
+    let v = corners.map(|p| s.vertex(p));
+    let mut edge = |i: usize, j: usize| {
+        let d = std::array::from_fn(|k| corners[j][k] - corners[i][k]);
+        let line = s.line(corners[i], unit(d));
+        s.edge(v[i], v[j], line)
+    };
+    let (e01, e02, e03) = (edge(0, 1), edge(0, 2), edge(0, 3));
+    let (e12, e13, e23) = (edge(1, 2), edge(1, 3), edge(2, 3));
+    let faces = [
+        (
+            vec![(e02, true), (e12, false), (e01, false)],
+            [0.0; 3],
+            [0.0, 0.0, -1.0],
+            [1.0, 0.0, 0.0],
+        ),
+        (
+            vec![(e01, true), (e13, true), (e03, false)],
+            [0.0; 3],
+            [0.0, -1.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ),
+        (
+            vec![(e03, true), (e23, false), (e02, false)],
+            [0.0; 3],
+            [-1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ),
+        (
+            vec![(e12, true), (e23, true), (e13, false)],
+            corners[1],
+            unit([1.0, 1.0, 1.0]),
+            unit([-1.0, 1.0, 0.0]),
+        ),
+    ];
+    let faces: Vec<u64> = faces
+        .into_iter()
+        .map(|(edges, origin, normal, x)| {
+            let loop_ = s.edge_loop(&edges);
+            let plane = s.plane(origin, normal, x);
+            s.face(&[loop_], plane, true)
+        })
+        .collect();
+    s.solid(&faces)
 }
 
 /// A frame: origin, z axis, x axis.
@@ -193,6 +248,12 @@ fn geometry_comes_out_in_millimetres() {
 fn assembly_step(frames: &[Frame], reversed: bool) -> String {
     let mut s = StepText::new();
     let solid = cylinder(&mut s);
+    assemble(s, solid, frames, reversed)
+}
+
+/// The file of `s`, with `solid` a part and an assembly using it once at
+/// each of `frames`.
+fn assemble(mut s: StepText, solid: u64, frames: &[Frame], reversed: bool) -> String {
     let part_origin = s.placement([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
     let part_rep = s.representation("ADVANCED_BREP_SHAPE_REPRESENTATION", &[part_origin, solid]);
     let part_pd = product(&mut s, "part", part_rep);
@@ -466,4 +527,64 @@ fn a_mapped_item_may_target_a_transformation_operator() {
             &format!("operator, complex {complex}"),
         );
     }
+}
+
+/// A shape within the size limit in the file's unit can pass it in
+/// millimetres, or where its assembly places it. A unit of 1e9 mm takes a
+/// coordinate of 1e300 to infinity, a metre takes 1e298 to 1e301, and a
+/// placement 6e299 out carries a part 5e299 across past 1e300. The reader
+/// refuses each, for a tetrahedron of planes and lines and for a cylinder,
+/// and reads the same files with parts 10 across, which stay within it.
+#[test]
+fn a_shape_scaled_or_placed_past_the_size_limit_is_refused() {
+    type Part = fn(&mut StepText, f64) -> u64;
+    let parts: [(&str, Part); 2] = [
+        ("tetrahedron", tetrahedron_of),
+        ("cylinder", |s, a| cylinder_of(s, a, 1.0)),
+    ];
+    let mut wrong = Vec::new();
+    for (name, part) in parts {
+        let in_unit = |unit: Unit, a: f64, mm_per_unit: Option<&str>| {
+            let mut s = StepText::with_unit(unit);
+            let solid = part(&mut s, a);
+            s.representation("ADVANCED_BREP_SHAPE_REPRESENTATION", &[solid]);
+            let text = s.finish();
+            match mm_per_unit {
+                Some(scale) => {
+                    text.replace("LENGTH_MEASURE(25.4)", &format!("LENGTH_MEASURE({scale})"))
+                }
+                None => text,
+            }
+        };
+        let placed = |a: f64| {
+            let mut s = StepText::new();
+            let solid = part(&mut s, a);
+            let at = ([6e299, 0.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+            assemble(s, solid, &[at], false)
+        };
+        let cases = [
+            (
+                "1e9 mm units",
+                in_unit(Unit::Inch, 1e300, Some("1.E9")),
+                in_unit(Unit::Inch, 10.0, Some("1.E9")),
+            ),
+            (
+                "metres",
+                in_unit(Unit::Metre, 1e298, None),
+                in_unit(Unit::Metre, 10.0, None),
+            ),
+            ("placement", placed(5e299), placed(10.0)),
+        ];
+        for (what, past, within) in &cases {
+            let found = read_step(past, &mut Topology::new());
+            if !matches!(found, Err(brepkit_io::IoError::ParseError { .. })) {
+                wrong.push(format!("{name} {what}: {found:?}"));
+            }
+            let found = read_step(within, &mut Topology::new()).map(|solids| solids.len());
+            if !matches!(found, Ok(1)) {
+                wrong.push(format!("{name} {what} within: {found:?}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }

@@ -203,9 +203,11 @@ impl<'a> StepBuilder<'a> {
                         solid
                     };
                     if !super::assembly::is_identity(placement) {
+                        check_placed_vertices(self.topo, instance, placement)?;
                         brepkit_operations::transform::transform_solid(
                             self.topo, instance, placement,
                         )?;
+                        check_placed_geometry(self.topo, instance)?;
                     }
                     solid_ids.push(instance);
                 }
@@ -2341,6 +2343,45 @@ fn parse_list_refs(attrs: &str) -> Vec<u64> {
         return parse_refs(inner);
     }
     Vec::new()
+}
+
+/// Refuses `solid` when `placement`, its unit scale and its place in the
+/// assembly, would put a vertex past the size limit: a coordinate within it
+/// in the file's unit can pass it in millimetres. Checked before the solid
+/// moves.
+fn check_placed_vertices(
+    topo: &Topology,
+    solid: SolidId,
+    placement: &brepkit_math::mat::Mat4,
+) -> Result<(), IoError> {
+    for vertex in brepkit_topology::explorer::solid_vertices(topo, solid)? {
+        let point = topo.vertex(vertex)?.point();
+        crate::bounded_point(placement.mul_point(point), || {
+            format!("a vertex at {point:?} scaled and placed")
+        })?;
+    }
+    Ok(())
+}
+
+/// Refuses a placed `solid` whose curve or surface the placement scaled or
+/// moved past what [`EdgeCurve::is_well_formed`] and
+/// [`FaceSurface::is_well_formed`] accept: a radius scales with the unit.
+fn check_placed_geometry(topo: &Topology, solid: SolidId) -> Result<(), IoError> {
+    for face in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        if !topo.face(face)?.surface().is_well_formed() {
+            return Err(IoError::ParseError {
+                reason: "a surface scaled and placed is past the size limit".to_string(),
+            });
+        }
+    }
+    for edge in brepkit_topology::explorer::solid_edges(topo, solid)? {
+        if !topo.edge(edge)?.curve().is_well_formed() {
+            return Err(IoError::ParseError {
+                reason: "a curve scaled and placed is past the size limit".to_string(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// `curve`, read from `#entity`, if it gives a finite point at each
