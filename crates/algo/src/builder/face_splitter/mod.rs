@@ -19269,6 +19269,78 @@ mod tests {
         }
     }
 
+    /// Segments of length 1e-3, 1 and 1e6 from the plate's (5, 5) and from
+    /// 1e8 along its x, each crossed on its line two tolerances past its end
+    /// by a segment square to it: they never meet, in each frame.
+    #[test]
+    fn segments_crossing_past_an_end_never_meet() {
+        for (pose, o, u, v) in plate_frames() {
+            let at = |x: f64, y: f64| o + u * x + v * y;
+            let line = EdgeCurve::Line;
+            for length in [1e-3, 1.0, 1e6] {
+                for offset in [0.0, 1e8] {
+                    let past = 5.0 + offset + length + 2e-7;
+                    let (a, b) = (
+                        edge_splitting::SectionSpan {
+                            curve: &line,
+                            start: at(5.0 + offset, 5.0),
+                            end: at(5.0 + offset + length, 5.0),
+                        },
+                        edge_splitting::SectionSpan {
+                            curve: &line,
+                            start: at(past, 4.0),
+                            end: at(past, 6.0),
+                        },
+                    );
+                    for (x, y) in [(&a, &b), (&b, &a)] {
+                        let found = edge_splitting::segments_meet((x, 0.0), (y, 0.0), 1e-7);
+                        assert!(
+                            !matches!(found, Ok(Some(_))),
+                            "{pose}, length {length:e}, offset {offset:e}: {found:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// The flat arc of a circle of radius 1e9 over the plate's x from 4 to 6
+    /// near y = 5, and a segment square to its chord two tolerances past
+    /// its end at x = 6, and another along its chord over x from 5 to 7:
+    /// neither meets it inside both, in each frame.
+    #[test]
+    fn a_flat_arc_meets_no_segment_past_its_end_or_along_its_chord() {
+        use brepkit_math::curves::Circle3D;
+        for (pose, o, u, v) in plate_frames() {
+            let n = u.cross(v);
+            let at = |x: f64, y: f64| o + u * x + v * y;
+            let circle = EdgeCurve::Circle(
+                Circle3D::with_axes(at(5.0, 5.0 - 1e9), n, 1e9, v, n.cross(v)).unwrap(),
+            );
+            let (right, left) = (
+                edge_splitting::conic_point(&circle, -1e-9).unwrap(),
+                edge_splitting::conic_point(&circle, 1e-9).unwrap(),
+            );
+            let along = (right - left) * (1.0 / (right - left).length());
+            let across = n.cross(along);
+            let past = right + along * 2e-7;
+            for other in [
+                meeting_edge(EdgeCurve::Line, past - across, past + across, 2),
+                meeting_edge(EdgeCurve::Line, right - along, right + along, 2),
+            ] {
+                let edges = vec![meeting_edge(circle.clone(), right, left, 1), other];
+                let found = edge_splitting::section_meeting_points(
+                    &edge_splitting::section_spans(&edges),
+                    1e-7,
+                );
+                assert!(
+                    !matches!(&found, Ok(m) if !m.is_empty()),
+                    "{pose}: {found:?}"
+                );
+            }
+        }
+    }
+
     /// A circle of radius 2 and an ellipse of semi-axes 2 and 1.5 about the
     /// plate's (5, 5): a section over half a turn from each of several
     /// angles, its twin with it, and a line ending on its middle split both
