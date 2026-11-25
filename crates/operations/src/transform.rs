@@ -6,7 +6,7 @@ use std::collections::HashSet;
 use brepkit_math::mat::Mat4;
 use brepkit_math::nurbs::curve::NurbsCurve;
 use brepkit_math::nurbs::surface::NurbsSurface;
-use brepkit_math::vec::Vec3;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::{EdgeCurve, EdgeId};
 use brepkit_topology::face::{FaceId, FaceSurface};
@@ -48,105 +48,67 @@ pub fn transform_solid(
     transform_topology(topo, &vertex_ids, &edge_ids, &face_ids, matrix, &inverse)
 }
 
-/// Check that `solid`, moved by `matrix`, would pass the load checks, and
-/// move nothing.
-///
-/// Each face's surface, each edge's curve and each vertex is mapped as
-/// [`transform_solid`] maps it, and must be well formed. That transform
-/// moves the faces one by one, so one that fails part way leaves the faces
-/// before it moved: this finds such a failure first.
-///
-/// # Errors
-///
-/// Returns an error if the matrix is degenerate, an image cannot be
-/// computed, or an image would not pass the load checks.
-pub fn check_solid_transform(
-    topo: &Topology,
-    solid: SolidId,
-    matrix: &Mat4,
-) -> Result<(), crate::OperationsError> {
-    let inverse = checked_inverse(matrix)?;
-    let (vertex_ids, edge_ids, face_ids) = collect_solid_entities(topo, solid)?;
-    check_images(topo, &vertex_ids, &edge_ids, &face_ids, matrix, &inverse)
+#[cfg(test)]
+thread_local! {
+    /// The surface and curve images computed on this thread, for the tests
+    /// that count them.
+    pub(crate) static IMAGES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// Check that `face`, moved by `matrix` as [`transform_face`] moves it,
-/// would pass the load checks, and move nothing.
-///
-/// # Errors
-///
-/// As [`check_solid_transform`].
-pub fn check_face_transform(
-    topo: &Topology,
-    face: FaceId,
-    matrix: &Mat4,
-) -> Result<(), crate::OperationsError> {
-    let inverse = checked_inverse(matrix)?;
-    let (vertex_ids, edge_ids) = collect_face_entities(topo, face)?;
-    let face_ids = HashSet::from([face]);
-    check_images(topo, &vertex_ids, &edge_ids, &face_ids, matrix, &inverse)
+/// The refusal of `what`, whose image would not pass the load checks.
+fn not_loadable(what: &str) -> crate::OperationsError {
+    crate::OperationsError::InvalidInput {
+        reason: format!("{what}, moved, would not pass the load checks"),
+    }
 }
 
-/// Check that `wire`, moved by `matrix` as [`transform_wire`] moves it,
-/// would pass the load checks, and move nothing.
-///
-/// # Errors
-///
-/// As [`check_solid_transform`].
-pub fn check_wire_transform(
+/// The image of face `fid`'s surface, which must pass the load checks.
+pub(crate) fn checked_surface_image(
     topo: &Topology,
-    wire: WireId,
-    matrix: &Mat4,
-) -> Result<(), crate::OperationsError> {
-    let inverse = checked_inverse(matrix)?;
-    let (vertex_ids, edge_ids) = collect_wire_entities(topo, wire)?;
-    check_images(
-        topo,
-        &vertex_ids,
-        &edge_ids,
-        &HashSet::new(),
-        matrix,
-        &inverse,
-    )
-}
-
-/// Whether each surface, curve and point of the given entities, mapped by
-/// `matrix`, passes the load checks.
-fn check_images(
-    topo: &Topology,
-    vertex_ids: &HashSet<VertexId>,
-    edge_ids: &HashSet<EdgeId>,
-    face_ids: &HashSet<FaceId>,
+    fid: FaceId,
     matrix: &Mat4,
     inverse: &Mat4,
-) -> Result<(), crate::OperationsError> {
+) -> Result<SurfaceImage, crate::OperationsError> {
+    let image = surface_image(topo, fid, matrix, inverse)?;
+    if image.surface.is_well_formed() {
+        Ok(image)
+    } else {
+        Err(not_loadable(&format!(
+            "the surface of face {}",
+            fid.index()
+        )))
+    }
+}
+
+/// The image of an edge curve, which must pass the load checks, and whether
+/// its parameter origin moved (see [`curve_image`]).
+pub(crate) fn checked_curve_image(
+    curve: &EdgeCurve,
+    matrix: &Mat4,
+) -> Result<(EdgeCurve, bool), crate::OperationsError> {
+    let (image, origin_moved) = curve_image(curve, matrix)?;
+    if image.is_well_formed() {
+        Ok((image, origin_moved))
+    } else {
+        Err(not_loadable("an edge's curve"))
+    }
+}
+
+/// The image of a vertex's point, which must lie within the size limit.
+pub(crate) fn checked_point_image(
+    point: Point3,
+    matrix: &Mat4,
+) -> Result<Point3, crate::OperationsError> {
     use brepkit_math::curves::SIZE_LIMIT;
-    let refused = |what: String| crate::OperationsError::InvalidInput {
-        reason: format!("{what}, moved, would not pass the load checks"),
-    };
-    for &fid in face_ids {
-        if !surface_image(topo, fid, matrix, inverse)?
-            .surface
-            .is_well_formed()
-        {
-            return Err(refused(format!("the surface of face {}", fid.index())));
-        }
+    let image = matrix.mul_point(point);
+    if [image.x(), image.y(), image.z()]
+        .iter()
+        .all(|c| c.abs() <= SIZE_LIMIT)
+    {
+        Ok(image)
+    } else {
+        Err(not_loadable("a vertex"))
     }
-    for &eid in edge_ids {
-        if !curve_image(topo.edge(eid)?.curve(), matrix)?
-            .0
-            .is_well_formed()
-        {
-            return Err(refused(format!("the curve of edge {}", eid.index())));
-        }
-    }
-    for &vid in vertex_ids {
-        let p = matrix.mul_point(topo.vertex(vid)?.point());
-        if ![p.x(), p.y(), p.z()].iter().all(|c| c.abs() <= SIZE_LIMIT) {
-            return Err(refused(format!("vertex {}", vid.index())));
-        }
-    }
-    Ok(())
 }
 
 /// Checks the matrix is invertible and returns its inverse.
@@ -261,6 +223,12 @@ fn invert_linear_block(matrix: &Mat4) -> Option<(Mat4, bool)> {
 }
 
 /// Transform a closed set of faces with the edges and vertices they use.
+///
+/// Every image is computed, and checked against the load checks, before any
+/// is written: an image that fails leaves the shape as it was. The images
+/// are read with the shape in place, as the NURBS fallbacks need: they take
+/// a face's parameter range from its boundary vertices on the source
+/// surface.
 fn transform_topology(
     topo: &mut Topology,
     vertex_ids: &HashSet<VertexId>,
@@ -269,25 +237,30 @@ fn transform_topology(
     matrix: &Mat4,
     inverse: &Mat4,
 ) -> Result<(), crate::OperationsError> {
-    // Surfaces go first: the NURBS fallbacks read a face's parameter range
-    // off its boundary vertices, which must still lie on the source surface.
+    let surfaces = face_ids
+        .iter()
+        .map(|&fid| Ok((fid, checked_surface_image(topo, fid, matrix, inverse)?)))
+        .collect::<Result<Vec<_>, crate::OperationsError>>()?;
+    let (points, curves) = point_and_curve_images(topo, vertex_ids, edge_ids, matrix)?;
+
     let mut stale_pcurves = HashSet::new();
     let mut flipped = HashSet::new();
-    for &fid in face_ids {
-        let (keeps_parameterization, flips_face) =
-            transform_face_surface(topo, fid, matrix, inverse)?;
-        if !keeps_parameterization {
-            stale_pcurves.insert(fid);
-        }
-        if flips_face {
+    for (fid, image) in surfaces {
+        let face = topo.face_mut(fid)?;
+        if image.flips_face {
+            let reversed = face.is_reversed();
+            face.set_reversed(!reversed);
             flipped.insert(fid);
+        }
+        face.set_surface(image.surface);
+        if !image.keeps_parameterization {
+            stale_pcurves.insert(fid);
         }
     }
     let stretch = largest_stretch(matrix);
-    for &vid in vertex_ids {
+    for (vid, point) in points {
         let vertex = topo.vertex_mut(vid)?;
-        let new_point = matrix.mul_point(vertex.point());
-        vertex.set_point(new_point);
+        vertex.set_point(point);
         if let Some(stretch) = stretch {
             vertex.set_tolerance(vertex.tolerance() * stretch);
         }
@@ -300,7 +273,7 @@ fn transform_topology(
             }
         }
     }
-    let moved_origins = transform_edges(topo, edge_ids, matrix)?;
+    let moved_origins = write_curves(topo, curves)?;
     // A mirror turns every face's boundary clockwise about its outward
     // normal. A face with an explicit normal (plane, quadric) keeps that
     // normal outward, so its wires reverse. A NURBS image's Su × Sv turns
@@ -314,6 +287,52 @@ fn transform_topology(
     topo.pcurves_mut().remove_faces(&stale_pcurves);
     topo.pcurves_mut().remove_edges(&moved_origins);
     Ok(())
+}
+
+/// A moved vertex, and a moved curve with whether its edge is closed and
+/// its parameter origin moved.
+type PointImages = Vec<(VertexId, Point3)>;
+type CurveImages = Vec<(EdgeId, EdgeCurve, bool)>;
+
+/// The checked images of `vertex_ids`' points and of `edge_ids`' curves. A
+/// line's geometry lives in its vertices: it has no curve image.
+fn point_and_curve_images(
+    topo: &Topology,
+    vertex_ids: &HashSet<VertexId>,
+    edge_ids: &HashSet<EdgeId>,
+    matrix: &Mat4,
+) -> Result<(PointImages, CurveImages), crate::OperationsError> {
+    let points = vertex_ids
+        .iter()
+        .map(|&vid| Ok((vid, checked_point_image(topo.vertex(vid)?.point(), matrix)?)))
+        .collect::<Result<Vec<_>, crate::OperationsError>>()?;
+    let mut curves = Vec::new();
+    for &eid in edge_ids {
+        let edge = topo.edge(eid)?;
+        if matches!(edge.curve(), EdgeCurve::Line) {
+            continue;
+        }
+        let closed = edge.start() == edge.end();
+        let (curve, origin_moved) = checked_curve_image(edge.curve(), matrix)?;
+        curves.push((eid, curve, closed && origin_moved));
+    }
+    Ok((points, curves))
+}
+
+/// Write each moved curve. Returns the closed edges whose parameter origin
+/// moved: a pcurve of one no longer starts where the edge does.
+fn write_curves(
+    topo: &mut Topology,
+    curves: CurveImages,
+) -> Result<HashSet<EdgeId>, crate::OperationsError> {
+    let mut moved = HashSet::new();
+    for (eid, curve, origin_moved) in curves {
+        topo.edge_mut(eid)?.set_curve(curve);
+        if origin_moved {
+            moved.insert(eid);
+        }
+    }
+    Ok(moved)
 }
 
 /// Give each of `flipped` its own copy of any wire it shares with a face in
@@ -586,6 +605,8 @@ pub(crate) fn surface_image(
         ConicalSurface, CylindricalSurface, SphericalSurface, ToroidalSurface,
     };
 
+    #[cfg(test)]
+    IMAGES.with(|n| n.set(n.get() + 1));
     let mirrored = is_mirror(matrix);
     let heal_err = |what: &str, e: brepkit_heal::HealError| crate::OperationsError::InvalidInput {
         reason: format!("{what} failed: {e}"),
@@ -724,25 +745,6 @@ pub(crate) fn surface_image(
     })
 }
 
-/// Transform a single face's surface to its exact image under `matrix`.
-/// Returns whether the face's stored pcurves remain valid, and whether its
-/// flag flipped with the image's normal.
-fn transform_face_surface(
-    topo: &mut Topology,
-    fid: FaceId,
-    matrix: &Mat4,
-    inverse: &Mat4,
-) -> Result<(bool, bool), crate::OperationsError> {
-    let image = surface_image(topo, fid, matrix, inverse)?;
-    let face = topo.face_mut(fid)?;
-    if image.flips_face {
-        let reversed = face.is_reversed();
-        face.set_reversed(!reversed);
-    }
-    face.set_surface(image.surface);
-    Ok((image.keeps_parameterization, image.flips_face))
-}
-
 /// The v-parameter range a face's boundary covers, sampled along every edge
 /// of every wire and padded by a twentieth of its span on each side, so a
 /// NURBS patch built on it reaches past the face everywhere. `floor` keeps the
@@ -815,6 +817,8 @@ pub(crate) fn curve_image(
     curve: &EdgeCurve,
     matrix: &Mat4,
 ) -> Result<(EdgeCurve, bool), crate::OperationsError> {
+    #[cfg(test)]
+    IMAGES.with(|n| n.set(n.get() + 1));
     Ok(match curve {
         EdgeCurve::Line => (EdgeCurve::Line, false),
         EdgeCurve::NurbsCurve(c) => {
@@ -846,30 +850,6 @@ pub(crate) fn curve_image(
             e.v_axis() * e.semi_minor(),
         )?,
     })
-}
-
-/// Transform a set of edge curves in place. Returns the closed edges whose
-/// parameter origin moved: a pcurve of one no longer starts where the edge
-/// does.
-fn transform_edges(
-    topo: &mut Topology,
-    edge_ids: &HashSet<EdgeId>,
-    matrix: &Mat4,
-) -> Result<HashSet<EdgeId>, crate::OperationsError> {
-    let mut moved = HashSet::new();
-    for &eid in edge_ids {
-        let edge = topo.edge(eid)?;
-        if matches!(edge.curve(), EdgeCurve::Line) {
-            continue;
-        }
-        let closed = edge.start() == edge.end();
-        let (curve, origin_moved) = curve_image(edge.curve(), matrix)?;
-        if closed && origin_moved {
-            moved.insert(eid);
-        }
-        topo.edge_mut(eid)?.set_curve(curve);
-    }
-    Ok(moved)
 }
 
 /// The exact image of the conic `center + p·cos(t) + q·sin(t)`.
@@ -927,15 +907,12 @@ pub fn transform_wire(
 ) -> Result<(), crate::OperationsError> {
     checked_inverse(matrix)?;
     let (vertex_ids, edge_ids) = collect_wire_entities(topo, wire_id)?;
-
-    // Transform vertices.
-    for vid in vertex_ids {
-        let vertex = topo.vertex_mut(vid)?;
-        let new_point = matrix.mul_point(vertex.point());
-        vertex.set_point(new_point);
+    // Every image first: one that fails leaves the wire as it was.
+    let (points, curves) = point_and_curve_images(topo, &vertex_ids, &edge_ids, matrix)?;
+    for (vid, point) in points {
+        topo.vertex_mut(vid)?.set_point(point);
     }
-
-    let moved_origins = transform_edges(topo, &edge_ids, matrix)?;
+    let moved_origins = write_curves(topo, curves)?;
     topo.pcurves_mut().remove_edges(&moved_origins);
     Ok(())
 }

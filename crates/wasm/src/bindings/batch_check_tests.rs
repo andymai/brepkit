@@ -56,6 +56,10 @@ fn refused(cases: &[(&str, String)]) {
             "must be two numbers",
             "law must be",
             "must be an array",
+            // A move is refused by the engine, before it moves anything: an
+            // image past the load checks, or one it cannot build.
+            "would not pass the load checks",
+            "cannot normalize",
         ];
         assert!(
             checks.iter().any(|check| message.contains(check)),
@@ -700,7 +704,10 @@ fn a_move_is_bounded_by_the_control_points_not_samples_of_the_surface() {
     ] {
         let out = run(&mut k, &op);
         let message = out["error"].as_str().unwrap_or_default();
-        assert!(message.contains("must be at most"), "{op}: {out}");
+        assert!(
+            message.contains("would not pass the load checks"),
+            "{op}: {out}"
+        );
     }
 }
 

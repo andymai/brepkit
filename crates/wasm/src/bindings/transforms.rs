@@ -521,17 +521,16 @@ impl Reach {
 }
 
 impl BrepKernel {
-    /// Check that `solid` moved by `matrix` stays within the size limit.
+    /// Check that a copy of `solid` moved by `matrix` stays within the size
+    /// limit, before a pattern builds its copies: cheaper than building the
+    /// copy the engine would refuse.
     fn check_moved_solid(
         &self,
         solid: brepkit_topology::solid::SolidId,
         matrix: &Mat4,
         what: &str,
     ) -> Result<(), WasmError> {
-        Reach::of_solid(&self.topo, solid)?.check_moved(matrix, what)?;
-        Ok(brepkit_operations::transform::check_solid_transform(
-            &self.topo, solid, matrix,
-        )?)
+        Reach::of_solid(&self.topo, solid)?.check_moved(matrix, what)
     }
 
     /// The checked body of `transformSolid` and the batch's `transform`.
@@ -542,7 +541,6 @@ impl BrepKernel {
     ) -> Result<(), WasmError> {
         let mat = matrix_from(matrix)?;
         let solid_id = self.resolve_solid(solid)?;
-        self.check_moved_solid(solid_id, &mat, "the moved solid")?;
         transform_solid(self.topo_mut(), solid_id, &mat)?;
         Ok(())
     }
@@ -555,7 +553,6 @@ impl BrepKernel {
     ) -> Result<u32, WasmError> {
         let mat = matrix_from(matrix)?;
         let solid_id = self.resolve_solid(solid)?;
-        self.check_moved_solid(solid_id, &mat, "the moved copy")?;
         let copy =
             brepkit_operations::copy::copy_and_transform_solid(self.topo_mut(), solid_id, &mat)?;
         Ok(solid_id_to_u32(copy))
@@ -569,8 +566,6 @@ impl BrepKernel {
     ) -> Result<(), WasmError> {
         let mat = matrix_from(matrix)?;
         let wire_id = self.resolve_wire(wire)?;
-        Reach::of_wires(&self.topo, [wire_id])?.check_moved(&mat, "the moved wire")?;
-        brepkit_operations::transform::check_wire_transform(&self.topo, wire_id, &mat)?;
         brepkit_operations::transform::transform_wire(self.topo_mut(), wire_id, &mat)?;
         Ok(())
     }
@@ -583,8 +578,6 @@ impl BrepKernel {
     ) -> Result<(), WasmError> {
         let mat = matrix_from(matrix)?;
         let face_id = self.resolve_face(face)?;
-        Reach::of_face(&self.topo, face_id)?.check_moved(&mat, "the moved face")?;
-        brepkit_operations::transform::check_face_transform(&self.topo, face_id, &mat)?;
         brepkit_operations::transform::transform_face(self.topo_mut(), face_id, &mat)?;
         Ok(())
     }
@@ -599,20 +592,6 @@ impl BrepKernel {
         validate_point(point, "the mirror plane's point")?;
         validate_vector(normal, "the mirror plane's normal")?;
         let solid_id = self.resolve_solid(solid)?;
-        let n = scaled_unit(normal)?;
-        let offset = 2.0 * (point - Point3::new(0.0, 0.0, 0.0)).dot(n);
-        let reflection = Mat4(std::array::from_fn(|i| {
-            std::array::from_fn(|j| {
-                let unit = if i == j { 1.0 } else { 0.0 };
-                match (i, j) {
-                    (3, 3) => 1.0,
-                    (3, _) => 0.0,
-                    (_, 3) => offset * n.0[i],
-                    _ => unit - 2.0 * n.0[i] * n.0[j],
-                }
-            })
-        }));
-        self.check_moved_solid(solid_id, &reflection, "the mirrored solid")?;
         let result = brepkit_operations::mirror::mirror(self.topo_mut(), solid_id, point, normal)?;
         Ok(solid_id_to_u32(result))
     }

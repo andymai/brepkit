@@ -256,13 +256,14 @@ pub fn copy_and_transform_solid(
     solid_id: SolidId,
     matrix: &brepkit_math::mat::Mat4,
 ) -> Result<SolidId, crate::OperationsError> {
-    use crate::transform::{curve_image, surface_image};
+    use crate::transform::{checked_curve_image, checked_point_image, checked_surface_image};
 
     let inverse = crate::transform::checked_inverse(matrix)?;
     let mirrored = crate::transform::is_mirror(matrix);
 
-    // Read phase mirrors copy_solid, and maps each surface while the source
-    // face's boundary is still in place.
+    // Read phase mirrors copy_solid, and maps each surface, curve and point
+    // while the source face's boundary is still in place. Each image must
+    // pass the load checks before anything is built.
     let solid = topo.solid(solid_id)?;
     let outer_shell_id = solid.outer_shell();
     let inner_shell_ids: Vec<_> = solid.inner_shells().to_vec();
@@ -286,7 +287,7 @@ pub fn copy_and_transform_solid(
 
         for &face_id in shell.faces() {
             let face = topo.face(face_id)?;
-            let image = surface_image(topo, face_id, matrix, &inverse)?;
+            let image = checked_surface_image(topo, face_id, matrix, &inverse)?;
             let reverse_wires = mirrored && !image.flips_face;
             let outer_wire_index = face.outer_wire().index();
             let inner_wire_indices: Vec<usize> =
@@ -322,7 +323,7 @@ pub fn copy_and_transform_solid(
                             let v = topo.vertex(vid)?;
                             vertex_snaps.push(VertexSnap {
                                 old_index: vid_idx,
-                                point: v.point(),
+                                point: checked_point_image(v.point(), matrix)?,
                                 tol: v.tolerance(),
                             });
                         }
@@ -332,7 +333,7 @@ pub fn copy_and_transform_solid(
                         old_index: edge_idx,
                         start_index: start_idx,
                         end_index: end_idx,
-                        curve: edge.curve().clone(),
+                        curve: checked_curve_image(edge.curve(), matrix)?.0,
                         tolerance: edge.tolerance(),
                     });
                 }
@@ -372,20 +373,18 @@ pub fn copy_and_transform_solid(
     let stretch = crate::transform::largest_stretch(matrix).unwrap_or(1.0);
     let mut vertex_map: HashMap<usize, VertexId> = HashMap::new();
     for vsnap in &vertex_snaps {
-        let new_point = matrix.mul_point(vsnap.point);
-        let new_vid = topo.add_vertex(Vertex::new(new_point, vsnap.tol * stretch));
+        let new_vid = topo.add_vertex(Vertex::new(vsnap.point, vsnap.tol * stretch));
         vertex_map.insert(vsnap.old_index, new_vid);
     }
 
     let mut edge_map: HashMap<usize, brepkit_topology::edge::EdgeId> = HashMap::new();
-    for esnap in &edge_snaps {
+    for esnap in edge_snaps {
         let new_start = vertex_map[&esnap.start_index];
         let new_end = vertex_map[&esnap.end_index];
-        let (new_curve, _) = curve_image(&esnap.curve, matrix)?;
         let copied_edge = topo.add_edge(Edge::with_tolerance(
             new_start,
             new_end,
-            new_curve,
+            esnap.curve,
             esnap.tolerance.map(|tolerance| tolerance * stretch),
         ));
         edge_map.insert(esnap.old_index, copied_edge);
