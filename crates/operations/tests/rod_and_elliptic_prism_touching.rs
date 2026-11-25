@@ -115,6 +115,62 @@ mod tests {
         }
     }
 
+    /// That each edge of `solid` between a face on a cylinder and a face on
+    /// a B-spline surface lies within the linear tolerance of both, at its
+    /// two ends and its middle: off the cylinder by its distance from the
+    /// axis less the radius, off the B-spline by the distance to a point of
+    /// it that a projection finds, which no nearest point is farther than.
+    fn assert_sections_on_both(topo: &Topology, solid: SolidId, what: &str) {
+        let tol = 1e-7;
+        let mut owners: std::collections::HashMap<_, Vec<FaceSurface>> =
+            std::collections::HashMap::new();
+        for f in solid_faces(topo, solid).unwrap() {
+            let face = topo.face(f).unwrap();
+            for w in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+                for oe in topo.wire(w).unwrap().edges() {
+                    owners
+                        .entry(oe.edge())
+                        .or_default()
+                        .push(face.surface().clone());
+                }
+            }
+        }
+        for (edge_id, surfaces) in owners {
+            let cylinder = surfaces.iter().find_map(|s| match s {
+                FaceSurface::Cylinder(c) => Some(c.clone()),
+                _ => None,
+            });
+            let wall = surfaces.iter().find_map(|s| match s {
+                FaceSurface::Nurbs(n) => Some(n.clone()),
+                _ => None,
+            });
+            let (Some(cylinder), Some(wall)) = (cylinder, wall) else {
+                continue;
+            };
+            let edge = topo.edge(edge_id).unwrap();
+            let (start, end) = (
+                topo.vertex(edge.start()).unwrap().point(),
+                topo.vertex(edge.end()).unwrap().point(),
+            );
+            let (t0, t1) = edge.curve().domain_with_endpoints(start, end);
+            let axis = cylinder.axis().normalize().unwrap();
+            for t in [t0, 0.5 * (t0 + t1), t1] {
+                let p = edge.curve().evaluate_with_endpoints(t, start, end);
+                let w = p - cylinder.origin();
+                let off_cylinder = ((w - axis * w.dot(axis)).length() - cylinder.radius()).abs();
+                let off_wall =
+                    brepkit_math::nurbs::projection::project_point_to_surface(&wall, p, 1e-10)
+                        .unwrap()
+                        .distance;
+                assert!(
+                    off_cylinder <= tol && off_wall <= tol,
+                    "{what}: section edge at {p:?} {off_cylinder:e} off the cylinder, \
+                     {off_wall:e} off the wall"
+                );
+            }
+        }
+    }
+
     /// That `solid` is valid and closed, within 1e-9 of `volume`, and holds
     /// each of `inside` and none of `outside`, placed by `pose`.
     fn assert_exact(
@@ -127,6 +183,7 @@ mod tests {
     ) {
         let report = validate_solid(topo, solid).unwrap();
         assert!(report.is_valid(), "{what}: {:?}", report.issues);
+        assert_sections_on_both(topo, solid, what);
         let measured = solid_volume(topo, solid, 1e-4).unwrap();
         assert!(
             (measured - volume).abs() <= 1e-9 * volume,
