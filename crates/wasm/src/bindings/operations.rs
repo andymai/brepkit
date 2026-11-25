@@ -537,6 +537,25 @@ impl BrepKernel {
         pitch: f64,
         turns: f64,
     ) -> Result<u32, JsError> {
+        crate::error::validate_point(
+            brepkit_math::vec::Point3::new(axis_origin_x, axis_origin_y, axis_origin_z),
+            "the axis' origin",
+        )?;
+        crate::error::validate_vector(
+            brepkit_math::vec::Vec3::new(axis_dir_x, axis_dir_y, axis_dir_z),
+            "the axis' direction",
+        )?;
+        crate::error::validate_positive(turns, "turns")?;
+        if turns > f64::from(crate::error::MAX_COUNT) {
+            return Err(WasmError::InvalidInput {
+                reason: format!(
+                    "turns must be at most {}, got {turns}",
+                    crate::error::MAX_COUNT
+                ),
+            }
+            .into());
+        }
+        crate::error::validate_size(pitch * turns, "the helix's height")?;
         validate_positive(radius, "radius")?;
         validate_positive(pitch, "pitch")?;
         let face_id = self.resolve_face(profile)?;
@@ -1028,6 +1047,8 @@ impl BrepKernel {
         z: f64,
         tolerance: f64,
     ) -> Result<String, JsError> {
+        crate::error::validate_point(brepkit_math::vec::Point3::new(x, y, z), "the point")?;
+        crate::error::validate_tolerance(tolerance, "tolerance")?;
         let solid_id = self.resolve_solid(solid)?;
         let point = Point3::new(x, y, z);
         let result = brepkit_operations::classify::classify_point_winding(
@@ -1049,6 +1070,8 @@ impl BrepKernel {
         z: f64,
         tolerance: f64,
     ) -> Result<String, JsError> {
+        crate::error::validate_point(brepkit_math::vec::Point3::new(x, y, z), "the point")?;
+        crate::error::validate_tolerance(tolerance, "tolerance")?;
         let solid_id = self.resolve_solid(solid)?;
         let point = Point3::new(x, y, z);
         let result = brepkit_operations::classify::classify_point_robust(

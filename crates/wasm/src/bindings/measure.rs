@@ -209,6 +209,7 @@ impl BrepKernel {
         pz: f64,
         solid: u32,
     ) -> Result<Vec<f64>, JsError> {
+        crate::error::validate_point(brepkit_math::vec::Point3::new(px, py, pz), "the point")?;
         let solid_id = self.resolve_solid(solid)?;
         let result = brepkit_operations::distance::point_to_solid_distance(
             &self.topo,
@@ -261,6 +262,7 @@ impl BrepKernel {
         pz: f64,
         face: u32,
     ) -> Result<Vec<f64>, JsError> {
+        crate::error::validate_point(brepkit_math::vec::Point3::new(px, py, pz), "the point")?;
         let face_id = self.resolve_face(face)?;
         let result = brepkit_operations::distance::point_to_face(
             &self.topo,
@@ -290,6 +292,7 @@ impl BrepKernel {
         pz: f64,
         edge: u32,
     ) -> Result<Vec<f64>, JsError> {
+        crate::error::validate_point(brepkit_math::vec::Point3::new(px, py, pz), "the point")?;
         let edge_id = self.resolve_edge(edge)?;
         let result = brepkit_operations::distance::point_to_edge(
             &self.topo,

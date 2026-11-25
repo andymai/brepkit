@@ -154,6 +154,12 @@ pub fn parse_mat4(elems: &[f64]) -> Result<Mat4, JsError> {
         }
         .into());
     }
+    if let Some(pos) = elems.iter().position(|v| !v.is_finite()) {
+        return Err(WasmError::InvalidInput {
+            reason: format!("matrix element at index {pos} is not finite"),
+        }
+        .into());
+    }
     let rows = std::array::from_fn(|i| std::array::from_fn(|j| elems[i * 4 + j]));
     Ok(Mat4(rows))
 }

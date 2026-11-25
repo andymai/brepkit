@@ -48,24 +48,13 @@ impl BrepKernel {
         matrix_a: Vec<f64>,
         matrix_b: Vec<f64>,
     ) -> Result<Vec<f64>, JsError> {
-        if matrix_a.len() != 16 {
+        let product = matrix_from(&matrix_a)? * matrix_from(&matrix_b)?;
+        let out: Vec<f64> = product.0.iter().flatten().copied().collect();
+        if let Some(pos) = out.iter().position(|v| !v.is_finite()) {
             return Err(WasmError::InvalidInput {
-                reason: format!("matrix A must have 16 elements, got {}", matrix_a.len()),
+                reason: format!("the composed matrix's element at index {pos} is not finite"),
             }
             .into());
-        }
-        if matrix_b.len() != 16 {
-            return Err(WasmError::InvalidInput {
-                reason: format!("matrix B must have 16 elements, got {}", matrix_b.len()),
-            }
-            .into());
-        }
-        let rows_a = std::array::from_fn(|i| std::array::from_fn(|j| matrix_a[i * 4 + j]));
-        let rows_b = std::array::from_fn(|i| std::array::from_fn(|j| matrix_b[i * 4 + j]));
-        let result = Mat4(rows_a) * Mat4(rows_b);
-        let mut out = Vec::with_capacity(16);
-        for row in &result.0 {
-            out.extend_from_slice(row);
         }
         Ok(out)
     }
@@ -274,6 +263,7 @@ impl BrepKernel {
         solid: u32,
         tolerance: f64,
     ) -> Result<u32, JsError> {
+        crate::error::validate_tolerance(tolerance, "tolerance")?;
         let solid_id = self.resolve_solid(solid)?;
         let count = brepkit_operations::heal::merge_coincident_vertices(
             self.topo_mut(),

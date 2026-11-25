@@ -334,6 +334,8 @@ impl BrepKernel {
         y: f64,
         fixed: bool,
     ) -> Result<u32, JsError> {
+        crate::error::validate_size(x, "x")?;
+        crate::error::validate_size(y, "y")?;
         let sk = self
             .sketches
             .get_mut(sketch as usize)
