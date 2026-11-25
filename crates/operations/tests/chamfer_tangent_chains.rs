@@ -369,6 +369,111 @@ fn a_pockets_mouth_loop_is_a_hole_of_its_cap() {
     }
 }
 
+/// A plate 10 high whose outline runs from `(40, 8)` along a chain that
+/// steps down: 15 to the left, a quarter turn left of radius 2, a turn
+/// right of radius 2 a quarter less `tilt`, and 15 on at that slant, so
+/// that the two lines' directions differ by `tilt`. A half turn of radius
+/// 0.7 brings it round, tangent, to the floor's bottom, a line back to
+/// `x = 40` and up the right side. Returns the plate, the chain's four
+/// edges, the outline's area, and the volume a chamfer of 1 along the
+/// chain takes off: `1 / 2` along each line and round each arc at
+/// `r -+ 1 / 3`.
+fn stepped_plate(topo: &mut Topology, tilt: f64) -> (SolidId, Vec<EdgeId>, f64, f64) {
+    let mut at = Point3::new(LENGTH, RADIUS, 0.0);
+    let mut heading = PI;
+    let start = topo.add_vertex(Vertex::new(at, 1e-7));
+    let mut from = start;
+    let (mut area, mut removed) = (0.0, 0.0);
+    let mut sides = Vec::new();
+    // Each step: a line of the length given, or an arc of the radius and the
+    // signed turn given (left positive), and whether the chain holds it.
+    let steps = [
+        (15.0, None, true),
+        (2.0, Some(0.5 * PI), true),
+        (2.0, Some(-(0.5 * PI - tilt)), true),
+        (15.0, None, true),
+        (0.7, Some(PI - tilt), false),
+    ];
+    for (size, turn, chained) in steps {
+        let Some(turn) = turn else {
+            let to = at + Vec3::new(heading.cos(), heading.sin(), 0.0) * size;
+            if chained {
+                removed += 0.5 * size;
+            }
+            area += 0.5 * (at.x() * to.y() - to.x() * at.y());
+            let vertex = topo.add_vertex(Vertex::new(to, 1e-7));
+            sides.push((from, vertex, EdgeCurve::Line, chained));
+            (at, from) = (to, vertex);
+            continue;
+        };
+        let (to, curve) = {
+            let left = turn.signum();
+            let normal = Vec3::new(-heading.sin(), heading.cos(), 0.0) * left;
+            let center = at + normal * size;
+            let (from_angle, to_angle) =
+                (heading - left * 0.5 * PI, heading + turn - left * 0.5 * PI);
+            let to = center + Vec3::new(to_angle.cos(), to_angle.sin(), 0.0) * size;
+            // Green's theorem along the arc about the origin.
+            area += 0.5
+                * (size * size * turn + size * center.x() * (to_angle.sin() - from_angle.sin())
+                    - size * center.y() * (to_angle.cos() - from_angle.cos()));
+            // A left turn holds the floor inside its circle.
+            if chained {
+                removed += 0.5 * turn.abs() * (size - left / 3.0);
+            }
+            let circle = Circle3D::new(center, Vec3::new(0.0, 0.0, left), size).unwrap();
+            (to, EdgeCurve::Circle(circle))
+        };
+        let vertex = topo.add_vertex(Vertex::new(to, 1e-7));
+        sides.push((from, vertex, curve, chained));
+        (at, from, heading) = (to, vertex, heading + turn);
+    }
+    let corner = Point3::new(LENGTH, at.y(), 0.0);
+    let corner_vertex = topo.add_vertex(Vertex::new(corner, 1e-7));
+    for (p, q) in [(at, corner), (corner, Point3::new(LENGTH, RADIUS, 0.0))] {
+        area += 0.5 * (p.x() * q.y() - q.x() * p.y());
+    }
+    sides.push((from, corner_vertex, EdgeCurve::Line, false));
+    sides.push((corner_vertex, start, EdgeCurve::Line, false));
+    let mut chain = Vec::new();
+    let mut edges = Vec::new();
+    for (s, e, curve, chained) in sides {
+        let edge = topo.add_edge(Edge::new(s, e, curve));
+        if chained {
+            chain.push(edge);
+        }
+        edges.push(OrientedEdge::new(edge, true));
+    }
+    let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+    let plane = FaceSurface::Plane {
+        normal: Vec3::new(0.0, 0.0, 1.0),
+        d: 0.0,
+    };
+    let face = topo.add_face(Face::new(wire, Vec::new(), plane));
+    let solid = extrude(topo, face, Vec3::new(0.0, 0.0, 1.0), HEIGHT).unwrap();
+    (solid, chain, area, removed)
+}
+
+/// Two lines of one chain whose directions into the floor differ by 5e-8,
+/// with the plate placed 1e7 out and posed: each line's far side is read
+/// along its own direction, from a point on the line. A far side read along
+/// the other line's direction would move by about 0.5 there, and the lower
+/// line's floor ends 1.4 below it, so that reading would refuse a chamfer
+/// of 1 that fits. The chamfer takes off its closed form in each pose.
+#[test]
+fn two_lines_a_hair_apart_each_read_their_own_far_side() {
+    for (name, pose) in poses() {
+        let mut topo = Topology::new();
+        let (solid, chain, area, removed) = stepped_plate(&mut topo, 5e-8);
+        let far_out = pose * Mat4::translation(1e7, 0.0, 0.0);
+        transform_solid(&mut topo, solid, &far_out).unwrap();
+
+        let result = chamfer(&mut topo, solid, &chain, 1.0).unwrap();
+
+        assert_exact(&topo, result, area * HEIGHT - removed, name);
+    }
+}
+
 /// The chamfer of `edges` at `d` is refused for a reason that holds one of
 /// `causes`, and the refusal adds no solid, face or edge to the topology.
 fn refused_for(

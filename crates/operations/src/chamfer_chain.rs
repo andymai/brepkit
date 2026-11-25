@@ -1275,11 +1275,22 @@ fn meets_a_curved_face(
 /// other on read once along each direction (see [`FarSides::reach`]).
 #[derive(Default)]
 struct FarSides {
-    /// For each face read, each direction and the farthest `p . dir` of its
-    /// run, `None` where a box is not known.
-    known: HashMap<FaceId, Vec<(Vec3, Option<f64>)>>,
+    /// For each face read, what each read of its run along a direction gave.
+    known: HashMap<FaceId, Vec<FarRead>>,
     /// How many face boxes have been read.
     boxes: usize,
+}
+
+/// One read of a run of faces along a direction.
+#[derive(Clone, Copy)]
+struct FarRead {
+    /// The direction's bits.
+    bits: [u64; 3],
+    /// The point the run was read from.
+    from: Point3,
+    /// How far the run reaches past `from` along the direction, `None`
+    /// where a box is not known.
+    far: Option<f64>,
 }
 
 impl FarSides {
@@ -1288,7 +1299,11 @@ impl FarSides {
     /// agree (a flat seam or a tangent join), where a contact can run on.
     /// Read from each face's box in a frame along `dir`; `None` where a box
     /// is not known. The run is the same from any of its faces, so each
-    /// face of it keeps what was read for the next.
+    /// face of it keeps what was read for a read along the same direction,
+    /// to its last bit: a direction near it reads a far side that can move
+    /// by the angle between them times the distance to the run, which need
+    /// not be small. What is kept is measured from the point it was read
+    /// from, on the run, so where the solid lies does not enter it.
     fn reach(
         &mut self,
         topo: &Topology,
@@ -1298,13 +1313,13 @@ impl FarSides {
         dir: Vec3,
     ) -> Result<Option<f64>, OperationsError> {
         let dir = dir.normalize()?;
-        let base = to_vec(origin).dot(dir);
-        if let Some(&(_, far)) = self
+        let key = [dir.x().to_bits(), dir.y().to_bits(), dir.z().to_bits()];
+        if let Some(read) = self
             .known
             .get(&face)
-            .and_then(|read| read.iter().find(|(d, _)| (*d - dir).length() < JOIN_TOL))
+            .and_then(|reads| reads.iter().find(|read| read.bits == key))
         {
-            return Ok(far.map(|far| far - base));
+            return Ok(read.far.map(|far| far - (origin - read.from).dot(dir)));
         }
         let frame = Frame3::from_normal(origin, dir)?;
         let frame = Reach {
@@ -1343,9 +1358,12 @@ impl FarSides {
                 }
             }
         }
-        let absolute = far.map(|far| far + base);
         for read in seen {
-            self.known.entry(read).or_default().push((dir, absolute));
+            self.known.entry(read).or_default().push(FarRead {
+                bits: key,
+                from: origin,
+                far,
+            });
         }
         Ok(far)
     }
@@ -4509,15 +4527,13 @@ mod tests {
         }
     }
 
-    /// A face's far side runs on across a flat seam to the next face of its
-    /// plane, and stops at a crease: the square `[0, 1] x [0, 1]` on `z = 0`,
-    /// the face of its plane beyond `y = 1` up to `y = 3`, and a wall down
-    /// from `y = 0`.
-    #[test]
-    fn a_far_side_runs_on_across_a_flat_seam_and_stops_at_a_crease() {
-        let mut topo = Topology::new();
-        let mut at =
-            |x: f64, y: f64, z: f64| topo.add_vertex(Vertex::new(Point3::new(x, y, z), 1e-7));
+    /// The square `[0, 1] x [0, 1]` on `z = 0` moved `shift` along `x`, the
+    /// face of its plane beyond `y = 1` up to `y = 3`, and a wall down from
+    /// `y = 0` to `z = -2`, with their adjacency.
+    fn seam_and_crease(topo: &mut Topology, shift: f64) -> ([FaceId; 3], AdjacencyIndex) {
+        let mut at = |x: f64, y: f64, z: f64| {
+            topo.add_vertex(Vertex::new(Point3::new(x + shift, y, z), 1e-7))
+        };
         let [p0, p1, p2, p3, p4, p5, q0, q1] = [
             at(0.0, 0.0, 0.0),
             at(1.0, 0.0, 0.0),
@@ -4567,7 +4583,17 @@ mod tests {
             Vec3::new(0.0, -1.0, 0.0),
             0.0,
         );
-        let adjacency = AdjacencyIndex::build_from_faces(&topo, &[square, beyond, wall]).unwrap();
+        let faces = [square, beyond, wall];
+        let adjacency = AdjacencyIndex::build_from_faces(topo, &faces).unwrap();
+        (faces, adjacency)
+    }
+
+    /// A face's far side runs on across a flat seam to the next face of its
+    /// plane, and stops at a crease (see [`seam_and_crease`]).
+    #[test]
+    fn a_far_side_runs_on_across_a_flat_seam_and_stops_at_a_crease() {
+        let mut topo = Topology::new();
+        let ([square, beyond, wall], adjacency) = seam_and_crease(&mut topo, 0.0);
         let origin = Point3::new(0.5, 0.0, 0.0);
         let mut far_sides = FarSides::default();
         let mut far = |face, from, dir| {
@@ -4583,6 +4609,28 @@ mod tests {
         // The run read from the square along `across` serves the face beyond.
         assert!((far(beyond, Point3::new(0.5, 2.0, 0.0), across) - 1.0).abs() < 1e-12);
         assert_eq!(far_sides.boxes, 5);
+    }
+
+    /// With the faces 1e9 out, a read along a direction 5e-8 off one read
+    /// before reads the run afresh: a far side carried over from the first
+    /// direction would move by the turn times the distance out, 50.
+    #[test]
+    fn a_far_side_along_a_near_direction_far_out_is_read_afresh() {
+        let mut topo = Topology::new();
+        let ([square, _, _], adjacency) = seam_and_crease(&mut topo, 1e9);
+        let origin = Point3::new(1e9 + 0.5, 0.0, 0.0);
+        let (across, near) = (Vec3::new(0.0, 1.0, 0.0), Vec3::new(5e-8, 1.0, 0.0));
+        let mut far_sides = FarSides::default();
+        let mut far = |dir| {
+            far_sides
+                .reach(&topo, &adjacency, square, origin, dir)
+                .unwrap()
+                .unwrap()
+        };
+        assert!((far(across) - 3.0).abs() < 1e-6);
+        let second = far(near);
+        assert!((second - 3.0).abs() < 1e-6, "{second}");
+        assert_eq!(far_sides.boxes, 4);
     }
 
     /// A rod of radius 8, 10 high, whose wall is `n` faces of one cylinder,
