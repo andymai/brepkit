@@ -2103,8 +2103,10 @@ impl NurbsTrim {
 }
 
 /// A [`FaceGeom::Nurbs`] for a face on a NURBS surface whose weights are all
-/// positive and that neither closes on itself nor shrinks to a point along
-/// a side: on such a surface each point of the face has one `(u, v)`.
+/// positive and whose sides keep apart past the face's reach
+/// ([`crate::nurbs_sides::sides_are_apart`]), so that it neither closes on
+/// itself nor shrinks to a point along a side: on such a surface each point
+/// of the face has one `(u, v)`.
 fn nurbs_geom(
     topo: &Topology,
     face: &brepkit_topology::face::Face,
@@ -2137,16 +2139,8 @@ fn nurbs_geom(
         .map(|side| length(side))
         .fold(0.0_f64, f64::max);
     let near = 1e-9 * size.max(1.0);
-    let same =
-        |a: &[Point3], b: &[Point3]| a.iter().zip(b).all(|(p, q)| (*p - *q).length() <= near);
-    let collapsed = |side: &[Point3]| length(side) <= near;
-    if size <= near
-        || same(&lo_u, &hi_u)
-        || same(&lo_v, &hi_v)
-        || [&lo_u, &hi_u, &lo_v, &hi_v]
-            .iter()
-            .any(|side| collapsed(side))
-    {
+    let reach = crate::nurbs_sides::face_reach(topo, face, Tolerance::new())?;
+    if size <= near || !crate::nurbs_sides::sides_are_apart(surface, reach) {
         return Ok(None);
     }
     let u_len = (0..=SAMPLES)
@@ -6419,6 +6413,42 @@ mod tests {
         let on = |q: Point3| trim.contains_strict(q, &std::cell::Cell::new(None), 1e-3);
         assert!(on(p(0.25, 0.5, 0.0)));
         assert!(!on(p(0.75, 0.5, 0.0)));
+    }
+
+    /// The ray cast reads a face on a NURBS surface by its wires in the
+    /// surface's parameters only where its sides keep apart: a sheet folded
+    /// across a corner, a tube that closes to a hundred millionth of its
+    /// size, one run past its start and a ball with its poles for sides go
+    /// to the reading of the surface span by span; the sheet unfolded keeps
+    /// its reading by wires.
+    #[test]
+    fn a_nurbs_face_is_read_by_its_wires_only_where_its_sides_keep_apart() {
+        use crate::nurbs_sides::tests::{ball, corner_sheet, tube};
+        let zero = Vec3::new(0.0, 0.0, 0.0);
+        let cases = [
+            ("fold", corner_sheet(true), false),
+            ("unfolded", corner_sheet(false), true),
+            ("tube closed to 1e-8", tube(2e-8, zero), false),
+            ("tube run past its start", tube(-2e-3, zero), false),
+            ("ball", ball(Point3::new(0.0, 0.0, 0.0)), false),
+        ];
+        for (name, surface, want) in cases {
+            let mut topo = Topology::new();
+            let at = [(0.1, 0.1), (0.3, 0.1), (0.3, 0.3), (0.1, 0.3)]
+                .map(|(u, v)| topo.add_vertex(Vertex::new(surface.evaluate(u, v), 1e-7)));
+            let edges: Vec<_> = (0..4)
+                .map(|i| {
+                    let edge = Edge::new(at[i], at[(i + 1) % 4], EdgeCurve::Line);
+                    OrientedEdge::new(topo.add_edge(edge), true)
+                })
+                .collect();
+            let wire = topo.add_wire(Wire::new(edges, true).unwrap());
+            let face_id =
+                topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface.clone())));
+            let face = topo.face(face_id).unwrap();
+            let read = nurbs_geom(&topo, face, &surface).unwrap().is_some();
+            assert_eq!(read, want, "{name}");
+        }
     }
 
     /// The patch of a ring about `z` from ring angle `u.0` to `u.1` and
