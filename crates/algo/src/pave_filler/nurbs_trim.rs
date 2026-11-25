@@ -265,6 +265,8 @@ struct TrimEdge {
     end: Point3,
     /// How near the edge a point counts as on it ([`super::phase_ef::edge_reach`]).
     reach: f64,
+    /// Whether the wire runs the edge from its start to its end.
+    forward: bool,
 }
 
 impl NurbsFaceTrim {
@@ -311,6 +313,7 @@ impl NurbsFaceTrim {
                     start: sv.point(),
                     end: ev.point(),
                     reach: super::phase_ef::edge_reach(edge, sv, ev, tol),
+                    forward: *forward,
                 });
                 let along = if *forward {
                     (pcurve.t_start(), pcurve.t_end())
@@ -541,8 +544,16 @@ impl NurbsFaceTrim {
     /// bound times the span squared over eight. Each bound is grown by the
     /// rounding of the cut and of the distances. The piece with the widest
     /// bound is halved until each is within half the tolerance, or
-    /// [`IMAGE_HALVINGS`] halvings are spent. `None` where an edge is a
-    /// B-spline, or a piece's box holds no area of the surface's domain.
+    /// [`IMAGE_HALVINGS`] halvings are spent.
+    ///
+    /// Near is not enough: a pcurve that runs out along its edge and back
+    /// stays near it but does not wind as it does. So each pcurve's pieces,
+    /// in order, must run along their edge in order from its start to its
+    /// end, once ([`runs_along`]); each piece then stays near its own part
+    /// of the edge, and the image winds as the edge does about each point
+    /// farther than those bounds from it. `None` where an edge is a
+    /// B-spline, a piece's box holds no area of the surface's domain, or a
+    /// pcurve does not run along its edge so.
     fn image_reaches(&self, tol: Tolerance) -> Option<Vec<f64>> {
         let bound = |piece: &Piece| -> Option<f64> {
             let [a, b] = piece.owner;
@@ -568,15 +579,26 @@ impl NurbsFaceTrim {
             if most <= 0.5 * tol.linear {
                 break;
             }
-            let (_, piece) = bounded.swap_remove(widest);
+            let (_, piece) = bounded.remove(widest);
             let (left, right) = piece.halves();
-            bounded.push((bound(&left)?, left));
-            bounded.push((bound(&right)?, right));
+            let halves = [(bound(&left)?, left), (bound(&right)?, right)];
+            bounded.splice(widest..widest, halves);
         }
         let mut reaches = vec![0.0_f64; self.edges.len()];
         for (most, piece) in &bounded {
             for &e in &piece.owner {
                 reaches[e] = reaches[e].max(*most);
+            }
+        }
+        for (e, edge) in self.edges.iter().enumerate() {
+            let ends: Vec<Point3> = bounded
+                .iter()
+                .filter(|(_, piece)| piece.owner == [e, e])
+                .flat_map(|(_, piece)| [piece.a, piece.b])
+                .map(|q| self.surface.evaluate(q.x(), q.y()))
+                .collect();
+            if !runs_along(edge, &ends, edge.reach + reaches[e]) {
+                return None;
             }
         }
         Some(reaches)
@@ -705,6 +727,75 @@ impl NurbsFaceTrim {
                 != self.crossed(&right, q, budget, depth + 1)?,
         )
     }
+}
+
+/// Whether `ends`, the points of the surface at the ends of the pieces of
+/// an edge's pcurve in order (each piece's start, then its end), run along
+/// the edge in order from where the wire enters it to where it leaves it,
+/// once: their places along the edge, read on a line as the share of the
+/// way from its start to its end, and on a circle or an ellipse as the
+/// angle nearest the place before, start within `reach` of the edge's
+/// entry, end within it of its exit, a whole turn round for a closed one,
+/// and never step back more than it. A point edge runs along itself.
+fn runs_along(edge: &TrimEdge, ends: &[Point3], reach: f64) -> bool {
+    let (from, to) = (edge.start, edge.end);
+    let (start, end, place, speed): (f64, f64, Box<dyn Fn(Point3) -> f64 + '_>, f64) =
+        match &edge.curve {
+            EdgeCurve::Line => {
+                let d = to - from;
+                let length = d.length();
+                if length.is_nan() {
+                    return false;
+                }
+                if length <= reach {
+                    return true;
+                }
+                let place = move |q: Point3| (q - from).dot(d) / (length * length);
+                (0.0, 1.0, Box::new(place), length)
+            }
+            EdgeCurve::Circle(c) => {
+                let (t0, t1) = edge.curve.domain_with_endpoints(from, to);
+                (t0, t1, Box::new(move |q: Point3| c.project(q)), c.radius())
+            }
+            EdgeCurve::Ellipse(e) => {
+                let (t0, t1) = edge.curve.domain_with_endpoints(from, to);
+                let least = e.semi_major().min(e.semi_minor());
+                (t0, t1, Box::new(move |q: Point3| e.project(q)), least)
+            }
+            EdgeCurve::NurbsCurve(_) => return false,
+        };
+    let turns = !matches!(edge.curve, EdgeCurve::Line);
+    // A whole turn starts and ends where its vertex lies, whatever its
+    // curve's own origin.
+    let (start, end) = if turns && (end - start).abs() >= std::f64::consts::TAU * (1.0 - 1e-9) {
+        let at = place(from);
+        (at, at + std::f64::consts::TAU.copysign(end - start))
+    } else {
+        (start, end)
+    };
+    let (start, end) = if edge.forward {
+        (start, end)
+    } else {
+        (end, start)
+    };
+    let slip = reach / speed.max(f64::MIN_POSITIVE);
+    let way = (end - start).signum();
+    let mut at = start;
+    for (k, &q) in ends.iter().enumerate() {
+        let raw = place(q);
+        let next = if turns {
+            let turn = raw - at;
+            at + (turn - (turn / std::f64::consts::TAU).round() * std::f64::consts::TAU)
+        } else {
+            raw
+        };
+        if !next.is_finite() || (k == 0 && (next - start).abs() > slip) || (next - at) * way < -slip
+        {
+            return false;
+        }
+        at = next;
+    }
+    (at - end).abs() <= slip
 }
 
 /// How many pairs of pieces one proof that a trim's loops are simple may

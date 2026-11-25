@@ -7613,6 +7613,93 @@ mod tests {
         }
     }
 
+    /// A disc on a flat sheet over `[0, 1]²` with `x = u` and `y = v`,
+    /// bounded by the whole circle of radius 0.3 about `(0.5, 0.5)`, whose
+    /// pcurve is a polyline: once round at radius 0.3 where `round`, else
+    /// 270 degrees round, in to radius 0.29, back, and out to its start.
+    fn disc_with_polyline_pcurve(topo: &mut Topology, round: bool) -> FaceId {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::curves2d::{Curve2D, NurbsCurve2D};
+        use brepkit_math::nurbs::surface::NurbsSurface;
+        use brepkit_math::vec::{Point2, Vec3};
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::face::Face;
+        use brepkit_topology::pcurve::PCurve;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let rows = [0.0, 1.0]
+            .iter()
+            .map(|&x| [0.0, 1.0].iter().map(|&y| Point3::new(x, y, 0.0)).collect())
+            .collect();
+        let knots = vec![0.0, 0.0, 1.0, 1.0];
+        let sheet =
+            NurbsSurface::new(1, 1, knots.clone(), knots, rows, vec![vec![1.0; 2]; 2]).unwrap();
+        let rim = Circle3D::new_with_ref(
+            Point3::new(0.5, 0.5, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            0.3,
+            Vec3::new(1.0, 0.0, 0.0),
+        )
+        .unwrap();
+        let v = topo.add_vertex(Vertex::new(rim.evaluate(0.0), 1e-7));
+        let e = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(rim)));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(e, true)], true).unwrap());
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(sheet)));
+        let at = |r: f64, a: f64| Point2::new(r.madd(a.cos(), 0.5), r.madd(a.sin(), 0.5));
+        let steps = 64_u32;
+        let turn = if round {
+            std::f64::consts::TAU
+        } else {
+            1.5 * std::f64::consts::PI
+        };
+        let mut points: Vec<Point2> = (0..=steps)
+            .map(|k| at(0.3, turn * f64::from(k) / f64::from(steps)))
+            .collect();
+        if !round {
+            points.extend(
+                (0..=steps)
+                    .rev()
+                    .map(|k| at(0.29, turn * f64::from(k) / f64::from(steps))),
+            );
+            points.push(at(0.3, 0.0));
+        }
+        let n = points.len();
+        #[allow(clippy::cast_precision_loss)]
+        let knots: Vec<f64> = std::iter::once(0.0)
+            .chain((0..n).map(|k| k as f64 / (n - 1) as f64))
+            .chain(std::iter::once(1.0))
+            .collect();
+        let polyline = NurbsCurve2D::new(1, knots, points, vec![1.0; n]).unwrap();
+        topo.pcurves_mut()
+            .set(e, face, PCurve::new(Curve2D::Nurbs(polyline), 0.0, 1.0));
+        face
+    }
+
+    /// A disc whose pcurve runs 270 degrees round its circle, in by 0.01,
+    /// back, and out: the pcurve stays within 0.01 of the circle, but its
+    /// loop holds only that band, not the disc. It does not run along its
+    /// edge in order, so the trim keeps the crossing of a line through the
+    /// disc's centre. With the pcurve once round, the trim keeps it too and
+    /// drops a line's crossing outside the circle, inside the face's box.
+    #[test]
+    fn a_pcurve_run_out_along_its_edge_and_back_keeps_the_crossings() {
+        for (round, (x, y), want) in [
+            (false, (0.5, 0.5), 1),
+            (true, (0.5, 0.5), 1),
+            (true, (0.75, 0.75), 0),
+        ] {
+            let mut topo = Topology::new();
+            let face = disc_with_polyline_pcurve(&mut topo, round);
+            let found = ef_vertices(
+                &mut topo,
+                face,
+                EdgeCurve::Line,
+                Point3::new(x, y, 0.31),
+                Some(Point3::new(x, y, -0.27)),
+            );
+            assert_eq!(found.len(), want, "round {round} at ({x}, {y}): {found:?}");
+        }
+    }
+
     /// A flat sheet over `[0, 1]²` with `x = u` and `y = v`, its face the
     /// square `[0.1, 0.9]²` whose wire runs a slit from `(0.5, 0.1)` up to
     /// `(0.5, 0.5)` and back down it, one edge used twice: its loop is no
