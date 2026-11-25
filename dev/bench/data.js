@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795615332052,
+  "lastUpdate": 1795619897083,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -78785,6 +78785,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 27600490,
             "range": "± 127158",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "c4935072390caa23773c19bf832ec4bccfd3d19f",
+          "message": "fix(wasm,topology,math): check each batch arm's sizes, coordinates and counts as its binding does (#2887)\n\n## Summary\n\n#2858 listed wasm inputs that reach the engine with no check. On main:\n\n- Most batch arms skip their bindings' checks. A fillet radius, chamfer\ndistance, shell thickness, deflection, tolerance or pattern spacing of\n1e301, zero or below reaches the engine.\n- Coordinates from JS are not bounded, so `makeVertex`, `makePolygon`,\n`translate` and `scale` can put geometry past `SIZE_LIMIT`. A NaN end of\n`makeLineEdge` passes the builder's length test.\n- In the batch, a count above `u32::MAX` takes its default with no\nerror.\n- `max_iterations` from JS has no limit.\n- `RevolutionSurface::new` does not check its origin.\n\nWith this change, each of these returns an error before the engine runs.\nThe pose sweep and the truth audit give the same output as main.\n\nFixes #2858.\n\n## The change\n\n- **One body for a binding and its arm.** About 60 batch arms now call\nthe same checked body as their binding, or carry its check. They cover\nmeasurements, extrude and revolve, fillets and chamfers, shell, section,\nsplit, draft, offsets, sewing, the heal tolerances, transforms and\npatterns.\n- **Result sizes.** Transforms, mirror, the patterns, extrude and\nrevolve also check the shape they make, before any change. A moved plane\nmust pass the load checks, and section, split and draft planes from JS\nare checked the same way. Each moved point, control point and conic\ncorner must be finite and within `SIZE_LIMIT`. Each moved spline must\nstill pass the load checks' weighted limit. The linear, grid and\ncircular patterns read and check every copy before they build one, so a\nrefused pattern leaves no copies behind.\n- **Optional numbers.** An optional number takes its default only when\nit is absent, in the top-level options and in nested specs. A wrong\ntype, a count past `u32::MAX`, or `null` (how `JSON.stringify` writes\nNaN) is an error. Handle arrays refuse a bad entry, where before they\ndropped or truncated it.\n- **Coordinates.** Each coordinate from JS is checked against\n`SIZE_LIMIT`: vertices, polygons, line edges, arcs, every point list,\nand 2D polygons. Extents are measured with norms scaled before squaring.\n- **Iterations and fits.** `MAX_ITERATIONS` is 10,000 for `sketchSolve`\nand the LSPIA fits. The largest count in the tests and brepjs is 200.\nEach fit takes a degree of at most 25 and refuses working arrays past\n2^22 cells (32 MB) before it allocates. On main, a dense fit of 30,000\npoints asked for 4.8 GB and aborted.\n- **Bindings with no batch arm.** Point queries, surface evaluations,\nthe helical sweep and sketch points are checked. So are the 2D polygon\noffset and point test, the merge and degenerate-edge tolerances, and\nfeature deflections. The matrices of `composeTransforms` and the\nassembly must be finite.\n- **Engine.** `make_line_edge` refuses an end that is not finite, and\n`RevolutionSurface::new` checks its origin against `SIZE_LIMIT`.\n- **All-or-nothing transforms.** `transform_topology` and\n`transform_wire` compute every surface, curve and vertex image and check\neach against the load checks before they write any. So a failed image\nleaves the shape unchanged; before, the faces moved before the failure\nstayed moved. The wasm moves call this once, so each image is computed\nonce.\n\nThe batch `fillet` now takes the binding's path, so it retries with the\nsolid's planar edges, and a panic is caught.\n\n## Tests\n\n- `bindings/batch_check_tests.rs` sends sizes of 1e301 in every kind of\nargument (54 cases), and zero and negative sizes. It sends counts past\ntheir limits and past `u32::MAX`, `null` numbers, and absent defaults.\nIt also covers a scale that passes the limit only in the moved shape,\nand NaN through the shared bodies. Each refusal must come from an input\ncheck.\n- `make_line_edge_refuses_an_end_that_is_not_finite` and the revolution\ntest with NaN, infinite and ±2e300 origins fail on main.\n- Further tests cover:\n  - a turn about a far origin, and a circular pattern near the limit;\n  - `null` spec fields;\n- a bump between surface samples, and a weighted spline moved past the\nload checks;\n  - a move that makes a NaN point, and an empty solid.\n- `a_transform_that_fails_on_its_third_face_leaves_every_face_unchanged`\nfails on main.\n- brepkit-wasm native (330) and the wasm32 build pass, and so do all\nbrepkit-operations and brepkit-io tests (3367, 28 skipped).\n\n## Still open\n\n- `transform_solid` refuses a uniform scale above about 1e154, because a\nnormal's length underflows (#2885).\n- `Aabb3::from_points` skips a NaN after the first point and panics on\nan empty list (#2888).\n- Curve and surface fits have no bound on their running time (#2892).\n- Option parsers and some mesh, sketch and fit bindings still take\nunchecked or defaulted values (#2886).",
+          "timestamp": "2026-11-25T15:14:12Z",
+          "tree_id": "61e684623513704a5523b452aaaa6cea746241a4",
+          "url": "https://github.com/andymai/brepkit/commit/c4935072390caa23773c19bf832ec4bccfd3d19f"
+        },
+        "date": 1795619881989,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1000269,
+            "range": "± 18752",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1032731,
+            "range": "± 11657",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12438,
+            "range": "± 92",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 612314,
+            "range": "± 15016",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22575811,
+            "range": "± 211095",
             "unit": "ns/iter"
           }
         ]
