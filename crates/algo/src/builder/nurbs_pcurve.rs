@@ -275,13 +275,11 @@ impl<'a> Run<'a> {
         let mut out = [0.0; ORDER + 1];
         match self {
             Self::Line(a, b) => out[1] = (*b - *a).length(),
-            Self::Circle(c, t0, t1) => {
-                for (k, slot) in out.iter_mut().enumerate().skip(1) {
-                    *slot = c.radius() * power((t1 - t0).abs(), k);
-                }
-            }
-            Self::Ellipse(e, t0, t1) => {
-                let reach = e.semi_major().max(e.semi_minor());
+            Self::Circle(_, t0, t1) | Self::Ellipse(_, t0, t1) => {
+                let (a, b) = self.conic_axes()?;
+                // `|a cos + b sin|` is at most `sqrt(|a|^2 + |b|^2)`, whatever
+                // the lengths of the stored axes and the angle between them.
+                let reach = length(a, b, 0.0) * (1.0 + 4.0 * f64::EPSILON);
                 for (k, slot) in out.iter_mut().enumerate().skip(1) {
                     *slot = reach * power((t1 - t0).abs(), k);
                 }
@@ -298,6 +296,20 @@ impl<'a> Run<'a> {
             }
         }
         out.iter().all(|b| b.is_finite()).then_some(out)
+    }
+
+    /// The lengths of a circle's or an ellipse's two terms as stored, `c +
+    /// a cos t + b sin t`: each axis times its radius or semi-axis, the
+    /// axes of whatever length the conic holds. `None` for a line or a
+    /// B-spline, or where a length is not finite.
+    fn conic_axes(&self) -> Option<(f64, f64)> {
+        let (a, b) = match self {
+            Self::Circle(c, ..) => (c.u_axis() * c.radius(), c.v_axis() * c.radius()),
+            Self::Ellipse(e, ..) => (e.u_axis() * e.semi_major(), e.v_axis() * e.semi_minor()),
+            Self::Line(..) | Self::Spline(..) => return None,
+        };
+        let (a, b) = (length(a.x(), a.y(), a.z()), length(b.x(), b.y(), b.z()));
+        (a.is_finite() && b.is_finite()).then_some((a, b))
     }
 
     /// The fractions in `(0, 1)` at the knots of a B-spline edge, so that no
@@ -325,12 +337,16 @@ impl<'a> Run<'a> {
         };
         match self {
             Self::Line(a, b) => 8.0 * eps * largest(*a).max(largest(*b)),
-            Self::Circle(c, t0, t1) => {
-                32.0 * eps * (largest(c.center()) + c.radius()) + along(*t0, *t1)
-            }
-            Self::Ellipse(e, t0, t1) => {
-                32.0 * eps * (largest(e.center()) + e.semi_major() + e.semi_minor())
-                    + along(*t0, *t1)
+            Self::Circle(_, t0, t1) | Self::Ellipse(_, t0, t1) => {
+                let centre = match self {
+                    Self::Circle(c, ..) => c.center(),
+                    Self::Ellipse(e, ..) => e.center(),
+                    Self::Line(..) | Self::Spline(..) => return f64::NAN,
+                };
+                let Some((a, b)) = self.conic_axes() else {
+                    return f64::NAN;
+                };
+                32.0 * eps * (largest(centre) + a + b) + along(*t0, *t1)
             }
             Self::Spline(n, t0, t1) => {
                 let size = n
@@ -1591,5 +1607,40 @@ mod tests {
             let far = stray(&pcurve.unwrap(), &line, a, b, &flat);
             assert!(far <= tol, "weights scaled by {scale}: {far:e}");
         }
+    }
+
+    /// Circles stored with radius 1e-8 on axes 1e8 long and with radius
+    /// 1e-6 on axes 1e6 long, and an ellipse of semi-axes 0.5 and 0.2 on
+    /// axes 40 and 25 long, each in the plane of the flat sheet: the stored
+    /// curve is what the edge is, so each gets a pcurve within the
+    /// tolerance of it, or none, and the larger two get one.
+    #[test]
+    fn conics_on_scaled_axes_get_pcurves_within_the_tolerance_of_their_stored_form() {
+        use brepkit_math::curves::{Circle3D, Ellipse3D};
+        let tol = 1e-7;
+        let flat = sheet(0.0);
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let centre = Point3::new(3.0, -2.0, 0.0);
+        let circle = |radius: f64, axes: f64| {
+            EdgeCurve::Circle(Circle3D::with_axes(centre, z, radius, x * axes, y * axes).unwrap())
+        };
+        let ellipse = EdgeCurve::Ellipse(
+            Ellipse3D::with_axes(centre, z, 0.5, 0.2, x * 40.0, y * 25.0).unwrap(),
+        );
+        let mut proved = 0;
+        for curve in [&circle(1e-8, 1e8), &circle(1e-6, 1e6), &ellipse] {
+            let at = curve.evaluate_with_endpoints(0.3, centre, centre);
+            let pcurve = proved_nurbs_pcurve(curve, at, at, &flat, tol);
+            if let Some(pcurve) = pcurve {
+                proved += 1;
+                let far = stray(&pcurve, curve, at, at, &flat);
+                assert!(far <= tol, "{curve:?}: {far:e}");
+            }
+        }
+        assert!(proved >= 2, "{proved}");
     }
 }
