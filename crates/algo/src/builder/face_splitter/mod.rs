@@ -3935,9 +3935,10 @@ struct ArrInput {
 /// Split co-endpoint SECTION arc pairs in an arrangement's input list at
 /// their geometric midpoints (see the call site in
 /// [`split_plane_face_by_arrangement`]). Only section arcs with a colliding
-/// unordered chord-endpoint pair AND distinct midpoints are split; boundary
-/// edges and identical duplicates are left untouched. A line between the
-/// same two ends collides with an arc too: its chord is the arc's chord.
+/// unordered chord-endpoint pair are split: one whose inputs are not all
+/// proved one curve ([`edges_one_curve`]); boundary edges and duplicates
+/// proved one curve are left untouched. A line between the same two ends
+/// collides with an arc too: its chord is the arc's chord.
 fn split_coendpoint_section_arc_inputs(inputs: &mut Vec<ArrInput>, frame: &PlaneFrame, tol: f64) {
     use std::collections::HashMap;
     type Q2 = (i64, i64);
@@ -3948,44 +3949,44 @@ fn split_coendpoint_section_arc_inputs(inputs: &mut Vec<ArrInput>, frame: &Plane
             (p.y() * qscale).round() as i64,
         )
     };
+    // The middle of a circle or ellipse arc, read counter-clockwise from its
+    // stored start.
     let arc_mid = |e: &OrientedPCurveEdge| -> Option<Point3> {
-        let EdgeCurve::Circle(ref c) = e.curve_3d else {
-            return None;
-        };
         let (ns, ne) = if e.forward {
             (e.start_3d, e.end_3d)
         } else {
             (e.end_3d, e.start_3d)
         };
-        let s_ang = c.project(ns);
-        let span = (c.project(ne) - s_ang).rem_euclid(std::f64::consts::TAU);
-        if span < 1e-9 {
-            return None;
-        }
-        Some(c.evaluate(s_ang + 0.5 * span))
-    };
-    let mut pair_mids: HashMap<(Q2, Q2), Vec<Q2>> = HashMap::new();
-    for inp in inputs.iter() {
-        let mid_uv = if matches!(inp.edge.curve_3d, EdgeCurve::Line) {
-            Point2::new(
-                f64::midpoint(inp.a.x(), inp.b.x()),
-                f64::midpoint(inp.a.y(), inp.b.y()),
-            )
-        } else if inp.is_section
-            && inp.is_arc
-            && let Some(mid) = arc_mid(&inp.edge)
-        {
-            frame.project(mid)
-        } else {
-            continue;
+        let middle = |s_ang: f64, e_ang: f64| {
+            let span = (e_ang - s_ang).rem_euclid(std::f64::consts::TAU);
+            (span >= 1e-9).then_some(s_ang + 0.5 * span)
         };
+        match &e.curve_3d {
+            EdgeCurve::Circle(c) => middle(c.project(ns), c.project(ne)).map(|t| c.evaluate(t)),
+            EdgeCurve::Ellipse(el) => {
+                middle(el.project(ns), el.project(ne)).map(|t| el.evaluate(t))
+            }
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+        }
+    };
+    let mut pairs: HashMap<(Q2, Q2), Vec<usize>> = HashMap::new();
+    for (i, inp) in inputs.iter().enumerate() {
+        if !(matches!(inp.edge.curve_3d, EdgeCurve::Line) || inp.is_section && inp.is_arc) {
+            continue;
+        }
         let (a, b) = (q2(inp.a), q2(inp.b));
         let key = if a <= b { (a, b) } else { (b, a) };
-        pair_mids.entry(key).or_default().push(q2(mid_uv));
+        pairs.entry(key).or_default().push(i);
     }
-    let colliding: std::collections::HashSet<(Q2, Q2)> = pair_mids
+    let colliding: std::collections::HashSet<(Q2, Q2)> = pairs
         .into_iter()
-        .filter(|(_, mids)| mids.iter().any(|m| *m != mids[0]))
+        .filter(|(_, members)| {
+            members.iter().enumerate().any(|(k, &i)| {
+                members[k + 1..]
+                    .iter()
+                    .any(|&j| !edges_one_curve(&inputs[i].edge, &inputs[j].edge, 10.0 * tol))
+            })
+        })
         .map(|(k, _)| k)
         .collect();
     // A line through both ends of an arc is cut at them, and its piece
@@ -5011,7 +5012,35 @@ fn arrangement_regions_from_inputs(
 
     // Deduplicate undirected sub-edges (the same physical edge can arise from
     // two overlapping input chords). Keep one record per vertex pair, preferring
-    // a whole-arc source so the true arc geometry is emitted.
+    // a whole-arc source so the true arc geometry is emitted. Two records on
+    // one pair are one edge only where they are proved one curve: two pieces
+    // of lines, or two whole inputs [`edges_one_curve`] holds together; any
+    // other pair leaves the face to the curved paths.
+    let one_curve = |l: &(UvKey, UvKey, usize, bool), r: &(UvKey, UvKey, usize, bool)| {
+        let (a, b) = (&inputs[l.2].edge, &inputs[r.2].edge);
+        l.2 == r.2
+            || matches!(a.curve_3d, EdgeCurve::Line) && matches!(b.curve_3d, EdgeCurve::Line)
+            || l.3 && r.3 && edges_one_curve(a, b, 10.0 * tol)
+    };
+    {
+        let key =
+            |e: &(UvKey, UvKey, usize, bool)| if e.0 <= e.1 { (e.0, e.1) } else { (e.1, e.0) };
+        let mut by_pair: std::collections::HashMap<(UvKey, UvKey), Vec<usize>> =
+            std::collections::HashMap::new();
+        for (k, e) in sub_edges.iter().enumerate() {
+            by_pair.entry(key(e)).or_default().push(k);
+        }
+        for members in by_pair.values() {
+            for (n, &k) in members.iter().enumerate() {
+                if members[n + 1..]
+                    .iter()
+                    .any(|&m| !one_curve(&sub_edges[k], &sub_edges[m]))
+                {
+                    return None;
+                }
+            }
+        }
+    }
     sub_edges.sort_by(|l, r| {
         let lk = if l.0 <= l.1 { (l.0, l.1) } else { (l.1, l.0) };
         let rk = if r.0 <= r.1 { (r.0, r.1) } else { (r.1, r.0) };
@@ -19564,6 +19593,62 @@ mod tests {
             ]
         };
         plate_regions_match(&sections, &[lower, upper - lower], 1e-9);
+    }
+
+    /// Two halves of ellipses about the plate's (5, 5) from (8, 5) to (2, 5),
+    /// of semi-axes 3 along x and 1 and 2, their chord, and lines from the
+    /// chord at x = 4 and 6 down to the plate's edge, which end on the
+    /// chord so the face takes the cells of its arrangement: the plate splits
+    /// into the inner half, the band between the halves, the strip between
+    /// the lines and the rest, though the halves share both ends. In each
+    /// frame.
+    #[test]
+    fn two_half_ellipses_with_one_pair_of_ends_are_two_cells() {
+        use brepkit_math::curves::Ellipse3D;
+        use std::f64::consts::PI;
+        let half = |b: f64| 0.5 * PI * 3.0 * b;
+        let mut want = vec![
+            half(1.0),
+            half(2.0) - half(1.0),
+            10.0,
+            100.0 - half(2.0) - 10.0,
+        ];
+        want.sort_by(f64::total_cmp);
+        for (pose, o, u, v) in plate_frames() {
+            let n = u.cross(v);
+            let at = |x: f64, y: f64| o + u * x + v * y;
+            let (p, q) = (at(8.0, 5.0), at(2.0, 5.0));
+            let mut sections: Vec<SectionEdge> = [1.0, 2.0]
+                .iter()
+                .map(|&b| {
+                    let ellipse = Ellipse3D::with_axes(at(5.0, 5.0), n, 3.0, b, u, v).unwrap();
+                    curve_section(EdgeCurve::Ellipse(ellipse), p, q)
+                })
+                .collect();
+            sections.push(line_section(q, p));
+            for x in [4.0, 6.0] {
+                sections.push(line_section(at(x, 5.0), at(x, 0.0)));
+            }
+            let (topo, face_id) = plate_in_frame(o, u, v);
+            let cells = split_plane_into_cells(&topo, face_id, &sections, Rank::B, 1e-7)
+                .unwrap_or_else(|| unreachable!("{pose}: no cells"));
+            let mut areas: Vec<f64> = cells
+                .iter()
+                .map(|s| {
+                    exact_wire_area(&s.outer_wire, o, u, v)
+                        + s.inner_wires
+                            .iter()
+                            .map(|w| exact_wire_area(w, o, u, v))
+                            .sum::<f64>()
+                })
+                .collect();
+            areas.sort_by(f64::total_cmp);
+            assert!(
+                areas.len() == want.len()
+                    && areas.iter().zip(&want).all(|(a, w)| (a - w).abs() < 1e-9),
+                "{pose}: cells of areas {areas:?}, want {want:?}"
+            );
+        }
     }
 
     /// A circle of radius 2 and an ellipse of semi-axes 2 and 1.5 about the
