@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795585635747,
+  "lastUpdate": 1795589733925,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -78461,6 +78461,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 19790469,
             "range": "± 69880",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "500de92283ffb9d45fc8c05e578e7c36a66d2daa",
+          "message": "fix(io,operations): a STEP vertex off its curve's end takes the gap as its tolerance (#2861)\n\n## Summary\n\n#2803 reported walked fillet rounds that end up to 1.06e-3 off their\nvertices. The walk does not make these misses. They are in the parts'\nSTEP files: in `leg_ledge_tips.step`, the last control point of B-spline\n#767 lies 1.062e-3 from vertex #13, which ends its edge. The reader\ngives every vertex a tolerance of 1e-7, so the solid reads with curves\nthat miss their vertices, and the fillet keeps those edges.\n\nRead straight from their files, before any fillet, the inputs hold every\nmiss. There are 8 in the ledge part, 9 in the wall-corner part, and 11\nin the rib. With this change, the STEP import raises each such vertex's\ntolerance to cover its gap, and the three parts and their fillets read\nas valid. The pose sweep and the truth audit give the same output as\nmain.\n\nFixes #2803.\n\n## The change\n\n- `brepkit_operations::heal::cover_curve_end_gaps` reads each edge-end\ngap by `check_vertex_on_curve`, the same measure `validate_solid` uses.\nWhere a gap is larger than the vertex's tolerance, the tolerance becomes\nthe gap plus 1e-7.\n- It does not cover a gap of a tenth of the edge's chord or more. For a\nclosed edge, the limit is a tenth of the whole curve's size, which a\nmotion does not change. Such a vertex does not end its curve, so\n`validate_solid` still reports it. The largest ratio in the fixtures is\n1.3e-2.\n- A vertex keeps its tolerance if its gap on any one of its edges is\npast that edge's limit.\n- The STEP reader calls it once at the end of `build_all_solids`, after\nevery unit and placement. It first resets each vertex to 1e-7, so a gap\nis covered in millimetres in any unit.\n- `transform_solid` and `copy_and_transform_solid` multiply each vertex\nand edge tolerance by an upper bound on the largest stretch of the map.\nThe bound is computed on the map divided by a power of two, so it holds\nfrom 1e-150 to 1e150. A motion or a mirror keeps them bit for bit.\n- Of the 81 STEP fixtures, 4 have a gap past 1e-7: the three fillet\nparts and `spline_part_coarse_volume.step`. The last one's worst gap is\n3.6e-3, and its volume test still passes.\n\n## Tests\n\n- `fillet_round_off_a_ledge.rs` (3 tests) and\n`fillet_walked_ends_on_a_skin.rs` assert full validity again.\n- `step_curve_end_gaps.rs` reads the 3 parts in 3 poses each. Each\nvertex's tolerance must cover its gap and stay within 1e-7 of it, and a\nvertex with no gap keeps 1e-7.\n- `a_vertex_off_its_curve_s_end_takes_the_gap_as_its_tolerance` and\n`a_vertex_past_a_tenth_of_its_edge_off_its_curve_keeps_its_tolerance`\nrun in 3 poses.\n- Tests cover a closed circle and a closed B-spline with the vertex at\ntwo places on the loop. Another covers a vertex shared by an edge past\nits limit. A part read in metres and in centimetres takes its gaps in\nmillimetres.\n- `a_scale_scales_vertex_and_edge_tolerances_and_a_motion_keeps_them`\ncovers a motion, a mirror, two scales and a stretch along a turned axis.\nAnother test bounds the stretch within 1e-12 above the true value at\nsizes from 1e-150 to 1e150.\n- A probe over 1,420 fillet and 387 chamfer builds found no edge made by\nthe walk that misses its vertex past the 1e-5 floor. The largest gap\npast a vertex's tolerance on a new edge is 2.0e-7.\n- brepkit-blend (228) and the fillet, blend, chamfer and heal lib tests\n(161) pass, and so do all brepkit-operations and brepkit-io tests (3332,\n28 skipped).\n\n## Still open\n\n- The walking chamfer moves an arc's vertices but keeps its old circle\n(#2864).\n- New walked edges end 1.0e-7 to 2.0e-7 off their vertices, which\nmatters to #2801's plan to drop `WELD_BAND`.\n- The IGES reader is not yet checked for the same gaps.",
+          "timestamp": "2026-11-25T06:50:50Z",
+          "tree_id": "b41f5639bda234a57ed37584772a8212542cb168",
+          "url": "https://github.com/andymai/brepkit/commit/500de92283ffb9d45fc8c05e578e7c36a66d2daa"
+        },
+        "date": 1795589717592,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1241985,
+            "range": "± 10454",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1317337,
+            "range": "± 3863",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14739,
+            "range": "± 21",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 762509,
+            "range": "± 22029",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28685989,
+            "range": "± 162197",
             "unit": "ns/iter"
           }
         ]
