@@ -981,6 +981,17 @@ const MOST_LOOP_DEPTH: u32 = 40;
 /// coordinates can move the angle between two directions read by `acos`.
 const ANGLE_SLACK: f64 = 1e-7;
 
+/// How a pair of parts read in [`loops_are_simple`] meets at an end: not at
+/// all, at the one point where the first starts and the second starts, or
+/// across a joint from two starts apart. Each of the two runs from that
+/// end.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Corner {
+    No,
+    Shared,
+    Apart,
+}
+
 /// An item of the sweep in [`loops_are_simple`]: a part past the joints, by
 /// its place, or a joint, by its place in the list of joints.
 #[derive(Clone, Copy)]
@@ -1018,9 +1029,13 @@ struct JointRun {
 /// it ([`cone2`]): where the cones meet only there, the parts do too; else
 /// they are halved, the halves at the joint read so again. Two that follow
 /// each other across a joint whose ends lie farther than `2 slack` apart
-/// are read as any two parts are: a cone from each end does not bound the
-/// other's path, and the two can cross a little past the joint. Two ends of
-/// parts within `2 slack` of each other away from a joint show the parts
+/// can cross a little past the joint: each lies in a cone from its own end,
+/// and where the cones are apart they can meet only within a reach of
+/// those ends ([`meeting_reach`]). Where that reach is within `joint`, its
+/// box about the two ends joins the joints' boxes, and a loop tangled only
+/// inside small boxes reads its parity outside them as a simple loop does;
+/// else the two are halved, the halves at the joint read so again. Two ends
+/// of parts within `2 slack` of each other away from a joint show the parts
 /// meet.
 ///
 /// Each item read takes one of `budget` before it is read. A loop of fewer
@@ -1138,7 +1153,7 @@ fn loops_are_simple(
     );
     items.sort_by(|x, y| x.0.lo[0].total_cmp(&y.0.lo[0]));
     let meet = |a: Point2, b: Point2| (a.x() - b.x()).hypot(a.y() - b.y()) <= 2.0 * slack;
-    let mut work: Vec<(Piece, Piece, bool, u32)> = Vec::new();
+    let mut work: Vec<(Piece, Piece, Corner, u32)> = Vec::new();
     for (place, &(bx, x)) in items.iter().enumerate() {
         for &(by, y) in &items[place + 1..] {
             take(budget)?;
@@ -1151,16 +1166,21 @@ fn loops_are_simple(
             match (x, y) {
                 (Item::Part(x), Item::Part(y)) => {
                     // Two parts past joints that follow each other, read
-                    // from their joint where they meet there: cones from
-                    // two points apart do not bound each other's parts,
-                    // which can cross a little past the joint.
+                    // from their joint.
                     let (px, py) = (&parts[x], &parts[y]);
-                    if after[x] == y && meet(px.b, py.a) {
-                        work.push((px.reversed(), py.clone(), true, 0));
-                    } else if after[y] == x && meet(py.b, px.a) {
-                        work.push((py.reversed(), px.clone(), true, 0));
+                    let corner = |b: Point2, a: Point2| {
+                        if meet(b, a) {
+                            Corner::Shared
+                        } else {
+                            Corner::Apart
+                        }
+                    };
+                    if after[x] == y {
+                        work.push((px.reversed(), py.clone(), corner(px.b, py.a), 0));
+                    } else if after[y] == x {
+                        work.push((py.reversed(), px.clone(), corner(py.b, px.a), 0));
                     } else {
-                        work.push((px.clone(), py.clone(), false, 0));
+                        work.push((px.clone(), py.clone(), Corner::No, 0));
                     }
                 }
                 (Item::Joint(r), Item::Part(o)) | (Item::Part(o), Item::Joint(r)) => {
@@ -1171,14 +1191,14 @@ fn loops_are_simple(
                     }
                     for &k in &runs[r].parts {
                         take(budget)?;
-                        work.push((parts[k].clone(), parts[o].clone(), false, 0));
+                        work.push((parts[k].clone(), parts[o].clone(), Corner::No, 0));
                     }
                 }
                 (Item::Joint(r), Item::Joint(s)) => {
                     for &k in &runs[r].parts {
                         for &m in &runs[s].parts {
                             take(budget)?;
-                            work.push((parts[k].clone(), parts[m].clone(), false, 0));
+                            work.push((parts[k].clone(), parts[m].clone(), Corner::No, 0));
                         }
                     }
                 }
@@ -1188,16 +1208,24 @@ fn loops_are_simple(
     while let Some((x, y, corner, depth)) = work.pop() {
         take(budget)?;
         let (bx, by) = (x.bounds(slack), y.bounds(slack));
-        if bx.apart(by) || (corner && cones2_apart(&x, &y, slack)) {
+        if bx.apart(by) || (corner == Corner::Shared && cones2_apart(&x, &y, slack)) {
+            continue;
+        }
+        if corner == Corner::Apart
+            && let Some(reach) = meeting_reach(&x, &y, slack).filter(|&r| r <= joint)
+            && let (Some(p), Some(q)) = (apex(&x), apex(&y))
+        {
+            joints.push(Box2::of([p, q]).grown(reach));
             continue;
         }
         let ends_meet = [x.a, x.b].into_iter().any(|p| meet(p, y.a) || meet(p, y.b));
-        if (!corner && ends_meet) || depth >= MOST_LOOP_DEPTH {
+        if (corner == Corner::No && ends_meet) || depth >= MOST_LOOP_DEPTH {
             return None;
         }
+        let at_end = corner != Corner::No;
         let (cut_x, cut_y) = (
-            corner || size(bx) >= size(by),
-            corner || size(by) > size(bx),
+            at_end || size(bx) >= size(by),
+            at_end || size(by) > size(bx),
         );
         let xs = if cut_x {
             let (l, r) = x.halves();
@@ -1213,12 +1241,8 @@ fn loops_are_simple(
         };
         for (i, xx) in xs.iter().enumerate() {
             for (j, yy) in ys.iter().enumerate() {
-                work.push((
-                    xx.clone(),
-                    yy.clone(),
-                    corner && i == 0 && j == 0,
-                    depth + 1,
-                ));
+                let corner = if i == 0 && j == 0 { corner } else { Corner::No };
+                work.push((xx.clone(), yy.clone(), corner, depth + 1));
             }
         }
     }
@@ -1340,6 +1364,33 @@ fn cones2_apart(a: &Piece, b: &Piece, slack: f64) -> bool {
         return false;
     };
     x.0.madd(y.0, x.1 * y.1).clamp(-1.0, 1.0).acos() > hx + hy + ANGLE_SLACK
+}
+
+/// The point a piece's cone starts from ([`cone2`]): a Bezier piece's first
+/// control point, else the piece's start.
+fn apex(piece: &Piece) -> Option<Point2> {
+    match &piece.hull {
+        Hull::Bezier(net) => net.first().map(|q| Point2::new(q[0] / q[2], q[1] / q[2])),
+        Hull::Segment | Hull::Conic { .. } => Some(piece.a),
+    }
+}
+
+/// How far from where they start two pieces that start a little apart can
+/// meet: each lies in a cone from its start ([`cone2`]), and where the
+/// angle between the cones' axes passes their half-angles by `g`, a point
+/// `s` along one and a point `t` along the other stand `d` apart, the
+/// distance between the starts, only where `max(s, t)` is at most
+/// `d / sqrt(1 - max(cos g, 0))`. `None` where the cones are not apart.
+fn meeting_reach(a: &Piece, b: &Piece, slack: f64) -> Option<f64> {
+    let ((x, hx), (y, hy)) = (cone2(a, slack)?, cone2(b, slack)?);
+    let gap = x.0.madd(y.0, x.1 * y.1).clamp(-1.0, 1.0).acos() - hx - hy - ANGLE_SLACK;
+    if gap.is_nan() || gap <= 0.0 {
+        return None;
+    }
+    let (p, q) = (apex(a)?, apex(b)?);
+    let apart = (p.x() - q.x()).hypot(p.y() - q.y()) + 4.0 * slack;
+    let reach = apart / (1.0 - gap.cos().max(0.0)).sqrt() + 4.0 * slack;
+    reach.is_finite().then_some(reach)
 }
 
 /// Whether a plane keeps every one of `points`, and so their convex hull,
@@ -1666,6 +1717,45 @@ mod tests {
             trim.holds_parameters(Point2::new(0.5, 0.75 + 1e-9)),
             Some(false)
         );
+    }
+
+    /// A rectangle whose pcurves meet at its two top corners 1e-10 apart,
+    /// each side run on past the start of the next, as the pcurves of a cut
+    /// wall fitted edge by edge can meet: the right side runs up to `v = h`
+    /// and the top starts at `v = h - 1e-10` back along it, so the two touch
+    /// 1e-10 short of the right side's end. Two sides that leave a joint
+    /// from ends apart can meet only within a reach of those ends, about
+    /// 1e-10 here, so the loop takes a trim: it reads the rectangle's inside
+    /// and outside up to 1e-3 from each corner, and keeps a box about each
+    /// corner unproved.
+    #[test]
+    fn a_loop_whose_sides_run_past_its_corners_by_a_hair_takes_a_trim() {
+        let (h, gap) = (0.595_360_402_637_849_7, 1e-10);
+        let trim = trim_of_pieces(&[vec![
+            vec![(0.0, 0.0), (1.0, 0.0)],
+            vec![(1.0, 0.0), (1.0, h)],
+            vec![(1.0, h - gap), (0.0, h - gap)],
+            vec![(0.0, h), (0.0, 0.0)],
+        ]]);
+        assert!(trim.is_some());
+        let trim = trim.unwrap();
+        for (q, inside) in [
+            ((0.5, 0.3), true),
+            ((0.999, h - 1e-3), true),
+            ((0.001, h - 1e-3), true),
+            ((0.5, h + 1e-3), false),
+            ((1.001, h - 1e-3), false),
+            ((-0.001, h + 1e-3), false),
+        ] {
+            let read = trim.holds_parameters(Point2::new(q.0, q.1));
+            assert_eq!(read, Some(inside), "{q:?}");
+        }
+        for corner in [Point3::new(1.0, h, 0.0), Point3::new(0.0, h, 0.0)] {
+            assert!(
+                trim.joints.iter().any(|j| j.contains_point(corner)),
+                "{corner:?}"
+            );
+        }
     }
 
     /// A loop of 10^4 tiny pieces is proved simple within a count of items
