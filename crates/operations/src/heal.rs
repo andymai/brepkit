@@ -729,19 +729,40 @@ pub fn cover_curve_end_gaps(
     Ok(raised)
 }
 
-/// The size of a closed curve as a whole, wherever its ends lie on it: a
-/// circle's diameter, an ellipse's longer axis, and the diagonal of a
-/// B-spline's control box.
+/// The size of a closed curve as a whole, wherever its ends lie on it and
+/// in any pose: a circle's diameter, an ellipse's longer axis, and the
+/// largest distance between two of a B-spline's control points.
 fn closed_curve_size(curve: &EdgeCurve) -> f64 {
     match curve {
         EdgeCurve::Line => 0.0,
         EdgeCurve::Circle(circle) => 2.0 * circle.radius(),
         EdgeCurve::Ellipse(ellipse) => 2.0 * ellipse.semi_major().max(ellipse.semi_minor()),
-        EdgeCurve::NurbsCurve(curve) => {
-            let hull = curve.aabb();
-            (hull.max - hull.min).length()
+        EdgeCurve::NurbsCurve(curve) => widest_apart(curve.control_points()),
+    }
+}
+
+/// The largest distance between two of `points`. Past 512 points, twice the
+/// largest distance from the first point, which is no less and at most
+/// twice as much, so that the cost stays linear.
+fn widest_apart(points: &[Point3]) -> f64 {
+    const PAIRS_UP_TO: usize = 512;
+    let Some(&first) = points.first() else {
+        return 0.0;
+    };
+    if points.len() > PAIRS_UP_TO {
+        return 2.0
+            * points
+                .iter()
+                .map(|&p| (p - first).length())
+                .fold(0.0, f64::max);
+    }
+    let mut widest = 0.0_f64;
+    for (i, &p) in points.iter().enumerate() {
+        for &q in &points[i + 1..] {
+            widest = widest.max((q - p).length());
         }
     }
+    widest
 }
 
 /// The control hull of a NURBS curve over `[t0, t1]` alone: the curve is

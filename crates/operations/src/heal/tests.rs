@@ -1333,3 +1333,52 @@ fn a_vertex_past_one_edge_s_limit_keeps_its_tolerance_for_every_edge() {
         assert_eq!(curve_misses(&topo, prism), 2, "{pose}");
     }
 }
+
+/// A closed square B-spline, 2 x 2 through its corners: its size is the
+/// same in any pose, so a vertex off its starting corner takes a gap under
+/// a tenth of the square's diagonal in each pose, and refuses one past it.
+#[test]
+fn a_closed_edge_s_limit_is_the_same_in_every_pose() {
+    let diagonal = 8.0_f64.sqrt();
+    let turns = [
+        ("upright", brepkit_math::mat::Mat4::identity()),
+        (
+            "turned a quarter about z",
+            brepkit_math::mat::Mat4::rotation_z(std::f64::consts::FRAC_PI_4),
+        ),
+        ("turned", poses()[1].1),
+    ];
+    for (pose, at) in turns {
+        for (gap, takes) in [(0.27, true), (0.29, false)] {
+            assert!((gap < 0.1 * diagonal) == takes);
+            let corners = [
+                (1.0, 1.0),
+                (-1.0, 1.0),
+                (-1.0, -1.0),
+                (1.0, -1.0),
+                (1.0, 1.0),
+            ]
+            .map(|(x, y)| at.mul_point(Point3::new(x, y, 0.0)));
+            let curve = brepkit_math::nurbs::NurbsCurve::new(
+                1,
+                vec![0.0, 0.0, 0.25, 0.5, 0.75, 1.0, 1.0],
+                corners.to_vec(),
+                vec![1.0; 5],
+            )
+            .unwrap();
+            let vertex = at.mul_point(Point3::new(1.0, 1.0, gap));
+            let normal = linear_image(&at, Vec3::new(0.0, 0.0, 1.0));
+            let mut topo = Topology::new();
+            let (face, v) =
+                face_on_closed_edge(&mut topo, EdgeCurve::NurbsCurve(curve), vertex, normal);
+            let raised = cover_curve_end_gaps(&mut topo, &[face]).unwrap();
+            assert_eq!(raised, usize::from(takes), "{pose} {gap}");
+            let tolerance = topo.vertex(v).unwrap().tolerance();
+            if takes {
+                assert!((tolerance - (gap + 1e-7)).abs() < 1e-12, "{pose} {gap}");
+            } else {
+                assert!((tolerance - 1e-7).abs() < 1e-20, "{pose} {gap}");
+            }
+        }
+    }
+}
