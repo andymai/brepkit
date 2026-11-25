@@ -1440,33 +1440,79 @@ fn whole_turn(curve: &EdgeCurve, data: &EdgeData, tol: f64) -> bool {
 /// meet, they cross rather than touch.
 const TOUCH_SIN: f64 = 1e-3;
 
-/// Whether curve `a` runs along curve `b`: at nine points spread over `a`,
-/// it lies within `tol` of `b`, each point's nearest on `b` found from `b`'s
-/// nearest sample. A pair where one runs along the other has no one point
-/// of touch, and its readings are left as the search finds them; refusing
-/// to sort or polish keeps the readings, so these few samples need prove
-/// nothing.
+/// Whether curve `a` runs along curve `b`: proved within `tol` of it over
+/// `a`'s whole range. `a`'s ends must lie within `tol` of `b`; then `a` and
+/// the part of `b` between the feet of those ends are one curve by
+/// [`same_section_curve`] (lines, circles, ellipses, a B-spline against a
+/// line or a B-spline), or by a bound over Bezier pieces of the two
+/// ([`proved_within`]). A pair where one runs along the other has no one
+/// point of touch, and its readings are left as the search finds them.
+///
+/// [`same_section_curve`]: crate::builder::face_splitter::same_section_curve
 fn runs_along(
     (ca, ea): (&EdgeCurve, &EdgeData),
     (cb, eb): (&EdgeCurve, &EdgeData),
     tol: f64,
 ) -> bool {
+    use crate::builder::split_types::SectionEdge;
+    use brepkit_math::curves2d::{Curve2D, Line2D};
+    use brepkit_math::vec::{Point2, Vec2};
     let samples = &eb
         .sampled
         .get_or_init(|| SampledEdgeChords::new(cb, eb))
         .pts;
     let turn_b = whole_turn(cb, eb, tol);
-    (0..=8).all(|k| {
-        let t = ea.t0 + (ea.t1 - ea.t0) * f64::from(k) / 8.0;
-        let p = ca.evaluate_with_endpoints(t, ea.start_pos, ea.end_pos);
+    let at_a = |t: f64| ca.evaluate_with_endpoints(t, ea.start_pos, ea.end_pos);
+    let at_b = |s: f64| cb.evaluate_with_endpoints(s, eb.start_pos, eb.end_pos);
+    let foot = |p: Point3| {
         let seed = samples
             .iter()
             .min_by(|x, y| (x.pos - p).length().total_cmp(&(y.pos - p).length()))
             .map_or(eb.t0, |x| x.t);
-        let s = nearest_on((cb, eb), p, seed, turn_b);
-        (p - cb.evaluate_with_endpoints(s, eb.start_pos, eb.end_pos)).length() <= tol
-    })
+        nearest_on((cb, eb), p, seed, turn_b)
+    };
+    let (start, end) = (ea.start_pos, ea.end_pos);
+    let (s0, s1) = (foot(start), foot(end));
+    let (q0, q1) = (at_b(s0), at_b(s1));
+    if (start - q0).length() > tol || (end - q1).length() > tol {
+        return false;
+    }
+    let Ok(line) = Line2D::new(Point2::new(0.0, 0.0), Vec2::new(1.0, 0.0)) else {
+        return false;
+    };
+    let section = |curve: &EdgeCurve, start: Point3, end: Point3| SectionEdge {
+        curve_3d: curve.clone(),
+        pcurve_a: Curve2D::Line(line.clone()),
+        pcurve_b: Curve2D::Line(line.clone()),
+        start,
+        end,
+        start_uv_a: None,
+        end_uv_a: None,
+        start_uv_b: None,
+        end_uv_b: None,
+        target_face: None,
+        pave_block_id: None,
+    };
+    let mine = section(ca, start, end);
+    // `b`'s part between the feet, read either way along `b`.
+    if [(q0, q1), (q1, q0)].into_iter().any(|(from, to)| {
+        crate::builder::face_splitter::same_section_curve(&mine, &section(cb, from, to), tol)
+    }) {
+        return true;
+    }
+    let mut budget = ALONG_PROOF_PIECES;
+    proved_within(
+        ((ca, ea), (cb, eb)),
+        ((ea.t0, ea.t1), (s0, s1)),
+        tol,
+        &|t: f64, s: f64| nearest_on((cb, eb), at_a(t), s, turn_b),
+        &mut budget,
+    )
 }
+
+/// The most Bezier pieces the proof in [`runs_along`] reads, once for a
+/// pair.
+const ALONG_PROOF_PIECES: usize = 512;
 
 #[cfg(test)]
 thread_local! {
@@ -1712,6 +1758,12 @@ fn proved_within(
         return false;
     }
     let sm = foot(tm, f64::midpoint(s0, s1));
+    // Where the middle stands off by more, no halving proves the piece.
+    let middle = ca.evaluate_with_endpoints(tm, ea.start_pos, ea.end_pos)
+        - cb.evaluate_with_endpoints(sm, eb.start_pos, eb.end_pos);
+    if middle.length() > tol {
+        return false;
+    }
     proved_within(
         ((ca, ea), (cb, eb)),
         ((t0, tm), (s0, sm)),
@@ -4352,6 +4404,104 @@ mod tests {
             }
             let work = POLISH_WORK.with(std::cell::Cell::get) - before;
             assert_eq!(work, 0, "{a_span:?} against {b_span:?}");
+        }
+    }
+
+    /// The coefficients in x of a polynomial given in u, for u = (x - left)
+    /// / width.
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_wrap,
+        clippy::cast_possible_truncation
+    )]
+    fn in_x(in_u: &[f64], left: f64, width: f64) -> Vec<f64> {
+        let binom = |n: usize, k: usize| -> f64 {
+            (0..k).fold(1.0, |acc, i| acc * (n - i) as f64 / (i + 1) as f64)
+        };
+        let mut c = vec![0.0; in_u.len()];
+        for (m, &cm) in in_u.iter().enumerate() {
+            for (j, b) in c.iter_mut().enumerate().take(m + 1) {
+                *b += cm / width.powi(m as i32) * binom(m, j) * (-left).powi((m - j) as i32);
+            }
+        }
+        c
+    }
+
+    /// The parabola `y = x^2` over [0, 1], and the same parabola with a bump
+    /// over [0.03, 0.09], between two of its nine samples at x = k / 8: one
+    /// that parts from it by 1e-6, ten tolerances, and one that crosses it
+    /// at x = 0.06, parting by up to 1.1e-6 each side. At the nine samples
+    /// the curves agree, but neither pair is proved to run along, so the
+    /// crossing search runs, and the crossing is read at its point.
+    #[test]
+    fn curves_that_agree_at_samples_but_part_between_are_not_taken_to_run_along() {
+        let (left, right) = (0.03, 0.09);
+        let width = right - left;
+        let tol = Tolerance::default().linear;
+        let parabola: &[f64] = &[0.0, 0.0, 1.0];
+        let bumps: [(Vec<f64>, bool); 2] = [
+            (
+                vec![
+                    0.0,
+                    0.0,
+                    16.0 * 10.0 * tol,
+                    -32.0 * 10.0 * tol,
+                    16.0 * 10.0 * tol,
+                ],
+                false,
+            ),
+            (
+                vec![
+                    0.0,
+                    0.0,
+                    -64.0 * 10.0 * tol,
+                    256.0 * 10.0 * tol,
+                    -320.0 * 10.0 * tol,
+                    128.0 * 10.0 * tol,
+                ],
+                true,
+            ),
+        ];
+        for pose in ee_poses() {
+            for (bump, crosses) in &bumps {
+                let mut middle = in_x(bump, left, width);
+                for (c, p) in middle.iter_mut().zip(parabola) {
+                    *c += p;
+                }
+                let mut topo = Topology::new();
+                let bumped = posed_curve(
+                    &mut topo,
+                    &[
+                        (parabola, &[0.0], (0.0, left)),
+                        (&middle, &[0.0], (left, right)),
+                        (parabola, &[0.0], (right, 1.0)),
+                    ],
+                    &pose,
+                );
+                let plain = posed_curve(&mut topo, &[(parabola, &[0.0], (0.0, 1.0))], &pose);
+                let data = collect_edge_data(&topo, &[bumped, plain]).unwrap();
+                let (on_bumped, on_plain) = (
+                    topo.edge(bumped).unwrap().curve().clone(),
+                    topo.edge(plain).unwrap().curve().clone(),
+                );
+                assert!(!runs_along(
+                    (&on_bumped, &data[0]),
+                    (&on_plain, &data[1]),
+                    tol
+                ));
+                assert!(!runs_along(
+                    (&on_plain, &data[1]),
+                    (&on_bumped, &data[0]),
+                    tol
+                ));
+                if *crosses {
+                    let at = pose.mul_point(Point3::new(0.06, 0.0036, 0.0));
+                    for (ea, eb) in [(bumped, plain), (plain, bumped)] {
+                        let hits = crossings(&topo, ea, eb);
+                        assert!(hits.iter().any(|h| (h.2 - at).length() < 1e-9), "{hits:?}");
+                    }
+                }
+            }
         }
     }
 }

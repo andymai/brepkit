@@ -14045,7 +14045,7 @@ pub fn edges_one_curve(a: &OrientedPCurveEdge, b: &OrientedPCurveEdge, tol: f64)
 /// [`nurbs_trims_apart`] holds them within `tol`. Their middles must meet
 /// too, a quick refusal and never a proof. Any other pair is taken for two
 /// curves.
-fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
+pub fn same_section_curve(a: &SectionEdge, b: &SectionEdge, tol: f64) -> bool {
     use std::borrow::Cow;
     // Each bound reads a conic's sizes from its radius or semi-axes, true
     // only on unit, square axes. A line or a B-spline is read as it is.
