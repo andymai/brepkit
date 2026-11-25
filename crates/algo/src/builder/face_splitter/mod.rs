@@ -19195,6 +19195,80 @@ mod tests {
         }
     }
 
+    /// The ellipse of semi-axes 3 along the plate's x and 1 about (5, 5)
+    /// over `pi / 4` to `7 pi / 6`, and the segment from (4, 6) to (6, 6),
+    /// which touches it at (5, 6) far from both its ends: one meeting there,
+    /// in each frame.
+    #[test]
+    fn a_long_ellipse_arc_touched_far_from_its_ends_meets() {
+        use brepkit_math::curves::Ellipse3D;
+        use std::f64::consts::PI;
+        for (pose, o, u, v) in plate_frames() {
+            let at = |x: f64, y: f64| o + u * x + v * y;
+            let ellipse = Ellipse3D::with_axes(at(5.0, 5.0), u.cross(v), 3.0, 1.0, u, v).unwrap();
+            let edges = vec![
+                meeting_edge(
+                    EdgeCurve::Ellipse(ellipse.clone()),
+                    ellipse.evaluate(0.25 * PI),
+                    ellipse.evaluate(7.0 * PI / 6.0),
+                    1,
+                ),
+                meeting_edge(EdgeCurve::Line, at(4.0, 6.0), at(6.0, 6.0), 2),
+            ];
+            let found = meetings(&edges);
+            assert!(
+                found.len() == 1 && (found[0] - at(5.0, 6.0)).length() < 1e-6,
+                "{pose}: meetings {found:?}"
+            );
+        }
+    }
+
+    /// The ellipse of [`a_long_ellipse_arc_touched_far_from_its_ends_meets`]
+    /// over all but a hundredth of a half turn from `pi / 4`: a segment
+    /// across it at (5, 6) meets it there, and one across its curve two and
+    /// a half tolerances past either end meets it nowhere, in each frame.
+    #[test]
+    fn an_ellipse_arc_meets_inside_its_ends_and_not_past_them() {
+        use brepkit_math::curves::Ellipse3D;
+        use std::f64::consts::PI;
+        for (pose, o, u, v) in plate_frames() {
+            let n = u.cross(v);
+            let at = |x: f64, y: f64| o + u * x + v * y;
+            let ellipse = Ellipse3D::with_axes(at(5.0, 5.0), n, 3.0, 1.0, u, v).unwrap();
+            let (t0, t1) = (0.25 * PI, 0.25 * PI + 0.99 * PI);
+            let arc = meeting_edge(
+                EdgeCurve::Ellipse(ellipse.clone()),
+                ellipse.evaluate(t0),
+                ellipse.evaluate(t1),
+                1,
+            );
+            let across = meeting_edge(EdgeCurve::Line, at(5.0, 5.5), at(5.0, 6.5), 2);
+            let found = meetings(&[arc.clone(), across]);
+            assert!(
+                found.len() == 1 && (found[0] - at(5.0, 6.0)).length() < 1e-6,
+                "{pose}: meetings {found:?}"
+            );
+            for (end, out) in [(t0, -1.0), (t1, 1.0)] {
+                let ahead = u * (-3.0 * end.sin()) + v * end.cos();
+                let past = end + out * 2.5e-7 / ahead.length();
+                let x = ellipse.evaluate(past);
+                let normal = n.cross(ahead).normalize().unwrap();
+                let edges = [
+                    arc.clone(),
+                    meeting_edge(EdgeCurve::Line, x - normal * 0.5, x + normal * 0.5, 2),
+                ];
+                let found = edge_splitting::section_meeting_points(
+                    &edge_splitting::section_spans(&edges),
+                    1e-7,
+                );
+                assert!(
+                    !matches!(&found, Ok(m) if !m.is_empty()),
+                    "{pose}, past the end at {end:.3}: {found:?}"
+                );
+            }
+        }
+    }
+
     /// A circle of radius 2 and an ellipse of semi-axes 2 and 1.5 about the
     /// plate's (5, 5): a section over half a turn from each of several
     /// angles, its twin with it, and a line ending on its middle split both

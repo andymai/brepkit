@@ -3541,14 +3541,11 @@ pub(super) fn section_meeting_points(
                     }
                     EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return false,
                 };
-                // The foot lies inside the span where the point lies on the
-                // inner side of the curve's normal at each end, read as
-                // lengths so the curve's size does not enter; the parameter
-                // only keeps the far side of the curve out.
-                (foot - p).length() <= tol
-                    && (u - t0 + 1e-3).rem_euclid(TAU) <= sweep + 2e-3
-                    && (p - s).dot(e.curve.tangent_with_endpoints(t0, s, t)) >= 0.0
-                    && (p - t).dot(e.curve.tangent_with_endpoints(t0 + sweep, s, t)) <= 0.0
+                // Away from the ends, which the lengths above decide however
+                // coarse a parameter is there, the foot's own parameter lies
+                // strictly inside the span.
+                let along = (u - t0).rem_euclid(TAU);
+                (foot - p).length() <= tol && along > 0.0 && along < sweep
             }
             EdgeCurve::NurbsCurve(_) => false,
         }
@@ -3986,27 +3983,22 @@ pub(super) fn section_meeting_points(
                     continue;
                 }
                 // A kept point stands for this junction where it lies within
-                // `tol` of both sections and on the arc within this run: on
-                // the inner side, to within `tol`, of the arc's normal at
-                // each of the run's ends, read as lengths so the arc's size
-                // does not enter; the parameter only keeps the far side of
-                // the arc out.
-                let ahead = |t: f64| {
-                    let s = t - mid;
-                    let d = uu * (-s.sin()) + vv * s.cos();
-                    d * (1.0 / d.length())
-                };
+                // `tol` of both sections and on the arc within this run: its
+                // foot's parameter strictly inside the run, or the point
+                // within `tol` of one of the run's ends by length, which
+                // decides there however coarse a parameter is.
                 let (from, to) = (point(run_start).0, point(run_end).0);
-                let (ahead_from, ahead_to) = (ahead(run_start), ahead(run_end));
                 let in_run = |k: Point3| {
+                    if (k - from).length() <= tol || (k - to).length() <= tol {
+                        return true;
+                    }
                     let near = match &*unit_a {
                         EdgeCurve::Circle(circle) => circle.project(k),
                         EdgeCurve::Ellipse(el) => el.project(k),
                         EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return false,
                     };
-                    (near - run_start + 1e-3).rem_euclid(TAU) <= (run_end - run_start) + 2e-3
-                        && (k - from).dot(ahead_from) >= -tol
-                        && (k - to).dot(ahead_to) <= tol
+                    let along = (near - run_start).rem_euclid(TAU);
+                    along > 0.0 && along < run_end - run_start
                 };
                 let stands_for =
                     |k: Point3| on_section(a, 0.0, k) && on_section(b, chord_b, k) && in_run(k);
