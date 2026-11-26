@@ -14080,7 +14080,24 @@ pub fn section_meetings(
         }
         (Some(pa), None) => in_plane(pa, start_b, end_b),
         (None, Some(pb)) => in_plane(pb, start_a, end_a),
-        (None, None) => true,
+        // Two segments lie in one plane where one of their four ends lies
+        // within `tol` of the plane through the other three. The plane
+        // through the three that span the largest triangle is the one the
+        // fourth lies nearest, and the best defined: no such triangle at
+        // all puts the four on one line.
+        (None, None) => {
+            let (ab, ac, ad) = (end_a - start_a, start_b - start_a, end_b - start_a);
+            let widest = [
+                ab.cross(ac),
+                ab.cross(ad),
+                ac.cross(ad),
+                (start_b - end_a).cross(end_b - end_a),
+            ]
+            .iter()
+            .map(|n| n.length())
+            .fold(0.0_f64, f64::max);
+            ab.dot(ac.cross(ad)).abs() <= tol * widest
+        }
     };
     if !one_plane {
         return None;

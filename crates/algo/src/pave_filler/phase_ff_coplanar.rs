@@ -2740,4 +2740,28 @@ mod tests {
         assert!(out.len() >= 2, "{}", out.len());
         assert!((sweep - std::f64::consts::TAU).abs() < 1e-9, "{sweep}");
     }
+
+    /// A segment along x at z = 0 and one along y at z = 1 lie in no one
+    /// plane: no meeting set is given for them. Two parallel segments at
+    /// those heights lie in one plane and meet nowhere. In three poses.
+    #[test]
+    fn two_skew_segments_are_refused() {
+        let tol = 1e-7;
+        let line = EdgeCurve::Line;
+        for pose in test_poses() {
+            let p = |x: f64, y: f64, z: f64| pose.mul_point(Point3::new(x, y, z));
+            let skew = crate::builder::face_splitter::section_meetings(
+                (&line, p(-1.0, 0.0, 0.0), p(1.0, 0.0, 0.0)),
+                (&line, p(0.0, -1.0, 1.0), p(0.0, 1.0, 1.0)),
+                tol,
+            );
+            assert!(skew.is_none(), "{skew:?}");
+            let parallel = crate::builder::face_splitter::section_meetings(
+                (&line, p(-1.0, 0.0, 0.0), p(1.0, 0.0, 0.0)),
+                (&line, p(-1.0, 0.0, 1.0), p(1.0, 0.0, 1.0)),
+                tol,
+            );
+            assert!(parallel.as_ref().is_some_and(Vec::is_empty), "{parallel:?}");
+        }
+    }
 }
