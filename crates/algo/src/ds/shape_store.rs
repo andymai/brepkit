@@ -711,6 +711,81 @@ fn raise_vertices_to_proved_reach(
     Ok(())
 }
 
+/// Gives each B-spline edge of `solid` the greater of its proved bounds off
+/// the surfaces of the faces that use it
+/// ([`crate::surface_reach::spline_off_face`]) as its tolerance, where that
+/// exceeds the tolerance it has and stays under [`PART_OF_EDGE`] of its
+/// size. A boolean builds its result's edges afresh from the pieces of its
+/// sections and of its operands' edges, which are fits off their faces by up
+/// to their own tolerances; this reads each one's own. An edge whose bound
+/// against any of its faces is not proved keeps its tolerance.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a topology lookup fails.
+pub fn prove_edge_tolerances(
+    topo: &mut Topology,
+    solid: SolidId,
+    tol: brepkit_math::tolerance::Tolerance,
+) -> Result<(), AlgoError> {
+    use brepkit_topology::edge::EdgeCurve;
+    let mut faces_of: HashMap<EdgeId, Vec<FaceId>> = HashMap::new();
+    for face_id in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        let face = topo.face(face_id)?;
+        for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(wire)?.edges() {
+                let faces = faces_of.entry(oe.edge()).or_default();
+                if !faces.contains(&face_id) {
+                    faces.push(face_id);
+                }
+            }
+        }
+    }
+    let mut proved = Vec::new();
+    for (edge_id, faces) in faces_of {
+        let edge = topo.edge(edge_id)?;
+        let EdgeCurve::NurbsCurve(curve) = edge.curve() else {
+            continue;
+        };
+        let (sp, ep) = (
+            topo.vertex(edge.start())?.point(),
+            topo.vertex(edge.end())?.point(),
+        );
+        let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+        let held = tol.linear.max(edge.tolerance().unwrap_or(0.0));
+        let mut worst = Some(0.0_f64);
+        for &face in &faces {
+            worst = match (
+                worst,
+                crate::surface_reach::spline_off_face(
+                    curve,
+                    (t0.min(t1), t0.max(t1)),
+                    topo.face(face)?.surface(),
+                    held,
+                ),
+            ) {
+                (Some(w), Some(b)) => Some(w.max(b)),
+                _ => None,
+            };
+        }
+        let Some(worst) = worst else {
+            continue;
+        };
+        let size = if edge.start() == edge.end() {
+            widest_apart(curve.control_points())
+        } else {
+            (ep - sp).length()
+        };
+        if worst > held && worst < PART_OF_EDGE * size {
+            proved.push((edge_id, worst));
+        }
+    }
+    for (edge_id, worst) in proved {
+        topo.edge_mut(edge_id)?.set_tolerance(Some(worst));
+    }
+    Ok(())
+}
+
 /// The largest distance between two of `points`. Past 512 points, twice the
 /// largest distance from the first point, which is no less and at most
 /// twice as much, so that the cost stays linear.
@@ -985,14 +1060,20 @@ mod tests {
     /// bows `bow` off both of its faces at its middle. Below a tenth of the
     /// edge's length the edge takes its proved distance from them as its
     /// tolerance, at least the bow and at most twice it. At a tenth or more
-    /// it keeps none.
+    /// it keeps none. So read at a boolean's entry for the faces near the
+    /// other operand, and at its exit for every face of the result.
     #[test]
     fn a_b_spline_edge_off_its_faces_takes_its_proved_distance() {
         use brepkit_math::nurbs::curve::NurbsCurve;
         use brepkit_math::vec::Vec3;
         use brepkit_topology::edge::EdgeCurve;
         use brepkit_topology::test_utils::make_unit_cube_manifold_at;
-        for (bow, raised) in [(1e-4, true), (0.15, false)] {
+        for (bow, raised, prove) in [
+            (1e-4, true, false),
+            (0.15, false, false),
+            (1e-4, true, true),
+            (0.15, false, true),
+        ] {
             let mut topo = Topology::default();
             let solid = make_unit_cube_manifold_at(&mut topo, 0.0, 0.0, 0.0);
             let at = |topo: &Topology, e: EdgeId| {
@@ -1031,13 +1112,22 @@ mod tests {
                 .unwrap()
                 .set_curve(EdgeCurve::NurbsCurve(cubic));
 
-            raise_to_proved_reach(
-                &mut topo,
-                solid,
-                None,
-                brepkit_math::tolerance::Tolerance::default(),
-            )
-            .unwrap();
+            if prove {
+                prove_edge_tolerances(
+                    &mut topo,
+                    solid,
+                    brepkit_math::tolerance::Tolerance::default(),
+                )
+                .unwrap();
+            } else {
+                raise_to_proved_reach(
+                    &mut topo,
+                    solid,
+                    None,
+                    brepkit_math::tolerance::Tolerance::default(),
+                )
+                .unwrap();
+            }
 
             let held = topo.edge(edge).unwrap().tolerance();
             if raised {

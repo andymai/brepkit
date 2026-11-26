@@ -13,7 +13,7 @@ use brepkit_topology::solid::SolidId;
 
 use crate::bop::BooleanOp;
 use crate::builder::Builder;
-use crate::ds::shape_store::prove_source_pcurves;
+use crate::ds::shape_store::{prove_edge_tolerances, prove_source_pcurves};
 use crate::ds::{GfaArena, GfaImprintStore, GfaShapeStoreN};
 use crate::error::AlgoError;
 use crate::pave_filler;
@@ -106,6 +106,7 @@ pub fn boolean_with_tolerance(
     }
 
     // Export result solid back to the caller's topology
+    prove_edge_tolerances(&mut store.topo, store_result, tol)?;
     let result = store.export_solid(topo, store_result)?;
 
     Ok(result)
@@ -155,6 +156,7 @@ pub fn fuse_n(topo: &mut Topology, sources: &[SolidId]) -> Result<SolidId, AlgoE
             )?;
             store.topo = store_topo;
 
+            prove_edge_tolerances(&mut store.topo, store_result, tol)?;
             let fused = store.export_solid(topo, store_result)?;
             refuse_unpaired_edges(topo, fused)?;
             Ok(fused)
@@ -226,6 +228,7 @@ pub fn imprint(
         tol,
     )?;
     store.topo = store_topo;
+    prove_edge_tolerances(&mut store.topo, result, tol)?;
     store.export_solid(topo, result)
 }
 
@@ -326,6 +329,9 @@ fn split_piece(
     if parts.len() < 2 && !keep_whole {
         return Ok(None);
     }
+    for &part in &parts {
+        prove_edge_tolerances(&mut store.topo, part, tol)?;
+    }
     let exported = parts
         .into_iter()
         .map(|part| store.export_solid(topo, part))
@@ -378,6 +384,7 @@ pub fn boolean_with_face_origins(
         return Ok((topo.add_empty_solid(), Vec::new()));
     }
 
+    prove_edge_tolerances(&mut store.topo, store_result, tol)?;
     let (result, export_map) = store.export_solid_with_face_map(topo, store_result)?;
 
     // Translate store-space provenance to caller-space face indices. The export

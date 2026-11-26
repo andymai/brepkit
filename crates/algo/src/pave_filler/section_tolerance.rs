@@ -566,6 +566,42 @@ mod tests {
         assert_eq!(arena.curves[0].t_range, (2.0, 8.0), "the section's range");
     }
 
+    /// Two edges on one line with tolerances 2e-4 and 5e-4, their blocks
+    /// in one common block: the one edge made for the block takes the larger,
+    /// and an edge outside any common block takes its own.
+    #[test]
+    fn a_split_edge_keeps_the_largest_tolerance_of_its_blocks() {
+        let mut topo = Topology::default();
+        let a = topo.add_vertex(Vertex::new(Point3::new(0.0, 0.0, 0.0), 1e-7));
+        let b = topo.add_vertex(Vertex::new(Point3::new(1.0, 0.0, 0.0), 1e-7));
+        let c = topo.add_vertex(Vertex::new(Point3::new(1.0, 1.0, 0.0), 1e-7));
+        let mut edge = |from, to, held: f64| {
+            let e = topo.add_edge(Edge::new(from, to, EdgeCurve::Line));
+            topo.edge_mut(e).unwrap().set_tolerance(Some(held));
+            e
+        };
+        let (first, second, alone) = (edge(a, b, 2e-4), edge(a, b, 5e-4), edge(b, c, 3e-5));
+        let mut arena = GfaArena::new();
+        let pb_first = arena.init_edge_pave_block(first, a, 0.0, b, 1.0);
+        let pb_second = arena.init_edge_pave_block(second, a, 0.0, b, 1.0);
+        let pb_alone = arena.init_edge_pave_block(alone, b, 0.0, c, 1.0);
+        arena.create_common_block(vec![pb_first, pb_second], 1e-7);
+
+        crate::pave_filler::make_split_edges::perform(&mut topo, &mut arena).unwrap();
+
+        let held = |pb| {
+            let split = arena
+                .pave_blocks
+                .get(pb)
+                .and_then(|b| b.split_edge)
+                .unwrap();
+            topo.edge(split).unwrap().tolerance()
+        };
+        assert_eq!(held(pb_first), Some(5e-4), "the common block's edge");
+        assert_eq!(held(pb_second), Some(5e-4), "the common block's edge");
+        assert_eq!(held(pb_alone), Some(3e-5), "an edge of its own");
+    }
+
     /// A cubic along a ruling of a cylinder of radius 2, `off` outside it,
     /// in the plane through the axis that holds it, as a section of the two
     /// faces: its edge takes a tolerance of at least `off` and at most twice
@@ -616,15 +652,23 @@ mod tests {
             });
 
             super::perform(&mut topo, Tolerance::default(), &mut arena).unwrap();
+            crate::pave_filler::make_split_edges::perform(&mut topo, &mut arena).unwrap();
 
-            let held = topo.edge(section).unwrap().tolerance();
-            if off > 0.0 {
-                assert!(
-                    held.is_some_and(|t| t >= off && t <= 2.0 * off + 1e-12),
-                    "off {off}: {held:?}"
-                );
-            } else {
-                assert!(held.is_none(), "on the cylinder: {held:?}");
+            let split = arena
+                .pave_blocks
+                .get(pb)
+                .and_then(|b| b.split_edge)
+                .unwrap();
+            for (what, edge) in [("section", section), ("split edge", split)] {
+                let held = topo.edge(edge).unwrap().tolerance();
+                if off > 0.0 {
+                    assert!(
+                        held.is_some_and(|t| t >= off && t <= 2.0 * off + 1e-12),
+                        "{what}, off {off}: {held:?}"
+                    );
+                } else {
+                    assert!(held.is_none(), "{what} on the cylinder: {held:?}");
+                }
             }
         }
     }
