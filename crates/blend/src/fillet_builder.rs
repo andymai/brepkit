@@ -4506,19 +4506,34 @@ fn kept_wall_boundary_height(
                 }
                 continue;
             }
+            let p0 = topo.vertex(ends[0])?.point();
+            let p1 = topo.vertex(ends[1])?.point();
+            // A conic arc's height is h + a cos t + b sin t: its lowest is
+            // an end, or the conic's lowest point where the arc reaches it
+            // (an arc of a cross bore's ellipse need not).
+            let arc_lowest = |center: Point3, a: f64, b: f64| {
+                let (t0, t1) = edge.curve().domain_with_endpoints(p0, p1);
+                let t_low = b.atan2(a) + std::f64::consts::PI;
+                let k = ((t0 - t_low) / std::f64::consts::TAU).ceil();
+                let ends_low = height(p0).min(height(p1));
+                if t_low + k * std::f64::consts::TAU <= t1 {
+                    ends_low.min(height(center) - a.hypot(b))
+                } else {
+                    ends_low
+                }
+            };
             let edge_lowest = match edge.curve() {
-                EdgeCurve::Line => {
-                    height(topo.vertex(ends[0])?.point()).min(height(topo.vertex(ends[1])?.point()))
-                }
-                EdgeCurve::Circle(c) => {
-                    let across = (1.0 - c.normal().dot(toward).powi(2)).max(0.0).sqrt();
-                    height(c.center()) - c.radius() * across
-                }
-                EdgeCurve::Ellipse(el) => {
-                    let u = el.semi_major() * el.u_axis().dot(toward);
-                    let v = el.semi_minor() * el.v_axis().dot(toward);
-                    height(el.center()) - u.hypot(v)
-                }
+                EdgeCurve::Line => height(p0).min(height(p1)),
+                EdgeCurve::Circle(c) => arc_lowest(
+                    c.center(),
+                    c.radius() * c.u_axis().dot(toward),
+                    c.radius() * c.v_axis().dot(toward),
+                ),
+                EdgeCurve::Ellipse(el) => arc_lowest(
+                    el.center(),
+                    el.semi_major() * el.u_axis().dot(toward),
+                    el.semi_minor() * el.v_axis().dot(toward),
+                ),
                 EdgeCurve::NurbsCurve(n) => {
                     if n.weights().iter().all(|&w| w.is_finite() && w > 0.0) {
                         n.control_points()
