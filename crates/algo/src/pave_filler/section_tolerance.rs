@@ -314,6 +314,34 @@ fn settle_on_vertices(
                     raised.push((v, gap));
                 }
             }
+            // Two vertices that cut the section at one point are one vertex
+            // where they lie within their tolerances of each other, the rule
+            // that joins coincident vertices; else the section is refused.
+            cuts.sort_by(|a, b| a.parameter.total_cmp(&b.parameter));
+            let mut apart: Vec<crate::ds::Pave> = Vec::with_capacity(cuts.len());
+            for cut in cuts {
+                if let Some(last) = apart.last()
+                    && cut.parameter - last.parameter <= margin
+                {
+                    let (a, b) = (topo.vertex(last.vertex)?, topo.vertex(cut.vertex)?);
+                    let gap = (a.point() - b.point()).length();
+                    if gap > a.tolerance() + b.tolerance() + tol.linear {
+                        return Err(AlgoError::IntersectionFailed(format!(
+                            "vertices {:?} and {:?}, {gap:e} apart, cut a section at one point",
+                            last.vertex, cut.vertex
+                        )));
+                    }
+                    let holds = gap + b.tolerance().max(a.tolerance());
+                    arena.merge_vertices(last.vertex, cut.vertex);
+                    raised.push((arena.resolve_vertex(last.vertex), holds));
+                    continue;
+                }
+                apart.push(cut);
+            }
+            let cuts: Vec<crate::ds::Pave> = apart
+                .into_iter()
+                .map(|c| crate::ds::Pave::new(arena.resolve_vertex(c.vertex), c.parameter))
+                .collect();
             for leaf in leaves {
                 if arena.pb_to_cb.contains_key(&leaf) {
                     continue;
@@ -386,6 +414,109 @@ mod tests {
     /// A pose: its name, where it takes the origin, and how it turns a
     /// direction.
     type Pose = (&'static str, Point3, Box<dyn Fn(Vec3) -> Vec3>);
+
+    /// A straight spline section of a plane and of a second plane, and two
+    /// vertices of the plane's wire on either side of the section's middle,
+    /// each within its tolerance and the section's of the section. Where the
+    /// two lie within their tolerances of each other, they are one vertex
+    /// that cuts the section once. Where the section's tolerance of 1e-6
+    /// takes them 2e-6 apart, the section is refused. Upright, turned and
+    /// mirrored.
+    #[test]
+    fn two_vertices_at_one_point_of_a_section_join_or_refuse_it() {
+        let axis = Vec3::new(1.0, 2.0, 3.0).normalize().unwrap();
+        let (sin, cos) = 0.7f64.sin_cos();
+        let turn =
+            move |e: Vec3| e * cos + axis.cross(e) * sin + axis * (axis.dot(e) * (1.0 - cos));
+        let mirror = |e: Vec3| Vec3::new(-e.x(), e.y(), e.z());
+        let poses: [Pose; 3] = [
+            ("upright", Point3::new(0.0, 0.0, 0.0), Box::new(|e| e)),
+            ("turned", Point3::new(3.0, -2.0, 5.0), Box::new(turn)),
+            (
+                "mirrored",
+                Point3::new(-3.0, -2.0, 5.0),
+                Box::new(move |e| mirror(turn(e))),
+            ),
+        ];
+        for (name, origin, along) in &poses {
+            let (u, v, w) = (
+                along(Vec3::new(1.0, 0.0, 0.0)),
+                along(Vec3::new(0.0, 1.0, 0.0)),
+                along(Vec3::new(0.0, 0.0, 1.0)),
+            );
+            let at = |a: f64| *origin + u * a;
+            for (what, off, held, joins) in [
+                ("within their tolerances", 1e-7, None, true),
+                ("2e-6 apart", 1e-6, Some(1e-6), false),
+            ] {
+                let mut topo = Topology::default();
+                let curve = NurbsCurve::new(
+                    1,
+                    vec![0.0, 0.0, 1.0, 1.0],
+                    vec![at(0.0), at(10.0)],
+                    vec![1.0; 2],
+                )
+                .unwrap();
+                let (s0, s1) = (
+                    topo.add_vertex(Vertex::new(at(0.0), 1e-7)),
+                    topo.add_vertex(Vertex::new(at(10.0), 1e-7)),
+                );
+                let section =
+                    topo.add_edge(Edge::new(s0, s1, EdgeCurve::NurbsCurve(curve.clone())));
+                topo.edge_mut(section).unwrap().set_tolerance(held);
+                let (a, b) = (
+                    topo.add_vertex(Vertex::new(at(5.0) + v * off, 1e-7)),
+                    topo.add_vertex(Vertex::new(at(5.0) - v * off, 1e-7)),
+                );
+                let across = topo.add_edge(Edge::new(a, b, EdgeCurve::Line));
+                let wire =
+                    topo.add_wire(Wire::new(vec![OrientedEdge::new(across, true)], false).unwrap());
+                let plane = |n: Vec3| FaceSurface::Plane {
+                    normal: n,
+                    d: n.dot(Vec3::new(origin.x(), origin.y(), origin.z())),
+                };
+                let face_a = topo.add_face(Face::new(wire, vec![], plane(w)));
+                let face_b = topo.add_face(Face::new(wire, vec![], plane(v)));
+                let mut arena = GfaArena::new();
+                let pb = arena.pave_blocks.alloc(PaveBlock::new(
+                    section,
+                    Pave::new(s0, 0.0),
+                    Pave::new(s1, 1.0),
+                ));
+                arena.curves.push(IntersectionCurveDS {
+                    curve: EdgeCurve::NurbsCurve(curve.clone()),
+                    face_a,
+                    face_b,
+                    bbox: Aabb3::from_points(curve.control_points().iter().copied()),
+                    pave_blocks: vec![pb],
+                    t_range: (0.0, 1.0),
+                });
+
+                let settled = super::perform(&mut topo, Tolerance::default(), &mut arena);
+                if joins {
+                    settled.unwrap();
+                    assert_eq!(
+                        arena.resolve_vertex(a),
+                        arena.resolve_vertex(b),
+                        "{name}, {what}: the two vertices are one"
+                    );
+                    let children = &arena.pave_blocks.get(pb).unwrap().children;
+                    assert_eq!(children.len(), 2, "{name}, {what}: the section's pieces");
+                    for &child in children {
+                        let c = arena.pave_blocks.get(child).unwrap();
+                        assert!(
+                            c.end.parameter > c.start.parameter,
+                            "{name}, {what}: a piece over [{}, {}]",
+                            c.start.parameter,
+                            c.end.parameter
+                        );
+                    }
+                } else {
+                    assert!(settled.is_err(), "{name}, {what}: the section is cut");
+                }
+            }
+        }
+    }
 
     /// A unit cube whose top face is a B-spline patch on its plane, and whose
     /// corner over (1, 1) stands 3e-6 above it with a tolerance of 1e-7, and
