@@ -1951,8 +1951,8 @@ fn halve_long_sphere_edges(
     let key = |a: u32, b: u32| (a.min(b), a.max(b));
     let cos_between = |merged: &TriangleMesh, a: u32, b: u32| {
         let (p, q) = (
-            position_of(merged, a) - center,
-            position_of(merged, b) - center,
+            (position_of(merged, a) - center).at_unit_size(),
+            (position_of(merged, b) - center).at_unit_size(),
         );
         p.dot(q) / (p.length() * q.length())
     };
