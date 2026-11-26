@@ -1257,8 +1257,22 @@ fn uf_union(parent: &mut [usize], a: usize, b: usize) {
 /// # Errors
 ///
 /// Returns an error if topology lookups fail.
-#[allow(clippy::too_many_lines)]
 pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::OperationsError> {
+    unify_faces_keeping(topo, solid, &[])
+}
+
+/// [`unify_faces`], leaving the faces of `keep` as they are: none is merged
+/// with a neighbour on its surface.
+///
+/// # Errors
+///
+/// Returns an error if topology lookups fail.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn unify_faces_keeping(
+    topo: &mut Topology,
+    solid: SolidId,
+    keep: &[FaceId],
+) -> Result<usize, crate::OperationsError> {
     /// Maximum boundary edges for a merged face. Groups whose boundary
     /// exceeds this are skipped to prevent O(N²) slowdowns in subsequent
     /// boolean intersection computations. 200 edges is generous for any
@@ -1365,9 +1379,11 @@ pub fn unify_faces(topo: &mut Topology, solid: SolidId) -> Result<usize, crate::
     }
 
     // Step 2: Find connected components of faces sharing edges on the same surface.
+    // A kept face has no index, so no union takes it in.
     let face_index_map: HashMap<usize, usize> = all_face_ids
         .iter()
         .enumerate()
+        .filter(|(_, fid)| !keep.contains(fid))
         .map(|(i, fid)| (fid.index(), i))
         .collect();
 
