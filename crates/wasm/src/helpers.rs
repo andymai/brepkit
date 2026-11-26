@@ -115,7 +115,10 @@ pub fn parse_points(coords: &[f64]) -> Result<Vec<Point3>, WasmError> {
     Ok(points)
 }
 
-/// Parse flat coordinates into a 2D grid of points.
+/// Parse flat coordinates into a 2D grid of points, `rows` rows of `cols`.
+/// The count of coordinates is checked before any is read, and each row is
+/// read straight from them, so the grid is held once. Each point must be
+/// one [`crate::error::validate_point`] accepts.
 pub fn parse_point_grid(
     coords: &[f64],
     rows: usize,
@@ -131,16 +134,30 @@ pub fn parse_point_grid(
         .ok_or_else(|| WasmError::InvalidInput {
             reason: format!("rows*cols overflow: {rows}*{cols}"),
         })?;
-    let points = parse_points(coords)?;
-    if points.len() != total {
+    if total.checked_mul(3) != Some(coords.len()) {
         return Err(WasmError::InvalidInput {
             reason: format!(
-                "expected {total} points ({rows}x{cols}), got {}",
-                points.len()
+                "expected {total} points ({rows}x{cols}), got {} coordinates",
+                coords.len()
             ),
         });
     }
-    Ok(points.chunks(cols).map(<[Point3]>::to_vec).collect())
+    coords
+        .chunks_exact(3 * cols)
+        .enumerate()
+        .map(|(i, row)| {
+            row.chunks_exact(3)
+                .enumerate()
+                .map(|(j, c)| {
+                    let point = Point3::new(c[0], c[1], c[2]);
+                    if crate::error::validate_point(point, "").is_err() {
+                        crate::error::validate_point(point, &format!("point {}", i * cols + j))?;
+                    }
+                    Ok(point)
+                })
+                .collect()
+        })
+        .collect()
 }
 
 /// Parse a flat 16-element array into a `Mat4` (row-major).

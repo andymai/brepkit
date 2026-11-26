@@ -167,11 +167,13 @@ pub const MAX_FIT_DEGREE: u32 = 25;
 ///
 /// A least-squares fit holds a row of at most `3 * degree + 4` cells for
 /// each point and control point, and an interpolation a row of at most `4 *
-/// degree + 2` cells for each point. An LSPIA surface fit holds its grid of
-/// points, three cells each, each side's basis values, and eleven cells for
-/// each control point: its point, weight and correction, and the copy of
-/// its point and weight each pass takes. The largest fit in the
-/// tests, through 1,500 points at degree 3, holds 21,000 cells.
+/// degree + 2` cells for each point. An LSPIA surface fit holds at most
+/// what `lspia_surface_cells` in `brepkit_math::nurbs::surface_fitting`
+/// counts: its grid of points, its parameters and each one's basis values,
+/// and eleven cells for each control point (its point, weight and
+/// correction, and the copy of its point and weight each pass takes). Each
+/// count is read before the coordinates are. The largest fit in the tests,
+/// through 1,500 points at degree 3, holds 21,000 cells.
 pub const MAX_FIT_CELLS: usize = 1 << 22;
 
 /// Check that a fit's working arrays, `rows` rows of `cells` cells, hold at

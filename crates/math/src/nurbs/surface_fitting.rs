@@ -255,6 +255,21 @@ pub fn approximate_surface_lspia(
 
         let mut max_err = 0.0f64;
         let mut deltas = vec![vec![(0.0f64, 0.0f64, 0.0f64); mv]; mu];
+        #[cfg(test)]
+        HELD_CELLS.with(|most| {
+            let held = rows_cells(points)
+                + cells::<f64>(params_u.capacity() + params_v.capacity())
+                + cells::<f64>(knots_u.capacity() + knots_v.capacity())
+                + rows_cells(&cps)
+                + rows_cells(&weights)
+                + basis_cells(&basis_u_data)
+                + basis_cells(&basis_v_data)
+                + cells::<f64>(surface.knots_u().len() + surface.knots_v().len())
+                + rows_cells(surface.control_points())
+                + rows_cells(surface.weights())
+                + rows_cells(&deltas);
+            most.set(most.get().max(held));
+        });
 
         for (i, (su, nu)) in basis_u_data.iter().enumerate() {
             for (j, (sv, nv)) in basis_v_data.iter().enumerate() {
@@ -320,13 +335,82 @@ fn lspia_surface_work(
     (iterations as f64).madd(pass, start)
 }
 
+/// The most cells of eight bytes an LSPIA fit of a grid of `rows` by `cols`
+/// points ([`approximate_surface_lspia`]) holds at once, the grid included,
+/// counted from its sizes; `None` past `usize`.
+///
+/// The grid holds three cells a point and three for each row's header. The
+/// parameters, read first, hold each direction's count and one line's
+/// chords at a time, at most `2 rows + 2 cols`. The passes then hold more:
+/// the parameters, each one's span and basis values with a header of four,
+/// the knots, the control net and its weights with their rows' headers, a
+/// copy of those for the surface each pass reads, the corrections, and the
+/// basis each point's evaluation reads, with three cells for each of their
+/// headers. With the outer headers and the surface's caches, that is at
+/// most:
+///
+/// `rows (pu + 6) + cols (pv + 6) + 11 mu mv + 17 mu + 2 mv + 3 (pu + pv) + 72`.
+#[must_use]
+pub fn lspia_surface_cells(
+    [rows, cols]: [usize; 2],
+    [degree_u, degree_v]: [usize; 2],
+    [num_cps_u, num_cps_v]: [usize; 2],
+) -> Option<usize> {
+    if rows == 0 || cols == 0 {
+        return Some(0);
+    }
+    let (pu, pv) = (degree_u.min(rows - 1), degree_v.min(cols - 1));
+    let mu = num_cps_u.min(rows).max(pu + 1);
+    let mv = num_cps_v.min(cols).max(pv + 1);
+    let grid = cols.checked_mul(3)?.checked_add(3)?.checked_mul(rows)?;
+    rows.checked_mul(pu.checked_add(6)?)?
+        .checked_add(cols.checked_mul(pv.checked_add(6)?)?)?
+        .checked_add(mu.checked_mul(mv)?.checked_mul(11)?)?
+        .checked_add(mu.checked_mul(17)?)?
+        .checked_add(mv.checked_mul(2)?)?
+        .checked_add(pu.checked_add(pv)?.checked_mul(3)?.checked_add(72)?)?
+        .checked_add(grid)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The most cells an LSPIA surface fit held at once on this thread, read
+    /// from its buffers' capacities.
+    static HELD_CELLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The cells of eight bytes `count` items of `T` take.
+#[cfg(test)]
+const fn cells<T>(count: usize) -> usize {
+    (count * std::mem::size_of::<T>()).div_ceil(8)
+}
+
+/// The cells a grid of rows takes, its rows' headers included.
+#[cfg(test)]
+fn rows_cells<T>(rows: &[Vec<T>]) -> usize {
+    cells::<Vec<T>>(rows.len())
+        + rows
+            .iter()
+            .map(|row| cells::<T>(row.capacity()))
+            .sum::<usize>()
+}
+
+/// The cells each parameter's span and basis values take.
+#[cfg(test)]
+fn basis_cells(data: &[(usize, Vec<f64>)]) -> usize {
+    cells::<(usize, Vec<f64>)>(data.len())
+        + data
+            .iter()
+            .map(|(_, values)| cells::<f64>(values.capacity()))
+            .sum::<usize>()
+}
+
 /// Compute average chord-length parameters in the u direction (across rows).
 #[allow(clippy::cast_precision_loss)]
 fn compute_grid_params_u(points: &[Vec<Point3>], rows: usize, cols: usize) -> Vec<f64> {
     let mut params = vec![0.0f64; rows];
     for j in 0..cols {
-        let col: Vec<Point3> = (0..rows).map(|i| points[i][j]).collect();
-        let col_params = fitting::chord_length_params(&col);
+        let col_params = fitting::chord_length_params_by(rows, |i| points[i][j]);
         for (i, &p) in col_params.iter().enumerate() {
             params[i] += p;
         }
@@ -630,5 +714,48 @@ mod tests {
             matches!(found, Err(MathError::ParameterOutOfRange { .. })),
             "{found:?}"
         );
+    }
+
+    /// A grid two points wide and one 100 wide, each with as many rows as
+    /// its count holds within 2^22 cells at degree 3 by 8 by 8 control
+    /// points: the fit's buffers at their most, read from their
+    /// capacities, stay within the count, and the count within 128 cells of
+    /// them. The count the binding charged, three cells a point, each
+    /// side's basis values and eleven cells a control point, held the grid
+    /// two points wide to 10 cells a row against the 18 it holds.
+    #[test]
+    fn an_lspia_surface_fit_holds_at_most_its_count() {
+        let limit = 1_usize << 22;
+        for cols in [2, 100] {
+            let count = |rows: usize| lspia_surface_cells([rows, cols], [3, 3], [8, 8]).unwrap();
+            let (mut low, mut high) = (1, limit);
+            while high - low > 1 {
+                let mid = low.midpoint(high);
+                if count(mid) <= limit {
+                    low = mid;
+                } else {
+                    high = mid;
+                }
+            }
+            let rows = low;
+            let grid: Vec<Vec<Point3>> = (0..rows)
+                .map(|i| {
+                    (0..cols)
+                        .map(|j| {
+                            let z = ((i * 7 + j * 3) % 11) as f64 * 0.1;
+                            Point3::new(i as f64, j as f64, z)
+                        })
+                        .collect()
+                })
+                .collect();
+            HELD_CELLS.with(|held| held.set(0));
+            approximate_surface_lspia(&grid, 3, 3, 8, 8, 1e-12, 1).unwrap();
+            let held = HELD_CELLS.with(std::cell::Cell::get);
+            let counted = count(rows);
+            assert!(
+                held <= counted && counted <= limit && counted - held <= 128,
+                "{rows} by {cols}: held {held}, counted {counted}"
+            );
+        }
     }
 }

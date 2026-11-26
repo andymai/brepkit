@@ -278,26 +278,40 @@ pub fn approximate(
 /// Returns parameters in [0, 1] where each parameter is proportional
 /// to the accumulated chord length.
 pub(crate) fn chord_length_params(points: &[Point3]) -> Vec<f64> {
-    let n = points.len();
+    chord_length_params_by(points.len(), |i| points[i])
+}
+
+/// [`chord_length_params`] for the `n` points `point(0)` to `point(n - 1)`,
+/// read where they lie, in one buffer of `n` parameters.
+pub(crate) fn chord_length_params_by(n: usize, point: impl Fn(usize) -> Point3) -> Vec<f64> {
     if n <= 1 {
         return vec![0.0; n];
     }
 
     let mut dists = Vec::with_capacity(n);
     dists.push(0.0);
+    let mut last = point(0);
     for i in 1..n {
-        let d = (points[i] - points[i - 1]).length();
+        let next = point(i);
+        let d = (next - last).length();
         dists.push(dists[i - 1] + d);
+        last = next;
     }
 
     let total = dists[n - 1];
     if total < 1e-15 {
         // All points are coincident — uniform params.
         #[allow(clippy::cast_precision_loss)]
-        return (0..n).map(|i| (i as f64) / ((n - 1) as f64)).collect();
+        for (i, d) in dists.iter_mut().enumerate() {
+            *d = (i as f64) / ((n - 1) as f64);
+        }
+        return dists;
     }
 
-    dists.iter().map(|d| d / total).collect()
+    for d in &mut dists {
+        *d /= total;
+    }
+    dists
 }
 
 // ── Knot vector construction ───────────────────────────────────────
