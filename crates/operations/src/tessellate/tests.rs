@@ -4482,6 +4482,60 @@ fn a_twisted_grid_with_no_room_for_witnesses_keeps_a_narrow_peak() {
     assert_eq!(held, 1, "the probes held at once");
 }
 
+/// S(u, v) = (u, v, 0.0192uv + 0.003 h(u) h(v)), h(t) = max(0, 1 - |t - 1/6|
+/// / 0.006), at deflection 0.002 from a 2 by 2 grid with room for 4
+/// witnesses: the 2 by 2 grid's four cells stray at their middles and fill
+/// the room, and the 3 by 3 grid tried next finds the peak at a cell's
+/// middle with no room left to keep it. A 4 by 4 grid leaves the peak
+/// between its probes, 0.0031 off their triangles. The grid taken goes on
+/// from multiples of the 3 by 3 grid and holds the peak within half the
+/// deflection, in three poses.
+#[test]
+fn a_twisted_grid_out_of_room_on_a_grid_tried_between_keeps_its_peak() {
+    let turn = |angle: f64, axis: Vec3, shift: Vec3| {
+        let k = axis * (1.0 / axis.length());
+        let (sin, cos) = angle.sin_cos();
+        move |p: Point3| {
+            let v = Vec3::new(p.x(), p.y(), p.z());
+            let r = v * cos + k.cross(v) * sin + k * (k.dot(v) * (1.0 - cos));
+            Point3::new(r.x() + shift.x(), r.y() + shift.y(), r.z() + shift.z())
+        }
+    };
+    let poses = [
+        turn(0.0, Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, 0.0)),
+        turn(0.7, Vec3::new(1.0, 2.0, 3.0), Vec3::new(5.0, -3.0, 2.0)),
+        turn(2.1, Vec3::new(-2.0, 1.0, 0.5), Vec3::new(-100.0, 40.0, 7.0)),
+    ];
+    let h = |t: f64| (1.0 - (t - 1.0 / 6.0).abs() / 0.006).max(0.0);
+    let deflection = 0.002;
+    for pose in &poses {
+        let at = |u: f64, v: f64| pose(Point3::new(u, v, 0.0192 * u * v + 0.003 * h(u) * h(v)));
+        let mut held = 0;
+        let found = super::nurbs::untwisted_grid_keeping(
+            &at,
+            ((0.0, 1.0), (0.0, 1.0)),
+            (2, 2),
+            deflection,
+            1024,
+            None,
+            (4, &mut held),
+        );
+        match found {
+            Ok(grid) => {
+                let stray = stray_in_grid(&at, grid, (1.0 / 6.0, 1.0 / 6.0));
+                assert!(
+                    stray <= 0.5 * deflection,
+                    "{grid:?}: the peak stands {stray} off"
+                );
+            }
+            Err(e) => assert!(
+                matches!(e, crate::OperationsError::TooManySamples { .. }),
+                "{e:?}"
+            ),
+        }
+    }
+}
+
 /// The saddle S(u, v) = (u, v, uv) at deflection 1e-6 needs some 700
 /// divisions each way, past a limit of 128. Every probe of every grid up to
 /// 128 by 128 strays, some 110,000 in all; with room for 1,000 witnesses

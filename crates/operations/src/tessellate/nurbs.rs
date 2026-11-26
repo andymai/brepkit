@@ -1699,8 +1699,11 @@ pub(super) fn untwisted_grid_keeping(
         }
         // The next grid is the chain's next multiple, or one tried between;
         // when both are past the limits, the search is refused before it
-        // keeps this pass's witnesses.
-        let doubled = if (n_u, n_v) == chain {
+        // keeps this pass's witnesses. A pass that kept only the farthest of
+        // its strays goes on from a multiple of its own grid, which keeps
+        // every probe it read on its vertices or probes, the strays it let go
+        // among them, though it is a grid tried between.
+        let doubled = if (n_u, n_v) == chain || more {
             nested(n_u, true).and_then(|a| Ok((a, nested(n_v, false)?)))
         } else {
             nested(chain.0, true).and_then(|a| Ok((a, nested(chain.1, false)?)))
