@@ -171,29 +171,59 @@ pub(crate) fn curve_revolution_surface(
     axis: Vec3,
     seg_angle: f64,
 ) -> Result<NurbsSurface, brepkit_math::MathError> {
+    curve_revolution_spans(profile, origin, axis, seg_angle, 1)
+}
+
+/// The surface `profile` sweeps through `spans` turns of `seg_angle` each,
+/// one rational arc span per turn: across `v` in `[0, 1]`, span `k` holds
+/// `[k / spans, (k + 1) / spans]`, so the first span is the band
+/// [`curve_revolution_surface`] builds, its normals the same way round.
+pub(crate) fn curve_revolution_spans(
+    profile: &NurbsCurve,
+    origin: Point3,
+    axis: Vec3,
+    seg_angle: f64,
+    spans: usize,
+) -> Result<NurbsSurface, brepkit_math::MathError> {
     let half = seg_angle / 2.0;
     let w_mid = half.cos();
     let rows = profile
         .control_points()
         .iter()
         .map(|&p| {
-            vec![
-                p,
-                arc_mid_control_point(p, origin, axis, half, w_mid),
-                rotate_point(p, origin, axis, seg_angle),
-            ]
+            let mut row = vec![p];
+            for k in 0..spans {
+                #[allow(clippy::cast_precision_loss)]
+                let start = rotate_point(p, origin, axis, seg_angle * k as f64);
+                row.push(arc_mid_control_point(start, origin, axis, half, w_mid));
+                row.push(rotate_point(start, origin, axis, seg_angle));
+            }
+            row
         })
         .collect();
     let weights = profile
         .weights()
         .iter()
-        .map(|&w| vec![w, w * w_mid, w])
+        .map(|&w| {
+            let mut row = vec![w];
+            for _ in 0..spans {
+                row.extend([w * w_mid, w]);
+            }
+            row
+        })
         .collect();
+    let mut knots_v = vec![0.0; 3];
+    for k in 1..spans {
+        #[allow(clippy::cast_precision_loss)]
+        let t = k as f64 / spans as f64;
+        knots_v.extend([t, t]);
+    }
+    knots_v.extend([1.0; 3]);
     NurbsSurface::new(
         profile.degree(),
         2,
         profile.knots().to_vec(),
-        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        knots_v,
         rows,
         weights,
     )
@@ -2288,6 +2318,65 @@ pub fn revolve(
                     .edge(wire_data.input_oriented[i].edge())?
                     .curve()
                     .clone();
+                // A spline or ellipse edge sweeps one wall however many quarter
+                // turns a part turn takes, one rational span a quarter, as its
+                // line and circle neighbours' bands merge into one face below.
+                // The wall is built whole with the first quarter; an edge
+                // with an end on the axis keeps its wedges.
+                let whole_wall = !is_full
+                    && num_segs > 1
+                    && !matches!(profile_curve, EdgeCurve::Line)
+                    && profile_arc_center_radius(
+                        &profile_curve,
+                        p0_start,
+                        p1_start,
+                        axis_origin,
+                        axis,
+                    )
+                    .is_none()
+                    && wire_data
+                        .arc_edges
+                        .iter()
+                        .take(num_segs)
+                        .all(|arcs| arcs[i].is_some() && arcs[next_i].is_some());
+                if whole_wall {
+                    if seg > 0 {
+                        continue;
+                    }
+                    let profile = profile_band_curve(
+                        &profile_curve,
+                        fwd_seg,
+                        (p0_start, p1_start),
+                        axis_origin,
+                        axis,
+                        0.0,
+                    )?
+                    .ok_or_else(|| crate::OperationsError::InvalidInput {
+                        reason: "a spline wall needs a curved profile edge".into(),
+                    })?;
+                    let surface = FaceSurface::Nurbs(curve_revolution_spans(
+                        &profile,
+                        axis_origin,
+                        axis,
+                        seg_angle,
+                        num_segs,
+                    )?);
+                    let last = num_segs;
+                    let mut loop_edges =
+                        vec![OrientedEdge::new(wire_data.ring_edges[0][i], fwd_seg)];
+                    for arcs in wire_data.arc_edges.iter().take(num_segs) {
+                        loop_edges.extend(arcs[next_i].map(|e| OrientedEdge::new(e, true)));
+                    }
+                    loop_edges.push(OrientedEdge::new(wire_data.ring_edges[last][i], !fwd_seg));
+                    for arcs in wire_data.arc_edges.iter().take(num_segs).rev() {
+                        loop_edges.extend(arcs[i].map(|e| OrientedEdge::new(e, false)));
+                    }
+                    let wire =
+                        Wire::new(loop_edges, true).map_err(crate::OperationsError::Topology)?;
+                    let wire_id = topo.add_wire(wire);
+                    all_faces.push(topo.add_face(Face::new(wire_id, vec![], surface)));
+                    continue;
+                }
                 #[allow(clippy::cast_precision_loss)]
                 let seg_start = seg_angle * seg as f64;
                 let (surface, reversed) = revolution_band_surface(

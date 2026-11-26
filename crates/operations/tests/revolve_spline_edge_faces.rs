@@ -169,14 +169,14 @@ fn a_full_turn_of_an_ellipse_arc_among_lines_sweeps_one_face_per_edge() {
 }
 
 #[test]
-fn a_part_turn_of_an_ellipse_arc_among_lines_keeps_its_lines_faces_whole() {
-    // The ellipse's wall keeps a face per quarter turn; the planes and the
-    // cylinder are one face each, beside the two caps.
-    for (angle, walls) in [(FRAC_PI_2, 1), (PI, 2), (1.5 * PI, 3)] {
+fn a_part_turn_of_an_ellipse_arc_among_lines_sweeps_one_face_per_edge() {
+    // The ellipse's wall is one face however many quarter turns it spans, as
+    // are the planes and the cylinder, beside the two caps.
+    for angle in [FRAC_PI_2, 0.7 * PI, PI, 1.5 * PI, 1.9 * PI] {
         let mut topo = Topology::new();
         let face = bulb_profile(&mut topo);
         let solid = revolve(&mut topo, face, Point3::new(0.0, 0.0, 0.0), Z, angle).unwrap();
-        check(&topo, solid, angle, 6 + walls, walls);
+        check(&topo, solid, angle, 7, 1);
     }
 }
 
