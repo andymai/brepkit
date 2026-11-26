@@ -559,9 +559,9 @@ pub(super) fn twisted_straight_edge_samples(
         ((u_lo, u_hi), (v_lo, v_hi)),
         (1, 1),
         deflection,
-        super::nonplanar::NURBS_MAX_DIVISIONS,
+        super::MAX_DIVISIONS,
         None,
-    );
+    )?;
     if n_u.max(n_v) <= 1 {
         return Ok(Vec::new());
     }

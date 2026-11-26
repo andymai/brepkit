@@ -13,13 +13,22 @@ pub(super) struct AdaptiveCell {
     u_max: f64,
     v_min: f64,
     v_max: f64,
-    depth: u8,
+    depth: u16,
     /// Indices into the cell vec; `None` means this is a leaf cell.
     children: Option<[usize; 4]>,
 }
 
-/// Maximum recursion depth for adaptive subdivision.
-const MAX_DEPTH: u8 = 6;
+/// The depth past which a cell is divided for its distance from the
+/// surface alone, not for the turn of its normals: across a crease the roots
+/// do not hold, the normals disagree however small the cell gets.
+const ANGULAR_DEPTH: u16 = 6;
+
+/// The deepest a cell lies below its root. A cell there is 2^-64 of its
+/// root's width, far past any feature a face's own parameters can show: a
+/// cell that still strays there is refused. The deepest tree in the meshing
+/// tests reaches 9, and a whole tree of 16 roots reaches the sample limit by
+/// its tenth level, so a cell past it lies on a narrow branch.
+const MAX_TREE_DEPTH: u16 = 64;
 
 /// Initial grid resolution (cells per direction).
 const INITIAL_CELLS: usize = 4;
@@ -28,10 +37,6 @@ const INITIAL_CELLS: usize = 4;
 /// as a faceted sheet, keeps the even grid there: each line multiplies the roots
 /// the other way, and this many keeps them in the hundreds.
 const MAX_CREASE_LINES: usize = 16;
-
-/// Cells a quadtree stops growing at. An even grid's tree cannot reach it, only one
-/// on many crease-lined roots.
-const MAX_CELLS: usize = 200_000;
 
 /// The radius a cone face's columns are counted at: the radius at the end of
 /// `v_range` (its distances from the apex along a generator, as
@@ -472,13 +477,6 @@ fn cell_refinement_error(
     let p01 = surface.evaluate(u_min, v_max);
     let p_mid = surface.evaluate(u_mid, v_mid);
 
-    let bilinear_mid = Point3::new(
-        0.25 * (p00.x() + p10.x() + p11.x() + p01.x()),
-        0.25 * (p00.y() + p10.y() + p11.y() + p01.y()),
-        0.25 * (p00.z() + p10.z() + p11.z() + p01.z()),
-    );
-    let sag = (p_mid - bilinear_mid).length();
-
     let (u_in_lo, u_in_hi) = inside_creases(u_min, u_max, &creases.u);
     let (v_in_lo, v_in_hi) = inside_creases(v_min, v_max, &creases.v);
     let normals = [
@@ -497,31 +495,26 @@ fn cell_refinement_error(
         }
     }
 
+    // Each side's middle against its chord: where the parameters crowd
+    // along a straight side, its middle lies on the chord all the same.
     let edge_mids = [
         surface.evaluate(u_mid, v_min),
         surface.evaluate(u_mid, v_max),
         surface.evaluate(u_min, v_mid),
         surface.evaluate(u_max, v_mid),
     ];
-
-    let edge_linear_mids = [
-        lerp_point(p00, p10),
-        lerp_point(p01, p11),
-        lerp_point(p00, p01),
-        lerp_point(p10, p11),
-    ];
-
-    let mut max_edge_sag = 0.0_f64;
-    for i in 0..4 {
-        let edge_sag = (edge_mids[i] - edge_linear_mids[i]).length();
-        max_edge_sag = max_edge_sag.max(edge_sag);
-    }
+    let chords = [(p00, p10), (p01, p11), (p00, p01), (p10, p11)];
+    let edge_sags = edge_mids
+        .into_iter()
+        .zip(chords)
+        .map(|(mid, (a, b))| point_segment_distance(mid, a, b));
 
     let diag = (p11 - p00).length().max((p10 - p01).length());
     let normal_sag = max_normal_dev * diag * 0.5;
 
-    // A twisted cell's middle is its corners' average, so `sag` misses its
-    // twist; read the cell against the triangles it splits into instead.
+    // The middle and quarter points against the triangles the cell splits
+    // into: the distance from the mesh, not from the corners' average, which
+    // misses a twist and counts the crowding of the parameters as sag.
     let probes = PROBES.map(|(a, b)| {
         if (a, b) == (0.5, 0.5) {
             p_mid
@@ -532,18 +525,26 @@ fn cell_refinement_error(
             )
         }
     });
-    let twist = split_stray([p00, p10, p01, p11], &probes);
+    let read = [p00, p10, p11, p01]
+        .iter()
+        .chain(&edge_mids)
+        .chain(&probes)
+        .all(|p| p.x().is_finite() && p.y().is_finite() && p.z().is_finite());
+    let twist = if read {
+        split_stray([p00, p10, p01, p11], &probes)
+    } else {
+        f64::NAN
+    };
 
-    sag.max(max_edge_sag).max(normal_sag).max(twist)
-}
-
-/// Linear interpolation (midpoint) of two points.
-fn lerp_point(a: Point3, b: Point3) -> Point3 {
-    Point3::new(
-        0.5 * (a.x() + b.x()),
-        0.5 * (a.y() + b.y()),
-        0.5 * (a.z() + b.z()),
-    )
+    // A point that is not a number would drop out of a plain maximum, and
+    // the cell would pass.
+    edge_sags.chain([normal_sag, twist]).fold(0.0_f64, |m, e| {
+        if m.is_nan() || e.is_nan() {
+            f64::NAN
+        } else {
+            m.max(e)
+        }
+    })
 }
 
 /// The root cells' lines, laid out in `cells` by `u` span then `v` span.
@@ -676,36 +677,248 @@ fn root_lines(lo: f64, hi: f64, creases: &[f64]) -> Vec<f64> {
     lines
 }
 
-/// Build the adaptive quadtree by recursive subdivision.
+/// Build the adaptive quadtree below the cell `root`, until each leaf lies
+/// within `threshold` of the surface. The cells are read from a stack of
+/// their own, each branch whole before the next, as a recursion would read
+/// them, so that a deep branch takes no call stack.
+///
+/// # Errors
+///
+/// Returns [`crate::OperationsError::TooManySamples`] if the tree would take
+/// more cells than the sample limit, a cell past [`MAX_TREE_DEPTH`] or one
+/// that cannot be halved still strays, or the surface is not finite in a
+/// cell.
 #[allow(clippy::similar_names)]
 fn build_quadtree(
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
     cells: &mut Vec<AdaptiveCell>,
-    cell_idx: usize,
+    root: usize,
     threshold: f64,
     angular_tol: f64,
     creases: &Creases,
-) {
-    let cell = &cells[cell_idx];
-    if cell.depth >= MAX_DEPTH || cells.len() >= MAX_CELLS {
-        return;
-    }
+) -> Result<(), crate::OperationsError> {
+    let mut work = vec![root];
+    while let Some(cell_idx) = work.pop() {
+        let cell = &cells[cell_idx];
+        let u_min = cell.u_min;
+        let u_max = cell.u_max;
+        let v_min = cell.v_min;
+        let v_max = cell.v_max;
+        let depth = cell.depth;
 
+        let error = cell_refinement_error(surface, u_min, u_max, v_min, v_max, creases);
+        if !error.is_finite() {
+            return Err(super::endless_samples(
+                "a B-spline face's cell, whose surface is not finite",
+                threshold,
+            ));
+        }
+        let angular_exceeded = depth < ANGULAR_DEPTH
+            && cell_exceeds_angular(surface, u_min, u_max, v_min, v_max, angular_tol, creases);
+        if error <= threshold && !angular_exceeded {
+            continue;
+        }
+
+        let u_mid = 0.5 * (u_min + u_max);
+        let v_mid = 0.5 * (v_min + v_max);
+        check_cells(
+            cells.len(),
+            depth,
+            (u_min, u_mid, u_max),
+            (v_min, v_mid, v_max),
+            threshold,
+        )?;
+        let child_depth = depth + 1;
+
+        let c0 = cells.len();
+        cells.push(AdaptiveCell {
+            u_min,
+            u_max: u_mid,
+            v_min,
+            v_max: v_mid,
+            depth: child_depth,
+            children: None,
+        });
+        cells.push(AdaptiveCell {
+            u_min: u_mid,
+            u_max,
+            v_min,
+            v_max: v_mid,
+            depth: child_depth,
+            children: None,
+        });
+        cells.push(AdaptiveCell {
+            u_min,
+            u_max: u_mid,
+            v_min: v_mid,
+            v_max,
+            depth: child_depth,
+            children: None,
+        });
+        cells.push(AdaptiveCell {
+            u_min: u_mid,
+            u_max,
+            v_min: v_mid,
+            v_max,
+            depth: child_depth,
+            children: None,
+        });
+
+        cells[cell_idx].children = Some([c0, c0 + 1, c0 + 2, c0 + 3]);
+        work.extend([c0 + 3, c0 + 2, c0 + 1, c0]);
+    }
+    Ok(())
+}
+
+/// Refuses four more cells for a tree of `count`, from the halving of a cell
+/// at `depth` at the middles `u` and `v`, past the sample limit, at
+/// [`MAX_TREE_DEPTH`], or where a middle does not part its cell: such a cell
+/// cannot be halved.
+fn check_cells(
+    count: usize,
+    depth: u16,
+    (u_min, u_mid, u_max): (f64, f64, f64),
+    (v_min, v_mid, v_max): (f64, f64, f64),
+    deflection: f64,
+) -> Result<(), crate::OperationsError> {
+    if depth >= MAX_TREE_DEPTH
+        || !(u_min < u_mid && u_mid < u_max && v_min < v_mid && v_mid < v_max)
+    {
+        return Err(super::endless_samples("a B-spline face's cell", deflection));
+    }
+    super::check_total("a B-spline face's cells", count as u64 + 4, deflection)
+}
+
+/// Conforming pass: ensure no more than 1 level difference between adjacent
+/// leaf cells. Each pass halves the leaves beside one two levels deeper, so
+/// the deepest level is reached in as many passes as the tree is deep.
+///
+/// # Errors
+///
+/// Returns [`crate::OperationsError::TooManySamples`] if the tree would take
+/// more cells than the sample limit.
+fn conforming_pass(
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    cells: &mut Vec<AdaptiveCell>,
+    roots: &RootGrid,
+    deflection: f64,
+) -> Result<(), crate::OperationsError> {
+    loop {
+        let mut to_subdivide = Vec::new();
+
+        let len = cells.len();
+        for i in 0..len {
+            if cells[i].children.is_some() {
+                continue;
+            }
+
+            let depth = cells[i].depth;
+            let u_min = cells[i].u_min;
+            let u_max = cells[i].u_max;
+            let v_min = cells[i].v_min;
+            let v_max = cells[i].v_max;
+
+            if needs_conforming_subdivision(cells, roots, depth, u_min, u_max, v_min, v_max) {
+                to_subdivide.push(i);
+            }
+        }
+
+        if to_subdivide.is_empty() {
+            return Ok(());
+        }
+
+        for &cell_idx in &to_subdivide {
+            if cells[cell_idx].children.is_some() {
+                continue;
+            }
+            force_subdivide(surface, cells, cell_idx, deflection)?;
+        }
+    }
+}
+
+/// Check if a leaf cell needs conforming subdivision (neighbor is 2+ levels deeper).
+#[allow(clippy::similar_names)]
+fn needs_conforming_subdivision(
+    cells: &[AdaptiveCell],
+    roots: &RootGrid,
+    depth: u16,
+    u_min: f64,
+    u_max: f64,
+    v_min: f64,
+    v_max: f64,
+) -> bool {
+    let eps = (u_max - u_min) * 0.01;
+    let u_mid = 0.5 * (u_min + u_max);
+    let v_mid = 0.5 * (v_min + v_max);
+
+    let probes = [
+        (u_mid, v_min - eps),
+        (u_mid, v_max + eps),
+        (u_min - eps, v_mid),
+        (u_max + eps, v_mid),
+    ];
+
+    for &(pu, pv) in &probes {
+        if let Some(neighbor_depth) = find_leaf_depth_at(cells, roots, pu, pv)
+            && neighbor_depth > depth + 1
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Find the depth of the leaf cell containing the given parameter point.
+fn find_leaf_depth_at(cells: &[AdaptiveCell], roots: &RootGrid, u: f64, v: f64) -> Option<u16> {
+    let root = roots.holding(u, v)?;
+    find_leaf_depth_below(cells, root, u, v)
+}
+
+/// The depth of the leaf holding a point below the cell `idx`, read down
+/// the tree; one past a cell none of whose children holds it.
+fn find_leaf_depth_below(cells: &[AdaptiveCell], idx: usize, u: f64, v: f64) -> Option<u16> {
+    let holds = |cell: &AdaptiveCell| {
+        !(u < cell.u_min || u > cell.u_max || v < cell.v_min || v > cell.v_max)
+    };
+    let mut cell = &cells[idx];
+    if !holds(cell) {
+        return None;
+    }
+    loop {
+        match cell.children {
+            None => return Some(cell.depth),
+            Some(children) => match children.iter().find(|&&child| holds(&cells[child])) {
+                Some(&child) => cell = &cells[child],
+                None => return Some(cell.depth + 1),
+            },
+        }
+    }
+}
+
+/// Force-subdivide a leaf cell (for conforming pass, no curvature check).
+#[allow(clippy::similar_names)]
+fn force_subdivide(
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    cells: &mut Vec<AdaptiveCell>,
+    cell_idx: usize,
+    deflection: f64,
+) -> Result<(), crate::OperationsError> {
+    let cell = &cells[cell_idx];
     let u_min = cell.u_min;
     let u_max = cell.u_max;
     let v_min = cell.v_min;
     let v_max = cell.v_max;
     let depth = cell.depth;
 
-    let error = cell_refinement_error(surface, u_min, u_max, v_min, v_max, creases);
-    let angular_exceeded =
-        cell_exceeds_angular(surface, u_min, u_max, v_min, v_max, angular_tol, creases);
-    if error <= threshold && !angular_exceeded {
-        return;
-    }
-
     let u_mid = 0.5 * (u_min + u_max);
     let v_mid = 0.5 * (v_min + v_max);
+    check_cells(
+        cells.len(),
+        depth,
+        (u_min, u_mid, u_max),
+        (v_min, v_mid, v_max),
+        deflection,
+    )?;
     let child_depth = depth + 1;
 
     let c0 = cells.len();
@@ -744,165 +957,8 @@ fn build_quadtree(
 
     cells[cell_idx].children = Some([c0, c0 + 1, c0 + 2, c0 + 3]);
 
-    for i in 0..4 {
-        build_quadtree(surface, cells, c0 + i, threshold, angular_tol, creases);
-    }
-}
-
-/// Conforming pass: ensure no more than 1 level difference between adjacent leaf cells.
-fn conforming_pass(
-    surface: &brepkit_math::nurbs::surface::NurbsSurface,
-    cells: &mut Vec<AdaptiveCell>,
-    roots: &RootGrid,
-) {
-    for _pass in 0..MAX_DEPTH {
-        let mut to_subdivide = Vec::new();
-
-        let len = cells.len();
-        for i in 0..len {
-            if cells[i].children.is_some() {
-                continue;
-            }
-
-            let depth = cells[i].depth;
-            let u_min = cells[i].u_min;
-            let u_max = cells[i].u_max;
-            let v_min = cells[i].v_min;
-            let v_max = cells[i].v_max;
-
-            if needs_conforming_subdivision(cells, roots, depth, u_min, u_max, v_min, v_max) {
-                to_subdivide.push(i);
-            }
-        }
-
-        if to_subdivide.is_empty() {
-            break;
-        }
-
-        for &cell_idx in &to_subdivide {
-            if cells[cell_idx].children.is_some() {
-                continue;
-            }
-            force_subdivide(surface, cells, cell_idx);
-        }
-    }
-}
-
-/// Check if a leaf cell needs conforming subdivision (neighbor is 2+ levels deeper).
-#[allow(clippy::similar_names)]
-fn needs_conforming_subdivision(
-    cells: &[AdaptiveCell],
-    roots: &RootGrid,
-    depth: u8,
-    u_min: f64,
-    u_max: f64,
-    v_min: f64,
-    v_max: f64,
-) -> bool {
-    let eps = (u_max - u_min) * 0.01;
-    let u_mid = 0.5 * (u_min + u_max);
-    let v_mid = 0.5 * (v_min + v_max);
-
-    let probes = [
-        (u_mid, v_min - eps),
-        (u_mid, v_max + eps),
-        (u_min - eps, v_mid),
-        (u_max + eps, v_mid),
-    ];
-
-    for &(pu, pv) in &probes {
-        if let Some(neighbor_depth) = find_leaf_depth_at(cells, roots, pu, pv)
-            && neighbor_depth > depth + 1
-        {
-            return true;
-        }
-    }
-    false
-}
-
-/// Find the depth of the leaf cell containing the given parameter point.
-fn find_leaf_depth_at(cells: &[AdaptiveCell], roots: &RootGrid, u: f64, v: f64) -> Option<u8> {
-    let root = roots.holding(u, v)?;
-    find_leaf_depth_recursive(cells, root, u, v)
-}
-
-/// Recursively find the leaf depth at a given point within a cell subtree.
-fn find_leaf_depth_recursive(cells: &[AdaptiveCell], idx: usize, u: f64, v: f64) -> Option<u8> {
-    let cell = &cells[idx];
-    if u < cell.u_min || u > cell.u_max || v < cell.v_min || v > cell.v_max {
-        return None;
-    }
-
-    match cell.children {
-        None => Some(cell.depth),
-        Some(children) => {
-            for &child in &children {
-                if let Some(d) = find_leaf_depth_recursive(cells, child, u, v) {
-                    return Some(d);
-                }
-            }
-            Some(cell.depth + 1)
-        }
-    }
-}
-
-/// Force-subdivide a leaf cell (for conforming pass, no curvature check).
-#[allow(clippy::similar_names)]
-fn force_subdivide(
-    surface: &brepkit_math::nurbs::surface::NurbsSurface,
-    cells: &mut Vec<AdaptiveCell>,
-    cell_idx: usize,
-) {
-    let cell = &cells[cell_idx];
-    if cell.depth >= MAX_DEPTH + 2 {
-        return;
-    }
-    let u_min = cell.u_min;
-    let u_max = cell.u_max;
-    let v_min = cell.v_min;
-    let v_max = cell.v_max;
-    let child_depth = cell.depth + 1;
-
-    let u_mid = 0.5 * (u_min + u_max);
-    let v_mid = 0.5 * (v_min + v_max);
-
-    let c0 = cells.len();
-    cells.push(AdaptiveCell {
-        u_min,
-        u_max: u_mid,
-        v_min,
-        v_max: v_mid,
-        depth: child_depth,
-        children: None,
-    });
-    cells.push(AdaptiveCell {
-        u_min: u_mid,
-        u_max,
-        v_min,
-        v_max: v_mid,
-        depth: child_depth,
-        children: None,
-    });
-    cells.push(AdaptiveCell {
-        u_min,
-        u_max: u_mid,
-        v_min: v_mid,
-        v_max,
-        depth: child_depth,
-        children: None,
-    });
-    cells.push(AdaptiveCell {
-        u_min: u_mid,
-        u_max,
-        v_min: v_mid,
-        v_max,
-        depth: child_depth,
-        children: None,
-    });
-
-    cells[cell_idx].children = Some([c0, c0 + 1, c0 + 2, c0 + 3]);
-
     let _ = surface;
+    Ok(())
 }
 
 /// Mesh a NURBS surface that closes on itself in both directions (a torus
@@ -911,21 +967,23 @@ fn force_subdivide(
 /// cracks, and cannot see that the domain's opposite edges meet. Here every
 /// row is sampled alike, and the far seam rows copy the near rows' positions,
 /// so a caller that welds by position closes both seams exactly.
+///
+/// # Errors
+///
+/// Returns [`crate::OperationsError::TooManySamples`] if the grid the
+/// deflection needs is past the sample limit.
 pub(super) fn tessellate_periodic_nurbs_grid(
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
     deflection: f64,
     angular_tol: f64,
-) -> TriangleMeshUV {
+) -> Result<TriangleMeshUV, crate::OperationsError> {
     let (u_lo, u_hi) = surface.domain_u();
     let (v_lo, v_hi) = surface.domain_v();
     // Fewer than three divisions of a closed direction collapse its seam
     // copies onto the cells' other side.
-    let (n_u, n_v) = cap_grid(
-        iso_divisions(surface, true, deflection, angular_tol).max(3),
-        iso_divisions(surface, false, deflection, angular_tol).max(3),
-        GRID_MAX_CELLS,
-    );
-    let (n_u, n_v) = (n_u.max(3), n_v.max(3));
+    let n_u = iso_divisions(surface, true, deflection, angular_tol)?.max(3);
+    let n_v = iso_divisions(surface, false, deflection, angular_tol)?.max(3);
+    super::check_grid(n_u + 1, n_v + 1, deflection)?;
     let (um, vm) = (0.5 * (u_lo + u_hi), 0.5 * (v_lo + v_hi));
     let duv = surface.first_derivatives(um, vm);
     let right_handed = duv.1.cross(duv.2).dot(safe_normal(surface, um, vm)) >= 0.0;
@@ -964,68 +1022,14 @@ pub(super) fn tessellate_periodic_nurbs_grid(
             }
         }
     }
-    TriangleMeshUV {
+    Ok(TriangleMeshUV {
         mesh: TriangleMesh {
             positions,
             normals,
             indices,
         },
         uvs,
-    }
-}
-
-/// The most cells a structured NURBS grid may hold; past it the deflection
-/// gives way to a bounded mesh.
-pub(super) const GRID_MAX_CELLS: usize = 1 << 16;
-
-/// Shrinks a grid's two division counts together, keeping their ratio, until
-/// it holds at most `max_cells` cells. The shrunk grid no longer meets the
-/// deflection it was sized for, so this says so.
-pub(super) fn cap_grid(n_u: usize, n_v: usize, max_cells: usize) -> (usize, usize) {
-    let cells = n_u.saturating_mul(n_v);
-    if cells <= max_cells {
-        return (n_u, n_v);
-    }
-    log::warn!(
-        "NURBS grid of {n_u} x {n_v} cells exceeds {max_cells}; meshing it coarser than the requested deflection"
-    );
-    #[allow(clippy::cast_precision_loss)]
-    let scale = (max_cells as f64 / cells as f64).sqrt();
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
-    let shrink = |n: usize| ((n as f64 * scale).floor() as usize).max(1);
-    (shrink(n_u), shrink(n_v))
-}
-
-/// Thins grid lines until they hold at most `max_cells` cells: the longer
-/// list loses every second inner line. The thinned grid no longer meets the
-/// deflection it was sized for, so this says so.
-pub(super) fn cap_lines(us: &mut Vec<f64>, vs: &mut Vec<f64>, max_cells: usize) {
-    let cells = |us: &[f64], vs: &[f64]| (us.len() - 1).saturating_mul(vs.len() - 1);
-    if cells(us, vs) <= max_cells {
-        return;
-    }
-    log::warn!(
-        "NURBS grid of {} x {} cells exceeds {max_cells}; meshing it coarser than the requested deflection",
-        us.len() - 1,
-        vs.len() - 1
-    );
-    while cells(us, vs) > max_cells {
-        let lines = if us.len() >= vs.len() {
-            &mut *us
-        } else {
-            &mut *vs
-        };
-        let last = lines.len() - 1;
-        let mut k = 0;
-        lines.retain(|_| {
-            k += 1;
-            k == 1 || k == last + 1 || k % 2 == 1
-        });
-    }
+    })
 }
 
 /// Divisions of one parameter direction that keep every iso-line chord of a
@@ -1036,7 +1040,7 @@ fn iso_divisions(
     along_u: bool,
     deflection: f64,
     angular_tol: f64,
-) -> usize {
+) -> Result<usize, crate::OperationsError> {
     let ranges = if along_u {
         (surface.domain_u(), surface.domain_v())
     } else {
@@ -1049,7 +1053,7 @@ fn iso_divisions(
         ranges,
         deflection,
         angular_tol,
-        4096,
+        (4096, super::MAX_DIVISIONS),
     )
 }
 
@@ -1058,6 +1062,15 @@ fn iso_divisions(
 /// `(u, v)` (a caller on a periodic surface wraps them). A straight direction
 /// (a ruling) needs one division. The normals' turn is weighed across every
 /// chord but one that ends on a pole.
+///
+/// The normals' turn is met up to `turn_cap` divisions: a turn that does not
+/// settle there, as across a crease, is left, and the chords' distance from
+/// the surface alone takes the count on from there.
+///
+/// # Errors
+///
+/// Returns [`crate::OperationsError::TooManySamples`] if the chords' distance
+/// holds at no power of two up to `max_divisions`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn iso_divisions_over(
     at: &dyn Fn(f64, f64) -> Point3,
@@ -1066,15 +1079,43 @@ pub(super) fn iso_divisions_over(
     ranges: ((f64, f64), (f64, f64)),
     deflection: f64,
     angular_tol: f64,
-    max_divisions: usize,
-) -> usize {
+    (turn_cap, max_divisions): (usize, usize),
+) -> Result<usize, crate::OperationsError> {
     let mut n = 1;
-    while n < max_divisions
+    while n < turn_cap
         && !iso_chords_hold(at, normal_at, along_u, ranges, deflection, angular_tol, n)
     {
         n *= 2;
     }
-    n
+    while !iso_chords_hold(at, normal_at, along_u, ranges, deflection, 0.0, n) {
+        n = n.saturating_mul(2);
+        if n > max_divisions {
+            return Err(too_many_divisions(
+                "a B-spline face's divisions",
+                n,
+                max_divisions,
+                deflection,
+            ));
+        }
+    }
+    Ok(n)
+}
+
+/// The refusal of `what`, which would take `divisions` divisions of one
+/// direction, past `max_divisions`.
+#[allow(clippy::cast_precision_loss)]
+fn too_many_divisions(
+    what: &str,
+    divisions: usize,
+    max_divisions: usize,
+    deflection: f64,
+) -> crate::OperationsError {
+    super::too_many_samples(
+        what,
+        divisions as f64 + 1.0,
+        max_divisions as f64 + 1.0,
+        deflection,
+    )
 }
 
 /// Whether `n` even divisions of one parameter direction keep every
@@ -1133,17 +1174,15 @@ pub(super) fn iso_chords_hold(
                     lo + (hi - lo) * (k + 1) as f64 / n as f64,
                 );
                 let (p0, p1) = (point(t0, o), point(t1, o));
-                let chord_mid = Point3::new(
-                    0.5 * (p0.x() + p1.x()),
-                    0.5 * (p0.y() + p1.y()),
-                    0.5 * (p0.z() + p1.z()),
-                );
-                // An inflected span can cross its chord at its middle and
-                // stand off it either side, so its quarter points count too.
-                let sag = [0.25, 0.75]
+                // Each point is read against the chord, not against the
+                // chord's own point at its fraction: a span whose parameter
+                // runs unevenly along a straight chord lies on it. An
+                // inflected span can cross its chord at its middle and stand
+                // off it either side, so its quarter points count too.
+                let sag = [0.25, 0.5, 0.75]
                     .iter()
                     .map(|&f| off_chord(point(t0 + (t1 - t0) * f, o), p0, p1))
-                    .fold((point(0.5 * (t0 + t1), o) - chord_mid).length(), f64::max);
+                    .fold(0.0, f64::max);
                 let at_pole = (k == 0 && pole_lo) || (k + 1 == n && pole_hi);
                 let turned = angular_tol > 0.0
                     && !at_pole
@@ -1208,6 +1247,11 @@ pub(super) fn span_probes(a: f64, b: f64, knots: &[f64]) -> Vec<f64> {
 /// `ranges` is the span divided and the span its rows sit across, `at` /
 /// `normal_at` take `(u, v)`, and `knots` are the divided direction's knots,
 /// sorted: a span holding many is cut unread, and each one in a span is read.
+///
+/// # Errors
+///
+/// Returns [`crate::OperationsError::TooManySamples`] if the spans the
+/// deflection needs are more than `max_divisions`.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn iso_breaks_over(
     at: &dyn Fn(f64, f64) -> Point3,
@@ -1218,9 +1262,8 @@ pub(super) fn iso_breaks_over(
     deflection: f64,
     angular_tol: f64,
     max_divisions: usize,
-) -> Vec<f64> {
+) -> Result<Vec<f64>, crate::OperationsError> {
     const ROWS: usize = 8;
-    const MAX_DEPTH: usize = 12;
     const MAX_KNOTS: usize = 8;
     let point = |t: f64, o: f64| if along_u { at(t, o) } else { at(o, t) };
     let normal = |t: f64, o: f64| {
@@ -1305,22 +1348,37 @@ pub(super) fn iso_breaks_over(
         parts_needed(sag / (0.5 * deflection), turn_ratio)
     };
 
-    // Level by level, so a budget that runs out leaves every part of the
-    // span equally read, not its start fine and its end whole.
+    // Level by level: each level reads again only the spans the one before
+    // cut. A span that never holds is cut on every level, so the count
+    // passes `max_divisions` and is refused, as it passes it: the spans
+    // still to come take one each at least.
     let mut spans = vec![(lo, hi, false)];
-    for _ in 0..MAX_DEPTH {
-        let mut next = Vec::with_capacity(spans.len() * 2);
+    loop {
+        let mut next = Vec::with_capacity((spans.len() * 2).min(max_divisions + 1));
         let mut cut = false;
         for (k, &(a, b, held)) in spans.iter().enumerate() {
-            let room = max_divisions.saturating_sub(next.len() + (spans.len() - k));
-            let n = if held || room == 0 {
-                1
-            } else {
-                parts(a, b).min(room + 1)
-            };
+            let n = if held { 1 } else { parts(a, b) };
             if n == 1 {
                 next.push((a, b, true));
                 continue;
+            }
+            // A span with no parameter strictly between its ends cannot be
+            // cut: its parts would be the span again and empty spans.
+            let mid = 0.5 * (a + b);
+            if !(a.min(b) < mid && mid < a.max(b)) {
+                return Err(super::endless_samples(
+                    "a B-spline face's grid lines",
+                    deflection,
+                ));
+            }
+            let projected = next.len() + n + (spans.len() - k - 1);
+            if projected > max_divisions {
+                return Err(too_many_divisions(
+                    "a B-spline face's grid lines",
+                    projected,
+                    max_divisions,
+                    deflection,
+                ));
             }
             cut = true;
             for part in 0..n {
@@ -1345,9 +1403,9 @@ pub(super) fn iso_breaks_over(
             break;
         }
     }
-    std::iter::once(lo)
+    Ok(std::iter::once(lo)
         .chain(spans.into_iter().map(|(_, b, _)| b))
-        .collect()
+        .collect())
 }
 
 /// Cuts the grid lines `us` by `vs` until no cell strays past the deflection
@@ -1357,17 +1415,22 @@ pub(super) fn iso_breaks_over(
 /// already lies within the whole of it; what is left is a twisted cell, whose
 /// sides are straight and whose middle stands off its triangles. A cell that
 /// strays has its two spans halved, and no other cell's.
+///
+/// # Errors
+///
+/// Returns [`crate::OperationsError::TooManySamples`] if the grid the
+/// halving needs is past the sample limit. A stray falls with the square of
+/// a cell's size, so the passes end where the surface is smooth.
 pub(super) fn untwist_lines(
     at: &dyn Fn(f64, f64) -> Point3,
     us: &mut Vec<f64>,
     vs: &mut Vec<f64>,
     deflection: f64,
-) {
-    const MAX_PASSES: usize = 10;
+) -> Result<(), crate::OperationsError> {
     // A span is read again only after a cut made it: a cell between two
     // spans that both held stays as it was read.
     let (mut fresh_u, mut fresh_v) = (vec![true; us.len() - 1], vec![true; vs.len() - 1]);
-    for _ in 0..MAX_PASSES {
+    loop {
         let (mut cut_u, mut cut_v) = (vec![false; us.len() - 1], vec![false; vs.len() - 1]);
         // Each grid point is a corner of four cells: read once.
         let corners: Vec<Vec<Point3>> = us
@@ -1398,16 +1461,9 @@ pub(super) fn untwist_lines(
         }
         let more = |cut: &[bool]| cut.len() + cut.iter().filter(|&&c| c).count();
         if !cut_u.contains(&true) {
-            return;
+            return Ok(());
         }
-        if more(&cut_u) * more(&cut_v) > GRID_MAX_CELLS {
-            log::warn!(
-                "twisted NURBS grid stops at {} x {} cells, its budget; it may stand off its surface by more than the requested deflection",
-                us.len() - 1,
-                vs.len() - 1
-            );
-            return;
-        }
+        super::check_grid(more(&cut_u) + 1, more(&cut_v) + 1, deflection)?;
         let halve = |lines: &mut Vec<f64>, cut: &[bool]| {
             let mut next = Vec::with_capacity(lines.len() + cut.len());
             let mut fresh = Vec::with_capacity(lines.len() + cut.len());
@@ -1453,26 +1509,79 @@ pub(super) fn untwist_lines(
 /// does a multiple always hold: creases turning opposite ways can leave a
 /// chord's ends alike and turn one of its parts. A step `chords` refuses
 /// goes up through the multiples of the starting count to the first it
-/// holds, and to the first multiple when none within the division cap does.
+/// holds.
+///
+/// # Errors
+///
+/// Returns [`crate::OperationsError::TooManySamples`] if a direction needs
+/// more than `max_divisions` divisions, or the grid more cells than the
+/// sample limit.
 pub(super) fn untwisted_grid(
+    at: &dyn Fn(f64, f64) -> Point3,
+    spans: ((f64, f64), (f64, f64)),
+    start: (usize, usize),
+    deflection: f64,
+    max_divisions: usize,
+    chords: Option<&dyn Fn(bool, usize) -> bool>,
+) -> Result<(usize, usize), crate::OperationsError> {
+    let mut held = 0;
+    untwisted_grid_keeping(
+        at,
+        spans,
+        start,
+        deflection,
+        max_divisions,
+        chords,
+        (MAX_WITNESSES, &mut held),
+    )
+}
+
+/// The most probes [`untwisted_grid`] keeps as witnesses. A pass whose
+/// strays pass the room left keeps the farthest of them, and the search
+/// then takes only whole multiples of its grids, which need no witnesses:
+/// each keeps every probe of the one before on its vertices or probes.
+const MAX_WITNESSES: usize = 1 << 20;
+
+/// [`untwisted_grid`], keeping at most `room` probes as witnesses, and
+/// setting `held` to the most probes it held at once: while it scans a
+/// grid, up to twice the room it has left, and one more.
+///
+/// # Errors
+///
+/// As [`untwisted_grid`].
+#[allow(clippy::too_many_lines)]
+pub(super) fn untwisted_grid_keeping(
     at: &dyn Fn(f64, f64) -> Point3,
     ((u_lo, u_hi), (v_lo, v_hi)): ((f64, f64), (f64, f64)),
     (mut n_u, mut n_v): (usize, usize),
     deflection: f64,
     max_divisions: usize,
     chords: Option<&dyn Fn(bool, usize) -> bool>,
-) -> (usize, usize) {
+    (room, held): (usize, &mut usize),
+) -> Result<(usize, usize), crate::OperationsError> {
     let (start_u, start_v) = (n_u.max(1), n_v.max(1));
     // Every cell is read: a patch's worst cell can sit anywhere, at a
     // taper's narrow end or wherever a saddle flattens, and a spread of cells
     // can step over it.
     let half = 0.5 * deflection;
-    // The worst cell's stray over the grid, and where its probes strayed
-    // past half the deflection.
-    let worst = |n_u: usize, n_v: usize, past: &mut Vec<(f64, (f64, f64))>| {
+    // The farthest `keep` of `past`, by how far each strayed.
+    let farthest = |past: &mut Vec<(f64, (f64, f64))>, keep: usize| {
+        if past.len() > keep {
+            if keep > 0 {
+                past.select_nth_unstable_by(keep - 1, |x, y| y.0.total_cmp(&x.0));
+            }
+            past.truncate(keep);
+        }
+    };
+    // The worst cell's stray over the grid, with the farthest `keep` of the
+    // probes that strayed past half the deflection, whether more did, and
+    // the most it held at once.
+    let worst = |n_u: usize, n_v: usize, past: &mut Vec<(f64, (f64, f64))>, keep: usize| {
         #[allow(clippy::cast_precision_loss)]
         let (du, dv) = ((u_hi - u_lo) / n_u as f64, (v_hi - v_lo) / n_v as f64);
         let mut worst = 0.0_f64;
+        let mut more = false;
+        let mut most = 0;
         for i in 0..n_u {
             for j in 0..n_v {
                 #[allow(clippy::cast_precision_loss)]
@@ -1481,11 +1590,20 @@ pub(super) fn untwisted_grid(
                     worst = worst.max(stray);
                     if stray > half {
                         past.push((stray, uv));
+                        most = most.max(past.len());
+                        if past.len() > keep.saturating_mul(2) {
+                            farthest(past, keep);
+                            more = true;
+                        }
                     }
                 }
             }
         }
-        worst
+        if past.len() > keep {
+            farthest(past, keep);
+            more = true;
+        }
+        (worst, more, most)
     };
     // How far the grid's cell holding `(u, v)` strays from its triangles there.
     let stray_at = |(n_u, n_v): (usize, usize), (u, v): (f64, f64)| {
@@ -1509,33 +1627,37 @@ pub(super) fn untwisted_grid(
         )
     };
     let holds = |along_u: bool, n: usize| chords.is_none_or(|holds| holds(along_u, n));
-    // From `from` on by steps of `by`, the first count the chords hold; `from`
-    // itself when none within the division cap does.
+    let refused = |divisions: usize| {
+        too_many_divisions(
+            "a twisted B-spline face's grid",
+            divisions,
+            max_divisions,
+            deflection,
+        )
+    };
+    // From `from` on by steps of `by`, the first count the chords hold;
+    // refused when none up to `max_divisions` does.
     let first_held = |from: usize, by: usize, along_u: bool| {
         let mut m = from;
         while !holds(along_u, m) {
-            if m >= max_divisions {
-                return from;
+            m = m.saturating_add(by);
+            if m > max_divisions {
+                return Err(refused(m));
             }
-            m = m.saturating_add(by).min(max_divisions);
         }
-        m
+        Ok(m)
     };
     // A whole multiple of a chain grid's count, the least past one its chords
     // hold: every multiple puts each cell's middle and quarter points on the
     // new grid's vertices or probes.
-    let nested = |n: usize, along_u: bool| first_held((2 * n).min(max_divisions), n, along_u);
+    let nested = |n: usize, along_u: bool| first_held(n.saturating_mul(2), n, along_u);
     // A proportional count, or the multiples of the sized count from it on,
     // whose chords each lie within one the sizing read.
     let sized = |n: usize, start: usize, along_u: bool| {
         if holds(along_u, n) {
-            n
+            Ok(n)
         } else {
-            first_held(
-                n.div_ceil(start).saturating_mul(start).min(max_divisions),
-                start,
-                along_u,
-            )
+            first_held(n.div_ceil(start).saturating_mul(start), start, along_u)
         }
     };
     // The grids reached by whole multiples from the start, each keeping its
@@ -1546,46 +1668,45 @@ pub(super) fn untwisted_grid(
     // whose lines move off a narrow peak a probe found can leave it between
     // its own probes.
     let mut chain = (n_u, n_v);
-    // Each chain grid holds at least four times the cells of the one before,
-    // and a grid tried between two no more than the later one, so at five
-    // probes a cell the witnesses number at most some 13 times the last chain
-    // grid's cells.
     // A whole multiple keeps a probe where one was, and one still straying
     // there is the same witness.
     let mut witnesses: Vec<(f64, f64)> = Vec::new();
     let mut witnessed: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
-    let mut refined = false;
-    loop {
-        // The twist never takes cells past the grid's budget: a grid capped
-        // down to it gives up the divisions the chord test asked for. Short of
-        // a grid it could move to, it checks nothing.
-        let fits_a_step = |n_u: usize, n_v: usize| {
-            let next = ((n_u + 1).min(max_divisions), (n_v + 1).min(max_divisions));
-            next != (n_u, n_v) && next.0 * next.1 <= GRID_MAX_CELLS
-        };
-        if !fits_a_step(n_u, n_v) {
-            if refined {
-                log::warn!(
-                    "twisted NURBS grid stops at {n_u} x {n_v} cells, its budget; it may stand off its surface by more than the requested deflection"
-                );
-            }
-            break;
+    // Whether the witnesses hold every probe that strayed: a grid between
+    // two whole multiples is tried only while they do.
+    let mut whole = true;
+    // A grid past the division or sample limit.
+    let past_limits = |(a, b): (usize, usize)| -> Result<(), crate::OperationsError> {
+        if a.max(b) > max_divisions {
+            return Err(refused(a.max(b)));
         }
+        super::check_grid(a + 1, b + 1, deflection)
+    };
+    loop {
         let mut past = Vec::new();
+        let keep = if whole { room - witnesses.len() } else { 0 };
+        let (scanned, more, most) = worst(n_u, n_v, &mut past, keep);
+        *held = (*held).max(witnesses.len() + most);
         let stray = witnesses
             .iter()
             .map(|&uv| stray_at((n_u, n_v), uv))
-            .fold(worst(n_u, n_v, &mut past), f64::max);
+            .fold(scanned, f64::max);
         let (held_u, held_v) = (holds(true, n_u), holds(false, n_v));
         if stray <= half && held_u && held_v {
             break;
         }
-        for &(_, (u, v)) in &past {
-            if witnessed.insert((u.to_bits(), v.to_bits())) {
-                witnesses.push((u, v));
-            }
-        }
-        let next = if (n_u, n_v) == chain {
+        // The next grid is the chain's next multiple, or one tried between;
+        // when both are past the limits, the search is refused before it
+        // keeps this pass's witnesses. A pass that kept only the farthest of
+        // its strays goes on from a multiple of its own grid, which keeps
+        // every probe it read on its vertices or probes, the strays it let go
+        // among them, though it is a grid tried between.
+        let doubled = if (n_u, n_v) == chain || more {
+            nested(n_u, true).and_then(|a| Ok((a, nested(n_v, false)?)))
+        } else {
+            nested(chain.0, true).and_then(|a| Ok((a, nested(chain.1, false)?)))
+        };
+        let tried = if whole && !more && (n_u, n_v) == chain {
             let grow = (1.1 * (stray / half).sqrt()).min(2.0);
             #[allow(
                 clippy::cast_precision_loss,
@@ -1596,35 +1717,48 @@ pub(super) fn untwisted_grid(
                 if stray <= half && held {
                     n
                 } else {
-                    (((n as f64) * grow).ceil() as usize)
-                        .max(n + 1)
-                        .min(max_divisions)
+                    (((n as f64) * grow).ceil() as usize).max(n + 1)
                 }
             };
-            let tried = (
-                sized(step(n_u, held_u), start_u, true),
-                sized(step(n_v, held_v), start_v, false),
-            );
-            if tried == chain || witnesses.iter().any(|&uv| stray_at(tried, uv) > half) {
-                chain = (nested(n_u, true), nested(n_v, false));
-                chain
-            } else {
-                tried
-            }
+            Some((
+                sized(step(n_u, held_u), start_u, true)?,
+                sized(step(n_v, held_v), start_v, false)?,
+            ))
         } else {
-            chain = (nested(chain.0, true), nested(chain.1, false));
-            chain
+            None
         };
-        if next.0 * next.1 > GRID_MAX_CELLS {
-            log::warn!(
-                "twisted NURBS grid stops at {n_u} x {n_v} cells, its budget; it may stand off its surface by more than the requested deflection"
-            );
-            break;
+        let fits = |grid: &Result<(usize, usize), crate::OperationsError>| {
+            grid.as_ref().is_ok_and(|&g| past_limits(g).is_ok())
+        };
+        if !fits(&doubled) {
+            match tried {
+                Some(t) => past_limits(t)?,
+                None => return doubled.and_then(|d| past_limits(d).map(|()| d)),
+            }
         }
+        for &(_, (u, v)) in &past {
+            if witnessed.insert((u.to_bits(), v.to_bits())) {
+                witnesses.push((u, v));
+            }
+        }
+        whole &= !more;
+        let next = match tried {
+            Some(t)
+                if t != chain
+                    && past_limits(t).is_ok()
+                    && !witnesses.iter().any(|&uv| stray_at(t, uv) > half) =>
+            {
+                t
+            }
+            _ => {
+                chain = doubled?;
+                chain
+            }
+        };
+        past_limits(next)?;
         (n_u, n_v) = next;
-        refined = true;
     }
-    (n_u, n_v)
+    Ok((n_u, n_v))
 }
 
 /// How far the cell from `(u0, v0)` across `(du, dv)` strays from the two
@@ -1692,34 +1826,76 @@ fn split_stray([p00, p10, p01, p11]: [Point3; 4], probes: &[Point3]) -> f64 {
         .fold(0.0, f64::max)
 }
 
-/// The distance from `p` to the triangle `a`, `b`, `c`; to its longest side
-/// when the triangle has no area.
-pub(super) fn point_triangle_distance(p: Point3, a: Point3, b: Point3, c: Point3) -> f64 {
-    let segment = |a: Point3, b: Point3| {
-        let ab = b - a;
-        let len2 = ab.dot(ab);
-        let t = if len2 > 0.0 {
-            ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        (p - (a + ab * t)).length()
+/// The distance from `p` to the segment from `a` to `b`.
+fn point_segment_distance(p: Point3, a: Point3, b: Point3) -> f64 {
+    let ab = b - a;
+    let len2 = ab.dot(ab);
+    let t = if len2 > 0.0 {
+        ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
     };
-    let edges = segment(a, b).min(segment(b, c)).min(segment(c, a));
-    let normal = (b - a).cross(c - a);
+    (p - (a + ab * t)).length()
+}
+
+/// The distance from `p` to the triangle `a`, `b`, `c`, with the doubt the
+/// rounding of its plane leaves, and never more than to its nearest side.
+///
+/// The normal is the cross product of the triangle's two shorter sides:
+/// any two sides give the same normal, but each of its terms rounds to
+/// within a few units in the last place of the two products it is the
+/// difference of, and the shorter sides give the smaller products. Where
+/// those products are still large beside the normal, as on a sliver whose
+/// longest side is near the sum of the others, the normal can tip, and the
+/// distance from the plane takes that tip in. The distance is read from the
+/// corner nearest `p`, so the tip moves it least.
+pub(super) fn point_triangle_distance(p: Point3, a: Point3, b: Point3, c: Point3) -> f64 {
+    let edges = point_segment_distance(p, a, b)
+        .min(point_segment_distance(p, b, c))
+        .min(point_segment_distance(p, c, a));
+    let sides = [b - a, c - b, a - c];
+    let longest = (0..3)
+        .max_by(|&i, &j| sides[i].dot(sides[i]).total_cmp(&sides[j].dot(sides[j])))
+        .unwrap_or(0);
+    // Consecutive sides round the triangle give its normal, `(b - a) x (c - a)`.
+    let (s, t) = (sides[(longest + 1) % 3], sides[(longest + 2) % 3]);
+    let normal = s.cross(t);
     let area2 = normal.length();
-    let scale = (b - a).length().max((c - a).length()).max((c - b).length());
-    if area2 <= 1e-12 * scale * scale {
+    if !(area2 > 0.0 && area2.is_finite()) {
         return edges;
     }
     let n = normal * (1.0 / area2);
-    let off = (p - a).dot(n);
+    let terms = [
+        (s.y() * t.z()).abs() + (s.z() * t.y()).abs(),
+        (s.z() * t.x()).abs() + (s.x() * t.z()).abs(),
+        (s.x() * t.y()).abs() + (s.y() * t.x()).abs(),
+    ];
+    let tip = terms
+        .into_iter()
+        .zip([n.x(), n.y(), n.z()])
+        .map(|(term, along)| term * (1.0 - along * along).max(0.0).sqrt())
+        .sum::<f64>()
+        * (4.0 * f64::EPSILON)
+        / area2;
+    let d = [p - a, p - b, p - c]
+        .into_iter()
+        .min_by(|x, y| x.dot(*x).total_cmp(&y.dot(*y)))
+        .unwrap_or(p - a);
+    let off = d.dot(n);
+    let rounding = 4.0
+        * f64::EPSILON
+        * ((d.x() * n.x()).abs() + (d.y() * n.y()).abs() + (d.z() * n.z()).abs());
+    let doubt = d.length().madd(tip, rounding);
     let q = p - n * off;
     // Inside when `q` lies on the same side of every edge as the triangle.
     let inside = [(a, b), (b, c), (c, a)]
         .iter()
         .all(|&(x, y)| (y - x).cross(q - x).dot(n) >= 0.0);
-    if inside { off.abs() } else { edges }
+    if inside {
+        (off.abs() + doubt).min(edges)
+    } else {
+        edges
+    }
 }
 
 /// The parameters of a point of a face's boundary on the face's surface.
@@ -1752,12 +1928,17 @@ pub(super) fn project_boundary_point(
 }
 
 /// Tessellate a NURBS surface via curvature-adaptive subdivision.
+///
+/// # Errors
+///
+/// Returns [`crate::OperationsError::TooManySamples`] if the tree the
+/// deflection needs is past the sample limit.
 #[allow(clippy::too_many_lines)]
 pub(super) fn tessellate_nurbs(
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
     deflection: f64,
     angular_tol: f64,
-) -> TriangleMeshUV {
+) -> Result<TriangleMeshUV, crate::OperationsError> {
     let (u_lo, u_hi) = surface.domain_u();
     let (v_lo, v_hi) = surface.domain_v();
 
@@ -1779,144 +1960,140 @@ pub(super) fn tessellate_nurbs(
     if su.cross(sv).dot(nrm) < 0.0 {
         handedness = -1.0;
     }
-    let mut creases = creases(surface);
-    let (roots, mut cells) = loop {
-        let roots = RootGrid {
-            u: root_lines(u_lo, u_hi, &creases.u),
-            v: root_lines(v_lo, v_hi, &creases.v),
-        };
-        let mut cells = Vec::with_capacity(256);
-        for u_span in roots.u.windows(2) {
-            for v_span in roots.v.windows(2) {
-                cells.push(AdaptiveCell {
-                    u_min: u_span[0],
-                    u_max: u_span[1],
-                    v_min: v_span[0],
-                    v_max: v_span[1],
-                    depth: 0,
-                    children: None,
-                });
-            }
-        }
-        let n_roots = cells.len();
-        for i in 0..n_roots {
-            build_quadtree(surface, &mut cells, i, deflection, angular_tol, &creases);
-        }
-        // A tree that ran out of cells left its later roots unread, so it starts
-        // again on the even grid, whose tree the budget always holds.
-        if cells.len() < MAX_CELLS || (creases.u.is_empty() && creases.v.is_empty()) {
-            break (roots, cells);
-        }
-        creases = Creases {
-            u: Vec::new(),
-            v: Vec::new(),
-        };
+    let creases = creases(surface);
+    let roots = RootGrid {
+        u: root_lines(u_lo, u_hi, &creases.u),
+        v: root_lines(v_lo, v_hi, &creases.v),
     };
-
-    conforming_pass(surface, &mut cells, &roots);
-
-    let leaf_count = cells.iter().filter(|c| c.children.is_none()).count();
-    let mut eval_cache: DetHashMap<(u64, u64), (Point3, Vec3)> = DetHashMap::default();
-    let mut positions = Vec::with_capacity(leaf_count * 4);
-    let mut normals = Vec::with_capacity(leaf_count * 4);
-    let mut uvs: Vec<[f64; 2]> = Vec::with_capacity(leaf_count * 4);
-    let mut indices = Vec::with_capacity(leaf_count * 6);
-    let mut vertex_map: DetHashMap<(u64, u64), u32> = DetHashMap::default();
-
-    let get_or_insert_vertex = |u: f64,
-                                v: f64,
-                                eval_cache: &mut DetHashMap<(u64, u64), (Point3, Vec3)>,
-                                positions: &mut Vec<Point3>,
-                                normals: &mut Vec<Vec3>,
-                                uvs: &mut Vec<[f64; 2]>,
-                                vertex_map: &mut DetHashMap<(u64, u64), u32>|
-     -> u32 {
-        let key = (u.to_bits(), v.to_bits());
-        if let Some(&idx) = vertex_map.get(&key) {
-            return idx;
+    let mut cells = Vec::with_capacity(256);
+    for u_span in roots.u.windows(2) {
+        for v_span in roots.v.windows(2) {
+            cells.push(AdaptiveCell {
+                u_min: u_span[0],
+                u_max: u_span[1],
+                v_min: v_span[0],
+                v_max: v_span[1],
+                depth: 0,
+                children: None,
+            });
         }
-        let &mut (pos, nrm) = eval_cache.entry(key).or_insert_with(|| {
-            let p = surface.evaluate(u, v);
-            let n = safe_normal(surface, u, v);
-            (p, n)
-        });
-        #[allow(clippy::cast_possible_truncation)]
-        let idx = positions.len() as u32;
-        positions.push(pos);
-        normals.push(nrm);
-        uvs.push([u, v]);
-        vertex_map.insert(key, idx);
-        idx
-    };
+    }
+    let n_roots = cells.len();
+    for i in 0..n_roots {
+        build_quadtree(surface, &mut cells, i, deflection, angular_tol, &creases)?;
+    }
 
-    for cell in &cells {
-        if cell.children.is_some() {
-            continue;
-        }
+    conforming_pass(surface, &mut cells, &roots, deflection)?;
 
-        let i00 = get_or_insert_vertex(
-            cell.u_min,
-            cell.v_min,
-            &mut eval_cache,
-            &mut positions,
-            &mut normals,
-            &mut uvs,
-            &mut vertex_map,
-        );
-        let i10 = get_or_insert_vertex(
-            cell.u_max,
-            cell.v_min,
-            &mut eval_cache,
-            &mut positions,
-            &mut normals,
-            &mut uvs,
-            &mut vertex_map,
-        );
-        let i11 = get_or_insert_vertex(
-            cell.u_max,
-            cell.v_max,
-            &mut eval_cache,
-            &mut positions,
-            &mut normals,
-            &mut uvs,
-            &mut vertex_map,
-        );
-        let i01 = get_or_insert_vertex(
-            cell.u_min,
-            cell.v_max,
-            &mut eval_cache,
-            &mut positions,
-            &mut normals,
-            &mut uvs,
-            &mut vertex_map,
-        );
+    let corners = leaf_corners(
+        &cells,
+        super::MAX_FACE_SAMPLES,
+        super::MAX_LINE_SAMPLES,
+        deflection,
+    )?;
+    drop(cells);
+    let positions = corners
+        .uvs
+        .iter()
+        .map(|&[u, v]| surface.evaluate(u, v))
+        .collect();
+    let normals = corners
+        .uvs
+        .iter()
+        .map(|&[u, v]| safe_normal(surface, u, v))
+        .collect();
+    let mut indices = Vec::with_capacity(corners.quads.len() * 6);
+    for [i00, i10, i11, i01] in corners.quads {
         if handedness > 0.0 {
-            indices.push(i00);
-            indices.push(i10);
-            indices.push(i11);
-
-            indices.push(i00);
-            indices.push(i11);
-            indices.push(i01);
+            indices.extend([i00, i10, i11, i00, i11, i01]);
         } else {
-            indices.push(i00);
-            indices.push(i11);
-            indices.push(i10);
-
-            indices.push(i00);
-            indices.push(i01);
-            indices.push(i11);
+            indices.extend([i00, i11, i10, i00, i01, i11]);
         }
     }
 
-    TriangleMeshUV {
+    Ok(TriangleMeshUV {
         mesh: TriangleMesh {
             positions,
             normals,
             indices,
         },
-        uvs,
+        uvs: corners.uvs,
+    })
+}
+
+/// The corners of a tree's leaves, each once, in the order the mesh numbers
+/// them, and the corners of each leaf as indices into them.
+struct LeafCorners {
+    uvs: Vec<[f64; 2]>,
+    quads: Vec<[u32; 4]>,
+}
+
+/// The corners of the leaves of `cells`, refused before the mesh takes room
+/// for them when the corners or the leaves pass `limit`, or the corners on
+/// one parameter line pass `line_limit`.
+///
+/// The cell limit does not hold the corners: a leaf halved beside one that
+/// is not puts a corner at the middle of their shared side, so the corners
+/// can outnumber the cells. Each leaf gives two triangles, so the leaf count
+/// holds the triangles to twice the limit, as a grid's are. A grid's row is
+/// held to the edge limit, and so is each line of the tree.
+fn leaf_corners(
+    cells: &[AdaptiveCell],
+    limit: usize,
+    line_limit: usize,
+    deflection: f64,
+) -> Result<LeafCorners, crate::OperationsError> {
+    let refused = |what: &str, count: usize, limit: usize| {
+        super::too_many_samples(what, count as f64, limit as f64, deflection)
+    };
+    let mut on_u_lines: DetHashMap<u64, usize> = DetHashMap::default();
+    let mut on_v_lines: DetHashMap<u64, usize> = DetHashMap::default();
+    let mut numbers: DetHashMap<(u64, u64), u32> = DetHashMap::default();
+    let mut uvs: Vec<[f64; 2]> = Vec::new();
+    let mut quads: Vec<[u32; 4]> = Vec::new();
+    for cell in cells.iter().filter(|c| c.children.is_none()) {
+        if quads.len() == limit {
+            return Err(refused(
+                "a B-spline face's mesh cells",
+                limit.saturating_add(1),
+                limit,
+            ));
+        }
+        let mut quad = [0_u32; 4];
+        for (number, (u, v)) in quad.iter_mut().zip([
+            (cell.u_min, cell.v_min),
+            (cell.u_max, cell.v_min),
+            (cell.u_max, cell.v_max),
+            (cell.u_min, cell.v_max),
+        ]) {
+            let next = uvs.len();
+            *number = match numbers.entry((u.to_bits(), v.to_bits())) {
+                std::collections::hash_map::Entry::Occupied(found) => *found.get(),
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    let past = || refused("a B-spline face's mesh vertices", next + 1, limit);
+                    if next == limit {
+                        return Err(past());
+                    }
+                    let on_u = on_u_lines.entry(u.to_bits()).or_insert(0);
+                    *on_u += 1;
+                    let on_v = on_v_lines.entry(v.to_bits()).or_insert(0);
+                    *on_v += 1;
+                    let most = (*on_u).max(*on_v);
+                    if most > line_limit {
+                        return Err(refused(
+                            "a B-spline face's mesh along one parameter line",
+                            most,
+                            line_limit,
+                        ));
+                    }
+                    uvs.push([u, v]);
+                    *slot.insert(u32::try_from(next).map_err(|_| past())?)
+                }
+            };
+        }
+        quads.push(quad);
     }
+    Ok(LeafCorners { uvs, quads })
 }
 
 #[cfg(test)]
@@ -1926,7 +2103,10 @@ mod crease_tests {
     use brepkit_math::nurbs::surface::NurbsSurface;
     use brepkit_math::vec::Point3;
 
-    use super::creases;
+    use super::{
+        AdaptiveCell, MAX_TREE_DEPTH, check_cells, creases, force_subdivide, leaf_corners,
+        point_triangle_distance,
+    };
 
     /// A half cylinder of two quarter arcs joined at `split`, smooth across it
     /// however narrow either span.
@@ -1964,8 +2144,7 @@ mod crease_tests {
         }
     }
 
-    /// A bumpy sheet creased along eight knots each way: its crease grid holds
-    /// far more roots than the cell budget can refine.
+    /// A bumpy sheet creased along eight knots each way.
     fn creased_bumps() -> NurbsSurface {
         let spans = 9_usize;
         let knots = || {
@@ -1993,13 +2172,20 @@ mod crease_tests {
         NurbsSurface::new(2, 2, knots(), knots(), rows, vec![vec![1.0; count]; count]).unwrap()
     }
 
+    /// The creased sheet's tree takes the crease grid's 100 roots and refines
+    /// each leaf to the deflection. At 4e-4 it takes about 290,000 leaves, and
+    /// each triangle lies within the deflection. A tree held to 200,000 cells
+    /// and meshed again on the even grid lies 38 times the deflection off.
     #[test]
-    fn a_tree_out_of_cells_meshes_the_whole_face_evenly() {
+    fn a_creased_sheet_meshes_within_its_deflection() {
         let surface = creased_bumps();
         let found = creases(&surface);
         assert_eq!((found.u.len(), found.v.len()), (8, 8), "the creases");
-        let meshed = super::tessellate_nurbs(&surface, 1e-6, 0.0);
+        let deflection = 4e-4;
+        let meshed = super::tessellate_nurbs(&surface, deflection, 0.0).unwrap();
         let (mesh, uvs) = (&meshed.mesh, &meshed.uvs);
+        let leaves = mesh.indices.len() / 6;
+        assert!(leaves > 200_000, "{leaves} leaves");
         let mut worst = 0.0_f64;
         for t in mesh.indices.chunks_exact(3) {
             let at = |i: u32| mesh.positions[i as usize];
@@ -2015,9 +2201,333 @@ mod crease_tests {
             );
             worst = worst.max((surface.evaluate(u, v) - flat).length());
         }
-        // Restarting on the even grid leaves 0.015 at worst. Left to the budget,
-        // the later roots stay whole and read 0.198.
-        assert!(worst < 0.05, "a triangle {worst} off the surface");
+        assert!(worst <= deflection, "a triangle {worst} off the surface");
+    }
+
+    /// A patch 1e100 across each way, linear in its parameters but for a
+    /// spike of height 1 at one corner, over a span 1e-100 wide each way:
+    /// the triangles from the spike's top stand off the patch by most of its
+    /// height until the cells at the corner are near the deflection across,
+    /// some 340 halvings down.
+    fn corner_spike() -> NurbsSurface {
+        let (t, d) = (1e-100, 1e100);
+        let knots = vec![0.0, 0.0, 0.0, t, 2.0 * t, d, d, d];
+        // Each control point over its Greville abscissa keeps the patch
+        // linear in its parameters.
+        let greville = [0.0, 0.5 * t, 1.5 * t, 0.5 * (2.0 * t + d), d];
+        let points = greville
+            .iter()
+            .enumerate()
+            .map(|(i, &gu)| {
+                greville
+                    .iter()
+                    .enumerate()
+                    .map(|(j, &gv)| {
+                        let z = if i == 0 && j == 0 { 1.0 } else { 0.0 };
+                        Point3::new(gu, gv, z)
+                    })
+                    .collect()
+            })
+            .collect();
+        NurbsSurface::new(2, 2, knots.clone(), knots, points, vec![vec![1.0; 5]; 5]).unwrap()
+    }
+
+    /// The spike drives the tree down one corner. On a 256 KB stack the
+    /// tree is refused at its depth bound, with no overflow.
+    #[test]
+    fn a_spike_at_a_corner_is_refused_at_the_depth_bound_on_a_small_stack() {
+        let found = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| super::tessellate_nurbs(&corner_spike(), 1e-3, 0.0).map(|m| m.uvs.len()))
+            .unwrap()
+            .join()
+            .unwrap();
+        assert!(
+            matches!(
+                &found,
+                Err(crate::OperationsError::TooManySamples { what, .. })
+                    if what == "a B-spline face's cell"
+            ),
+            "{found:?}"
+        );
+    }
+
+    /// A patch with a control point that is not a number is refused at its
+    /// first cell, not divided down to the sample limit.
+    #[test]
+    fn a_surface_that_is_not_finite_is_refused_at_once() {
+        let points = vec![
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+            vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, f64::NAN)],
+        ];
+        let surface = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            points,
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        let started = std::time::Instant::now();
+        let found = super::tessellate_nurbs(&surface, 0.1, 0.0).map(|m| m.uvs.len());
+        assert!(
+            matches!(found, Err(crate::OperationsError::TooManySamples { .. })),
+            "{found:?}"
+        );
+        assert!(started.elapsed().as_secs() < 1, "{:?}", started.elapsed());
+    }
+
+    /// A flat square patch with a weight of 1e-80 at one corner crowds its
+    /// parameters there, but its sides and iso-lines stay straight and its
+    /// cells flat, so the roots hold it.
+    #[test]
+    fn a_corner_crowded_by_its_weight_meshes_on_its_roots() {
+        let points = vec![
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+            vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+        ];
+        let surface = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            points,
+            vec![vec![1e-80, 1.0], vec![1.0, 1.0]],
+        )
+        .unwrap();
+        let mesh = super::tessellate_nurbs(&surface, 0.1, 0.0).unwrap();
+        assert_eq!(mesh.mesh.indices.len() / 6, 16, "the leaves");
+    }
+
+    /// A tree past the sample limit is refused before it takes the cells,
+    /// and so is a cell at the depth bound, or one whose middle does not
+    /// part it.
+    #[test]
+    fn a_tree_past_the_sample_limit_is_refused() {
+        let halves = (0.0, 0.5, 1.0);
+        let refused = |found: Result<(), crate::OperationsError>| {
+            matches!(found, Err(crate::OperationsError::TooManySamples { .. }))
+        };
+        assert!(check_cells(9_999_996, 0, halves, halves, 1e-3).is_ok());
+        assert!(refused(check_cells(9_999_997, 0, halves, halves, 1e-3)));
+        assert!(check_cells(4, MAX_TREE_DEPTH - 1, halves, halves, 1e-3).is_ok());
+        assert!(refused(check_cells(
+            4,
+            MAX_TREE_DEPTH,
+            halves,
+            halves,
+            1e-3
+        )));
+        let tiny = (1.0, 1.0, 1.0 + f64::EPSILON);
+        assert!(refused(check_cells(4, 0, tiny, halves, 1e-3)));
+    }
+
+    /// A root halved twice, then each other quarter of a quarter halved once
+    /// more: 53 cells and 40 leaves, but 65 corners, since each leaf halved
+    /// beside whole ones puts corners at the middles of its sides.
+    #[test]
+    fn corners_past_the_limit_are_refused_though_the_cells_are_within_it() {
+        let surface = creased_bumps();
+        let root = AdaptiveCell {
+            u_min: 0.0,
+            u_max: 1.0,
+            v_min: 0.0,
+            v_max: 1.0,
+            depth: 0,
+            children: None,
+        };
+        let mut cells = vec![AdaptiveCell {
+            children: None,
+            ..root
+        }];
+        let mut next = 0;
+        while next < cells.len() {
+            if cells[next].depth < 2 {
+                force_subdivide(&surface, &mut cells, next, 1e-3).unwrap();
+            }
+            next += 1;
+        }
+        let quarters: Vec<usize> = (0..cells.len())
+            .filter(|&i| cells[i].children.is_none())
+            .collect();
+        for i in quarters {
+            let (u, v) = (cells[i].u_min * 4.0, cells[i].v_min * 4.0);
+            if (u + v) % 2.0 < 0.5 {
+                force_subdivide(&surface, &mut cells, i, 1e-3).unwrap();
+            }
+        }
+        assert_eq!(cells.len(), 53, "the cells");
+        let corners = leaf_corners(&cells, 65, 65, 1e-3).unwrap();
+        assert_eq!((corners.uvs.len(), corners.quads.len()), (65, 40));
+        let refused = |found: Result<_, crate::OperationsError>| {
+            matches!(found, Err(crate::OperationsError::TooManySamples { .. }))
+        };
+        assert!(refused(leaf_corners(&cells, 64, 64, 1e-3)));
+        let alike: Vec<AdaptiveCell> = (0..5)
+            .map(|_| AdaptiveCell {
+                children: None,
+                ..root
+            })
+            .collect();
+        assert!(leaf_corners(&alike, 5, 5, 1e-3).is_ok());
+        assert!(
+            refused(leaf_corners(&alike, 4, 4, 1e-3)),
+            "five leaves past four"
+        );
+    }
+
+    /// A flat bilinear patch over `corners`, `[[p00, p01], [p10, p11]]`.
+    fn flat_patch(corners: [[Point3; 2]; 2], weights: [[f64; 2]; 2]) -> NurbsSurface {
+        NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            corners.iter().map(|row| row.to_vec()).collect(),
+            weights.iter().map(|row| row.to_vec()).collect(),
+        )
+        .unwrap()
+    }
+
+    /// A flat strip 1e9 long and 1e-4 wide: its cells' triangles are slivers
+    /// 1e13 times as long as wide, but their plane is exact, so the roots
+    /// hold the strip at a deflection of 1e-8.
+    #[test]
+    fn a_flat_sliver_meshes_on_its_roots() {
+        let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let strip = flat_patch(
+            [[p(0.0, 0.0), p(0.0, 1e-4)], [p(1e9, 0.0), p(1e9, 1e-4)]],
+            [[1.0; 2]; 2],
+        );
+        let mesh = super::tessellate_nurbs(&strip, 1e-8, 0.0).unwrap();
+        assert_eq!(mesh.mesh.indices.len() / 6, 16, "the leaves");
+        let inside = p(2.5e8, 2.5e-5);
+        assert!(point_triangle_distance(inside, p(0.0, 0.0), p(1e9, 0.0), p(1e9, 1e-4)) < 1e-12);
+    }
+
+    /// A flat strip 2^20 long and 2^-14 wide along a slant, S(u, v) =
+    /// (2^20 u, 2^20 u + 2^-14 v, 2^-14 v): its cells' plane is exact, and
+    /// its roots hold it at a deflection of 1e-9. A point 2^-30 (1, -1, 1)
+    /// off the strip's half reads at least its distance, 1.6e-9, and nowhere
+    /// near the half's sides.
+    #[test]
+    fn a_slanted_flat_sliver_meshes_on_its_roots() {
+        let (long, wide) = (2.0_f64.powi(20), 2.0_f64.powi(-14));
+        let (a, b, c, d) = (
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(long, long, 0.0),
+            Point3::new(0.0, wide, wide),
+            Point3::new(long, long + wide, wide),
+        );
+        let strip = flat_patch([[a, c], [b, d]], [[1.0; 2]; 2]);
+        let mesh = super::tessellate_nurbs(&strip, 1e-9, 0.0).unwrap();
+        assert_eq!(mesh.mesh.indices.len() / 6, 16, "the leaves");
+        let step = 2.0_f64.powi(-30);
+        let off = Point3::new(
+            0.5 * long + step,
+            0.5 * long + 0.25 * wide - step,
+            0.25 * wide + step,
+        );
+        let found = point_triangle_distance(off, a, b, d);
+        let lies = step * 3.0_f64.sqrt();
+        assert!(found >= 0.999 * lies && found < 1e-8, "{found}");
+    }
+
+    /// A tilted sliver's plane is in doubt, so a point off it reads at least
+    /// as far as it lies, and a triangle with no area reads by its sides.
+    #[test]
+    fn a_tilted_sliver_reads_no_nearer_than_it_lies() {
+        let axis = brepkit_math::vec::Vec3::new(1.0, 2.0, 3.0) * (1.0 / 14.0_f64.sqrt());
+        let (sin, cos) = 0.7_f64.sin_cos();
+        let turn = |x: f64, y: f64, z: f64| {
+            let v = brepkit_math::vec::Vec3::new(x, y, z);
+            let r = v * cos + axis.cross(v) * sin + axis * (axis.dot(v) * (1.0 - cos));
+            Point3::new(r.x(), r.y(), r.z())
+        };
+        for (long, wide) in [(1.0, 1e-6), (1e6, 1e-6), (1e9, 1e-4)] {
+            let (a, b, c) = (
+                turn(0.0, 0.0, 0.0),
+                turn(long, 0.0, 0.0),
+                turn(long, wide, 0.0),
+            );
+            let off = 1e-3 * wide;
+            let found = point_triangle_distance(turn(0.75 * long, 0.5 * wide, off), a, b, c);
+            assert!(
+                found >= 0.999 * off && found <= wide,
+                "{long} by {wide}: {found}"
+            );
+        }
+        let line = point_triangle_distance(
+            Point3::new(0.5, 1.0, 0.0),
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+        );
+        assert!((line - 1.0).abs() < 1e-15, "{line}");
+    }
+
+    /// Flat patches whose parameters crowd toward one side: a square whose
+    /// weights at `u = 0` are 2^-20, and a tilted cubic sheet whose control
+    /// points bunch there. Their sides are straight and their cells flat, so
+    /// a cell's middles lie on its chords and triangles however its
+    /// parameters crowd, and the roots hold them.
+    #[test]
+    fn a_flat_patch_with_crowded_parameters_meshes_on_its_roots() {
+        let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let tiny = 2.0_f64.powi(-20);
+        let square = flat_patch(
+            [[p(0.0, 0.0), p(0.0, 1.0)], [p(1.0, 0.0), p(1.0, 1.0)]],
+            [[tiny, tiny], [1.0, 1.0]],
+        );
+        let mesh = super::tessellate_nurbs(&square, 0.1, 0.0).unwrap();
+        assert_eq!(mesh.mesh.indices.len() / 6, 16, "the square's leaves");
+        let tilt = |x: f64, y: f64| Point3::new(0.6 * x, y, 0.8 * x);
+        let rows = [0.0, 0.001, 0.002, 1.0]
+            .iter()
+            .map(|&x| vec![tilt(x, 0.0), tilt(x, 1.0)])
+            .collect();
+        let sheet = NurbsSurface::new(
+            3,
+            1,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 2]; 4],
+        )
+        .unwrap();
+        let mesh = super::tessellate_nurbs(&sheet, 1e-6, 0.0).unwrap();
+        assert_eq!(mesh.mesh.indices.len() / 6, 16, "the sheet's leaves");
+    }
+
+    /// A root halved four times down its side at `u = 0`: 17 corners along
+    /// that line, and 68 in all. The line passes a limit of 16 though the
+    /// mesh does not pass its own.
+    #[test]
+    fn corners_past_the_line_limit_are_refused() {
+        let surface = creased_bumps();
+        let mut cells = vec![AdaptiveCell {
+            u_min: 0.0,
+            u_max: 1.0,
+            v_min: 0.0,
+            v_max: 1.0,
+            depth: 0,
+            children: None,
+        }];
+        let mut next = 0;
+        while next < cells.len() {
+            if cells[next].depth < 4 && cells[next].u_min <= 0.0 {
+                force_subdivide(&surface, &mut cells, next, 1e-3).unwrap();
+            }
+            next += 1;
+        }
+        let corners = leaf_corners(&cells, 1000, 17, 1e-3).unwrap();
+        let on_side = corners.uvs.iter().filter(|uv| uv[0] <= 0.0).count();
+        assert_eq!((on_side, corners.uvs.len()), (17, 68));
+        assert!(matches!(
+            leaf_corners(&cells, 1000, 16, 1e-3),
+            Err(crate::OperationsError::TooManySamples { .. })
+        ));
     }
 
     #[test]
