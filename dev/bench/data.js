@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795703378982,
+  "lastUpdate": 1795704932962,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -79649,6 +79649,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22628789,
             "range": "± 141378",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7dfbd82f48b88c1554468580b2b8fbc3717a691f",
+          "message": "chore(main): release 4.11.61 (#2938)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.61](https://github.com/andymai/brepkit/compare/v4.11.60...v4.11.61)\n(2026-11-26)\n\n\n### Bug Fixes\n\n* **algo,math:** prove B-spline section, edge and vertex tolerances, and\nmerge arcs only on a proof\n([#2921](https://github.com/andymai/brepkit/issues/2921))\n([81bce01](https://github.com/andymai/brepkit/commit/81bce01b8ab6d346a6d8e53337e878b2d46c0c2b))\n* **operations:** read a crowded twisted patch's cells by a proved bound\nat its weights' pace\n([#2929](https://github.com/andymai/brepkit/issues/2929))\n([7b54f4a](https://github.com/andymai/brepkit/commit/7b54f4a2a54d8020a353b00036cf021fa97d8edc))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-26T14:51:33Z",
+          "tree_id": "7f2fb7213a332671db7aca9eff13369b8774818d",
+          "url": "https://github.com/andymai/brepkit/commit/7dfbd82f48b88c1554468580b2b8fbc3717a691f"
+        },
+        "date": 1795704917921,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1000390,
+            "range": "± 9859",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1069895,
+            "range": "± 100090",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12328,
+            "range": "± 362",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 615812,
+            "range": "± 1869",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22702083,
+            "range": "± 40087",
             "unit": "ns/iter"
           }
         ]
