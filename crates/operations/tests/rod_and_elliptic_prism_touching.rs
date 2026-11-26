@@ -533,6 +533,77 @@ mod tests {
         }
     }
 
+    /// The thin rod of the test above with each rim one closed edge whose
+    /// seam lies at its circle's parameter pi, on the side away from the
+    /// prism, so that both crossings lie in the half of the rim past its
+    /// parameter's own origin, against the turn read from the seam. The
+    /// fuse, the prism less the rod and their common part are exact.
+    #[test]
+    fn a_thin_rod_seamed_at_pi_crossing_a_flush_prism_rim_is_exact() {
+        let theta: f64 = 0.344;
+        let (a, b): (f64, f64) = (3.0, 2.0);
+        let foot = (a.mul_add(theta.cos(), 4.0), b.mul_add(theta.sin(), 5.0));
+        let normal = {
+            let (nx, ny) = (theta.cos() / a, theta.sin() / b);
+            let len = nx.hypot(ny);
+            (nx / len, ny / len)
+        };
+        let r = 0.03;
+        let centre = (
+            0.01_f64.mul_add(normal.0, foot.0),
+            0.01_f64.mul_add(normal.1, foot.1),
+        );
+        let overlap = disc_and_ellipse_overlap(centre.0, centre.1, r);
+        let (ellipse, disc) = (PI * a * b, PI * r * r);
+        let in_rod = Point3::new(centre.0, centre.1, 1.0);
+        let in_both = Point3::new(
+            (-0.01_f64).mul_add(normal.0, foot.0),
+            (-0.01_f64).mul_add(normal.1, foot.1),
+            1.0,
+        );
+        let in_prism = Point3::new(4.0, 5.0, 1.0);
+        for (name, pose) in poses() {
+            for (op, volume) in [
+                (BooleanOp::Fuse, 4.0 * (ellipse + disc - overlap)),
+                (BooleanOp::Cut, 4.0 * (ellipse - overlap)),
+                (BooleanOp::Intersect, 4.0 * overlap),
+            ] {
+                let mut topo = Topology::new();
+                let [_, _, prism] = parts_with(&mut topo, b, 0.0, &pose);
+                // The circle's parameter runs from the prism's side; the
+                // seam stands half a turn on, away from it.
+                let rod = split_rod_sized(&mut topo, (r, 4.0), &[PI]);
+                transform_solid(
+                    &mut topo,
+                    rod,
+                    &(pose
+                        * Mat4::translation(centre.0, centre.1, -1.0)
+                        * Mat4::rotation_z(normal.1.atan2(normal.0) + PI)),
+                )
+                .unwrap();
+                let what = format!("{op:?}, {name}");
+                assert!(
+                    validate_solid(&topo, rod).unwrap().is_valid(),
+                    "{what}: rod"
+                );
+                let (x, y) = if op == BooleanOp::Cut {
+                    (prism, rod)
+                } else {
+                    (rod, prism)
+                };
+                let result = boolean_with_options(&mut topo, op, x, y, exact());
+                assert!(result.is_ok(), "{what}: {result:?}");
+                let result = result.unwrap();
+                let (inside, outside): (Vec<Point3>, Vec<Point3>) = match op {
+                    BooleanOp::Fuse => (vec![in_rod, in_both, in_prism], vec![]),
+                    BooleanOp::Cut => (vec![in_prism], vec![in_rod, in_both]),
+                    BooleanOp::Intersect => (vec![in_both], vec![in_rod, in_prism]),
+                };
+                assert_exact(&topo, result, volume, (&inside, &outside), &pose, &what);
+            }
+        }
+    }
+
     /// The rod from z = 0 to 2 only, and the prism from z = -1 to 3: the rod
     /// lies in the prism but for the two thin lenses beside the touch, so
     /// neither holds the other. The fuse, the prism less the rod and their
@@ -585,15 +656,24 @@ mod tests {
     /// A rod of radius 2 about the origin from z = 0 to 2, its seam at angle
     /// `cuts[0]` and each rim split into arcs at the angles `cuts`, in order.
     fn split_rod(topo: &mut Topology, cuts: &[f64]) -> SolidId {
+        split_rod_sized(topo, (2.0, 2.0), cuts)
+    }
+
+    /// [`split_rod`] of radius `size.0` and height `size.1`.
+    fn split_rod_sized(topo: &mut Topology, (radius, height): (f64, f64), cuts: &[f64]) -> SolidId {
         use brepkit_math::curves::Circle3D;
         use brepkit_math::surfaces::CylindricalSurface;
         use brepkit_topology::shell::Shell;
         use brepkit_topology::solid::Solid;
         let up = Vec3::new(0.0, 0.0, 1.0);
         let rim = |topo: &mut Topology, z: f64| {
-            let circle =
-                Circle3D::new_with_ref(Point3::new(0.0, 0.0, z), up, 2.0, Vec3::new(1.0, 0.0, 0.0))
-                    .unwrap();
+            let circle = Circle3D::new_with_ref(
+                Point3::new(0.0, 0.0, z),
+                up,
+                radius,
+                Vec3::new(1.0, 0.0, 0.0),
+            )
+            .unwrap();
             let vertices: Vec<_> = cuts
                 .iter()
                 .map(|&a| topo.add_vertex(Vertex::new(circle.evaluate(a), 1e-7)))
@@ -611,7 +691,7 @@ mod tests {
             (vertices[0], arcs)
         };
         let (bottom_seam, bottom) = rim(topo, 0.0);
-        let (top_seam, top) = rim(topo, 2.0);
+        let (top_seam, top) = rim(topo, height);
         let seam = topo.add_edge(Edge::new(bottom_seam, top_seam, EdgeCurve::Line));
         let mut lateral: Vec<OrientedEdge> =
             bottom.iter().map(|&e| OrientedEdge::new(e, true)).collect();
@@ -623,7 +703,7 @@ mod tests {
             wall,
             Vec::new(),
             FaceSurface::Cylinder(
-                CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), up, 2.0).unwrap(),
+                CylindricalSurface::new(Point3::new(0.0, 0.0, 0.0), up, radius).unwrap(),
             ),
         ));
         let floor = topo.add_wire(
@@ -655,7 +735,10 @@ mod tests {
         let roof = topo.add_face(Face::new(
             roof,
             Vec::new(),
-            FaceSurface::Plane { normal: up, d: 2.0 },
+            FaceSurface::Plane {
+                normal: up,
+                d: height,
+            },
         ));
         let shell = topo.add_shell(Shell::new(vec![wall, floor, roof]).unwrap());
         topo.add_solid(Solid::new(shell, Vec::new()))

@@ -14040,12 +14040,29 @@ pub fn edges_one_curve(a: &OrientedPCurveEdge, b: &OrientedPCurveEdge, tol: f64)
 /// turn. Each point is proved where the two come within `tol` of each other
 /// inside both (see `edge_splitting::section_meeting_points`), but not at
 /// an end of either, which stands for itself. `None` where the meetings are
-/// not settled.
+/// not settled, and for a pair the finder would pass over unread: a
+/// B-spline, an arc of more than a half turn or of none, or a conic no form
+/// on unit axes reads.
 pub fn section_meetings(
     (curve_a, start_a, end_a): (&EdgeCurve, Point3, Point3),
     (curve_b, start_b, end_b): (&EdgeCurve, Point3, Point3),
     tol: f64,
 ) -> Option<Vec<Point3>> {
+    let read = |curve: &EdgeCurve, start: Point3, end: Point3| match curve {
+        EdgeCurve::Line => true,
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+            let (t0, t1) = curve.domain_with_endpoints(start, end);
+            let sweep = t1 - t0;
+            sweep > 0.0
+                && sweep <= std::f64::consts::PI
+                && (start - end).length() > 0.0
+                && crate::builder::pcurve_compute::unit_conic(curve).is_some()
+        }
+        EdgeCurve::NurbsCurve(_) => false,
+    };
+    if !(read(curve_a, start_a, end_a) && read(curve_b, start_b, end_b)) {
+        return None;
+    }
     let spans = [
         edge_splitting::SectionSpan {
             curve: curve_a,

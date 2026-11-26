@@ -1493,7 +1493,18 @@ fn half_turns(
     match curve {
         EdgeCurve::Line => vec![(EdgeCurve::Line, start, end)],
         EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
-            let (t0, t1) = curve.domain_with_endpoints(start, end);
+            // A whole conic runs a turn from its own seam, wherever that
+            // lies on its parameter: its domain starts at the seam's.
+            let (t0, t1) = if (start - end).length() < 1e-9 {
+                let from = match curve {
+                    EdgeCurve::Circle(c) => c.project(start),
+                    EdgeCurve::Ellipse(e) => e.project(start),
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => 0.0,
+                };
+                (from, from + std::f64::consts::TAU)
+            } else {
+                curve.domain_with_endpoints(start, end)
+            };
             let pieces = ((t1 - t0).abs() / (0.99 * std::f64::consts::PI))
                 .ceil()
                 .max(1.0);
@@ -2444,6 +2455,46 @@ mod tests {
                 );
                 assert!((exact.sweep - spline.sweep).abs() < 1e-12, "{label}: sweep");
             }
+        }
+    }
+
+    fn test_poses() -> [brepkit_math::mat::Mat4; 3] {
+        use brepkit_math::mat::Mat4;
+        [
+            Mat4::identity(),
+            Mat4::translation(3.0, -2.0, 1.0) * Mat4::rotation_x(0.4) * Mat4::rotation_z(0.6),
+            Mat4::translation(1.0, 0.5, -2.0) * Mat4::scale(-1.0, 1.0, 1.0),
+        ]
+    }
+
+    /// A whole circle whose seam lies at its parameter pi comes in pieces of
+    /// at most a half turn, from the seam round to the seam, in three poses.
+    #[test]
+    fn a_closed_circle_seamed_at_pi_comes_in_half_turns_from_its_seam() {
+        use std::f64::consts::{PI, TAU};
+        for pose in test_poses() {
+            let centre = pose.mul_point(Point3::new(1.0, 2.0, 0.0));
+            let normal = (pose.mul_point(Point3::new(0.0, 0.0, 1.0))
+                - pose.mul_point(Point3::new(0.0, 0.0, 0.0)))
+            .normalize()
+            .unwrap();
+            let circle = Circle3D::new(centre, normal, 2.0).unwrap();
+            let seam = circle.evaluate(PI);
+            let curve = EdgeCurve::Circle(circle);
+            let pieces = half_turns(&curve, (seam, seam));
+            assert!((pieces[0].1 - seam).length() < 1e-12, "{pose:?}");
+            assert!((pieces[pieces.len() - 1].2 - seam).length() < 1e-12);
+            let mut total = 0.0;
+            for (k, (c, a, b)) in pieces.iter().enumerate() {
+                let (t0, t1) = c.domain_with_endpoints(*a, *b);
+                let sweep = t1 - t0;
+                assert!(sweep > 0.0 && sweep <= PI, "piece {k}: {sweep}");
+                total += sweep;
+                if k + 1 < pieces.len() {
+                    assert!((*b - pieces[k + 1].1).length() < 1e-12);
+                }
+            }
+            assert!((total - TAU).abs() < 1e-9, "{total}");
         }
     }
 }
