@@ -99,12 +99,13 @@ pub(crate) fn least_squares_work(n: usize, m: usize, p: usize) -> f64 {
 
 /// The multiply-adds of an LSPIA fit of `n` points by `m` control points at
 /// degree `p` over `iterations` passes: the start, which searches the
-/// sorted parameters for each control point's nearest, and reads the basis
-/// and the step size, then on each pass the curve at every point from its
-/// basis, and the corrections it spreads.
+/// sorted parameters twice for each control point's nearest, at most `log2
+/// n + 2` steps each, and reads the basis and the step size, then on each
+/// pass the curve at every point from its basis, and the corrections it
+/// spreads.
 pub(crate) fn lspia_work(n: usize, m: usize, p: usize, iterations: usize) -> f64 {
     let (n, m, p1, iterations) = (n as f64, m as f64, (p + 1) as f64, iterations as f64);
-    let start = m * (n.log2() + 2.0) + n * p1 * p1 + 42.0 * n * p1;
+    let start = m * 2.0f64.madd(n.log2(), 4.0) + n * p1 * p1 + 42.0 * n * p1;
     let pass = n * (7.0 * p1 + 4.0) + 5.0 * m;
     iterations.madd(pass, start)
 }
@@ -729,11 +730,16 @@ fn compute_lspia_step_size_weighted(
 ///
 /// Each distance `|param - t|` falls as the parameters rise to `t` and grows
 /// past it, with rounding at most leaving ties, so the nearest is one of the
-/// two either side of `t`, and those as near lie just below it.
+/// two either side of `t`, and those as near lie just below it: a second
+/// search of the parameters below finds the first of them, however many
+/// repeat.
 fn nearest_param(params: &[f64], t: f64) -> usize {
-    let above = params.partition_point(|&param| param < t);
+    let above = params.partition_point(|&param| {
+        nearest_step();
+        param < t
+    });
     let distance = |j: usize| (params[j] - t).abs();
-    let mut best = match (
+    let best = match (
         above.checked_sub(1),
         (above < params.len()).then_some(above),
     ) {
@@ -742,10 +748,24 @@ fn nearest_param(params: &[f64], t: f64) -> usize {
         (None, Some(above)) => above,
         (None, None) => return 0,
     };
-    while best > 0 && distance(best - 1) <= distance(best) {
-        best -= 1;
-    }
-    best
+    let near = distance(best);
+    params[..best].partition_point(|&param| {
+        nearest_step();
+        (param - t).abs() > near
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The parameters [`nearest_param`] compared, on this thread.
+    static NEAREST_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts one comparison of [`nearest_param`]'s searches.
+#[inline]
+fn nearest_step() {
+    #[cfg(test)]
+    NEAREST_STEPS.with(|steps| steps.set(steps.get() + 1));
 }
 
 /// The curve of equal weights on `control_points` at the parameter whose
@@ -1687,5 +1707,64 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The first parameter a scan of every parameter in turn finds nearest
+    /// `t`.
+    fn scanned_nearest(params: &[f64], t: f64) -> usize {
+        let mut best = (0, f64::INFINITY);
+        for (j, &param) in params.iter().enumerate() {
+            if (param - t).abs() < best.1 {
+                best = (j, (param - t).abs());
+            }
+        }
+        best.0
+    }
+
+    /// A long prefix of parameters closer together than a parameter near
+    /// the middle rounds to, or all alike, before one at 1: each control
+    /// point below the middle is as near the whole prefix, and the scan
+    /// takes its first. A walk back from the prefix's last took 3.5e5 steps
+    /// for 500 control points by 5,001 clustered parameters, past a count of
+    /// 1.4e4, and 2.0e7 for 2,000 by 20,001 alike ones: about `m n / 2`, or
+    /// 5.3e9 for 2^16 by 161,319. The two searches take at most `2 log2 n +
+    /// 4` steps for each control point, as the work counts them, and find
+    /// the parameter the scan finds.
+    #[test]
+    fn a_clustered_prefix_finds_each_nearest_within_its_count() {
+        let count = |n: usize, m: usize| m as f64 * 2.0f64.madd((n as f64).log2(), 4.0);
+        let spread = |m: usize| (0..m).map(move |i| i as f64 / (m - 1) as f64);
+        let steps = || NEAREST_STEPS.with(std::cell::Cell::get) as f64;
+        let n = 5_001;
+        let mut params: Vec<f64> = (0..n - 1).map(|k| k as f64 * 1e-20).collect();
+        params.push(1.0);
+        NEAREST_STEPS.with(|steps| steps.set(0));
+        for t in spread(500) {
+            assert_eq!(
+                nearest_param(&params, t),
+                scanned_nearest(&params, t),
+                "{t}"
+            );
+        }
+        assert!(
+            steps() <= count(n, 500),
+            "{} past {}",
+            steps(),
+            count(n, 500)
+        );
+        let n = CELLS / (DEGREE + 1);
+        let mut params = vec![0.0; n - 1];
+        params.push(1.0);
+        NEAREST_STEPS.with(|steps| steps.set(0));
+        for t in spread(CONTROLS) {
+            let scanned = if (1.0 - t).abs() < t.abs() { n - 1 } else { 0 };
+            assert_eq!(nearest_param(&params, t), scanned, "{t}");
+        }
+        assert!(
+            steps() <= count(n, CONTROLS),
+            "{} past {}",
+            steps(),
+            count(n, CONTROLS)
+        );
     }
 }
