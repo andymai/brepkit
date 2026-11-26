@@ -75,6 +75,17 @@ pub fn interpolate_surface(
             num_cols as f64 * fitting::interpolation_work(num_rows, pu),
         ),
     )?;
+    // Each row and each column is interpolated by its chord lengths, so a
+    // point repeated along either, or one that is not a number, is refused
+    // before any is fitted. The columns of the row curves' control points
+    // repeat where the data's columns do.
+    for row in points {
+        fitting::check_rising(&fitting::chord_length_params(row))?;
+    }
+    for j in 0..num_cols {
+        let column: Vec<Point3> = points.iter().map(|row| row[j]).collect();
+        fitting::check_rising(&fitting::chord_length_params(&column))?;
+    }
 
     // Step 1: Fit curves through each row (u-direction).
     let mut row_curves = Vec::with_capacity(num_rows);
@@ -188,6 +199,8 @@ pub fn approximate_surface_lspia(
 
     let params_u = compute_grid_params_u(points, rows, cols);
     let params_v = compute_grid_params_v(points, rows, cols);
+    fitting::check_finite(&params_u)?;
+    fitting::check_finite(&params_v)?;
 
     let knots_u = fitting::build_approximation_knots(&params_u, pu, mu, rows);
     let knots_v = fitting::build_approximation_knots(&params_v, pv, mv, cols);
@@ -557,5 +570,26 @@ mod tests {
         let found = approximate_surface_lspia(&swell(26, 26), 25, 25, 256, 256, 1e-6, 10_000);
         assert!(refused(&found), "{found:?}");
         assert!(started.elapsed().as_secs() < 1, "{:?}", started.elapsed());
+    }
+
+    /// A grid whose fifth row repeats its fourth, and one with a point that
+    /// is not a number, are refused before any row is fitted.
+    #[test]
+    fn a_grid_with_a_repeated_row_or_an_unreadable_point_is_refused() {
+        let refused = |found: &Result<NurbsSurface, MathError>| {
+            matches!(found, Err(MathError::ParameterOutOfRange { .. }))
+        };
+        let mut repeated = swell(40, 40);
+        repeated[4] = repeated[3].clone();
+        let found = interpolate_surface(&repeated, 3, 3);
+        assert!(refused(&found), "{found:?}");
+        let mut unread = swell(40, 40);
+        unread[7][9] = Point3::new(0.0, f64::NAN, 0.0);
+        for found in [
+            interpolate_surface(&unread, 3, 3),
+            approximate_surface_lspia(&unread, 3, 3, 10, 10, 1e-6, 50),
+        ] {
+            assert!(refused(&found), "{found:?}");
+        }
     }
 }

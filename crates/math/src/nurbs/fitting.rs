@@ -44,10 +44,49 @@ pub(crate) fn check_fit_work(what: &'static str, work: f64) -> Result<(), MathEr
 
 /// The multiply-adds of an interpolation through `n` points at degree `p`:
 /// each point's basis, and its row of the banded solve, at most `p` cells
-/// below the diagonal and `2p` above, for the three coordinates.
+/// below the diagonal and `2p` above, for the three coordinates. Its
+/// parameters rise strictly and its knots average them, so each lies inside
+/// the support of its own basis function, which keeps the band to `p` each
+/// side before the row swaps.
 pub(crate) fn interpolation_work(n: usize, p: usize) -> f64 {
-    let (n, p) = (n as f64, p as f64);
-    n * ((p + 1.0).powi(2) + p * (2.0 * p + 3.0) + 6.0 * p)
+    band_work(n, p, p, p)
+}
+
+/// The multiply-adds of a banded interpolation solve of `n` rows at degree
+/// `p`, `kl` cells below the diagonal and `ku` above before its row swaps.
+fn band_work(n: usize, p: usize, kl: usize, ku: usize) -> f64 {
+    let (n, p, kl, ku) = (n as f64, p as f64, kl as f64, ku as f64);
+    n * ((p + 1.0).powi(2) + kl * (kl + ku + 3.0) + 3.0 * (kl + ku))
+}
+
+/// Refuses parameters that do not rise strictly, or one that is not a
+/// number: points repeated in a row have repeated chord-length parameters,
+/// which make an interpolation's system singular.
+pub(crate) fn check_rising(params: &[f64]) -> Result<(), MathError> {
+    if let Some(pair) = params
+        .windows(2)
+        .find(|pair| pair[0].is_nan() || pair[1].is_nan() || pair[1] <= pair[0])
+    {
+        return Err(MathError::ParameterOutOfRange {
+            value: pair[1],
+            min: pair[0],
+            max: 1.0,
+        });
+    }
+    Ok(())
+}
+
+/// Refuses parameters with one that is not finite, as points with one that
+/// is not finite give.
+pub(crate) fn check_finite(params: &[f64]) -> Result<(), MathError> {
+    if let Some(&bad) = params.iter().find(|t| !t.is_finite()) {
+        return Err(MathError::ParameterOutOfRange {
+            value: bad,
+            min: 0.0,
+            max: 1.0,
+        });
+    }
+    Ok(())
 }
 
 /// The multiply-adds of a least-squares fit of `n` points by `m` control
@@ -103,6 +142,7 @@ pub fn interpolate(points: &[Point3], degree: usize) -> Result<NurbsCurve, MathE
     check_fit_work("an interpolation", interpolation_work(n, p))?;
 
     let params = chord_length_params(points);
+    check_rising(&params)?;
     let knots = build_interpolation_knots(&params, p, n);
     let control_points = solve_interpolation(points, &params, &knots, p)?;
 
@@ -170,13 +210,7 @@ pub fn interpolate_at(
             max: 1.0,
         });
     }
-    if let Some(pair) = params.windows(2).find(|pair| pair[1] <= pair[0]) {
-        return Err(MathError::ParameterOutOfRange {
-            value: pair[1],
-            min: pair[0],
-            max: 1.0,
-        });
-    }
+    check_rising(params)?;
     check_fit_work("an interpolation", interpolation_work(n, degree))?;
     let knots = build_interpolation_knots(params, degree, n);
     let control_points = solve_interpolation(points, params, &knots, degree)?;
@@ -226,6 +260,7 @@ pub fn approximate(
     check_fit_work("a least-squares fit", least_squares_work(n, m, p))?;
 
     let params = chord_length_params(points);
+    check_finite(&params)?;
     let knots = build_approximation_knots(&params, p, m, n);
 
     // Solve least-squares: N^T * N * P = N^T * Q
@@ -352,21 +387,23 @@ fn solve_interpolation(
     let n = points.len();
     let stride = degree + 1;
     let mut firsts = Vec::with_capacity(n);
-    let mut basis = vec![0.0; n * stride];
     let (mut kl, mut ku) = (0, 0);
     for (i, &t) in params.iter().enumerate() {
-        let span = find_span(t, degree, knots, n);
-        let first = span - degree;
+        let first = find_span(t, degree, knots, n) - degree;
         kl = kl.max(i.saturating_sub(first));
         ku = ku.max((first + degree).min(n - 1).saturating_sub(i));
+        firsts.push(first);
+    }
+    check_fit_work("an interpolation", band_work(n, degree, kl, ku))?;
+    let mut basis = vec![0.0; n * stride];
+    for (i, (&t, &first)) in params.iter().zip(&firsts).enumerate() {
         basis_funs_into(
-            span,
+            first + degree,
             t,
             degree,
             knots,
             &mut basis[i * stride..(i + 1) * stride],
         );
-        firsts.push(first);
     }
     // Row `i` keeps column `j` at `i * width + j + kl - i`.
     let width = 2 * kl + ku + 1;
@@ -390,7 +427,8 @@ fn solve_interpolation(
                 pivot_row = i;
             }
         }
-        if band[at(pivot_row, k)].abs() < 1e-15 {
+        let pivot = band[at(pivot_row, k)].abs();
+        if pivot.is_nan() || pivot < 1e-15 {
             return Err(MathError::SingularMatrix);
         }
         let right = (k + kl + ku).min(n - 1);
@@ -551,7 +589,7 @@ fn gauss_solve(a: &mut [Vec<f64>], b: &mut [[f64; 3]]) -> Result<(), MathError> 
             }
         }
 
-        if max_val < 1e-15 {
+        if max_val.is_nan() || max_val < 1e-15 {
             return Err(MathError::SingularMatrix);
         }
 
@@ -800,6 +838,7 @@ pub fn approximate_lspia(
     check_fit_work("an LSPIA fit", lspia_work(n, m, p, max_iterations))?;
 
     let params = chord_length_params(points);
+    check_finite(&params)?;
     let knots = build_approximation_knots(&params, p, m, n);
 
     // Initialize control points by sampling closest data points.
@@ -929,6 +968,7 @@ pub(crate) fn approximate_lspia_weighted(
     check_fit_work("an LSPIA fit", lspia_work(n, m, p, max_iterations))?;
 
     let params = chord_length_params(points);
+    check_finite(&params)?;
     let knots = build_approximation_knots(&params, p, m, n);
 
     // Initialize control points by sampling closest data points.
@@ -1402,5 +1442,31 @@ mod tests {
             f64::INFINITY,
             passes + 1
         )));
+    }
+
+    /// A thousand copies of the origin before the points (1, 0, 0) to
+    /// (1000, 0, 0): their chords are zero, so their parameters repeat and
+    /// the interpolation's system is singular. They are refused before the
+    /// solve, as are points with one that is not a number, by every fit.
+    #[test]
+    fn repeated_or_unreadable_points_are_refused_before_the_solve() {
+        let refused = |found: &Result<NurbsCurve, MathError>| {
+            matches!(found, Err(MathError::ParameterOutOfRange { .. }))
+        };
+        let started = std::time::Instant::now();
+        let mut repeated = vec![Point3::new(0.0, 0.0, 0.0); 1000];
+        repeated.extend((1..=1000).map(|i| Point3::new(f64::from(i), 0.0, 0.0)));
+        let found = interpolate(&repeated, 3);
+        assert!(refused(&found), "{found:?}");
+        let mut unread = wave(100);
+        unread[40] = Point3::new(f64::NAN, 0.0, 0.0);
+        for found in [
+            interpolate(&unread, 3),
+            approximate(&unread, 3, 20),
+            approximate_lspia(&unread, 3, 20, 1e-6, 100),
+        ] {
+            assert!(refused(&found), "{found:?}");
+        }
+        assert!(started.elapsed().as_secs() < 1, "{:?}", started.elapsed());
     }
 }
