@@ -583,3 +583,61 @@ fn a_round_over_a_bore_leaves_the_part_as_it_was() {
         .unwrap();
     assert_left_as_it_was("round failed", &mut topo, solid, &[edge, rim]);
 }
+
+/// A bore drilled from both faces to meet in the middle: its wall is two
+/// faces, split along the circle where the drills met (as where a part's
+/// two halves are fused). The round runs over it as over a bore of one
+/// wall.
+#[test]
+fn a_bore_whose_wall_is_in_two_pieces_cuts_back_through_it() {
+    use brepkit_operations::boolean::{BooleanOptions, boolean_with_options};
+    for (cy, rho, r) in [(5.0, 2.0, 8.0), (6.0, 2.0, 7.0)] {
+        let label = format!("two-piece bore at {cy} radius {rho}, r {r}");
+        let mut topo = Topology::new();
+        let block = make_box(&mut topo, LENGTH, WIDTH, HEIGHT).unwrap();
+        let opts = BooleanOptions {
+            unify_faces: false,
+            ..BooleanOptions::default()
+        };
+        let mut solid = block;
+        for (z0, h) in [
+            (-1.0, 0.5 * HEIGHT + 1.0),
+            (0.5 * HEIGHT, 0.5 * HEIGHT + 1.0),
+        ] {
+            let drill = make_cylinder(&mut topo, rho, h).unwrap();
+            transform_solid(&mut topo, drill, &Mat4::translation(0.5 * LENGTH, cy, z0)).unwrap();
+            solid = boolean_with_options(&mut topo, BooleanOp::Cut, solid, drill, opts).unwrap();
+        }
+        let walls = solid_faces(&topo, solid)
+            .unwrap()
+            .into_iter()
+            .filter(|&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Cylinder(_)))
+            .count();
+        assert_eq!(walls, 2, "{label}: the bore's wall should be two faces");
+        let edge = solid_edges(&topo, solid)
+            .unwrap()
+            .into_iter()
+            .find(|&e| {
+                let edge = topo.edge(e).unwrap();
+                [edge.start(), edge.end()].iter().all(|&v| {
+                    let p = topo.vertex(v).unwrap().point();
+                    p.y().abs() < 1e-9 && (p.z() - HEIGHT).abs() < 1e-9
+                })
+            })
+            .unwrap();
+        let before = solid_volume(&topo, solid, 0.01).unwrap();
+        let result = fillet_v2(&mut topo, solid, &[edge], r)
+            .and_then(all_blended)
+            .unwrap_or_else(|e| panic!("{label}: {e}"));
+        let report = validate_solid(&topo, result).unwrap();
+        assert!(report.is_valid(), "{label}: invalid: {report:?}");
+        let mesh = tessellate_solid(&topo, result, 0.05).unwrap();
+        assert!(is_watertight(&mesh), "{label}: mesh not watertight");
+        let want = (1.0 - FRAC_PI_4) * r * r * LENGTH - strip_in_bore(r, cy, rho);
+        let removed = before - solid_volume(&topo, result, 0.01).unwrap();
+        assert!(
+            (removed - want).abs() <= 1e-4 * want,
+            "{label}: removed {removed}, want {want}"
+        );
+    }
+}
