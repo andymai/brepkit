@@ -171,29 +171,59 @@ pub(crate) fn curve_revolution_surface(
     axis: Vec3,
     seg_angle: f64,
 ) -> Result<NurbsSurface, brepkit_math::MathError> {
+    curve_revolution_spans(profile, origin, axis, seg_angle, 1)
+}
+
+/// The surface `profile` sweeps through `spans` turns of `seg_angle` each,
+/// one rational arc span per turn: across `v` in `[0, 1]`, span `k` holds
+/// `[k / spans, (k + 1) / spans]`, so the first span is the band
+/// [`curve_revolution_surface`] builds, its normals the same way round.
+pub(crate) fn curve_revolution_spans(
+    profile: &NurbsCurve,
+    origin: Point3,
+    axis: Vec3,
+    seg_angle: f64,
+    spans: usize,
+) -> Result<NurbsSurface, brepkit_math::MathError> {
     let half = seg_angle / 2.0;
     let w_mid = half.cos();
     let rows = profile
         .control_points()
         .iter()
         .map(|&p| {
-            vec![
-                p,
-                arc_mid_control_point(p, origin, axis, half, w_mid),
-                rotate_point(p, origin, axis, seg_angle),
-            ]
+            let mut row = vec![p];
+            for k in 0..spans {
+                #[allow(clippy::cast_precision_loss)]
+                let start = rotate_point(p, origin, axis, seg_angle * k as f64);
+                row.push(arc_mid_control_point(start, origin, axis, half, w_mid));
+                row.push(rotate_point(start, origin, axis, seg_angle));
+            }
+            row
         })
         .collect();
     let weights = profile
         .weights()
         .iter()
-        .map(|&w| vec![w, w * w_mid, w])
+        .map(|&w| {
+            let mut row = vec![w];
+            for _ in 0..spans {
+                row.extend([w * w_mid, w]);
+            }
+            row
+        })
         .collect();
+    let mut knots_v = vec![0.0; 3];
+    for k in 1..spans {
+        #[allow(clippy::cast_precision_loss)]
+        let t = k as f64 / spans as f64;
+        knots_v.extend([t, t]);
+    }
+    knots_v.extend([1.0; 3]);
     NurbsSurface::new(
         profile.degree(),
         2,
         profile.knots().to_vec(),
-        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        knots_v,
         rows,
         weights,
     )
@@ -779,6 +809,10 @@ pub(crate) enum RevEdge {
     },
     /// Degenerate edge on the axis (both endpoints at r≈0) → no face.
     OnAxis,
+    /// An ellipse or spline arc clearing the axis → one rational B-spline wall
+    /// carrying the curve round a full turn (see [`full_turn_wall`]).
+    /// [`classify_profile_edge`] never returns it.
+    Spline,
 }
 
 /// One profile edge of the analytic full-revolution fast path, in wire
@@ -1030,14 +1064,25 @@ fn try_analytic_full_revolution(
         let curve = edge.curve().clone();
         let ns = topo.vertex(edge.start())?.point();
         let ne = topo.vertex(edge.end())?.point();
-        let Some(class) = classify_profile_edge(&curve, sp, ep, axis_origin, axis, lin) else {
-            return Ok(None);
+        let class = match classify_profile_edge(&curve, sp, ep, axis_origin, axis, lin) {
+            Some(class) => class,
+            // An ellipse or spline arc clear of the axis sweeps one wall of
+            // its own; the lines and arcs beside it keep their exact faces.
+            None if matches!(curve, EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_))
+                && edge.start() != edge.end()
+                && radial_axial(sp, axis_origin, axis).0 > lin
+                && radial_axial(ep, axis_origin, axis).0 > lin
+                && !curved_edge_reaches_axis(topo, oe.edge(), axis_origin, axis)? =>
+            {
+                RevEdge::Spline
+            }
+            None => return Ok(None),
         };
         // Interior samples for arcs, taken in the curve's NATURAL start→end
         // direction (the stored arc span) and then reversed to traversal order
         // — sampling with traversal endpoints directly would pick the CCW
         // complement of a reversed arc.
-        let interior = if matches!(class, RevEdge::Torus { .. }) {
+        let interior = if matches!(class, RevEdge::Torus { .. } | RevEdge::Spline) {
             let (t0, t1) = curve.domain_with_endpoints(ns, ne);
             let mut pts: Vec<Point3> = [0.25, 0.5, 0.75]
                 .iter()
@@ -1208,7 +1253,10 @@ fn build_analytic_revolution(
                     },
                 )));
             }
-            RevEdge::Cylinder { .. } | RevEdge::Cone { .. } | RevEdge::Torus { .. } => {
+            RevEdge::Cylinder { .. }
+            | RevEdge::Cone { .. }
+            | RevEdge::Torus { .. }
+            | RevEdge::Spline => {
                 // A periodic wall seamed by the ORIGINAL profile edge. The
                 // orientation probe is a point ON the wall surface mid-edge plus
                 // the material-outward direction there (for an arc, the local
@@ -1228,8 +1276,13 @@ fn build_analytic_revolution(
                     (m, out2)
                 };
                 let outward = e_r * outm.0 + axis * outm.1;
-                let (surface, reversed) =
-                    revolution_wall_surface(&pe.class, axis_origin, axis, probe, outward)?;
+                let (surface, reversed, rim_fwd) = if matches!(pe.class, RevEdge::Spline) {
+                    full_turn_wall(topo, pe, axis_origin, axis, e_r, s)?
+                } else {
+                    let (surface, reversed) =
+                        revolution_wall_surface(&pe.class, axis_origin, axis, probe, outward)?;
+                    (surface, reversed, reversed != ccw)
+                };
                 // Rim senses account for the face reversal below: a reversed
                 // face flips every edge's EFFECTIVE traversal (is_forward XOR
                 // is_reversed), so a reversed wall built with the unreversed
@@ -1241,7 +1294,6 @@ fn build_analytic_revolution(
                 // flip: reversal flips both of its uses together, keeping them
                 // opposed. A profile wound clockwise in the chart meets each
                 // edge's rims the other way round, so they flip once more.
-                let rim_fwd = reversed != ccw;
                 let wall_wire = match (rim_circle[idx], rim_circle[next]) {
                     (Some(bot_e), Some(top_e)) => Wire::new(
                         vec![
@@ -1298,6 +1350,86 @@ fn build_analytic_revolution(
     Ok(topo.add_solid(Solid::new(shell_id, vec![])))
 }
 
+/// The wall a full turn of an ellipse or spline profile edge sweeps: the
+/// rational B-spline surface carrying each of the edge's control points round
+/// the nine-point circle about the axis, round the turn in `u` and along the
+/// edge's curve in `v`, so it holds the edge at `u = 0` and every turn of it.
+/// Returns the surface, whether the face is reversed on it to face
+/// `s`-wound material out (see [`build_analytic_revolution`]), and the sense
+/// its rims take in its wire, as `revolution_wall_surface`'s walls have them:
+/// forward when the surface's normal runs against the turn's direction
+/// crossed with the edge's traversal.
+fn full_turn_wall(
+    topo: &Topology,
+    pe: &ProfileEdge,
+    axis_origin: Point3,
+    axis: Vec3,
+    e_r: Vec3,
+    s: f64,
+) -> Result<(FaceSurface, bool, bool), crate::OperationsError> {
+    use std::f64::consts::{FRAC_1_SQRT_2, FRAC_PI_4, SQRT_2};
+    const CIRCLE_KNOTS: [f64; 12] = [
+        0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+    ];
+    let edge = topo.edge(pe.edge)?;
+    let (a, b) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let Some(curve) = edge_span_nurbs(edge.curve(), true, (a, b))? else {
+        return Err(crate::OperationsError::InvalidInput {
+            reason: "a full-turn spline wall needs a curved profile edge".into(),
+        });
+    };
+    let around = |p: Point3| -> Vec<Point3> {
+        (0..9)
+            .map(|k| {
+                let on_circle = rotate_point(p, axis_origin, axis, f64::from(k) * FRAC_PI_4);
+                if k % 2 == 0 {
+                    on_circle
+                } else {
+                    let foot = axis_origin + axis * (on_circle - axis_origin).dot(axis);
+                    foot + (on_circle - foot) * SQRT_2
+                }
+            })
+            .collect()
+    };
+    let rows: Vec<Vec<Point3>> = curve.control_points().iter().map(|&p| around(p)).collect();
+    let surface = NurbsSurface::new(
+        2,
+        curve.degree(),
+        CIRCLE_KNOTS.to_vec(),
+        curve.knots().to_vec(),
+        (0..9)
+            .map(|i| rows.iter().map(|row| row[i]).collect())
+            .collect(),
+        (0..9)
+            .map(|i| {
+                let r = if i % 2 == 0 { 1.0 } else { FRAC_1_SQRT_2 };
+                curve.weights().iter().map(|&w| w * r).collect()
+            })
+            .collect(),
+    )?;
+    // Read the senses where the wall holds the edge, half way along it.
+    let (v0, v1) = curve.domain();
+    let v = f64::midpoint(v0, v1);
+    let probe = curve.evaluate(v);
+    let natural = surface.normal(0.0, v)?;
+    let h = 1e-4 * (v1 - v0);
+    let along = curve.evaluate(v + h) - curve.evaluate(v - h);
+    let along = if pe.forward { along } else { -along };
+    let radial = {
+        let off = probe - axis_origin;
+        off - axis * off.dot(axis)
+    };
+    let turning = axis.cross(radial);
+    let (tx, ty) = (along.dot(e_r), along.dot(axis));
+    let outward = e_r * (s * ty) + axis * (-(s * tx));
+    let reversed = natural.dot(outward) < 0.0;
+    let rim_fwd = natural.dot(turning.cross(along)) > 0.0;
+    Ok((FaceSurface::Nurbs(surface), reversed, rim_fwd))
+}
+
 /// Build the analytic wall surface (cylinder/cone/torus) for one classified
 /// profile edge, plus the `reversed` flag that aligns its natural normal with
 /// `outward` (the material-outward direction) at `probe`, a point ON the wall.
@@ -1346,9 +1478,11 @@ pub(crate) fn revolution_wall_surface(
             let nat = sfc.normal(u, v);
             Ok((FaceSurface::Torus(sfc), nat.dot(outward) < 0.0))
         }
-        RevEdge::Plane | RevEdge::OnAxis => Err(crate::OperationsError::InvalidInput {
-            reason: "revolution_wall_surface called on a non-wall edge".into(),
-        }),
+        RevEdge::Plane | RevEdge::OnAxis | RevEdge::Spline => {
+            Err(crate::OperationsError::InvalidInput {
+                reason: "revolution_wall_surface called on a non-wall edge".into(),
+            })
+        }
     }
 }
 
@@ -2119,6 +2253,7 @@ pub fn revolve(
         .collect::<Result<_, _>>()?;
 
     let mut all_faces = Vec::new();
+    let mut caps = Vec::new();
 
     // Start cap (bottom): reversed copy of input face for partial revolution.
     if !is_full {
@@ -2155,6 +2290,7 @@ pub fn revolve(
             },
         ));
         all_faces.push(fid);
+        caps.push(fid);
     }
 
     // The side faces, a wire at a time. Each reads which way it faces off its
@@ -2182,6 +2318,65 @@ pub fn revolve(
                     .edge(wire_data.input_oriented[i].edge())?
                     .curve()
                     .clone();
+                // A spline or ellipse edge sweeps one wall however many quarter
+                // turns a part turn takes, one rational span a quarter, as its
+                // line and circle neighbours' bands merge into one face below.
+                // The wall is built whole with the first quarter; an edge
+                // with an end on the axis keeps its wedges.
+                let whole_wall = !is_full
+                    && num_segs > 1
+                    && !matches!(profile_curve, EdgeCurve::Line)
+                    && profile_arc_center_radius(
+                        &profile_curve,
+                        p0_start,
+                        p1_start,
+                        axis_origin,
+                        axis,
+                    )
+                    .is_none()
+                    && wire_data
+                        .arc_edges
+                        .iter()
+                        .take(num_segs)
+                        .all(|arcs| arcs[i].is_some() && arcs[next_i].is_some());
+                if whole_wall {
+                    if seg > 0 {
+                        continue;
+                    }
+                    let profile = profile_band_curve(
+                        &profile_curve,
+                        fwd_seg,
+                        (p0_start, p1_start),
+                        axis_origin,
+                        axis,
+                        0.0,
+                    )?
+                    .ok_or_else(|| crate::OperationsError::InvalidInput {
+                        reason: "a spline wall needs a curved profile edge".into(),
+                    })?;
+                    let surface = FaceSurface::Nurbs(curve_revolution_spans(
+                        &profile,
+                        axis_origin,
+                        axis,
+                        seg_angle,
+                        num_segs,
+                    )?);
+                    let last = num_segs;
+                    let mut loop_edges =
+                        vec![OrientedEdge::new(wire_data.ring_edges[0][i], fwd_seg)];
+                    for arcs in wire_data.arc_edges.iter().take(num_segs) {
+                        loop_edges.extend(arcs[next_i].map(|e| OrientedEdge::new(e, true)));
+                    }
+                    loop_edges.push(OrientedEdge::new(wire_data.ring_edges[last][i], !fwd_seg));
+                    for arcs in wire_data.arc_edges.iter().take(num_segs).rev() {
+                        loop_edges.extend(arcs[i].map(|e| OrientedEdge::new(e, false)));
+                    }
+                    let wire =
+                        Wire::new(loop_edges, true).map_err(crate::OperationsError::Topology)?;
+                    let wire_id = topo.add_wire(wire);
+                    all_faces.push(topo.add_face(Face::new(wire_id, vec![], surface)));
+                    continue;
+                }
                 #[allow(clippy::cast_precision_loss)]
                 let seg_start = seg_angle * seg as f64;
                 let (surface, reversed) = revolution_band_surface(
@@ -2277,6 +2472,7 @@ pub fn revolve(
             },
         ));
         all_faces.push(fid);
+        caps.push(fid);
     }
 
     let shell = Shell::new(all_faces).map_err(crate::OperationsError::Topology)?;
@@ -2289,19 +2485,46 @@ pub fn revolve(
     // meshes open. So do the bands beside a cap all but square to the axis:
     // `unify_faces` reads planes within a fraction of a degree as one, and
     // would join the cap to the flat bands it stands off.
+    // A line square to the axis from a vertex on it sweeps a disc about its
+    // centre, which meshes whole however far round it goes: only a band that
+    // leans to its point on the axis keeps its quarters.
     let mut touches_axis = false;
     for wire_data in std::iter::once(&outer).chain(&inner_data) {
-        for vertex in &wire_data.ring_verts[0] {
-            let p = topo.vertex(*vertex)?.point();
-            touches_axis |= radial_axial(p, axis_origin, axis).0 <= tol.linear;
+        let n = wire_data.n;
+        let ring: Vec<Point3> = wire_data.ring_verts[0]
+            .iter()
+            .map(|&v| topo.vertex(v).map(brepkit_topology::vertex::Vertex::point))
+            .collect::<Result<_, _>>()?;
+        for (i, &p) in ring.iter().enumerate() {
+            if radial_axial(p, axis_origin, axis).0 > tol.linear {
+                continue;
+            }
+            for (e, q) in [
+                ((i + n - 1) % n, ring[(i + n - 1) % n]),
+                (i, ring[(i + 1) % n]),
+            ] {
+                if wire_data.along_axis[e] {
+                    continue;
+                }
+                let square = matches!(
+                    topo.edge(wire_data.input_oriented[e].edge())?.curve(),
+                    EdgeCurve::Line
+                ) && (radial_axial(q, axis_origin, axis).1
+                    - radial_axial(p, axis_origin, axis).1)
+                    .abs()
+                    <= tol.linear;
+                touches_axis |= !square;
+            }
         }
         for oe in &wire_data.input_oriented {
             touches_axis |= curved_edge_reaches_axis(topo, oe.edge(), axis_origin, axis)?;
         }
     }
     let cap_across_axis = (input_normal.dot(axis).abs() - 1.0).abs() < CAP_ACROSS_AXIS;
+    // The caps stay faces of their own: a half turn sets them in one plane,
+    // either side of the axis.
     if !is_full && num_segs > 1 && !touches_axis && !cap_across_axis {
-        crate::heal::unify_faces(topo, solid)?;
+        crate::heal::unify_faces_keeping(topo, solid, &caps)?;
     }
 
     Ok(solid)
@@ -3856,12 +4079,12 @@ mod tests {
         let solid_data = topo.solid(solid).unwrap();
         let shell = topo.shell(solid_data.outer_shell()).unwrap();
 
-        // 180° = 2 segments × 3 swept profile edges + 2 planar end caps = 8
-        // faces. The unit square revolved about the Y axis has an
-        // axis-parallel edge (x=1 wall → Cylinder), two perpendicular edges
-        // (Plane wedges closing at the axis), and an on-axis edge (x=0) that
-        // sweeps nothing.
-        assert_eq!(shell.faces().len(), 8);
+        // 180° = 3 swept profile edges + 2 planar end caps = 5 faces. The
+        // unit square revolved about the Y axis has an axis-parallel edge
+        // (x=1 wall → one Cylinder face), two perpendicular edges (half discs
+        // about the axis, each one Plane face across both quarters), and an
+        // on-axis edge (x=0) that sweeps nothing.
+        assert_eq!(shell.faces().len(), 5);
 
         let mut plane_count = 0;
         let mut cyl_count = 0;
@@ -3874,16 +4097,17 @@ mod tests {
                 _ => {}
             }
         }
-        // 4 perpendicular-edge wedges + 2 end caps.
-        assert_eq!(plane_count, 6, "perpendicular wedges + end caps are planar");
-        assert_eq!(
-            cyl_count, 2,
-            "the axis-parallel wall's 2 bands are cylinders"
-        );
+        // 2 half discs + 2 end caps.
+        assert_eq!(plane_count, 4, "half discs + end caps are planar");
+        assert_eq!(cyl_count, 1, "the axis-parallel wall is one cylinder");
         assert_eq!(nurbs_count, 0, "the on-axis edge sweeps no band");
 
         // Half revolution of a rectangle → genus-0 solid (χ=2).
         assert_euler_genus0(&topo, solid);
+        let report = crate::validate::validate_solid(&topo, solid).unwrap();
+        assert!(report.is_valid(), "{:?}", report.issues);
+        let volume = crate::measure::solid_volume(&topo, solid, 0.001).unwrap();
+        assert!((volume - PI / 2.0).abs() < 1e-9, "{volume}");
     }
 
     #[test]
