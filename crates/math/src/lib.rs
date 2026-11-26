@@ -214,6 +214,18 @@ pub enum MathError {
         /// End of the span.
         end: f64,
     },
+
+    /// A fit would take more multiply-adds than its limit, counted from
+    /// its sizes before it starts.
+    #[error("{what} would take {work:e} multiply-adds, past the limit of {limit:e}")]
+    TooMuchWork {
+        /// The fit refused.
+        what: &'static str,
+        /// The multiply-adds it would take.
+        work: f64,
+        /// The most it may take.
+        limit: f64,
+    },
 }
 
 pub mod aabb;

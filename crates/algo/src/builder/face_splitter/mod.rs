@@ -14059,6 +14059,134 @@ pub fn edges_one_curve(a: &OrientedPCurveEdge, b: &OrientedPCurveEdge, tol: f64)
     same_section_curve(&section(a), &section(b), tol)
 }
 
+/// Where a section along `a` meets one along `b`, each given as its curve
+/// and its two ends: a line, or a circle or an ellipse arc of at most a half
+/// turn, the two in one plane. Each point is proved where the two come
+/// within `tol` of each other inside both, but not at an end of either,
+/// which stands for itself: two lines by their segments' nearest points
+/// (`edge_splitting::segments_meet`), any other pair by
+/// `edge_splitting::read_section_meetings`. Two arcs of one conic meet
+/// along their overlap, which their ends stand for. `None` where the
+/// meetings are not settled, and for a pair the finder leaves unread: a
+/// B-spline, an arc of more than a half turn or of none, a conic no form on
+/// unit axes reads, or two curves not in one plane. With a conic, one plane
+/// is the finder's own reading: a quarter of `tol` off it at most, a line's
+/// ends over the cosine of its slope to it.
+pub fn section_meetings(
+    (curve_a, start_a, end_a): (&EdgeCurve, Point3, Point3),
+    (curve_b, start_b, end_b): (&EdgeCurve, Point3, Point3),
+    tol: f64,
+) -> Option<Vec<Point3>> {
+    let read = |curve: &EdgeCurve, start: Point3, end: Point3| match curve {
+        EdgeCurve::Line => true,
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+            let (t0, t1) = curve.domain_with_endpoints(start, end);
+            let sweep = t1 - t0;
+            sweep > 0.0
+                && sweep <= std::f64::consts::PI
+                && (start - end).length() > 0.0
+                && crate::builder::pcurve_compute::unit_conic(curve).is_some()
+        }
+        EdgeCurve::NurbsCurve(_) => false,
+    };
+    if !(read(curve_a, start_a, end_a) && read(curve_b, start_b, end_b)) {
+        return None;
+    }
+    // A conic's plane, as its centre and unit normal.
+    let plane = |curve: &EdgeCurve| match curve {
+        EdgeCurve::Circle(c) => c.normal().normalize().ok().map(|n| (c.center(), n)),
+        EdgeCurve::Ellipse(e) => e.normal().normalize().ok().map(|n| (e.center(), n)),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+    };
+    let quarter = 0.25 * tol;
+    let in_plane = |(c, n): (Point3, Vec3), p: Point3, q: Point3| {
+        let lean = (q - p).normalize().map_or(0.0, |along| {
+            along.dot(n).madd(-along.dot(n), 1.0).max(0.0).sqrt()
+        });
+        (p - c).dot(n).abs() <= quarter * lean && (q - c).dot(n).abs() <= quarter * lean
+    };
+    // How far a conic strays from a plane: its centre's distance, and its
+    // axes' reach off the plane, which its parameter turns through in full.
+    let stray = |curve: &EdgeCurve, (c, n): (Point3, Vec3)| match curve {
+        EdgeCurve::Circle(k) => {
+            (k.center() - c).dot(n).abs()
+                + (k.radius() * k.u_axis().dot(n)).hypot(k.radius() * k.v_axis().dot(n))
+        }
+        EdgeCurve::Ellipse(e) => {
+            (e.center() - c).dot(n).abs()
+                + (e.semi_major() * e.u_axis().dot(n)).hypot(e.semi_minor() * e.v_axis().dot(n))
+        }
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => f64::INFINITY,
+    };
+    let one_plane = match (plane(curve_a), plane(curve_b)) {
+        (Some(pa), Some(pb)) => stray(curve_b, pa) <= quarter && stray(curve_a, pb) <= quarter,
+        (Some(pa), None) => in_plane(pa, start_b, end_b),
+        (None, Some(pb)) => in_plane(pb, start_a, end_a),
+        // Two segments lie in one plane where one of their four ends lies
+        // within `tol` of the plane through the other three. The plane
+        // through the three that span the largest triangle is the one the
+        // fourth lies nearest, and the best defined: no such triangle at
+        // all puts the four on one line.
+        (None, None) => {
+            let (ab, ac, ad) = (end_a - start_a, start_b - start_a, end_b - start_a);
+            let widest = [
+                ab.cross(ac),
+                ab.cross(ad),
+                ac.cross(ad),
+                (start_b - end_a).cross(end_b - end_a),
+            ]
+            .iter()
+            .map(|n| n.length())
+            .fold(0.0_f64, f64::max);
+            ab.dot(ac.cross(ad)).abs() <= tol * widest
+        }
+    };
+    if !one_plane {
+        return None;
+    }
+    let spans = [
+        edge_splitting::SectionSpan {
+            curve: curve_a,
+            start: start_a,
+            end: end_a,
+        },
+        edge_splitting::SectionSpan {
+            curve: curve_b,
+            start: start_b,
+            end: end_b,
+        },
+    ];
+    if matches!((curve_a, curve_b), (EdgeCurve::Line, EdgeCurve::Line)) {
+        // The finder reads two lines as meeting only at their ends, as two
+        // sections of one face do: their segments are read here.
+        let off = |p: Point3, (a, b): (Point3, Point3)| {
+            let d = b - a;
+            let len2 = d.dot(d);
+            let along = if len2 > 0.0 {
+                ((p - a).dot(d) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (p - (a + d * along)).length()
+        };
+        let both = |p: Point3| off(p, (start_a, end_a)) <= tol && off(p, (start_b, end_b)) <= tol;
+        let met = edge_splitting::segments_meet((&spans[0], 0.0), (&spans[1], 0.0), tol).ok()?;
+        let ends = [start_a, end_a, start_b, end_b];
+        return Some(
+            met.filter(|m| both(m.at) && !ends.iter().any(|&k| both(k)))
+                .map(|m| m.at)
+                .into_iter()
+                .collect(),
+        );
+    }
+    let reading =
+        edge_splitting::read_section_meetings(&spans, tol, edge_splitting::OnUnread::Stop).ok()?;
+    if reading.unread.is_some() {
+        return None;
+    }
+    Some(reading.meetings.into_iter().map(|m| m.at).collect())
+}
+
 /// Whether two curves, each read from `start` to `end` the way it is
 /// stored, with ends within `tol` of each other either way round, are proved
 /// one curve within `tol` by [`same_section_curve`].
@@ -19304,6 +19432,48 @@ mod tests {
             forward: true,
             source_edge_idx: Some(src),
             pave_block_id: None,
+        }
+    }
+
+    /// The arc of the ellipse of semi-axes 3 and 2 about the origin from its
+    /// parameter -1 to 1, and the line x = 2.9 from y = -1 to 1 lifted `h`
+    /// off its plane, which crosses the arc twice in the plane's view.
+    /// Lifted half of 1e-7, the pair is reported unread, not passed over;
+    /// lifted an eighth, its two meetings are found and nothing is left.
+    #[test]
+    fn a_line_half_a_tolerance_off_an_arcs_plane_is_reported_unread() {
+        let ellipse = brepkit_math::curves::Ellipse3D::with_axes(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+            2.0,
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap();
+        let (arc, line) = (EdgeCurve::Ellipse(ellipse.clone()), EdgeCurve::Line);
+        for (h, unread) in [(0.5e-7, true), (0.125e-7, false)] {
+            let spans = [
+                edge_splitting::SectionSpan {
+                    curve: &arc,
+                    start: ellipse.evaluate(-1.0),
+                    end: ellipse.evaluate(1.0),
+                },
+                edge_splitting::SectionSpan {
+                    curve: &line,
+                    start: Point3::new(2.9, -1.0, h),
+                    end: Point3::new(2.9, 1.0, h),
+                },
+            ];
+            let reading =
+                edge_splitting::read_section_meetings(&spans, 1e-7, edge_splitting::OnUnread::Stop)
+                    .unwrap();
+            if unread {
+                assert_eq!(reading.unread, Some((0, 1)), "{h:e}");
+            } else {
+                assert!(reading.unread.is_none(), "{h:e}: {reading:?}");
+                assert_eq!(reading.meetings.len(), 2, "{h:e}: {reading:?}");
+            }
         }
     }
 

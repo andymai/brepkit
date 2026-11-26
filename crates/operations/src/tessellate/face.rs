@@ -335,13 +335,9 @@ pub(super) fn tessellate_with_uvs_floor(
                     && surface.is_periodic_v()
                     && covers_whole_domain(topo, face_data)? =>
             {
-                Ok(tessellate_periodic_nurbs_grid(
-                    surface,
-                    deflection,
-                    angular_tol,
-                ))
+                tessellate_periodic_nurbs_grid(surface, deflection, angular_tol)
             }
-            FaceSurface::Nurbs(surface) => Ok(tessellate_nurbs(surface, deflection, angular_tol)),
+            FaceSurface::Nurbs(surface) => tessellate_nurbs(surface, deflection, angular_tol),
             FaceSurface::Cylinder(cyl) => {
                 // Check if the boundary is non-standard (e.g., boolean result
                 // with arbitrary polyline boundary instead of circles + seams).
