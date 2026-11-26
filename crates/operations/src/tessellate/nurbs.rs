@@ -1174,17 +1174,15 @@ pub(super) fn iso_chords_hold(
                     lo + (hi - lo) * (k + 1) as f64 / n as f64,
                 );
                 let (p0, p1) = (point(t0, o), point(t1, o));
-                let chord_mid = Point3::new(
-                    0.5 * (p0.x() + p1.x()),
-                    0.5 * (p0.y() + p1.y()),
-                    0.5 * (p0.z() + p1.z()),
-                );
-                // An inflected span can cross its chord at its middle and
-                // stand off it either side, so its quarter points count too.
-                let sag = [0.25, 0.75]
+                // Each point is read against the chord, not against the
+                // chord's own point at its fraction: a span whose parameter
+                // runs unevenly along a straight chord lies on it. An
+                // inflected span can cross its chord at its middle and stand
+                // off it either side, so its quarter points count too.
+                let sag = [0.25, 0.5, 0.75]
                     .iter()
                     .map(|&f| off_chord(point(t0 + (t1 - t0) * f, o), p0, p1))
-                    .fold((point(0.5 * (t0 + t1), o) - chord_mid).length(), f64::max);
+                    .fold(0.0, f64::max);
                 let at_pole = (k == 0 && pole_lo) || (k + 1 == n && pole_hi);
                 let turned = angular_tol > 0.0
                     && !at_pole

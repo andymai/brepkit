@@ -7826,3 +7826,115 @@ fn a_closed_spline_torus_past_65536_cells_meshes_within_its_deflection() {
     let worst = worst_off(&mesh, &off_torus);
     assert!(worst <= deflection, "{worst:e} off the torus");
 }
+
+/// A straight profile x in [0, 1] whose pace crowds to x = 0 under weights
+/// `w`, 1, 1, extruded 1 along z, and a flat sheet crowded so both ways, in
+/// three poses: each iso-line lies on its chord, so every refiner holds the
+/// patch on its first lines at deflections 1e-3, 1e-6 and 1e-9. A conic
+/// profile crowded alike still divides.
+#[test]
+fn flat_patches_with_crowded_weights_hold_on_their_first_lines() {
+    let turn = |angle: f64, axis: Vec3, shift: Vec3| {
+        let k = axis * (1.0 / axis.length());
+        let (sin, cos) = angle.sin_cos();
+        move |p: Point3| {
+            let v = Vec3::new(p.x(), p.y(), p.z());
+            let r = v * cos + k.cross(v) * sin + k * (k.dot(v) * (1.0 - cos));
+            Point3::new(r.x() + shift.x(), r.y() + shift.y(), r.z() + shift.z())
+        }
+    };
+    let poses = [
+        turn(0.0, Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, 0.0)),
+        turn(0.7, Vec3::new(1.0, 2.0, 3.0), Vec3::new(5.0, -3.0, 2.0)),
+        turn(2.1, Vec3::new(-2.0, 1.0, 0.5), Vec3::new(-100.0, 40.0, 7.0)),
+    ];
+    let (q2, q1) = (vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]);
+    let unit = ((0.0, 1.0), (0.0, 1.0));
+    let max = super::MAX_DIVISIONS;
+    for w in [1e-3, 1e-6, 2.0_f64.powi(-20)] {
+        for pose in &poses {
+            let extrude = |profile: [(f64, f64); 3], weights: [f64; 3]| {
+                NurbsSurface::new(
+                    2,
+                    1,
+                    q2.clone(),
+                    q1.clone(),
+                    profile
+                        .iter()
+                        .map(|&(x, y)| {
+                            vec![pose(Point3::new(x, y, 0.0)), pose(Point3::new(x, y, 1.0))]
+                        })
+                        .collect(),
+                    weights.iter().map(|&k| vec![k, k]).collect(),
+                )
+                .unwrap()
+            };
+            let straight = extrude([(0.0, 0.0), (0.5, 0.0), (1.0, 0.0)], [w, 1.0, 1.0]);
+            let crowd = [w, 1.0, 1.0];
+            let sheet = NurbsSurface::new(
+                2,
+                2,
+                q2.clone(),
+                q2.clone(),
+                [0.0, 0.5, 1.0]
+                    .iter()
+                    .map(|&x| {
+                        [0.0, 0.5, 1.0]
+                            .iter()
+                            .map(|&y| pose(Point3::new(x, y, 0.0)))
+                            .collect()
+                    })
+                    .collect(),
+                crowd
+                    .iter()
+                    .map(|&a| crowd.iter().map(|&b| a * b).collect())
+                    .collect(),
+            )
+            .unwrap();
+            for surface in [&straight, &sheet] {
+                let at = |u: f64, v: f64| surface.evaluate(u, v);
+                let normal_at = |u: f64, v: f64| surface.normal(u, v).unwrap();
+                for deflection in [1e-3, 1e-6, 1e-9] {
+                    for along_u in [true, false] {
+                        let divisions = super::nurbs::iso_divisions_over(
+                            &at,
+                            &normal_at,
+                            along_u,
+                            unit,
+                            deflection,
+                            0.3,
+                            (4096, max),
+                        );
+                        assert_eq!(divisions.ok(), Some(1), "w {w} at {deflection}");
+                        let knots = if along_u {
+                            surface.knots_u()
+                        } else {
+                            surface.knots_v()
+                        };
+                        let lines = super::nurbs::iso_breaks_over(
+                            &at, &normal_at, along_u, unit, knots, deflection, 0.3, max,
+                        );
+                        assert_eq!(lines.map(|l| l.len()).ok(), Some(2));
+                    }
+                    let tree = tessellate_nurbs(surface, deflection, 0.3).map(|m| m.uvs.len());
+                    assert_eq!(tree.ok(), Some(25), "w {w} at {deflection}");
+                }
+            }
+            let half = std::f64::consts::FRAC_1_SQRT_2;
+            let conic = extrude([(1.0, 0.0), (1.0, 1.0), (0.0, 1.0)], [w, w * half, 1.0]);
+            let at = |u: f64, v: f64| conic.evaluate(u, v);
+            let normal_at = |u: f64, v: f64| conic.normal(u, v).unwrap();
+            let divisions = super::nurbs::iso_divisions_over(
+                &at,
+                &normal_at,
+                true,
+                unit,
+                1e-3,
+                0.3,
+                (4096, max),
+            )
+            .unwrap();
+            assert!(divisions > 1, "the conic's divisions");
+        }
+    }
+}
