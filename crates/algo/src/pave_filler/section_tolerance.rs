@@ -323,17 +323,24 @@ fn settle_on_vertices(
                 if let Some(last) = apart.last()
                     && cut.parameter - last.parameter <= margin
                 {
-                    let (a, b) = (topo.vertex(last.vertex)?, topo.vertex(cut.vertex)?);
+                    // The vertices the two now stand as: a third at the same
+                    // point joins the one the first two became.
+                    let (ra, rb) = (
+                        arena.resolve_vertex(last.vertex),
+                        arena.resolve_vertex(cut.vertex),
+                    );
+                    let (a, b) = (topo.vertex(ra)?, topo.vertex(rb)?);
                     let gap = (a.point() - b.point()).length();
                     if gap > a.tolerance() + b.tolerance() + tol.linear {
                         return Err(AlgoError::IntersectionFailed(format!(
-                            "vertices {:?} and {:?}, {gap:e} apart, cut a section at one point",
-                            last.vertex, cut.vertex
+                            "vertices {ra:?} and {rb:?}, {gap:e} apart, cut a section at one point"
                         )));
                     }
                     let holds = gap + b.tolerance().max(a.tolerance());
-                    arena.merge_vertices(last.vertex, cut.vertex);
-                    raised.push((arena.resolve_vertex(last.vertex), holds));
+                    if ra != rb {
+                        arena.merge_vertices(ra, rb);
+                    }
+                    raised.push((arena.resolve_vertex(ra), holds));
                     continue;
                 }
                 apart.push(cut);
@@ -385,10 +392,18 @@ fn settle_on_vertices(
             }
         }
     }
+    // A raise for a vertex since joined to another goes to the one it joined,
+    // across the distance between the two.
     for (v, gap) in raised {
-        let vertex = topo.vertex_mut(v)?;
-        if gap > vertex.tolerance() {
-            vertex.set_tolerance(gap);
+        let r = arena.resolve_vertex(v);
+        let reach = if r == v {
+            gap
+        } else {
+            gap + (topo.vertex(v)?.point() - topo.vertex(r)?.point()).length()
+        };
+        let vertex = topo.vertex_mut(r)?;
+        if reach > vertex.tolerance() {
+            vertex.set_tolerance(reach);
         }
     }
     Ok(())
@@ -414,6 +429,152 @@ mod tests {
     /// A pose: its name, where it takes the origin, and how it turns a
     /// direction.
     type Pose = (&'static str, Point3, Box<dyn Fn(Vec3) -> Vec3>);
+
+    /// A straight spline section across the frame's `u` from 0 to 10 of the
+    /// planes across its `w` and its `v`, and vertices at `points`, each with a
+    /// tolerance of 1e-7, chained by lines in the first plane's wire in the
+    /// order `order`. Gives the topology, the arena, the vertices and the
+    /// section's block.
+    fn section_beside(
+        (origin, [u, v, w]): (Point3, [Vec3; 3]),
+        points: &[Point3],
+        order: &[usize],
+    ) -> (
+        Topology,
+        GfaArena,
+        Vec<brepkit_topology::vertex::VertexId>,
+        crate::ds::PaveBlockId,
+    ) {
+        let at = |a: f64| origin + u * a;
+        let mut topo = Topology::default();
+        let curve = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![at(0.0), at(10.0)],
+            vec![1.0; 2],
+        )
+        .unwrap();
+        let (s0, s1) = (
+            topo.add_vertex(Vertex::new(at(0.0), 1e-7)),
+            topo.add_vertex(Vertex::new(at(10.0), 1e-7)),
+        );
+        let section = topo.add_edge(Edge::new(s0, s1, EdgeCurve::NurbsCurve(curve.clone())));
+        let vertices: Vec<_> = points
+            .iter()
+            .map(|&p| topo.add_vertex(Vertex::new(p, 1e-7)))
+            .collect();
+        let chain: Vec<_> = order
+            .windows(2)
+            .map(|pair| {
+                let e = topo.add_edge(Edge::new(
+                    vertices[pair[0]],
+                    vertices[pair[1]],
+                    EdgeCurve::Line,
+                ));
+                OrientedEdge::new(e, true)
+            })
+            .collect();
+        let wire = topo.add_wire(Wire::new(chain, false).unwrap());
+        let plane = |n: Vec3| FaceSurface::Plane {
+            normal: n,
+            d: n.dot(Vec3::new(origin.x(), origin.y(), origin.z())),
+        };
+        let face_a = topo.add_face(Face::new(wire, vec![], plane(w)));
+        let face_b = topo.add_face(Face::new(wire, vec![], plane(v)));
+        let mut arena = GfaArena::new();
+        let pb = arena.pave_blocks.alloc(PaveBlock::new(
+            section,
+            Pave::new(s0, 0.0),
+            Pave::new(s1, 1.0),
+        ));
+        arena.curves.push(IntersectionCurveDS {
+            curve: EdgeCurve::NurbsCurve(curve.clone()),
+            face_a,
+            face_b,
+            bbox: Aabb3::from_points(curve.control_points().iter().copied()),
+            pave_blocks: vec![pb],
+            t_range: (0.0, 1.0),
+        });
+        (topo, arena, vertices, pb)
+    }
+
+    /// The poses of the tests below: upright, turned and mirrored frames.
+    fn frames() -> [(&'static str, (Point3, [Vec3; 3])); 3] {
+        let axis = Vec3::new(1.0, 2.0, 3.0).normalize().unwrap();
+        let (sin, cos) = 0.7f64.sin_cos();
+        let turn = |e: Vec3| e * cos + axis.cross(e) * sin + axis * (axis.dot(e) * (1.0 - cos));
+        let mirror = |e: Vec3| Vec3::new(-e.x(), e.y(), e.z());
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        [
+            ("upright", (Point3::new(0.0, 0.0, 0.0), [x, y, z])),
+            (
+                "turned",
+                (Point3::new(3.0, -2.0, 5.0), [turn(x), turn(y), turn(z)]),
+            ),
+            (
+                "mirrored",
+                (
+                    Point3::new(-3.0, -2.0, 5.0),
+                    [mirror(turn(x)), mirror(turn(y)), mirror(turn(z))],
+                ),
+            ),
+        ]
+    }
+
+    /// Three vertices of the plane's wire within their tolerances of each
+    /// other at the section's middle, met in the wire as the last made
+    /// first: all three are one vertex that cuts the section once. Upright,
+    /// turned and mirrored.
+    #[test]
+    fn three_vertices_at_one_point_of_a_section_are_one() {
+        for (name, frame) in frames() {
+            let (origin, [u, v, w]) = frame;
+            let middle = origin + u * 5.0;
+            let points = [middle + v * 1e-7, middle - v * 1e-7, middle + w * 1e-7];
+            let (mut topo, mut arena, vertices, pb) = section_beside(frame, &points, &[2, 0, 1]);
+            super::perform(&mut topo, Tolerance::default(), &mut arena).unwrap();
+            let one = arena.resolve_vertex(vertices[0]);
+            for &vertex in &vertices {
+                assert_eq!(
+                    arena.resolve_vertex(vertex),
+                    one,
+                    "{name}: the three vertices are one"
+                );
+            }
+            let children = &arena.pave_blocks.get(pb).unwrap().children;
+            assert_eq!(children.len(), 2, "{name}: the section's pieces");
+        }
+    }
+
+    /// A vertex on the section's middle and one 1.5e-7 off it, within their
+    /// tolerances of each other: the second joins the first, and the first
+    /// then holds the second's distance from the section past the distance
+    /// between the two. Upright, turned and mirrored.
+    #[test]
+    fn a_vertex_takes_the_reach_of_one_joined_to_it() {
+        for (name, frame) in frames() {
+            let (origin, [u, v, _]) = frame;
+            let middle = origin + u * 5.0;
+            let points = [middle, middle + v * 1.5e-7];
+            let (mut topo, mut arena, vertices, _) = section_beside(frame, &points, &[0, 1]);
+            super::perform(&mut topo, Tolerance::default(), &mut arena).unwrap();
+            assert_eq!(
+                arena.resolve_vertex(vertices[1]),
+                vertices[0],
+                "{name}: the second vertex joins the first"
+            );
+            let want = (points[0] - points[1]).length() + (points[1] - middle).length();
+            let held = topo.vertex(vertices[0]).unwrap().tolerance();
+            assert!(
+                held >= want * (1.0 - 1e-9),
+                "{name}: the first vertex holds {held:e} for {want:e}"
+            );
+        }
+    }
 
     /// A straight spline section of a plane and of a second plane, and two
     /// vertices of the plane's wire on either side of the section's middle,
