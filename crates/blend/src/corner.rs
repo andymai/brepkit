@@ -4785,8 +4785,12 @@ fn apply_equal_two_edge_miter_corner(
     // `adopt_side_face_vertical_edge`); the miter only adopts it and makes
     // both side supports use the one shared edge/vertex pair. At the exact
     // limit there is no such edge left to adopt, and the corner closes on
-    // the two stripe faces instead.
-    let (vertical_edge, p00_vertex, bottom) = match adopt_side_face_vertical_edge(
+    // the two stripe faces instead. Where the walls are exactly twice the
+    // radius high and rounded along both rims, the edge is gone too, but
+    // because the walls are: the rounds along the far rims mitre at the
+    // same pinch, so each wall is left a sliver between two contacts, and
+    // the corner's pinch is the vertex both slivers share there.
+    let p00_vertex = match adopt_side_face_vertical_edge(
         topo,
         miter.side_a,
         miter.vertex,
@@ -4794,31 +4798,40 @@ fn apply_equal_two_edge_miter_corner(
         miter.radius,
         None,
     ) {
-        Ok(adopted) => adopted,
-        Err(error) => {
-            if close_collapsed_miter_corner(topo, miter, face_a, face_b, registry)? {
-                return Ok(());
+        Ok((vertical_edge, p00_vertex, bottom)) => {
+            if miter_trace() {
+                log::debug!(
+                    "MITER step1a: side_a={:?} vertical={vertical_edge:?} p00={p00_vertex:?} bottom={bottom:?}",
+                    miter.side_a
+                );
             }
-            return Err(error);
+            adopt_side_face_vertical_edge(
+                topo,
+                miter.side_b,
+                miter.vertex,
+                miter.n,
+                miter.radius,
+                Some((vertical_edge, p00_vertex, bottom)),
+            )?;
+            if miter_trace() {
+                log::debug!("MITER step1b: side_b={:?}", miter.side_b);
+            }
+            p00_vertex
+        }
+        Err(error) => {
+            if let Some(pinch) = shared_sliver_pinch(topo, miter)? {
+                if miter_trace() {
+                    log::debug!("MITER step1: walls gone, pinch={pinch:?}");
+                }
+                pinch
+            } else {
+                if close_collapsed_miter_corner(topo, miter, face_a, face_b, registry)? {
+                    return Ok(());
+                }
+                return Err(error);
+            }
         }
     };
-    if miter_trace() {
-        log::debug!(
-            "MITER step1a: side_a={:?} vertical={vertical_edge:?} p00={p00_vertex:?} bottom={bottom:?}",
-            miter.side_a
-        );
-    }
-    adopt_side_face_vertical_edge(
-        topo,
-        miter.side_b,
-        miter.vertex,
-        miter.n,
-        miter.radius,
-        Some((vertical_edge, p00_vertex, bottom)),
-    )?;
-    if miter_trace() {
-        log::debug!("MITER step1b: side_b={:?}", miter.side_b);
-    }
 
     // Step 2: shorten both stripes' shared-face contacts (in place, same
     // identity before and after) and splice the top face directly at the
@@ -4843,6 +4856,41 @@ fn apply_equal_two_edge_miter_corner(
     insert_miter_crease_into_stripe_face(topo, face_b, crease_edge)?;
 
     Ok(())
+}
+
+/// The vertex at a sharp mitre's pinch `p00` that both side supports' wires
+/// pass through, when each side support is a sliver of two edges, its two
+/// contacts (the rounds along both its rims, the wall exactly twice the
+/// radius high), with no retained vertical edge left between them.
+fn shared_sliver_pinch(
+    topo: &Topology,
+    miter: &MiterCorner,
+) -> Result<Option<VertexId>, BlendError> {
+    let p00 = topo.vertex(miter.vertex)?.point() - miter.n * miter.radius;
+    let pinches = |face_id: FaceId| -> Result<Option<Vec<VertexId>>, BlendError> {
+        let face = topo.face(face_id)?;
+        let wire = topo.wire(face.outer_wire())?;
+        if !face.inner_wires().is_empty() || wire.edges().len() != 2 {
+            return Ok(None);
+        }
+        let mut at = Vec::new();
+        for oe in wire.edges() {
+            let edge = topo.edge(oe.edge())?;
+            for v in [edge.start(), edge.end()] {
+                if (topo.vertex(v)?.point() - p00).length() <= TOL && !at.contains(&v) {
+                    at.push(v);
+                }
+            }
+        }
+        Ok(Some(at))
+    };
+    let (Some(a), Some(b)) = (pinches(miter.side_a)?, pinches(miter.side_b)?) else {
+        return Ok(None);
+    };
+    match (a.as_slice(), b.as_slice()) {
+        ([va], [vb]) if va == vb => Ok(Some(*va)),
+        _ => Ok(None),
+    }
 }
 
 /// The sphere of radius `radius` about `center` when every one of the corner's
