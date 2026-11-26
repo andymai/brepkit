@@ -235,19 +235,30 @@ fn trace_loops(
                     // edges that leave the vertex close together, even along
                     // one heading, are two curves unless proved one (a circle
                     // and an ellipse through the same ends, two B-splines
-                    // that part between their ends).
+                    // that part between their ends). Two drawn as straight
+                    // segments in the face's parameters are one segment
+                    // there, which the walk reads: an arc along the face's
+                    // own rim drawn as its chord, and the chord itself.
                     let angle_diff = (entry.angle - incoming_angle).abs();
                     let close = angle_diff < 0.1 || (angle_diff - TAU).abs() < 0.1;
                     let twin = current_edge.source_edge_idx.is_some()
                         && current_edge.source_edge_idx == candidate.source_edge_idx
                         && current_edge.forward != candidate.forward;
+                    let one_segment = matches!(
+                        (&current_edge.pcurve, &candidate.pcurve),
+                        (
+                            brepkit_math::curves2d::Curve2D::Line(_),
+                            brepkit_math::curves2d::Curve2D::Line(_)
+                        )
+                    );
                     let is_reverse = twin
                         || close
-                            && super::face_splitter::edges_one_curve(
-                                current_edge,
-                                candidate,
-                                10.0 * tol,
-                            );
+                            && (one_segment
+                                || super::face_splitter::edges_one_curve(
+                                    current_edge,
+                                    candidate,
+                                    10.0 * tol,
+                                ));
                     if is_reverse {
                         continue;
                     }
