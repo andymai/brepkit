@@ -1840,27 +1840,34 @@ fn point_segment_distance(p: Point3, a: Point3, b: Point3) -> f64 {
 /// The distance from `p` to the triangle `a`, `b`, `c`, with the doubt the
 /// rounding of its plane leaves, and never more than to its nearest side.
 ///
-/// Each term of the triangle's normal rounds to within a few units in the
-/// last place of the two products it is the difference of. Where those
-/// products are large beside the normal, as on a sliver, the normal can
-/// tip; the distance from the plane takes that tip in. A sliver flat in its
-/// plane then reads as flat, and one whose plane the rounding hides reads
-/// as far as its nearest side.
+/// The normal is the cross product of the triangle's two shorter sides:
+/// any two sides give the same normal, but each of its terms rounds to
+/// within a few units in the last place of the two products it is the
+/// difference of, and the shorter sides give the smaller products. Where
+/// those products are still large beside the normal, as on a sliver whose
+/// longest side is near the sum of the others, the normal can tip, and the
+/// distance from the plane takes that tip in. The distance is read from the
+/// corner nearest `p`, so the tip moves it least.
 pub(super) fn point_triangle_distance(p: Point3, a: Point3, b: Point3, c: Point3) -> f64 {
     let edges = point_segment_distance(p, a, b)
         .min(point_segment_distance(p, b, c))
         .min(point_segment_distance(p, c, a));
-    let (ab, ac) = (b - a, c - a);
-    let normal = ab.cross(ac);
+    let sides = [b - a, c - b, a - c];
+    let longest = (0..3)
+        .max_by(|&i, &j| sides[i].dot(sides[i]).total_cmp(&sides[j].dot(sides[j])))
+        .unwrap_or(0);
+    // Consecutive sides round the triangle give its normal, `(b - a) x (c - a)`.
+    let (s, t) = (sides[(longest + 1) % 3], sides[(longest + 2) % 3]);
+    let normal = s.cross(t);
     let area2 = normal.length();
     if !(area2 > 0.0 && area2.is_finite()) {
         return edges;
     }
     let n = normal * (1.0 / area2);
     let terms = [
-        (ab.y() * ac.z()).abs() + (ab.z() * ac.y()).abs(),
-        (ab.z() * ac.x()).abs() + (ab.x() * ac.z()).abs(),
-        (ab.x() * ac.y()).abs() + (ab.y() * ac.x()).abs(),
+        (s.y() * t.z()).abs() + (s.z() * t.y()).abs(),
+        (s.z() * t.x()).abs() + (s.x() * t.z()).abs(),
+        (s.x() * t.y()).abs() + (s.y() * t.x()).abs(),
     ];
     let tip = terms
         .into_iter()
@@ -1869,7 +1876,10 @@ pub(super) fn point_triangle_distance(p: Point3, a: Point3, b: Point3, c: Point3
         .sum::<f64>()
         * (4.0 * f64::EPSILON)
         / area2;
-    let d = p - a;
+    let d = [p - a, p - b, p - c]
+        .into_iter()
+        .min_by(|x, y| x.dot(*x).total_cmp(&y.dot(*y)))
+        .unwrap_or(p - a);
     let off = d.dot(n);
     let rounding = 4.0
         * f64::EPSILON
@@ -2393,6 +2403,34 @@ mod crease_tests {
         assert_eq!(mesh.mesh.indices.len() / 6, 16, "the leaves");
         let inside = p(2.5e8, 2.5e-5);
         assert!(point_triangle_distance(inside, p(0.0, 0.0), p(1e9, 0.0), p(1e9, 1e-4)) < 1e-12);
+    }
+
+    /// A flat strip 2^20 long and 2^-14 wide along a slant, S(u, v) =
+    /// (2^20 u, 2^20 u + 2^-14 v, 2^-14 v): its cells' plane is exact, and
+    /// its roots hold it at a deflection of 1e-9. A point 2^-30 (1, -1, 1)
+    /// off the strip's half reads at least its distance, 1.6e-9, and nowhere
+    /// near the half's sides.
+    #[test]
+    fn a_slanted_flat_sliver_meshes_on_its_roots() {
+        let (long, wide) = (2.0_f64.powi(20), 2.0_f64.powi(-14));
+        let (a, b, c, d) = (
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(long, long, 0.0),
+            Point3::new(0.0, wide, wide),
+            Point3::new(long, long + wide, wide),
+        );
+        let strip = flat_patch([[a, c], [b, d]], [[1.0; 2]; 2]);
+        let mesh = super::tessellate_nurbs(&strip, 1e-9, 0.0).unwrap();
+        assert_eq!(mesh.mesh.indices.len() / 6, 16, "the leaves");
+        let step = 2.0_f64.powi(-30);
+        let off = Point3::new(
+            0.5 * long + step,
+            0.5 * long + 0.25 * wide - step,
+            0.25 * wide + step,
+        );
+        let found = point_triangle_distance(off, a, b, d);
+        let lies = step * 3.0_f64.sqrt();
+        assert!(found >= 0.999 * lies && found < 1e-8, "{found}");
     }
 
     /// A tilted sliver's plane is in doubt, so a point off it reads at least
