@@ -3977,6 +3977,19 @@ fn run_window(
     if !cut_start && !cut_end {
         return None;
     }
+    cut_window(n, (t0, t1), (cut_start, cut_end), tol).map(EdgeCurve::NurbsCurve)
+}
+
+/// The curve `n` cut at `t0` where `cut.0` and at `t1` where `cut.1`.
+/// `None` where a cut fails, and where the cut curve is not the window: its
+/// knots run back, or an end stands off the curve's point at that end of
+/// the window by more than `tol`.
+fn cut_window(
+    n: &brepkit_math::nurbs::curve::NurbsCurve,
+    (t0, t1): (f64, f64),
+    (cut_start, cut_end): (bool, bool),
+    tol: f64,
+) -> Option<brepkit_math::nurbs::curve::NurbsCurve> {
     let tail = if cut_start {
         brepkit_math::nurbs::knot_ops::curve_split(n, t0).ok()?.1
     } else {
@@ -3989,7 +4002,27 @@ fn run_window(
     } else {
         tail
     };
-    Some(EdgeCurve::NurbsCurve(window))
+    let (d0, d1) = n.domain();
+    let ends = (
+        if cut_start { t0 } else { d0 },
+        if cut_end { t1 } else { d1 },
+    );
+    window_holds(n, &window, ends, tol).then_some(window)
+}
+
+/// Whether `window` is the part of `n` between the parameters `ends`: its
+/// knots never run back, and its two ends lie within `tol` of the points of
+/// `n` at `ends`.
+fn window_holds(
+    n: &brepkit_math::nurbs::curve::NurbsCurve,
+    window: &brepkit_math::nurbs::curve::NurbsCurve,
+    (from, to): (f64, f64),
+    tol: f64,
+) -> bool {
+    let (w0, w1) = window.domain();
+    window.knots().windows(2).all(|k| k[0] <= k[1])
+        && (window.evaluate(w0) - n.evaluate(from)).length() <= tol
+        && (window.evaluate(w1) - n.evaluate(to)).length() <= tol
 }
 
 /// Whether the non-rational curve `n` stays within `tol` of its point at
@@ -4470,23 +4503,9 @@ fn window_curve(
     if !cut_start && !cut_end {
         return SectionWindow::Whole;
     }
-    let tail = if cut_start {
-        match brepkit_math::nurbs::knot_ops::curve_split(n, t0) {
-            Ok((_, tail)) => tail,
-            Err(_) => return SectionWindow::Unread,
-        }
-    } else {
-        n.clone()
-    };
-    let window = if cut_end {
-        match brepkit_math::nurbs::knot_ops::curve_split(&tail, t1) {
-            Ok((window, _)) => window,
-            Err(_) => return SectionWindow::Unread,
-        }
-    } else {
-        tail
-    };
-    SectionWindow::Cut(EdgeCurve::NurbsCurve(window))
+    cut_window(n, (t0, t1), (cut_start, cut_end), tol).map_or(SectionWindow::Unread, |w| {
+        SectionWindow::Cut(EdgeCurve::NurbsCurve(w))
+    })
 }
 
 /// What a section's edge takes of its curve over the section's range.
@@ -9351,6 +9370,63 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// A cubic B-spline with a double knot, its coordinates up to 1e3, cut to
+    /// windows of it: a window cut from it is held as its part; one cut from
+    /// a copy 1e-6 away, or read against the wrong end, is not, and a window
+    /// a few ulps wide is refused. Upright, turned and mirrored.
+    #[test]
+    fn a_window_that_is_not_its_curves_part_is_refused() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        for (name, origin, [u, v, w]) in run_poses() {
+            let at = |a: f64, b: f64, c: f64| {
+                origin + u * (a * 140.0) + v * (b * 140.0) + w * (c * 140.0)
+            };
+            let spline = |shift: f64| {
+                NurbsCurve::new(
+                    3,
+                    vec![0.0, 0.0, 0.0, 0.0, 0.2, 0.45, 0.45, 0.7, 1.0, 1.0, 1.0, 1.0],
+                    vec![
+                        at(0.0, 0.0, 0.0),
+                        at(1.0, 2.0, 0.5),
+                        at(2.0, -1.0, 0.2),
+                        at(3.0, 3.0, -0.4),
+                        at(4.0, 0.5, 0.1),
+                        at(5.0, 2.5, 0.0),
+                        at(6.0, 0.0, 0.3),
+                        at(7.0, 1.0, 0.0),
+                    ]
+                    .into_iter()
+                    .map(|p| p + w * shift)
+                    .collect(),
+                    vec![1.0; 8],
+                )
+                .unwrap()
+            };
+            let (n, copy) = (spline(0.0), spline(1e-6));
+            let window = cut_window(&n, (0.3, 0.6), (true, true), 1e-7);
+            assert!(
+                window
+                    .as_ref()
+                    .is_some_and(|c| window_holds(&n, c, (0.3, 0.6), 1e-7)),
+                "{name}: a window cut from the curve"
+            );
+            let other = cut_window(&copy, (0.3, 0.6), (true, true), 1e-7).unwrap();
+            assert!(
+                !window_holds(&n, &other, (0.3, 0.6), 1e-7),
+                "{name}: a window cut from a copy 1e-6 away"
+            );
+            assert!(
+                !window_holds(&n, window.as_ref().unwrap(), (0.3, 0.61), 1e-7),
+                "{name}: a window read against the wrong end"
+            );
+            let narrow = f64::from_bits(0.3_f64.to_bits() + 3);
+            assert!(
+                cut_window(&n, (0.3, narrow), (true, true), 1e-7).is_none(),
+                "{name}: a window a few ulps wide"
+            );
         }
     }
 
