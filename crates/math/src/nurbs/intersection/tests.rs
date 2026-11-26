@@ -1526,6 +1526,29 @@ fn an_open_section_never_absorbs_a_closed_loop() {
     }
 }
 
+/// A second trace of an arc lies off the first trace's chords by their sag.
+/// A chord twice as long as its neighbours spans twice their arc, but turns
+/// against each by only the mean of the two arcs; read as its own arc, its
+/// sag came out three quarters of the true one, two points of the re-trace
+/// beside it were kept as a run of their own, and that run, within a step of
+/// the chain's end, was joined on there running back along the arc.
+#[test]
+fn a_retrace_beside_a_long_chord_is_dropped() {
+    let at = |deg: f64| {
+        let a = deg.to_radians();
+        IntersectionPoint {
+            point: Point3::new(12.0 * a.cos(), 12.0 * a.sin(), 0.0),
+            param1: (0.0, 0.0),
+            param2: (0.0, 0.0),
+        }
+    };
+    let first: Vec<IntersectionPoint> = [0.0, 6.0, 12.0, 24.0, 30.0].map(at).to_vec();
+    let again: Vec<IntersectionPoint> = [0.0, 3.0, 9.0, 17.0, 19.0, 27.0, 30.0].map(at).to_vec();
+    let chains = super::chaining::chain_traced_segments(vec![first, again], 5e-3, 3.0);
+    assert_eq!(chains.len(), 1, "one chain");
+    assert_eq!(chains[0].len(), 5, "the re-trace is dropped whole");
+}
+
 /// The tool's scoop: a cubic profile from the floor lip (y -5.117, z 2.25)
 /// up to the back wall (y -18.15, z 15.283), extruded along x over
 /// [-44.03, 44.03] (u is x, v runs the profile from the wall down).

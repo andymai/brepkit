@@ -1281,8 +1281,12 @@ const MAX_SAG_TURN: f64 = std::f64::consts::FRAC_PI_3;
 /// gentle curve, so a later trace of the same curve lies off these chords by
 /// their sag, which reads it as a second curve. An arc whose chords turn by
 /// `a` stands `chord * tan(a / 4) / 2` off each, on the side away from the
-/// turn; the turn is the larger of the chord's turns at its two ends. `None`
-/// for a chord the trace does not turn at.
+/// turn. A chord's turn against its neighbour is half the arc each spans,
+/// and on an arc of one curvature each spans in proportion to its length,
+/// so the arc this chord spans is its turn times `2 chord / (chord +
+/// neighbour)`: a long chord between short ones spans more than it turns.
+/// The arc is the larger read from the chord's two ends. `None` for a chord
+/// the trace does not turn at.
 pub(super) fn chord_bulge(seg: &[IntersectionPoint], i: usize) -> Option<(Vec3, f64)> {
     let (a, b) = (seg[i].point, seg[i + 1].point);
     let chord = b - a;
@@ -1293,12 +1297,22 @@ pub(super) fn chord_bulge(seg: &[IntersectionPoint], i: usize) -> Option<(Vec3, 
         let r = q - at;
         r - chord * (r.dot(chord) / chord.dot(chord))
     };
-    let mut best = i
-        .checked_sub(1)
-        .and_then(|k| seg.get(k))
-        .map(|prev| (turn(a - prev.point, chord), inside(prev.point, a)));
+    let length = chord.length();
+    let spanned = |turn: f64, neighbour: Vec3| {
+        let total = length + neighbour.length();
+        if total > 0.0 {
+            2.0 * turn * length / total
+        } else {
+            turn
+        }
+    };
+    let mut best = i.checked_sub(1).and_then(|k| seg.get(k)).map(|prev| {
+        let before = a - prev.point;
+        (spanned(turn(before, chord), before), inside(prev.point, a))
+    });
     if let Some(next) = seg.get(i + 2) {
-        let alpha = turn(chord, next.point - b);
+        let after = next.point - b;
+        let alpha = spanned(turn(chord, after), after);
         if best.is_none_or(|(beta, _)| alpha > beta) {
             best = Some((alpha, inside(next.point, b)));
         }
@@ -1307,6 +1321,6 @@ pub(super) fn chord_bulge(seg: &[IntersectionPoint], i: usize) -> Option<(Vec3, 
     let outward = (-inward).normalize().ok()?;
     Some((
         outward,
-        0.5 * chord.length() * (alpha.min(MAX_SAG_TURN) / 4.0).tan(),
+        0.5 * length * (alpha.min(MAX_SAG_TURN) / 4.0).tan(),
     ))
 }
