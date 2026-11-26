@@ -14074,10 +14074,21 @@ pub fn section_meetings(
     let in_plane = |(c, n): (Point3, Vec3), p: Point3, q: Point3| {
         (p - c).dot(n).abs() <= tol && (q - c).dot(n).abs() <= tol
     };
-    let one_plane = match (plane(curve_a), plane(curve_b)) {
-        (Some((ca, na)), Some((_, nb))) => {
-            na.cross(nb).length() <= 1e-9 && in_plane((ca, na), start_b, end_b)
+    // How far a conic strays from a plane: its centre's distance, and its
+    // axes' reach off the plane, which its parameter turns through in full.
+    let stray = |curve: &EdgeCurve, (c, n): (Point3, Vec3)| match curve {
+        EdgeCurve::Circle(k) => {
+            (k.center() - c).dot(n).abs()
+                + (k.radius() * k.u_axis().dot(n)).hypot(k.radius() * k.v_axis().dot(n))
         }
+        EdgeCurve::Ellipse(e) => {
+            (e.center() - c).dot(n).abs()
+                + (e.semi_major() * e.u_axis().dot(n)).hypot(e.semi_minor() * e.v_axis().dot(n))
+        }
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => f64::INFINITY,
+    };
+    let one_plane = match (plane(curve_a), plane(curve_b)) {
+        (Some(pa), Some(pb)) => stray(curve_b, pa) <= tol && stray(curve_a, pb) <= tol,
         (Some(pa), None) => in_plane(pa, start_b, end_b),
         (None, Some(pb)) => in_plane(pb, start_a, end_a),
         // Two segments lie in one plane where one of their four ends lies
