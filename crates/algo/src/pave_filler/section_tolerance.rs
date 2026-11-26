@@ -117,6 +117,13 @@ fn settle_on_vertices(
     arena: &mut GfaArena,
 ) -> Result<(), AlgoError> {
     use brepkit_topology::vertex::VertexId;
+    if !arena
+        .curves
+        .iter()
+        .any(|c| matches!(c.curve, EdgeCurve::NurbsCurve(_)))
+    {
+        return Ok(());
+    }
     let mut raised: Vec<(VertexId, f64)> = Vec::new();
     // Vertices the pave filler put on boundary edges: a section that ends on
     // one ends where it crosses that edge, and keeps it.
