@@ -521,6 +521,13 @@ fn raise_to_proved_reach(
         for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
             edges.extend(topo.wire(wire)?.edges().iter().map(OrientedEdge::edge));
         }
+        let mut splines = false;
+        for &edge_id in &edges {
+            splines |= matches!(topo.edge(edge_id)?.curve(), EdgeCurve::NurbsCurve(_));
+        }
+        if !splines {
+            continue;
+        }
         if let Some(near) = near
             && !edges_box(topo, &edges)?.is_some_and(|b| b.intersects(near))
         {
