@@ -10764,3 +10764,89 @@ fn an_ellipse_whose_semi_minor_axis_is_the_longer_still_reaches_past_the_band() 
         );
     }
 }
+
+/// Two unit boxes side by side, the second's top plane raised 1e-4 off the
+/// edges it holds. The two boxes' edges at the meeting line of their tops are
+/// one edge of the fused solid, between the first box's top and the second's:
+/// it holds the 1e-4 the raised plane stands off it, and lies within that of
+/// each face it bounds. Upright, turned and moved off the origin.
+#[test]
+fn a_shared_edge_holds_the_tolerance_one_of_its_copies_needs() {
+    use brepkit_math::mat::Mat4;
+    let raised = 1.0 + 1e-4;
+    let off = raised - 1.0;
+    for (name, pose) in [
+        ("upright", Mat4::identity()),
+        (
+            "turned",
+            Mat4::rotation_z(0.9) * Mat4::rotation_x(0.4) * Mat4::rotation_y(1.3),
+        ),
+        (
+            "moved",
+            Mat4::translation(250.0, -40.0, 75.0) * Mat4::rotation_y(-0.6),
+        ),
+    ] {
+        let mut topo = Topology::new();
+        let first = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        let second = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+        crate::transform::transform_solid(&mut topo, second, &Mat4::translation(1.0, 0.0, 0.0))
+            .unwrap();
+        let top = brepkit_topology::explorer::solid_faces(&topo, second)
+            .unwrap()
+            .into_iter()
+            .find(|&f| {
+                matches!(topo.face(f).unwrap().surface(),
+                    FaceSurface::Plane { normal, d } if normal.z() > 0.5 && (d - 1.0).abs() < 1e-9)
+            })
+            .unwrap();
+        topo.face_mut(top).unwrap().set_surface(FaceSurface::Plane {
+            normal: Vec3::new(0.0, 0.0, 1.0),
+            d: raised,
+        });
+        for s in [first, second] {
+            crate::transform::transform_solid(&mut topo, s, &pose).unwrap();
+        }
+        let fused = boolean(&mut topo, BooleanOp::Fuse, first, second).unwrap();
+
+        let meeting =
+            [Point3::new(1.0, 0.0, 1.0), Point3::new(1.0, 1.0, 1.0)].map(|p| pose.mul_point(p));
+        let near = |a: Point3, b: Point3| (a - b).length() < 1e-6;
+        let mut faces_of_shared = 0;
+        for face in brepkit_topology::explorer::solid_faces(&topo, fused).unwrap() {
+            let f = topo.face(face).unwrap();
+            let FaceSurface::Plane { normal, d } = *f.surface() else {
+                panic!("{name}: a box face that is not a plane");
+            };
+            for wire in std::iter::once(f.outer_wire()).chain(f.inner_wires().iter().copied()) {
+                for oe in topo.wire(wire).unwrap().edges() {
+                    let edge = topo.edge(oe.edge()).unwrap();
+                    let (p, q) = (
+                        topo.vertex(edge.start()).unwrap().point(),
+                        topo.vertex(edge.end()).unwrap().point(),
+                    );
+                    if !((near(p, meeting[0]) && near(q, meeting[1]))
+                        || (near(p, meeting[1]) && near(q, meeting[0])))
+                    {
+                        continue;
+                    }
+                    faces_of_shared += 1;
+                    let held = edge.tolerance().unwrap_or(Tolerance::new().linear);
+                    assert!(held + 1e-9 >= off, "{name}: the shared edge holds {held:e}");
+                    let mid = Point3::new(
+                        f64::midpoint(p.x(), q.x()),
+                        f64::midpoint(p.y(), q.y()),
+                        f64::midpoint(p.z(), q.z()),
+                    );
+                    for at in [p, mid, q] {
+                        let gap = (normal.dot(Vec3::new(at.x(), at.y(), at.z())) - d).abs();
+                        assert!(
+                            gap <= held + 1e-9,
+                            "{name}: the shared edge is {gap:e} off a face and holds {held:e}"
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(faces_of_shared, 2, "{name}: the faces of the shared edge");
+    }
+}

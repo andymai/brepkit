@@ -5052,6 +5052,7 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
     // needs_flip is true when the duplicate's vertex order is reversed vs canonical,
     // requiring the OrientedEdge's forward flag to be flipped during wire rebuilding.
     let mut replacements: HashMap<EdgeId, (EdgeId, bool)> = HashMap::new();
+    let mut carried: Vec<(EdgeId, f64)> = Vec::new();
     for edge_ids in groups.values() {
         // Deduplicate edge IDs (same edge may appear multiple times from different faces)
         let mut unique: Vec<EdgeId> = edge_ids.clone();
@@ -5179,6 +5180,19 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
                 c.0
             } else {
                 canonicals.push((head, mid, n));
+                // Copies share both ends and their middle: the one kept stands
+                // for each of them on its faces.
+                let most = members
+                    .iter()
+                    .filter_map(|&m| {
+                        topo.edge(m)
+                            .ok()
+                            .and_then(brepkit_topology::edge::Edge::tolerance)
+                    })
+                    .reduce(f64::max);
+                if let Some(t) = most {
+                    carried.push((head, t));
+                }
                 head
             };
             joins.extend(
@@ -5219,6 +5233,13 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
                 dup_qs == canon_qe && dup_qe == canon_qs
             };
             replacements.insert(dup, (canonical, needs_flip));
+        }
+    }
+
+    for (edge, t) in carried {
+        let e = topo.edge_mut(edge)?;
+        if t > e.tolerance().unwrap_or(0.0) {
+            e.set_tolerance(Some(t));
         }
     }
 

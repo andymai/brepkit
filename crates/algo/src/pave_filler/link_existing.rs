@@ -672,6 +672,7 @@ fn try_link(
     if let Some(&cb_id) = arena.pb_to_cb.get(&boundary_pb_id) {
         if let Some(cb) = arena.common_blocks.get_mut(cb_id) {
             cb.pave_blocks.push(section_pb_id);
+            cb.tolerance = cb.tolerance.max(within);
         }
         arena.pb_to_cb.insert(section_pb_id, cb_id);
     } else {
@@ -854,6 +855,137 @@ mod tests {
                         "{name}: a section {bow:e} off the edge is linked"
                     );
                 }
+            }
+        }
+    }
+
+    /// Two copies of a cubic edge, each with a tolerance of 2e-4 and split
+    /// at two vertices on it, their pieces already one common block each, and
+    /// a section 1e-4 off them with a tolerance of 1e-4. Each piece of the
+    /// section joins a block within the 3e-4 the two allow: the block, and
+    /// the one edge made for it, then hold that 3e-4. Upright, turned and
+    /// mirrored.
+    #[test]
+    fn a_section_joining_a_common_block_raises_its_tolerance() {
+        use crate::ds::{Pave, PaveBlock};
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let axis = Vec3::new(1.0, 2.0, 3.0).normalize().unwrap();
+        let (sin, cos) = 0.7f64.sin_cos();
+        let turn = |e: Vec3| e * cos + axis.cross(e) * sin + axis * (axis.dot(e) * (1.0 - cos));
+        let mirror = |e: Vec3| Vec3::new(-e.x(), e.y(), e.z());
+        let o = Point3::new(3.0, -2.0, 5.0);
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let poses: [(&str, Point3, [Vec3; 3]); 3] = [
+            ("upright", Point3::new(0.0, 0.0, 0.0), [x, y, z]),
+            ("turned", o, [turn(x), turn(y), turn(z)]),
+            (
+                "mirrored",
+                Point3::new(-o.x(), o.y(), o.z()),
+                [mirror(turn(x)), mirror(turn(y)), mirror(turn(z))],
+            ),
+        ];
+        for (name, origin, [u, v, w]) in poses {
+            let at = |a: f64, b: f64, c: f64| origin + u * a + v * b + w * c;
+            let cubic = |lift: f64| {
+                NurbsCurve::new(
+                    3,
+                    vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                    vec![
+                        at(0.0, 0.0, 0.0),
+                        at(3.0, 1.0, lift / 0.75),
+                        at(7.0, -1.0, lift / 0.75),
+                        at(10.0, 0.0, 0.0),
+                    ],
+                    vec![1.0; 4],
+                )
+                .unwrap()
+            };
+            let (along, beside) = (cubic(0.0), cubic(1e-4));
+            let mut topo = Topology::default();
+            let mut vertex = |t: f64| topo.add_vertex(Vertex::new(along.evaluate(t), 1e-7));
+            let (a, m1, m2, b) = (vertex(0.0), vertex(0.3), vertex(0.6), vertex(1.0));
+            let mut arena = GfaArena::new();
+            let copy = |topo: &mut Topology, arena: &mut GfaArena| {
+                let edge = topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(along.clone())));
+                topo.edge_mut(edge).unwrap().set_tolerance(Some(2e-4));
+                let root = arena.init_edge_pave_block(edge, a, 0.0, b, 1.0);
+                let parts: Vec<_> = [(a, 0.0, m1, 0.3), (m1, 0.3, m2, 0.6), (m2, 0.6, b, 1.0)]
+                    .iter()
+                    .map(|&(s, ts, e, te)| {
+                        arena.pave_blocks.alloc(PaveBlock::new(
+                            edge,
+                            Pave::new(s, ts),
+                            Pave::new(e, te),
+                        ))
+                    })
+                    .collect();
+                arena
+                    .pave_blocks
+                    .get_mut(root)
+                    .unwrap()
+                    .children
+                    .clone_from(&parts);
+                parts
+            };
+            let first = copy(&mut topo, &mut arena);
+            let second = copy(&mut topo, &mut arena);
+            for (&p, &q) in first.iter().zip(&second) {
+                arena.create_common_block(vec![p, q], 1e-7);
+            }
+            let section = topo.add_edge(Edge::new(a, b, EdgeCurve::NurbsCurve(beside.clone())));
+            topo.edge_mut(section).unwrap().set_tolerance(Some(1e-4));
+            let wire =
+                topo.add_wire(Wire::new(vec![OrientedEdge::new(section, true)], false).unwrap());
+            let face = topo.add_face(Face::new(
+                wire,
+                vec![],
+                FaceSurface::Plane {
+                    normal: w,
+                    d: w.dot(Vec3::new(origin.x(), origin.y(), origin.z())),
+                },
+            ));
+            let section_pb = arena.pave_blocks.alloc(PaveBlock::new(
+                section,
+                Pave::new(a, 0.0),
+                Pave::new(b, 1.0),
+            ));
+            arena.curves.push(IntersectionCurveDS {
+                curve: EdgeCurve::NurbsCurve(beside.clone()),
+                face_a: face,
+                face_b: face,
+                bbox: Aabb3::from_points(beside.control_points().iter().copied()),
+                pave_blocks: vec![section_pb],
+                t_range: (0.0, 1.0),
+            });
+
+            super::perform(&topo, Tolerance::default(), &mut arena).unwrap();
+            crate::pave_filler::make_split_edges::perform(&mut topo, &mut arena).unwrap();
+
+            let leaves = arena.collect_leaf_pave_blocks(&[section_pb]);
+            assert_eq!(leaves.len(), 3, "{name}: the section's pieces");
+            for (leaf, part) in leaves.iter().zip(&first) {
+                let cb = arena
+                    .pb_to_cb
+                    .get(leaf)
+                    .and_then(|&c| arena.common_blocks.get(c))
+                    .unwrap();
+                assert!(cb.pave_blocks.contains(part), "{name}: a piece apart");
+                assert!(
+                    cb.tolerance >= 3e-4,
+                    "{name}: the block holds {}",
+                    cb.tolerance
+                );
+                let held = cb
+                    .split_edge
+                    .and_then(|e| topo.edge(e).unwrap().tolerance());
+                assert!(
+                    held.is_some_and(|t| t >= 3e-4),
+                    "{name}: the block's edge holds {held:?}"
+                );
             }
         }
     }
