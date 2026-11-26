@@ -2775,7 +2775,7 @@ fn build_section_edges(
                 // another section, lies on that edge: the face takes only
                 // its other pieces, and none where every piece is such.
                 let blocks = curve_blocks(arena, curve_ds);
-                match section_runs(topo, arena, curve_ds, face_id, &taken) {
+                match section_runs(topo, arena, curve_ds, face_id, &taken, tol) {
                     SectionRuns::Unread => return None,
                     SectionRuns::Nothing => continue,
                     SectionRuns::Whole => taken.extend(blocks),
@@ -3861,6 +3861,7 @@ fn section_runs(
     curve_ds: &crate::ds::IntersectionCurveDS,
     face_id: FaceId,
     taken: &std::collections::HashSet<crate::ds::CommonBlockId>,
+    tol: f64,
 ) -> SectionRuns {
     use brepkit_topology::vertex::VertexId;
     let Ok(face) = topo.face(face_id) else {
@@ -3933,7 +3934,7 @@ fn section_runs(
         let (Some(a), Some(b)) = (point(from), point(to)) else {
             return SectionRuns::Unread;
         };
-        let Some(window) = run_window(&curve_ds.curve, (lo, hi), from != to) else {
+        let Some(window) = run_window(&curve_ds.curve, (lo, hi), from != to, tol) else {
             return SectionRuns::Unread;
         };
         runs.push((window, a, b));
@@ -3945,25 +3946,36 @@ fn section_runs(
 /// The curve of a run of a section's pieces over `(t0, t1)`, to go with the
 /// run's two end vertices. A line, circle or ellipse reads its span from those
 /// ends, along its own way round, so it stands as it is where they are two
-/// vertices. A NURBS curve is cut to the window: read from its ends it takes
-/// the whole curve where one lies off it. `None` for a run of no length or
-/// past the curve's domain, and for one over the whole domain (it then holds
-/// every piece).
-fn run_window(curve: &EdgeCurve, (t0, t1): (f64, f64), two_ends: bool) -> Option<EdgeCurve> {
+/// vertices. A NURBS curve is cut at the run's own parameters: read from its
+/// ends it takes the whole window where one lies off it, and a window past
+/// the run would give back the pieces beside it. It keeps a domain end only
+/// where it is proved within `tol` of that end over the rest of the domain
+/// there. `None` for a run of no length or past the curve's domain, for one
+/// over the whole domain (it then holds every piece), and where a cut fails.
+fn run_window(
+    curve: &EdgeCurve,
+    (t0, t1): (f64, f64),
+    two_ends: bool,
+    tol: f64,
+) -> Option<EdgeCurve> {
     let EdgeCurve::NurbsCurve(n) = curve else {
         return two_ends.then(|| curve.clone());
     };
     let (d0, d1) = n.domain();
-    let eps = 1e-9 * (d1 - d0);
-    if t1 - t0 <= eps || (t0 - d0 <= eps && d1 - t1 <= eps) || t0 < d0 - eps || t1 > d1 + eps {
+    if t1 <= t0 || t0 < d0 || t1 > d1 {
         return None;
     }
-    let tail = if t0 - d0 > eps {
+    let cut_start = t0 > d0 && !stays_within(n, (d0, t0), tol);
+    let cut_end = t1 < d1 && !stays_within(n, (t1, d1), tol);
+    if !cut_start && !cut_end {
+        return None;
+    }
+    let tail = if cut_start {
         brepkit_math::nurbs::knot_ops::curve_split(n, t0).ok()?.1
     } else {
         n.clone()
     };
-    let window = if d1 - t1 > eps {
+    let window = if cut_end {
         brepkit_math::nurbs::knot_ops::curve_split(&tail, t1)
             .ok()?
             .0
@@ -3971,6 +3983,34 @@ fn run_window(curve: &EdgeCurve, (t0, t1): (f64, f64), two_ends: bool) -> Option
         tail
     };
     Some(EdgeCurve::NurbsCurve(window))
+}
+
+/// Whether the non-rational curve `n` stays within `tol` of its point at
+/// `t0` over `(t0, t1)`: it moves no faster than the largest of its first
+/// derivative's control points, so no farther than that speed times the
+/// span. A rational curve is never held so.
+fn stays_within(
+    n: &brepkit_math::nurbs::curve::NurbsCurve,
+    (t0, t1): (f64, f64),
+    tol: f64,
+) -> bool {
+    let Ok(p) = u32::try_from(n.degree()) else {
+        return false;
+    };
+    if n.is_rational() || p == 0 {
+        return false;
+    }
+    let (knots, points) = (n.knots(), n.control_points());
+    let mut speed = 0.0_f64;
+    for (i, pair) in points.windows(2).enumerate() {
+        let (Some(&lo), Some(&hi)) = (knots.get(i + 1), knots.get(i + 1 + p as usize)) else {
+            return false;
+        };
+        if hi > lo {
+            speed = speed.max((pair[1] - pair[0]).length() * f64::from(p) / (hi - lo));
+        }
+    }
+    speed * (t1 - t0) * (1.0 + 1e-9) <= tol
 }
 
 /// Whether a section sampled as `section_pts` (3D points along its interior)
@@ -9458,6 +9498,97 @@ mod tests {
         (topo, arena, face, cb)
     }
 
+    /// A degree-1 spline whose first knot span is 5e-10 long and 1 across, in
+    /// three pieces over 0, 5e-10, 0.5 and 1, its first and last pieces on the
+    /// face's own boundary and its second vertex 2e-5 off the curve. The face
+    /// takes the middle piece alone: the run's curve starts where that piece
+    /// starts and ends where it ends, so its first piece, read from the run's
+    /// ends, stays out. A straight cubic whose run starts 1e-12 past its
+    /// domain's start keeps that start: the curve is proved within the
+    /// tolerance of it there. Upright, turned and mirrored.
+    #[test]
+    fn a_spline_run_is_cut_at_its_own_parameters() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        for (name, origin, [u, v, w]) in run_poses() {
+            let at = |a: f64, b: f64, c: f64| origin + u * a + v * b + w * c;
+            let steep = NurbsCurve::new(
+                1,
+                vec![0.0, 0.0, 5e-10, 1.0, 1.0],
+                vec![at(0.0, 0.0, 0.0), at(1.0, 0.0, 0.0), at(2.0, 0.0, 0.0)],
+                vec![1.0; 3],
+            )
+            .unwrap();
+            let straight = NurbsCurve::new(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                vec![
+                    at(0.0, 0.0, 0.0),
+                    at(1.0, 0.0, 0.0),
+                    at(2.0, 0.0, 0.0),
+                    at(3.0, 0.0, 0.0),
+                ],
+                vec![1.0; 4],
+            )
+            .unwrap();
+            for (what, spline, params, off) in [
+                ("steep", &steep, [0.0, 5e-10, 0.5, 1.0], 2e-5),
+                ("straight", &straight, [0.0, 1e-12, 0.5, 1.0], 0.0),
+            ] {
+                let mut points = params.map(|t| spline.evaluate(t));
+                points[1] = points[1] + v * off;
+                let curve = EdgeCurve::NurbsCurve(spline.clone());
+                let (topo, mut arena, face, cb) = three_pieces(&curve, params, points, w, true, 2);
+                let leaves = arena.collect_leaf_pave_blocks(&arena.curves[0].pave_blocks);
+                let rim_block = arena.common_blocks.get(cb).unwrap().pave_blocks[1];
+                let rim = arena.pave_blocks.get(rim_block).unwrap().original_edge;
+                arena.common_blocks.get_mut(cb).unwrap().pave_blocks = vec![leaves[0], rim_block];
+                arena.pb_to_cb.remove(&leaves[1]);
+                arena.pb_to_cb.insert(leaves[0], cb);
+                let (r0, r1) = (
+                    arena.pave_blocks.get(rim_block).unwrap().start.vertex,
+                    arena.pave_blocks.get(rim_block).unwrap().end.vertex,
+                );
+                let second = arena.init_edge_pave_block(rim, r0, 0.0, r1, 1.0);
+                arena.create_common_block(vec![leaves[2], second], 1e-7);
+
+                let taken = std::collections::HashSet::new();
+                let runs = match section_runs(&topo, &arena, &arena.curves[0], face, &taken, 1e-7) {
+                    SectionRuns::Pieces(runs) => runs,
+                    _ => Vec::new(),
+                };
+                assert_eq!(runs.len(), 1, "{name}, {what}: the runs the face takes");
+                let windows: Vec<_> = runs
+                    .iter()
+                    .filter_map(|(c, ..)| match c {
+                        EdgeCurve::NurbsCurve(n) => Some(n),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    windows.len(),
+                    1,
+                    "{name}, {what}: the run's curve is a spline"
+                );
+                let window = windows[0];
+                let (d0, d1) = window.domain();
+                let first = if what == "steep" {
+                    spline.evaluate(params[1])
+                } else {
+                    spline.evaluate(0.0)
+                };
+                assert!(
+                    (window.evaluate(d0) - first).length() < 1e-9,
+                    "{name}, {what}: the run's curve starts {:e} off its first piece",
+                    (window.evaluate(d0) - first).length()
+                );
+                assert!(
+                    (window.evaluate(d1) - spline.evaluate(params[2])).length() < 1e-9,
+                    "{name}, {what}: the run's curve ends off its piece"
+                );
+            }
+        }
+    }
+
     /// A kind of section curve: its name, the curve, its pieces' parameters
     /// and the curve's point at a parameter.
     type RunCase<'a> = (&'a str, EdgeCurve, [f64; 4], &'a dyn Fn(f64) -> Point3);
@@ -9510,10 +9641,11 @@ mod tests {
                     let taken: std::collections::HashSet<_> =
                         if own { [].into() } else { [cb].into() };
                     let what = format!("{name}, {kind}, own {own}");
-                    let runs = match section_runs(&topo, &arena, &arena.curves[0], face, &taken) {
-                        SectionRuns::Pieces(runs) => runs,
-                        _ => Vec::new(),
-                    };
+                    let runs =
+                        match section_runs(&topo, &arena, &arena.curves[0], face, &taken, 1e-7) {
+                            SectionRuns::Pieces(runs) => runs,
+                            _ => Vec::new(),
+                        };
                     assert_eq!(runs.len(), 2, "{what}: the runs the face takes");
                     for ((run, a, b), (i, j)) in runs.iter().zip([(0, 1), (2, 3)]) {
                         assert!(*a == points[i] && *b == points[j], "{what}: a run's ends");
@@ -9576,6 +9708,7 @@ mod tests {
                         &arena.curves[0],
                         face.unwrap_or(own_face),
                         &taken,
+                        1e-7,
                     );
                     assert!(
                         matches!(runs, SectionRuns::Unread),
