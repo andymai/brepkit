@@ -1592,9 +1592,17 @@ fn touch_point(
     // A touch at an end of either edge: a section can end where it touches
     // the other curve, and then every interval about a seed near it runs
     // past that end, where the other curve parts from it. Such a reading is
-    // that end, where it lies within the tolerance of the other curve and
-    // the curves are proved within the tolerance from the seed to it: the
-    // end stands for the run of points where the two keep that near.
+    // that end, where the end lies on the other curve to rounding, so no
+    // point of the edge is nearer it, and the curves are proved within the
+    // tolerance from the seed to it: the end stands for the run of points
+    // where the two keep that near. An end merely within the tolerance is
+    // no contact: a shallow crossing just inside the edge lies nearer.
+    let scale = [ea.bbox_min, ea.bbox_max, eb.bbox_min, eb.bbox_max]
+        .iter()
+        .fold(0.0_f64, |most, p| {
+            most.max(p.x().abs()).max(p.y().abs()).max(p.z().abs())
+        });
+    let contact = 64.0 * f64::EPSILON * scale;
     let at_end = || -> Option<(f64, f64, Point3)> {
         let mut ends: Vec<(f64, f64)> = Vec::new();
         if !turn_b {
@@ -1612,7 +1620,7 @@ fn touch_point(
             .filter(|&(t, s)| {
                 let gap = (at_a(t) - at_b(s)).length();
                 let (from, to) = (ta.min(t), ta.max(t));
-                gap <= tol && (to <= from || proved(from, to))
+                gap <= contact && (to <= from || proved(from, to))
             })
             .map(|(t, s)| {
                 let (pa, pb) = (at_a(t), at_b(s));
@@ -4460,10 +4468,46 @@ mod tests {
                     .collect();
                 assert_eq!(touch.len(), 1, "{what}: {found:?}");
                 assert!(
-                    (touch[0].2 - p(7.0, 5.0)).length() < 1e-9,
+                    (touch[0].2 - p(7.0, 5.0)).length() < 1e-12,
                     "{what}: {touch:?}"
                 );
                 assert_eq!(near(p(6.0, 5.0 + 3.0_f64.sqrt())), 1, "{what}: {found:?}");
+            }
+        }
+    }
+
+    /// The x axis from -10 to 10, and a straight B-spline of slope `k` that
+    /// crosses it at the origin and starts `d` short of it, at 1, 10, 50 and
+    /// 100 tolerances. Its start is no contact: it lies `k d` off the axis,
+    /// and the curves cross inside the B-spline's span. The crossing is read
+    /// once, at the origin, either way round and in three poses, for a
+    /// shallow slope and a steep one.
+    #[test]
+    fn a_crossing_near_an_edges_end_stays_at_its_point() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let tol = Tolerance::default();
+        for pose in ee_poses() {
+            let p = |x: f64, y: f64| pose.mul_point(Point3::new(x, y, 0.0));
+            for k in [1e-5, 1e-2] {
+                for d in [1e-7, 1e-6, 5e-6, 1e-5] {
+                    let mut topo = Topology::new();
+                    let axis = add_edge(&mut topo, p(-10.0, 0.0), p(10.0, 0.0), EdgeCurve::Line);
+                    let (from, to) = (p(-d, -k * d), p(1.0, k));
+                    let segment = NurbsCurve::new(
+                        1,
+                        vec![0.0, 0.0, 1.0, 1.0],
+                        vec![from, to],
+                        vec![1.0, 1.0],
+                    )
+                    .unwrap();
+                    let spline = add_edge(&mut topo, from, to, EdgeCurve::NurbsCurve(segment));
+                    for (a, b) in [(axis, spline), (spline, axis)] {
+                        let found = edge_crossings(&topo, a, b, tol).unwrap();
+                        let what = format!("k {k:e}, d {d:e}, {pose:?}: {found:?}");
+                        assert_eq!(found.len(), 1, "{what}");
+                        assert!((found[0].2 - p(0.0, 0.0)).length() <= tol.linear, "{what}");
+                    }
+                }
             }
         }
     }
