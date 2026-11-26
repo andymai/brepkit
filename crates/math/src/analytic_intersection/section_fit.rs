@@ -624,12 +624,24 @@ pub fn spline_off_surface(
 ///
 /// The bound is the distance the surface's closed form reads
 /// (`Carrier::distance`, exact for a point beside the surface), with its
-/// rounding. `None` where the form has no gradient at `p` (on an axis or at
-/// a centre).
+/// rounding. Each step of the form rounds at the size of what it reads, not
+/// of its result: `p` less the frame's point at both their sizes, and its
+/// part along an axis, taken off it again, at the size of that difference,
+/// which can be far beyond the distance from the axis that is left.
+/// `None` where the form has no gradient at `p` (on an axis or at a
+/// centre).
 #[must_use]
 pub fn point_off_surface(p: Point3, surface: &AnalyticSurface<'_>) -> Option<f64> {
     let (off, _) = surface.distance(p)?;
-    let bound = off.abs() + 64.0 * f64::EPSILON * surface.scale(p);
+    let frame = match surface {
+        AnalyticSurface::Cylinder(c) => c.origin(),
+        AnalyticSurface::Cone(c) => c.apex(),
+        AnalyticSurface::Sphere(s) => s.center(),
+        AnalyticSurface::Torus(t) => t.center(),
+    };
+    let size = |q: Point3| q.x().abs().max(q.y().abs()).max(q.z().abs());
+    let reach = (p - frame).length() + size(p) + size(frame);
+    let bound = off.abs() + 64.0 * f64::EPSILON * (surface.scale(p) + reach);
     bound.is_finite().then_some(bound)
 }
 
@@ -827,6 +839,55 @@ mod tests {
     use super::*;
     use crate::mat::Mat4;
     use crate::surfaces::{CylindricalSurface, ToroidalSurface};
+
+    /// Points far out along an oblique axis, where the axial projection
+    /// rounds at the point's distance from the frame and not at the result:
+    /// each bound holds the distance computed exactly from the stored values
+    /// (to 80 digits) and lies within 1e3 roundings of that size of it.
+    #[test]
+    fn a_far_point_is_bounded_by_its_exact_distance() {
+        use crate::surfaces::{ConicalSurface, SphericalSurface};
+        let axis = Vec3::new(0.6, 0.8, 0.0);
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let cylinder = CylindricalSurface::new(origin, axis, 1.179_247_641_507_075_4).unwrap();
+        let cone = ConicalSurface::new(origin, axis, 0.3).unwrap();
+        let ball = SphericalSurface::new(origin, 1e15).unwrap();
+        let ring = ToroidalSurface::with_axis(origin, 1e15, 1.0, axis).unwrap();
+        let cases = [
+            (
+                "cylinder",
+                AnalyticSurface::Cylinder(&cylinder),
+                Point3::new(6e14, 8e14 + 2.0, 0.0),
+                0.023_656_562_492_081_725,
+            ),
+            (
+                "cone",
+                AnalyticSurface::Cone(&cone),
+                Point3::new(-1_986_182_515_012_662.5, 2_739_636_886_259_497.0, 0.0),
+                0.080_564_395_704_250_67,
+            ),
+            (
+                "sphere",
+                AnalyticSurface::Sphere(&ball),
+                Point3::new(6e14, 8e14 + 2.0, 0.0),
+                1.600_000_000_000_000_8,
+            ),
+            (
+                "torus",
+                AnalyticSurface::Torus(&ring),
+                Point3::new(-8e14 - 1.2, 6e14 + 0.9, 0.0),
+                0.525_010_249_199_838,
+            ),
+        ];
+        for (name, surface, p, exact) in cases {
+            let bound = point_off_surface(p, &surface).unwrap();
+            let size = p.x().abs().max(p.y().abs()).max(p.z().abs());
+            assert!(
+                bound >= exact && bound <= exact + 1e3 * f64::EPSILON * 4.0 * size,
+                "{name}: bound {bound:e}, exact {exact:e}"
+            );
+        }
+    }
 
     /// A cubic of four spans along a ruling of a cylinder of radius 2 about
     /// the axis (1, 2, 3) through (3, -2, 5), at `off` outside it.
