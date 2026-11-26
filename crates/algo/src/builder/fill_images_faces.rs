@@ -2921,12 +2921,19 @@ fn build_section_edges(
                             None => (curve_ds.curve.clone(), start, end),
                         }]
                     }
-                    None => vec![(
-                        window_curve(&curve_ds.curve, curve_ds.t_range, (start, end))
-                            .unwrap_or_else(|| curve_ds.curve.clone()),
-                        start,
-                        end,
-                    )],
+                    None => {
+                        let curve_3d = match window_curve(
+                            &curve_ds.curve,
+                            curve_ds.t_range,
+                            (start, end),
+                            tol,
+                        ) {
+                            SectionWindow::Whole => curve_ds.curve.clone(),
+                            SectionWindow::Cut(window) => window,
+                            SectionWindow::Unread => return None,
+                        };
+                        vec![(curve_3d, start, end)]
+                    }
                 };
 
                 for (curve_3d, start, end) in spans {
@@ -4420,42 +4427,67 @@ fn curve_endpoints(
 /// A window of a closed curve is cut out too. Its two ends split the loop
 /// into two arcs, and the edge run from end to start cannot tell which one
 /// it is: past half the loop it read the whole loop, through its own ends.
+///
+/// The cut is at the range's own parameters. A domain end stays only where
+/// the curve is proved within `tol` of it over the rest of the domain there
+/// ([`stays_within`]).
 fn window_curve(
     curve: &EdgeCurve,
     (t0, t1): (f64, f64),
     (start, end): (brepkit_math::vec::Point3, brepkit_math::vec::Point3),
-) -> Option<EdgeCurve> {
+    tol: f64,
+) -> SectionWindow {
     // The span reading's own on-curve band.
     const ON_CURVE: f64 = 1e-5;
     let EdgeCurve::NurbsCurve(n) = curve else {
-        return None;
+        return SectionWindow::Whole;
     };
     let (d0, d1) = n.domain();
-    let eps = 1e-9 * (d1 - d0);
-    if t1 - t0 <= eps || (t0 - d0 <= eps && d1 - t1 <= eps) || t0 < d0 - eps || t1 > d1 + eps {
-        return None;
-    }
     let off = |p: brepkit_math::vec::Point3| {
         brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-9)
             .map_or(true, |c| c.distance >= ON_CURVE)
     };
     let closed = (n.evaluate(d0) - n.evaluate(d1)).length() < ON_CURVE;
     if !closed && !off(start) && !off(end) {
-        return None;
+        return SectionWindow::Whole;
     }
-    let tail = if t0 - d0 > eps {
-        brepkit_math::nurbs::knot_ops::curve_split(n, t0).ok()?.1
+    if t1 <= t0 || t0 < d0 || t1 > d1 {
+        return SectionWindow::Unread;
+    }
+    let cut_start = t0 > d0 && !stays_within(n, (d0, t0), tol);
+    let cut_end = t1 < d1 && !stays_within(n, (t1, d1), tol);
+    if !cut_start && !cut_end {
+        return SectionWindow::Whole;
+    }
+    let tail = if cut_start {
+        match brepkit_math::nurbs::knot_ops::curve_split(n, t0) {
+            Ok((_, tail)) => tail,
+            Err(_) => return SectionWindow::Unread,
+        }
     } else {
         n.clone()
     };
-    let window = if d1 - t1 > eps {
-        brepkit_math::nurbs::knot_ops::curve_split(&tail, t1)
-            .ok()?
-            .0
+    let window = if cut_end {
+        match brepkit_math::nurbs::knot_ops::curve_split(&tail, t1) {
+            Ok((window, _)) => window,
+            Err(_) => return SectionWindow::Unread,
+        }
     } else {
         tail
     };
-    Some(EdgeCurve::NurbsCurve(window))
+    SectionWindow::Cut(EdgeCurve::NurbsCurve(window))
+}
+
+/// What a section's edge takes of its curve over the section's range.
+enum SectionWindow {
+    /// The whole curve: its ends lie on an open curve, which reads the range
+    /// from them, or the range is the curve's whole domain within `tol`.
+    Whole,
+    /// The curve cut to the range.
+    Cut(EdgeCurve),
+    /// A range the curve is not cut to where it must be: past the domain, of
+    /// no length, or a cut that fails.
+    Unread,
 }
 
 /// Sub-intervals of the straight section `start..end` NOT covered by any
@@ -9149,11 +9181,15 @@ mod tests {
         let (t0, t1) = (0.25_f64.madd(d1 - d0, d0), 0.6_f64.madd(d1 - d0, d0));
         let (a, b) = (n.evaluate(t0), n.evaluate(t1));
         let curve = EdgeCurve::NurbsCurve(n);
-        assert!(window_curve(&curve, (t0, t1), (a, b)).is_none());
+        assert!(matches!(
+            window_curve(&curve, (t0, t1), (a, b), 1e-7),
+            SectionWindow::Whole
+        ));
 
         let off = b + brepkit_math::vec::Vec3::new(0.0, 0.0, 6e-5);
-        let trimmed = window_curve(&curve, (t0, t1), (a, off)).expect("the window was cut");
-        let EdgeCurve::NurbsCurve(w) = trimmed else {
+        let SectionWindow::Cut(EdgeCurve::NurbsCurve(w)) =
+            window_curve(&curve, (t0, t1), (a, off), 1e-7)
+        else {
             unreachable!()
         };
         let (w0, w1) = w.domain();
@@ -9185,7 +9221,9 @@ mod tests {
             "the loop's own reversed reading is the whole loop: ({r0}, {r1})"
         );
 
-        let windowed = window_curve(&curve, (t0, t1), (a, b)).expect("the window was cut");
+        let SectionWindow::Cut(windowed) = window_curve(&curve, (t0, t1), (a, b), 1e-7) else {
+            unreachable!()
+        };
         let (w0, w1) = windowed.domain_with_endpoints(b, a);
         assert!(
             (w0 - t1).abs() < 1e-9 && (w1 - t0).abs() < 1e-9,
@@ -9193,6 +9231,68 @@ mod tests {
         );
         let mid = windowed.evaluate_with_endpoints(f64::midpoint(w0, w1), b, a);
         assert!((mid - middle).length() < 1e-9, "{mid:?} against {middle:?}");
+    }
+
+    /// A section's range over 5e-10 to 0.5 of a degree-1 spline whose first
+    /// knot span is 5e-10 long and 1 across, its start vertex 2e-5 off the
+    /// curve: the section's curve is cut at the range's own start, so it
+    /// starts where the range does and its first span stays out. A straight
+    /// cubic whose range starts 1e-12 past its domain's start keeps that
+    /// start, proved within the tolerance of it; a rational quarter circle
+    /// never does. Upright, turned and mirrored.
+    #[test]
+    fn a_section_window_is_cut_at_its_own_parameters() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        for (name, origin, [u, v, w]) in run_poses() {
+            let at = |a: f64, b: f64| origin + u * a + v * b;
+            let steep = NurbsCurve::new(
+                1,
+                vec![0.0, 0.0, 5e-10, 1.0, 1.0],
+                vec![at(0.0, 0.0), at(1.0, 0.0), at(2.0, 0.0)],
+                vec![1.0; 3],
+            )
+            .unwrap();
+            let straight = NurbsCurve::new(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                vec![at(0.0, 0.0), at(1.0, 0.0), at(2.0, 0.0), at(3.0, 0.0)],
+                vec![1.0; 4],
+            )
+            .unwrap();
+            let quarter = NurbsCurve::new(
+                2,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                vec![at(1.0, 0.0), at(1.0, 1.0), at(0.0, 1.0)],
+                vec![1.0, std::f64::consts::FRAC_1_SQRT_2, 1.0],
+            )
+            .unwrap();
+            for (what, spline, t0, keeps_start) in [
+                ("steep", &steep, 5e-10, false),
+                ("straight", &straight, 1e-12, true),
+                ("rational", &quarter, 1e-12, false),
+            ] {
+                let t1 = 0.5;
+                let start = spline.evaluate(t0) + w * 2e-5;
+                let end = spline.evaluate(t1);
+                let curve = EdgeCurve::NurbsCurve(spline.clone());
+                let SectionWindow::Cut(EdgeCurve::NurbsCurve(window)) =
+                    window_curve(&curve, (t0, t1), (start, end), 1e-7)
+                else {
+                    unreachable!("{name}, {what}: the window is not cut")
+                };
+                let (w0, w1) = window.domain();
+                let want = if keeps_start { 0.0 } else { t0 };
+                assert!(
+                    (w0 - want).abs() <= f64::EPSILON && (w1 - t1).abs() <= f64::EPSILON,
+                    "{name}, {what}: the window runs over ({w0:e}, {w1})"
+                );
+                assert!(
+                    (window.evaluate(w0) - spline.evaluate(want)).length() < 1e-9,
+                    "{name}, {what}: the window starts {:e} off the range's start",
+                    (window.evaluate(w0) - spline.evaluate(want)).length()
+                );
+            }
+        }
     }
 
     /// The pool's grid must hand the weld every entry within its reach, in
