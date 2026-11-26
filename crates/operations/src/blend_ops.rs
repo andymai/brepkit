@@ -200,7 +200,21 @@ fn fillet_directly(
 ) -> Result<BlendResult, OperationsError> {
     let mut builder = FilletBuilder::new(topo, solid);
     builder.add_edges(edges, radius);
-    let built = builder.build()?;
+    let built = match builder.build() {
+        Ok(built) => built,
+        // A prism's whole cap rim on walls shorter than the radius: the
+        // ball rolls over the floor's rim instead.
+        Err(e) => {
+            match crate::fillet_short_wall::fillet_over_short_walls(topo, solid, edges, radius) {
+                Ok(Some(result)) => return Ok(result),
+                Ok(None) => return Err(e.into()),
+                Err(short) => {
+                    log::debug!("fillet over short walls: {short}");
+                    return Err(e.into());
+                }
+            }
+        }
+    };
     // Read before the cavities are detached: the detached copy takes new
     // edges throughout, and the faces the fillet did not touch are known by
     // the input's edges they keep.

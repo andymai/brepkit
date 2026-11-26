@@ -304,6 +304,7 @@ Quick reference — find the right file for any task:
 | Helical sweep | `helix.rs` |
 | Chamfer, Fillet | `chamfer.rs`, `fillet/` (mod, rolling_ball, g1_chain, geometry, radius_law, helpers, tests) |
 | Chamfer along chains of lines and arcs (tangent joins, corners, cylinder rulings, ends on a plane), one or two distances | `chamfer_chain.rs` |
+| Round a prism cap's whole rim when the walls are shorter than the radius (the ball rolls over the floor's rim) | `fillet_short_wall.rs` |
 | Shell (hollow solid) | `shell_op.rs` |
 | Draft (taper faces) | `draft.rs` |
 | Section / Split | `section.rs`, `split.rs` |
