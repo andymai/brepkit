@@ -1,5 +1,12 @@
 # Changelog
 
+## [4.11.62](https://github.com/andymai/brepkit/compare/v4.11.61...v4.11.62) (2026-11-26)
+
+
+### Bug Fixes
+
+* **algo:** cut plane sections at a hole's rim, and read a touch at a section's end there ([#2925](https://github.com/andymai/brepkit/issues/2925)) ([d8874ad](https://github.com/andymai/brepkit/commit/d8874ad623c350a3f9292abe6499ad1975b721eb))
+
 ## [4.11.61](https://github.com/andymai/brepkit/compare/v4.11.60...v4.11.61) (2026-11-26)
 
 
