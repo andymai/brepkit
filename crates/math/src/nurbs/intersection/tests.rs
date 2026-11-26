@@ -3590,3 +3590,44 @@ fn a_plane_section_keeps_a_bump_between_its_samples() {
     });
     assert!(reaches, "{} curves, none through the bump", curves.len());
 }
+
+/// A flat patch 100 across in one knot span, cut along its diagonal and
+/// kept near its middle. The span's control box reaches every cell, so the
+/// cells alone would keep the whole diagonal; where chords meet the region
+/// the run is theirs, with a sample beyond on either side.
+#[test]
+fn a_plane_section_kept_in_a_region_runs_one_sample_past_it() {
+    let surface = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 100.0, 0.0)],
+            vec![Point3::new(100.0, 0.0, 0.0), Point3::new(100.0, 100.0, 0.0)],
+        ],
+        vec![vec![1.0; 2]; 2],
+    )
+    .unwrap();
+    let region = crate::aabb::Aabb3 {
+        min: Point3::new(49.0, 49.0, -1.0),
+        max: Point3::new(51.0, 51.0, 1.0),
+    };
+    let curves = super::plane::intersect_plane_nurbs_in_region(
+        &surface,
+        Vec3::new(1.0, 1.0, 0.0),
+        100.0,
+        32,
+        Some(region),
+    )
+    .unwrap();
+    assert!(!curves.is_empty(), "the section through the region is kept");
+    let middle = Point3::new(50.0, 50.0, 0.0);
+    for c in &curves {
+        let (t0, t1) = c.curve.domain();
+        for t in [t0, t1] {
+            let off = (c.curve.evaluate(t) - middle).length();
+            assert!(off < 20.0, "an end {off} from the region's middle");
+        }
+    }
+}
