@@ -148,14 +148,9 @@ pub fn interpolate_surface(
         );
     }
 
-    NurbsSurface::new(
-        degree_u,
-        degree_v,
-        knots_u,
-        knots_v,
-        control_points,
-        weights,
-    )
+    // Each curve takes its degree at most one under its points, so the
+    // surface takes the degrees its curves took.
+    NurbsSurface::new(pu, pv, knots_u, knots_v, control_points, weights)
 }
 
 /// Approximate a NURBS surface through a grid of data points using LSPIA.
@@ -839,6 +834,58 @@ mod tests {
                 let held = fitting::HELD_CELLS.with(std::cell::Cell::get);
                 let count = interpolate_surface_cells([rows, cols], [degree_u, degree_v]).unwrap();
                 assert_eq!(held, count, "{rows} by {cols} at {degree_u}, {degree_v}");
+            }
+        }
+    }
+    /// A grid of 3 rows of 5 points, interpolated at degree 3 each way, in
+    /// three poses. The columns of 3 points take degree 2, the most 3
+    /// points allow, as their interpolation does, and the surface was given
+    /// degree 3 against their knots, which it refused. It now takes degrees
+    /// 2 and 3, its net is the columns' fits of the rows' fits bit for bit,
+    /// and its corners are the grid's.
+    #[test]
+    fn a_grid_with_fewer_rows_than_its_degree_takes_the_degree_its_columns_allow() {
+        let poses: [&dyn Fn(Point3) -> Point3; 3] = [
+            &|p| p,
+            &|p| Point3::new(-p.y() + 3.0, p.x() - 2.0, p.z() + 1.0),
+            &|p| Point3::new(p.x() + 1e3, p.z() - 5.0, -p.y()),
+        ];
+        for pose in poses {
+            let grid: Vec<Vec<Point3>> = (0..3)
+                .map(|i| {
+                    (0..5)
+                        .map(|j| {
+                            let (u, v) = (f64::from(i), f64::from(j));
+                            pose(Point3::new(u, v, (u * 0.7).sin() * (v * 0.5).cos()))
+                        })
+                        .collect()
+                })
+                .collect();
+            let surface = interpolate_surface(&grid, 3, 3).unwrap();
+            assert_eq!((surface.degree_u(), surface.degree_v()), (2, 3));
+            let rows: Vec<crate::nurbs::curve::NurbsCurve> = grid
+                .iter()
+                .map(|row| interpolate(row, 3).unwrap())
+                .collect();
+            let bits = |p: Point3| [p.x().to_bits(), p.y().to_bits(), p.z().to_bits()];
+            for j in 0..5 {
+                let column: Vec<Point3> = rows.iter().map(|c| c.control_points()[j]).collect();
+                let fitted = interpolate(&column, 3).unwrap();
+                assert_eq!(fitted.degree(), 2);
+                for i in 0..3 {
+                    assert_eq!(
+                        bits(surface.control_points()[i][j]),
+                        bits(fitted.control_points()[i])
+                    );
+                }
+            }
+            for (u, v, i, j) in [
+                (0.0, 0.0, 0, 0),
+                (1.0, 0.0, 2, 0),
+                (0.0, 1.0, 0, 4),
+                (1.0, 1.0, 2, 4),
+            ] {
+                assert!((surface.evaluate(u, v) - grid[i][j]).length() < 1e-9);
             }
         }
     }
