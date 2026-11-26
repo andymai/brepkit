@@ -1953,6 +1953,21 @@ impl Pace {
     pub(super) fn fraction(&self, u: f64) -> f64 {
         (self.moved(u) - self.from) / (self.to - self.from)
     }
+
+    /// Whether the pace reads its fractions as the parameters run, the far
+    /// end of its span weighing what the near end weighs.
+    #[allow(clippy::float_cmp)]
+    pub(super) fn is_even(&self) -> bool {
+        self.ratio == 1.0
+    }
+
+    /// The rate of change of [`Self::at`] at the fraction `s`.
+    pub(super) fn slope(&self, s: f64) -> f64 {
+        let ((k0, k1), r) = (self.knots, self.ratio);
+        let g = (self.to - self.from).madd(s, self.from);
+        let below = r.madd(1.0 - g, g);
+        (k1 - k0) * (self.to - self.from) * r / (below * below)
+    }
 }
 
 /// The paces of a degree-1 patch of one span over the box `u` by `v`

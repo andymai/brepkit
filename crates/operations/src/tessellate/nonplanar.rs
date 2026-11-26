@@ -3674,6 +3674,25 @@ fn cdt_in_surface_frame(
         );
         super::check_grid(n_u.saturating_add(1), n_v.saturating_add(1), deflection)?;
     }
+    // A degree-1 B-spline face's grid lines run at its weights' pace
+    // (`untwist_paced_lines`). Read in its raw parameters, a crowded pace
+    // packs them closer than the triangulation merges points, so a paced
+    // direction is read at its pace's fraction across the box, `min + d *
+    // fraction`, and its metric is the surface's speed in that coordinate.
+    let paces = match face_data.surface() {
+        FaceSurface::Nurbs(nurbs) if du > 1e-15 && dv > 1e-15 => {
+            let (pace_u, pace_v) =
+                super::nurbs::weight_paces(nurbs, (u_min, u_min + du), (v_min, v_min + dv));
+            (!(pace_u.is_even() && pace_v.is_even())).then_some((nurbs, pace_u, pace_v))
+        }
+        _ => None,
+    };
+    let (paced_u, paced_v) = paces.map_or((None, None), |(_, pace_u, pace_v)| {
+        (
+            (!pace_u.is_even()).then_some(pace_u),
+            (!pace_v.is_even()).then_some(pace_v),
+        )
+    });
     let (cdt_u_scale, cdt_v_scale) = match stripe_radius.or(holed_wall_radius) {
         Some(radius) if reaches_apex => (radius, 1.0),
         Some(radius) if du > 1e-15 && dv > 1e-15 => {
@@ -3682,25 +3701,45 @@ fn cdt_in_surface_frame(
             let cell = radius * du / divisions as f64;
             (radius, cell / dv)
         }
-        _ => extrusion_metric(
-            face_data.surface(),
-            (u_min, du),
-            (v_min, dv),
-            deflection,
-            angular_tol,
-        )
-        .or_else(|| {
-            let speeds = nurbs_speeds(face_data.surface(), (u_min, du), (v_min, dv));
-            ruled_metric(speeds, divisions, du, dv).or(speeds)
-        })
+        _ => match paces {
+            Some((nurbs, pace_u, pace_v)) => paced_speeds(nurbs, (&pace_u, &pace_v), (du, dv)),
+            None => extrusion_metric(
+                face_data.surface(),
+                (u_min, du),
+                (v_min, dv),
+                deflection,
+                angular_tol,
+            )
+            .or_else(|| {
+                let speeds = nurbs_speeds(face_data.surface(), (u_min, du), (v_min, dv));
+                ruled_metric(speeds, divisions, du, dv).or(speeds)
+            }),
+        }
         .unwrap_or((1.0, 1.0)),
     };
-    let to_cdt = |point: Point2| Point2::new(point.x() * cdt_u_scale, point.y() * cdt_v_scale);
-    let from_cdt = |point: Point2| Point2::new(point.x() / cdt_u_scale, point.y() / cdt_v_scale);
+    let to_cdt = |point: Point2| {
+        let (u, v) = (point.x(), point.y());
+        let u = paced_u.map_or(u, |pace| du.madd(pace.fraction(u), u_min));
+        let v = paced_v.map_or(v, |pace| dv.madd(pace.fraction(v), v_min));
+        Point2::new(u * cdt_u_scale, v * cdt_v_scale)
+    };
+    let from_cdt = |point: Point2| {
+        let (u, v) = (point.x() / cdt_u_scale, point.y() / cdt_v_scale);
+        Point2::new(
+            paced_u.map_or(u, |pace| pace.at((u - u_min) / du)),
+            paced_v.map_or(v, |pace| pace.at((v - v_min) / dv)),
+        )
+    };
     let margin = 0.01;
     let bounds = (
-        to_cdt(Point2::new(u_min - margin, v_min - margin)),
-        to_cdt(Point2::new(u_max + margin, v_max + margin)),
+        Point2::new(
+            (u_min - margin) * cdt_u_scale,
+            (v_min - margin) * cdt_v_scale,
+        ),
+        Point2::new(
+            (u_max + margin) * cdt_u_scale,
+            (v_max + margin) * cdt_v_scale,
+        ),
     );
     let mut cdt = Cdt::with_capacity(bounds, n_boundary);
 
@@ -5911,6 +5950,31 @@ fn untwist_grid_lines(
         }
         _ => super::nurbs::untwist_lines(&at, us, vs, deflection, None),
     }
+}
+
+/// The speeds of a degree-1 B-spline face across its box in the
+/// coordinates the triangulation reads it in at its weights' pace, `min + d
+/// * fraction` each way: the surface's rate of change for each unit of those
+/// coordinates, summed over a grid of the box's fractions as
+/// [`nurbs_speeds`] sums it.
+fn paced_speeds(
+    nurbs: &brepkit_math::nurbs::surface::NurbsSurface,
+    (pace_u, pace_v): (&super::nurbs::Pace, &super::nurbs::Pace),
+    (du, dv): (f64, f64),
+) -> Option<(f64, f64)> {
+    const ROWS: u32 = 5;
+    let (mut speed_u, mut speed_v) = (0.0_f64, 0.0_f64);
+    for i in 0..ROWS {
+        for j in 0..ROWS {
+            let s = (f64::from(i) + 0.5) / f64::from(ROWS);
+            let t = (f64::from(j) + 0.5) / f64::from(ROWS);
+            let d = nurbs.derivatives(pace_u.at(s), pace_v.at(t), 1);
+            speed_u = (d[1][0].length() * pace_u.slope(s)).madd(1.0 / du, speed_u);
+            speed_v = (d[0][1].length() * pace_v.slope(t)).madd(1.0 / dv, speed_v);
+        }
+    }
+    let read = |speed: f64| speed > 0.0 && speed.is_finite();
+    (read(speed_u) && read(speed_v)).then_some((speed_u, speed_v))
 }
 
 fn nurbs_speeds(

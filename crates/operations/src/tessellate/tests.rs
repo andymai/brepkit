@@ -5122,6 +5122,57 @@ fn a_twisted_patch_that_is_not_a_number_is_refused() {
     }
 }
 
+/// The twisted patch ([`TWIST`]) weighted 1, 1e-3 and 1e-6 along `u = 0`
+/// in three poses, trimmed to nine tenths of each way at its pace, meshed
+/// as a face at a deflection of 1e-3 with no angular tolerance. Its
+/// triangulation read the grid's raw parameters, which a crowded pace packs
+/// closer than it merges points: at weight 1e-3 the surface stood 2.1e-3
+/// off the mesh. It now reads the paced fractions, and at each weight and
+/// in each pose the mesh takes 540 triangles and every sample of the
+/// surface lies within 7e-4 of it, as with equal weights.
+#[test]
+fn a_crowded_twisted_face_meshes_within_its_deflection() {
+    use super::nurbs::{point_triangle_distance, weight_paces};
+    use brepkit_topology::builder::make_polygon_wire;
+    for (w, patch) in crowded_twists() {
+        let on = |u: f64, v: f64| patch.evaluate(u, v);
+        let (pace_u, pace_v) = weight_paces(&patch, (0.0, 1.0), (0.0, 1.0));
+        let (u_hi, v_hi) = (pace_u.at(0.9), pace_v.at(0.9));
+        let mut topo = Topology::new();
+        let wire = make_polygon_wire(
+            &mut topo,
+            &[on(0.0, 0.0), on(u_hi, 0.0), on(u_hi, v_hi), on(0.0, v_hi)],
+            1e-7,
+        )
+        .unwrap();
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(patch.clone())));
+        let mesh = crate::tessellate::tessellate_with_tolerance(&topo, face, 1e-3, 0.0).unwrap();
+        let triangles: Vec<[Point3; 3]> = mesh
+            .indices
+            .chunks(3)
+            .map(|t| [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]))
+            .collect();
+        let mut worst = 0.0_f64;
+        for a in 0..=24 {
+            for b in 0..=24 {
+                let p = on(
+                    pace_u.at(0.9 * f64::from(a) / 24.0),
+                    pace_v.at(0.9 * f64::from(b) / 24.0),
+                );
+                let near = triangles
+                    .iter()
+                    .map(|t| point_triangle_distance(p, t[0], t[1], t[2]))
+                    .fold(f64::INFINITY, f64::min);
+                worst = worst.max(near);
+            }
+        }
+        assert!(
+            worst <= 1e-3,
+            "w {w}: the surface stands {worst} off the mesh"
+        );
+    }
+}
+
 /// A flat square and the twisted patch ([`TWIST`]) weighted 1e-20 along
 /// `u = 0`, in three poses. The lines at 0.5 and 1 read one fraction of the
 /// pace, 1, so the square's lines 0, 0.5 and 1 came back as 0, 1 and 1.
