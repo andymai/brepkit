@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795697293962,
+  "lastUpdate": 1795700566422,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -79541,6 +79541,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28533767,
             "range": "± 244896",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "7b54f4a2a54d8020a353b00036cf021fa97d8edc",
+          "message": "fix(operations): read a crowded twisted patch's cells by a proved bound at its weights' pace (#2929)\n\n## Summary\n\n#2919 reported that the untwist grid search stops on a 1×1 grid where\ncrowded weights hide a twist. Two searches read a cell's twist:\n`untwisted_grid` sizes the straight-edge samples, and `untwist_lines`\nbuilds the face's interior grid. Both read each cell at probes on the\nquarters of its parameters. Weights crowded to one side put the whole\ntwist between those probes. On main:\n\n- The issue's twisted bilinear patch, with weights 1e-6 along u = 0,\nkeeps a 1×1 grid at a deflection of 1e-3. It stands 0.186 off its\ntriangles.\n- With weights 1e-3, `untwist_lines` keeps 10 × 129 lines, 1.2e-3 off,\npast the deflection.\n\nWith this change, weights 1, 1e-3 and 1e-6 give the same grids in 3\nposes. Each cell is within the deflection by a proved bound:\n\n| | δ = 1e-3 | δ = 1e-6 |\n|---|---|---|\n| Edge sampler grid | 25 × 25 cells, largest bound 4.0e-4 | 778 × 778\ncells, largest bound 4.1e-7 |\n| Face grid lines | 17 × 17 lines, largest bound 9.8e-4 | 513 × 513\nlines, largest bound 9.5e-7 |\n\nThe pose sweep and the truth audit give the same output as main.\n\nFixes #2919.\n\n## The change\n\n- **Proved stray.** `bilinear_cell_stray` bounds how far a cell of a\ndegree-1 patch, inside one knot span, strays from its two triangles. It\ntakes the smaller of two bounds:\n- one from the rational convex combination of the corners, which is\n|T|/4 where the weights factor;\n  - one from the tetrahedron on the corners, which is 0 for a flat cell.\n- **Searches.** Both searches read a cell by this bound where it\napplies. They keep probes only for a cell across a knot or a patch of\nanother degree.\n- **Pace.** Both searches run at the weights' pace (`Pace`,\n`weight_paces`). For weights that factor, an even grid at this pace is\nthe even grid of the patch with equal weights. Rounding in the pace adds\nno error, because the bound is read on the real cells.\n- **Rounding.** The pace and the bound read only ratios of the weights,\nso a common weight scale changes nothing. Each term of the bound carries\nits rounding, and a plane that rounding could tip gives no gap bound. A\nnon-finite stray refuses with `TooManySamples`.\n- **Triangulation.** A paced direction enters the triangulation at its\npace, with the surface's speed in that coordinate as its metric. So\ncrowded grid points do not merge in the CDT. Faces with even paces keep\nthe old mapping, bit for bit. `split_edge_ears` reads each ear's middle\nback to the face's parameters before the trim test.\n- **Lines and far cells.** Two given lines can read one paced fraction.\nThen the lines are cut in the raw parameters, still bounded by the cell\nbound. The bound reads a cell from its net's first point, so its\nrounding follows the cell's size.\n- `untwist_paced_lines` keeps the face's given lines at their exact\nparameters.\n- On a patch with equal weights at 1e-6, the edge sampler's grid now\ntakes 778 × 778 cells, down from 1,024 × 1,024. A bound needs no\nwitnesses, so the grids between whole multiples stand.\n\n## Tests\n\n- `a_crowded_twisted_patchs_grid_holds_its_twist` and\n`a_crowded_twisted_patchs_lines_hold_its_twist` cover weights 1, 1e-3\nand 1e-6 at both deflections, in 3 poses. Each cell's bound is within\nthe deflection, and a sampled distance is a cross-check. On main,\nweights 1e-6 give no edge samples.\n- `a_crowded_patch_with_no_twist_keeps_its_first_grid` keeps the first\ngrid and lines for a flat square and a flat trapezoid crowded at 1e-6.\n- `a_common_weight_scale_keeps_a_twisted_patchs_grid`,\n`a_sliver_cells_bound_holds_its_twist` and\n`a_twisted_patch_that_is_not_a_number_is_refused` run in 3 poses and\nfail without their fixes. Common weights 1, 1e200 and 1e-200 give the\nsame grid. A sliver whose determinant rounds to 0 now bounds at 0.25 and\nrefines.\n- `a_crowded_twisted_face_meshes_within_its_deflection` meshes a trimmed\ntwisted face through the triangulation, and checks 625 surface samples\nagainst the final mesh. At weight 1e-3, main's mesh stands 2.1e-3 off at\na deflection of 1e-3. Now every weight in 3 poses is within 7e-4.\n- `a_flat_square_far_from_the_origin_keeps_its_first_grid` and\n`lines_at_one_paced_fraction_keep_their_parameters` cover a square moved\nto 1e9 and weights 1e-20.\n- `a_paced_faces_ears_split_as_an_even_faces_do` meshes a\ncircular-segment trim on a paced face with 33 triangles, as on an even\nface, in 3 poses. Before, it had 15.\n- The tessellate lib tests (207) and the 10 mesh files (38) pass, and so\ndo all brepkit-operations and brepkit-io tests (3423, 28 skipped).\n\n## Still open\n\n- Deferred as contrived: weights spread to 1e40 can collapse the paced\nchart's boundary points.\n\n- A degree-1 cell across a knot is still read at probes (#2926).",
+          "timestamp": "2026-11-26T13:39:08Z",
+          "tree_id": "1a0c5d7454bcf4575fd11fdb92c9b7b4155862e8",
+          "url": "https://github.com/andymai/brepkit/commit/7b54f4a2a54d8020a353b00036cf021fa97d8edc"
+        },
+        "date": 1795700551221,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 764268,
+            "range": "± 12177",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 818351,
+            "range": "± 11902",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 9576,
+            "range": "± 130",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 498236,
+            "range": "± 13298",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 17707833,
+            "range": "± 187249",
             "unit": "ns/iter"
           }
         ]
