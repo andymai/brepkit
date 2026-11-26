@@ -2618,6 +2618,30 @@ pub(super) struct Meeting {
 #[derive(Debug)]
 pub(super) struct UnsettledMeeting;
 
+/// How [`read_section_meetings`] leaves a pair of sections out of its
+/// reading.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LeftPair {
+    /// Proved one curve within `tol`: the two overlap or lie apart, and their
+    /// ends stand for where they meet.
+    OneCurve,
+    /// Not read at all: a B-spline, two lines, an arc over half a turn or of
+    /// no length, a conic no form on unit axes reads, a line of no length or
+    /// square to the arc's plane, or a pair proved not in one plane within a
+    /// quarter of `tol`. Its meetings are not known.
+    Unread,
+}
+
+/// The meetings the finder proves among a face's sections, and each pair it
+/// leaves out, by the indices of its two sections.
+#[derive(Debug)]
+pub(super) struct SectionReading {
+    /// The meetings proved.
+    pub(super) meetings: Vec<Meeting>,
+    /// The pairs left out, and how.
+    pub(super) left: Vec<(usize, usize, LeftPair)>,
+}
+
 /// The distance from a circle or ellipse arc to a second curve, as a wave in
 /// the arc's parameter `t`, read about the parameter `mid` with `s = t - mid`:
 /// `c0 + c1 (cos s - 1) + d1 sin s + c2 (cos 2s - 1) + d2 sin 2s`. Read so,
@@ -3440,7 +3464,8 @@ pub(super) fn conic_point(curve: &EdgeCurve, t: f64) -> Option<Point3> {
 }
 
 /// Points where two section edges of a plane face meet inside both: where
-/// they touch (a circle and an ellipse tangent at one point) or cross.
+/// they touch (a circle and an ellipse tangent at one point) or cross. Each
+/// pair it does not read along is reported with how it is left out.
 ///
 /// For each pair, one curve, a circle or ellipse arc, is read along its
 /// parameter, and its distance from the other curve, a line, a circle or an
@@ -3471,18 +3496,20 @@ pub(super) fn conic_point(curve: &EdgeCurve, t: f64) -> Option<Point3> {
 /// turn, which
 /// every reading of it covers alike. Two conics proved within `tol` of each other along their
 /// whole length ([`conics_apart`]) are one curve: their arcs overlap or lie
-/// apart, and are left to their ends. So is a conic no form on unit axes
-/// reads, a line of no length, and a pair proved not in one plane within a
-/// quarter of `tol`: the face holds such a section by its pcurve, which is
-/// the shadow of its curve on the face's plane. A pair the wave cannot
+/// apart, and the pair is reported as [`LeftPair::OneCurve`]. A conic no
+/// form on unit axes reads, a line of no length, and a pair proved not in
+/// one plane within a quarter of `tol` are not read, and are reported as
+/// [`LeftPair::Unread`]: a face holds such a section by its pcurve, the
+/// shadow of its curve on the face's plane, and leaves it to its ends. A
+/// pair the wave cannot
 /// settle within its budget, whose distance it cannot settle near `tol`,
 /// whose plane the rounding hides, or that the gap between the curves and
 /// their unit forms leaves no room to read, is [`UnsettledMeeting`].
 #[allow(clippy::too_many_lines)]
-pub(super) fn section_meeting_points(
+pub(super) fn read_section_meetings(
     sections: &[SectionSpan<'_>],
     tol: f64,
-) -> Result<Vec<Meeting>, UnsettledMeeting> {
+) -> Result<SectionReading, UnsettledMeeting> {
     use crate::builder::pcurve_compute::{unit_conic, unit_conic_arc_gap};
     use std::f64::consts::{PI, TAU};
     /// The section's start and end, and its curve's parameter at the start
@@ -3572,19 +3599,24 @@ pub(super) fn section_meeting_points(
         .collect();
     let ends: Vec<Point3> = unique.iter().flat_map(|e| [e.start, e.end]).collect();
     let mut found: Vec<Meeting> = Vec::new();
+    let mut left: Vec<(usize, usize, LeftPair)> = Vec::new();
     for (i, first) in unique.iter().enumerate() {
         for (j, second) in unique.iter().enumerate().skip(i + 1) {
             // A B-spline section stays out of the finder.
-            if !boxes[i].intersects(boxes[j])
-                || matches!(first.curve, EdgeCurve::NurbsCurve(_))
+            if matches!(first.curve, EdgeCurve::NurbsCurve(_))
                 || matches!(second.curve, EdgeCurve::NurbsCurve(_))
             {
+                left.push((i, j, LeftPair::Unread));
+                continue;
+            }
+            if !boxes[i].intersects(boxes[j]) {
                 continue;
             }
             if !(curved(first) || curved(second)) {
                 // Two lines meet only at their ends; a flat arc read as its
                 // chord is proved against the other segment.
                 if chords[i].is_none() && chords[j].is_none() {
+                    left.push((i, j, LeftPair::Unread));
                     continue;
                 }
                 let Some(meeting) = segments_meet((first, chord(i)), (second, chord(j)), tol)?
@@ -3617,15 +3649,18 @@ pub(super) fn section_meeting_points(
             let eps = f64::EPSILON;
             let (Some((_, _, a0, a_sweep)), Some((sb, tb, b0, b_sweep))) = (span(a), span(b))
             else {
+                left.push((i, j, LeftPair::Unread));
                 continue;
             };
             let (Some((unit_a, gap_a)), Some((unit_b, gap_b))) =
                 (unit_conic(a.curve), unit_conic(b.curve))
             else {
+                left.push((i, j, LeftPair::Unread));
                 continue;
             };
             let slack = gap_a + unit_conic_arc_gap(gap_b) + chord_b;
             if conics_apart(&unit_a, &unit_b).is_some_and(|d| d + gap_a + gap_b <= tol) {
+                left.push((i, j, LeftPair::OneCurve));
                 continue;
             }
             // The arc as `centre + cu cos t + cv sin t`, and its plane.
@@ -3638,9 +3673,13 @@ pub(super) fn section_meeting_points(
                     el.u_axis() * el.semi_major(),
                     el.v_axis() * el.semi_minor(),
                 ),
-                EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => continue,
+                EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => {
+                    left.push((i, j, LeftPair::Unread));
+                    continue;
+                }
             };
             let Ok(normal) = cu.cross(cv).normalize() else {
+                left.push((i, j, LeftPair::Unread));
                 continue;
             };
             // The arc about its middle, `t = mid + s`: `centre + uu + uu (cos
@@ -3705,9 +3744,11 @@ pub(super) fn section_meeting_points(
                     // A line of no length is no section of this face to
                     // meet.
                     let Ok(along) = d.normalize() else {
+                        left.push((i, j, LeftPair::Unread));
                         continue;
                     };
                     let Ok(across) = normal.cross(along).normalize() else {
+                        left.push((i, j, LeftPair::Unread));
                         continue;
                     };
                     let (w, e_w) = offset(sb);
@@ -3759,7 +3800,10 @@ pub(super) fn section_meeting_points(
                             el.u_axis(),
                             el.v_axis(),
                         ),
-                        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => continue,
+                        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => {
+                            left.push((i, j, LeftPair::Unread));
+                            continue;
+                        }
                     };
                     // The arc in the other conic's frame, where that
                     // conic is the unit circle, each part within the
@@ -3785,7 +3829,10 @@ pub(super) fn section_meeting_points(
                     };
                     (wave, 1.0, (h, e, 1.0), true, Some(frame), near)
                 }
-                EdgeCurve::NurbsCurve(_) => continue,
+                EdgeCurve::NurbsCurve(_) => {
+                    left.push((i, j, LeftPair::Unread));
+                    continue;
+                }
             };
             let [e0, ..] = wave.rounding();
             let (meet_d, clear_d) = (tol - slack - (off_plane + off_err) / lean, tol + slack);
@@ -3918,6 +3965,7 @@ pub(super) fn section_meeting_points(
             // to read, cannot be read.
             let quarter = 0.25 * tol * lean;
             if off_plane.is_nan() || off_plane - off_err > quarter {
+                left.push((i, j, LeftPair::Unread));
                 continue;
             }
             if off_plane + off_err > quarter
@@ -4011,5 +4059,17 @@ pub(super) fn section_meeting_points(
             }
         }
     }
-    Ok(found)
+    Ok(SectionReading {
+        meetings: found,
+        left,
+    })
+}
+
+/// The meetings [`read_section_meetings`] proves among `sections`, without
+/// the pairs it leaves out, which a face's own sections leave to their ends.
+pub(super) fn section_meeting_points(
+    sections: &[SectionSpan<'_>],
+    tol: f64,
+) -> Result<Vec<Meeting>, UnsettledMeeting> {
+    read_section_meetings(sections, tol).map(|reading| reading.meetings)
 }

@@ -14041,10 +14041,13 @@ pub fn edges_one_curve(a: &OrientedPCurveEdge, b: &OrientedPCurveEdge, tol: f64)
 /// within `tol` of each other inside both, but not at an end of either,
 /// which stands for itself: two lines by their segments' nearest points
 /// (`edge_splitting::segments_meet`), any other pair by
-/// `edge_splitting::section_meeting_points`. `None` where the meetings are
-/// not settled, and for a pair the finder would pass over unread: a
+/// `edge_splitting::read_section_meetings`. Two arcs of one conic meet
+/// along their overlap, which their ends stand for. `None` where the
+/// meetings are not settled, and for a pair the finder leaves unread: a
 /// B-spline, an arc of more than a half turn or of none, a conic no form on
-/// unit axes reads, or two curves not in one plane.
+/// unit axes reads, or two curves not in one plane. With a conic, one plane
+/// is the finder's own reading: a quarter of `tol` off it at most, a line's
+/// ends over the cosine of its slope to it.
 pub fn section_meetings(
     (curve_a, start_a, end_a): (&EdgeCurve, Point3, Point3),
     (curve_b, start_b, end_b): (&EdgeCurve, Point3, Point3),
@@ -14071,8 +14074,12 @@ pub fn section_meetings(
         EdgeCurve::Ellipse(e) => e.normal().normalize().ok().map(|n| (e.center(), n)),
         EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
     };
+    let quarter = 0.25 * tol;
     let in_plane = |(c, n): (Point3, Vec3), p: Point3, q: Point3| {
-        (p - c).dot(n).abs() <= tol && (q - c).dot(n).abs() <= tol
+        let lean = (q - p).normalize().map_or(0.0, |along| {
+            along.dot(n).madd(-along.dot(n), 1.0).max(0.0).sqrt()
+        });
+        (p - c).dot(n).abs() <= quarter * lean && (q - c).dot(n).abs() <= quarter * lean
     };
     // How far a conic strays from a plane: its centre's distance, and its
     // axes' reach off the plane, which its parameter turns through in full.
@@ -14088,7 +14095,7 @@ pub fn section_meetings(
         EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => f64::INFINITY,
     };
     let one_plane = match (plane(curve_a), plane(curve_b)) {
-        (Some(pa), Some(pb)) => stray(curve_b, pa) <= tol && stray(curve_a, pb) <= tol,
+        (Some(pa), Some(pb)) => stray(curve_b, pa) <= quarter && stray(curve_a, pb) <= quarter,
         (Some(pa), None) => in_plane(pa, start_b, end_b),
         (None, Some(pb)) => in_plane(pb, start_a, end_a),
         // Two segments lie in one plane where one of their four ends lies
@@ -14148,9 +14155,15 @@ pub fn section_meetings(
                 .collect(),
         );
     }
-    edge_splitting::section_meeting_points(&spans, tol)
-        .ok()
-        .map(|found| found.into_iter().map(|m| m.at).collect())
+    let reading = edge_splitting::read_section_meetings(&spans, tol).ok()?;
+    if reading
+        .left
+        .iter()
+        .any(|&(_, _, how)| how == edge_splitting::LeftPair::Unread)
+    {
+        return None;
+    }
+    Some(reading.meetings.into_iter().map(|m| m.at).collect())
 }
 
 /// Whether two curves, each read from `start` to `end` the way it is
@@ -19373,6 +19386,50 @@ mod tests {
             forward: true,
             source_edge_idx: Some(src),
             pave_block_id: None,
+        }
+    }
+
+    /// The arc of the ellipse of semi-axes 3 and 2 about the origin from its
+    /// parameter -1 to 1, and the line x = 2.9 from y = -1 to 1 lifted `h`
+    /// off its plane, which crosses the arc twice in the plane's view.
+    /// Lifted half of 1e-7, the pair is reported unread, not passed over;
+    /// lifted an eighth, its two meetings are found and nothing is left.
+    #[test]
+    fn a_line_half_a_tolerance_off_an_arcs_plane_is_reported_unread() {
+        let ellipse = brepkit_math::curves::Ellipse3D::with_axes(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+            2.0,
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap();
+        let (arc, line) = (EdgeCurve::Ellipse(ellipse.clone()), EdgeCurve::Line);
+        for (h, unread) in [(0.5e-7, true), (0.125e-7, false)] {
+            let spans = [
+                edge_splitting::SectionSpan {
+                    curve: &arc,
+                    start: ellipse.evaluate(-1.0),
+                    end: ellipse.evaluate(1.0),
+                },
+                edge_splitting::SectionSpan {
+                    curve: &line,
+                    start: Point3::new(2.9, -1.0, h),
+                    end: Point3::new(2.9, 1.0, h),
+                },
+            ];
+            let reading = edge_splitting::read_section_meetings(&spans, 1e-7).unwrap();
+            if unread {
+                assert_eq!(
+                    reading.left,
+                    vec![(0, 1, edge_splitting::LeftPair::Unread)],
+                    "{h:e}"
+                );
+            } else {
+                assert!(reading.left.is_empty(), "{h:e}: {reading:?}");
+                assert_eq!(reading.meetings.len(), 2, "{h:e}: {reading:?}");
+            }
         }
     }
 

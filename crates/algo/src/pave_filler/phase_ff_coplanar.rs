@@ -3237,4 +3237,79 @@ mod tests {
             }
         }
     }
+
+    /// The arc of the ellipse of semi-axes 3 and 2 about the origin from its
+    /// parameter -1 to 1, and the line x = 2.9 from y = -1 to 1 lifted `h`
+    /// off its plane: in the plane's view the line crosses the arc twice.
+    /// A quarter of the tolerance is all the finder reads off one plane:
+    /// lifted half the tolerance, the pair is refused, not read as apart;
+    /// lifted an eighth, the two meetings are found. In three poses.
+    #[test]
+    fn an_ellipse_arc_and_a_line_off_its_plane_are_read_within_a_quarter_tolerance() {
+        use brepkit_math::curves::Ellipse3D;
+        let tol = 1e-7;
+        for pose in test_poses() {
+            let at = |x: f64, y: f64, z: f64| pose.mul_point(Point3::new(x, y, z));
+            let along = |v: Vec3| at(v.x(), v.y(), v.z()) - at(0.0, 0.0, 0.0);
+            let (u, v) = (
+                along(Vec3::new(1.0, 0.0, 0.0)),
+                along(Vec3::new(0.0, 1.0, 0.0)),
+            );
+            let ellipse =
+                Ellipse3D::with_axes(at(0.0, 0.0, 0.0), u.cross(v), 3.0, 2.0, u, v).unwrap();
+            // The arc runs counterclockwise about its normal, which a mirror
+            // turns over: read it from whichever end its parameter starts.
+            let (from, to) = (ellipse.evaluate(-1.0), ellipse.evaluate(1.0));
+            let curve = EdgeCurve::Ellipse(ellipse.clone());
+            let (from, to) = if (curve.domain_with_endpoints(from, to).1
+                - curve.domain_with_endpoints(from, to).0)
+                < std::f64::consts::PI
+            {
+                (from, to)
+            } else {
+                (to, from)
+            };
+            for (h, read) in [(0.5 * tol, false), (0.125 * tol, true)] {
+                let met = crate::builder::face_splitter::section_meetings(
+                    (&curve, from, to),
+                    (&EdgeCurve::Line, at(2.9, -1.0, h), at(2.9, 1.0, h)),
+                    tol,
+                );
+                if read {
+                    assert!(
+                        met.as_ref().is_some_and(|m| m.len() == 2),
+                        "{h:e}, {pose:?}: {met:?}"
+                    );
+                } else {
+                    assert!(met.is_none(), "{h:e}, {pose:?}: {met:?}");
+                }
+            }
+        }
+    }
+
+    /// Two arcs of one ellipse that overlap meet along the stretch between
+    /// their inner ends, which those ends stand for: no other point is
+    /// given, and the pair is not refused.
+    #[test]
+    fn two_overlapping_arcs_of_one_ellipse_meet_only_at_their_ends() {
+        use brepkit_math::curves::Ellipse3D;
+        let tol = 1e-7;
+        for pose in test_poses() {
+            let at = |x: f64, y: f64, z: f64| pose.mul_point(Point3::new(x, y, z));
+            let along = |v: Vec3| at(v.x(), v.y(), v.z()) - at(0.0, 0.0, 0.0);
+            let (u, v) = (
+                along(Vec3::new(1.0, 0.0, 0.0)),
+                along(Vec3::new(0.0, 1.0, 0.0)),
+            );
+            let ellipse =
+                Ellipse3D::with_axes(at(0.0, 0.0, 0.0), u.cross(v), 3.0, 2.0, u, v).unwrap();
+            let curve = EdgeCurve::Ellipse(ellipse.clone());
+            let met = crate::builder::face_splitter::section_meetings(
+                (&curve, ellipse.evaluate(0.0), ellipse.evaluate(2.0)),
+                (&curve, ellipse.evaluate(1.0), ellipse.evaluate(3.0)),
+                tol,
+            );
+            assert!(met.as_ref().is_some_and(Vec::is_empty), "{pose:?}: {met:?}");
+        }
+    }
 }
