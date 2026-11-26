@@ -165,37 +165,14 @@ pub const MAX_FIT_DEGREE: u32 = 25;
 
 /// The most `f64` cells a fit's working arrays hold: 2^22 cells, 32 MB.
 ///
-/// A least-squares fit holds a row of at most `3 * degree + 4` cells for
-/// each point and control point, and an interpolation a row of at most `4 *
-/// degree + 2` cells for each point. An LSPIA surface fit holds at most
-/// what `lspia_surface_cells` in `brepkit_math::nurbs::surface_fitting`
-/// counts: its grid of points, its parameters and each one's basis values,
-/// and eleven cells for each control point (its point, weight and
-/// correction, and the copy of its point and weight each pass takes). Each
-/// count is read before the coordinates are. The largest fit in the tests,
-/// through 1,500 points at degree 3, holds 21,000 cells.
+/// Each fit's count is the most it holds at once, the points read from the
+/// coordinates included, as `brepkit_math::nurbs::fitting` counts it for a
+/// curve (`interpolation_cells`, `least_squares_cells`, `lspia_cells`) and
+/// `brepkit_math::nurbs::surface_fitting` for a surface
+/// (`interpolate_surface_cells`, `lspia_surface_cells`). Each count is read
+/// before the coordinates are. The largest fit in the tests, through 1,500
+/// points at degree 3, holds 39,004 cells.
 pub const MAX_FIT_CELLS: usize = 1 << 22;
-
-/// Check that a fit's working arrays, `rows` rows of `cells` cells, hold at
-/// most [`MAX_FIT_CELLS`] cells, before the fit allocates them.
-///
-/// # Errors
-///
-/// Returns [`WasmError::InvalidInput`] if they would hold more.
-pub fn validate_fit_cells(rows: usize, cells: usize, what: &str) -> Result<(), WasmError> {
-    if rows
-        .checked_mul(cells)
-        .is_some_and(|total| total <= MAX_FIT_CELLS)
-    {
-        return Ok(());
-    }
-    Err(WasmError::InvalidInput {
-        reason: format!(
-            "{what} needs {rows} rows of {cells} cells for its fit, and the cells must be at \
-             most {MAX_FIT_CELLS}"
-        ),
-    })
-}
 
 /// Check that a fit's working arrays, `cells` cells in all, hold at most
 /// [`MAX_FIT_CELLS`] cells, before the fit allocates them. `None` stands for

@@ -5,12 +5,13 @@
 use wasm_bindgen::prelude::*;
 
 use brepkit_math::nurbs::curve::NurbsCurve;
+use brepkit_math::nurbs::fitting;
 use brepkit_math::nurbs::surface::NurbsSurface;
 use brepkit_math::vec::Point3;
 
 use crate::error::{
     MAX_COUNT, MAX_FIT_DEGREE, MAX_GRID_SIDE, MAX_ITERATIONS, WasmError, validate_count,
-    validate_finite, validate_fit_cells, validate_fit_total, validate_tolerance,
+    validate_finite, validate_fit_total, validate_tolerance,
 };
 use crate::handles::{edge_id_to_u32, face_id_to_u32};
 use crate::helpers::{parse_point_grid, parse_points};
@@ -423,19 +424,11 @@ fn fit_count(coords: &[f64]) -> Result<usize, WasmError> {
     Ok(count)
 }
 
-/// The cells an interpolation of `degree` holds for each point: its
-/// `degree + 1` basis values, and its row of the band of the solve, at most
-/// `degree` cells below the diagonal and `2 * degree` above.
-const fn interpolation_row(degree: usize) -> usize {
-    4 * degree + 2
-}
-
-/// The cells a least-squares fit of `degree` holds for each point and each
-/// control point, at most: a control point's row of the band of the normal
-/// matrix, `degree` cells below the diagonal and `2 * degree` above, and its
-/// right-hand side.
-const fn least_squares_row(degree: usize) -> usize {
-    3 * degree + 4
+/// The cells a curve fit of `count` points holds at once, `fit` counting
+/// its own: the points read from the coordinates, three cells each, and
+/// the fit's.
+fn with_points(count: usize, fit: Option<usize>) -> Option<usize> {
+    count.checked_mul(3)?.checked_add(fit?)
 }
 
 impl BrepKernel {
@@ -448,7 +441,8 @@ impl BrepKernel {
         let degree = validate_count(degree, "degree", MAX_FIT_DEGREE)?;
         let count = fit_count(coords)?;
         let degree = degree.min(count - 1);
-        validate_fit_cells(count, interpolation_row(degree), "interpolatePoints")?;
+        let cells = with_points(count, fitting::interpolation_cells(count, degree));
+        validate_fit_total(cells, "interpolatePoints")?;
         let points = parse_points(coords)?;
         let curve = brepkit_math::nurbs::fitting::interpolate(&points, degree)?;
         Ok(edge_id_to_u32(self.nurbs_curve_to_edge(&points, curve)?))
@@ -467,15 +461,8 @@ impl BrepKernel {
         let count = fit_count(coords)?;
         let degree = degree.min(count - 1);
         let controls = validate_count(num_control_points, "num_control_points", MAX_COUNT)?;
-        if controls < count {
-            validate_fit_cells(
-                count + controls,
-                least_squares_row(degree),
-                "approximateCurve",
-            )?;
-        } else {
-            validate_fit_cells(count, interpolation_row(degree), "approximateCurve")?;
-        }
+        let cells = with_points(count, fitting::least_squares_cells(count, controls, degree));
+        validate_fit_total(cells, "approximateCurve")?;
         let points = parse_points(coords)?;
         let curve = brepkit_math::nurbs::fitting::approximate(&points, degree, controls)?;
         Ok(edge_id_to_u32(self.nurbs_curve_to_edge(&points, curve)?))
@@ -496,7 +483,8 @@ impl BrepKernel {
         let controls = validate_count(num_control_points, "num_control_points", MAX_COUNT)?;
         validate_tolerance(tolerance, "tolerance")?;
         let max_iterations = validate_count(max_iterations, "max_iterations", MAX_ITERATIONS)?;
-        validate_fit_cells(count, degree + 1, "approximateCurveLspia")?;
+        let cells = with_points(count, fitting::lspia_cells(count, controls, degree));
+        validate_fit_total(cells, "approximateCurveLspia")?;
         let points = parse_points(coords)?;
         let curve = brepkit_math::nurbs::fitting::approximate_lspia(
             &points,
@@ -518,17 +506,21 @@ impl BrepKernel {
     ) -> Result<u32, WasmError> {
         let degree_u = validate_count(degree_u, "degree_u", MAX_FIT_DEGREE)?;
         let degree_v = validate_count(degree_v, "degree_v", MAX_FIT_DEGREE)?;
-        validate_fit_cells(
-            cols as usize,
-            interpolation_row(degree_v),
-            "interpolateSurface",
-        )?;
-        validate_fit_cells(
-            rows as usize,
-            interpolation_row(degree_u),
-            "interpolateSurface",
-        )?;
-        let grid = parse_point_grid(coords, rows as usize, cols as usize)?;
+        let (rows, cols) = (rows as usize, cols as usize);
+        let grid_cells = cols
+            .checked_mul(3)
+            .and_then(|row| row.checked_add(3))
+            .and_then(|row| row.checked_mul(rows));
+        let cells = grid_cells.and_then(|grid| {
+            grid.checked_add(
+                brepkit_math::nurbs::surface_fitting::interpolate_surface_cells(
+                    [rows, cols],
+                    [degree_u, degree_v],
+                )?,
+            )
+        });
+        validate_fit_total(cells, "interpolateSurface")?;
+        let grid = parse_point_grid(coords, rows, cols)?;
         let surface =
             brepkit_math::nurbs::surface_fitting::interpolate_surface(&grid, degree_u, degree_v)?;
         Ok(face_id_to_u32(self.nurbs_surface_to_face(surface)?))
@@ -1239,13 +1231,13 @@ mod tests {
     /// Unchecked, the interpolation through 25,000 points (or a surface with
     /// a side of 25,000) at degree 24,999 asks for a basis of 5 GB, which
     /// traps a 32-bit instance, from an input of 1.2 MB. A least-squares fit
-    /// holds 13 cells at degree 3 for each of its points and control points,
-    /// so 300,000 points by 60,000 control points need 4.7 million cells.
+    /// at degree 3 holds four cells a point and 17 a control point, so
+    /// 1,200,000 points by 60,000 control points need 5.8 million cells.
     #[test]
     fn a_fit_past_its_degree_or_its_cells_is_refused_before_it_allocates() {
         let mut k = BrepKernel::new();
-        let message = refused(k.approximate_curve_impl(&wave(300_000), 3, 60_000));
-        assert!(message.contains("360000 rows of 13 cells"), "{message}");
+        let message = refused(k.approximate_curve_impl(&wave(1_200_000), 3, 60_000));
+        assert!(message.contains("5820008 cells"), "{message}");
         refused(k.interpolate_points_impl(&wave(25_000), 24_999));
         refused(k.interpolate_points_impl(&wave(40), 26));
         refused(k.approximate_curve_lspia_impl(&wave(40), 26, 10, 1e-3, 10));
@@ -1260,10 +1252,58 @@ mod tests {
             1e-3,
             10,
         ));
-        // At degree 3 an interpolation holds 14 cells for each point, so
-        // 300,000 points need 4.2 million cells: past the limit of 2^22.
+        // At degree 3 an interpolation holds 26 cells for each point, so
+        // 300,000 points need 7.8 million cells: past the limit of 2^22.
         let message = refused(k.interpolate_points_impl(&wave(300_000), 3));
-        assert!(message.contains("300000 rows of 14 cells"), "{message}");
+        assert!(message.contains("7800004 cells"), "{message}");
+    }
+
+    /// Each curve fit at the most points its count allows within 2^22
+    /// cells, at degrees 0 and 3, by 10 control points where it
+    /// approximates: the fit is not refused for its cells, and one point
+    /// more is. At degrees 0 and 3 the counts by rows charged an
+    /// interpolation 2 or 14 cells a point and an LSPIA fit 1 or 4, where
+    /// they hold 14 or 26 and 10 or 13 with the points read from the
+    /// coordinates, and a least-squares fit 4 or 13 cells a point and
+    /// control point, where it holds 4 a point and 8 or 17 a control point.
+    #[test]
+    fn a_curve_fit_at_its_cell_limit_runs_and_one_point_more_is_refused() {
+        let mut k = BrepKernel::new();
+        for degree in [0_usize, 3] {
+            let counts: [&dyn Fn(usize) -> Option<usize>; 3] = [
+                &|n| with_points(n, fitting::interpolation_cells(n, degree)),
+                &|n| with_points(n, fitting::least_squares_cells(n, 10, degree)),
+                &|n| with_points(n, fitting::lspia_cells(n, 10, degree)),
+            ];
+            for (fit, count) in counts.iter().enumerate() {
+                let within = |n: usize| count(n).is_some_and(|c| c <= crate::error::MAX_FIT_CELLS);
+                let (mut low, mut high) = (2, crate::error::MAX_FIT_CELLS);
+                while high - low > 1 {
+                    let mid = low.midpoint(high);
+                    if within(mid) {
+                        low = mid;
+                    } else {
+                        high = mid;
+                    }
+                }
+                let degree32 = u32::try_from(degree).unwrap();
+                let mut run = |n: usize| {
+                    let coords = wave(n);
+                    match fit {
+                        0 => k.interpolate_points_impl(&coords, degree32),
+                        1 => k.approximate_curve_impl(&coords, degree32, 10),
+                        _ => k.approximate_curve_lspia_impl(&coords, degree32, 10, 1e-3, 1),
+                    }
+                };
+                let at_limit = run(low).err().map(|e| e.to_string()).unwrap_or_default();
+                assert!(!at_limit.contains("cells"), "{fit} at {degree}: {at_limit}");
+                let message = refused(run(low + 1));
+                assert!(
+                    message.contains(&format!("{} cells", count(low + 1).unwrap())),
+                    "{message}"
+                );
+            }
+        }
     }
 
     /// An LSPIA surface fit's grid of 2,000 by 1,000 points at degree 3 by
@@ -1330,8 +1370,8 @@ mod tests {
     /// A grid declared 1 by 1 with a million coordinates, none of them a
     /// number, is refused for its count of coordinates before any is read,
     /// by both surface fits. So are 333,333 points, none a number, that an
-    /// interpolation or a least-squares fit at degree 3 needs more than 2^22
-    /// cells for.
+    /// interpolation at degree 3 needs more than 2^22 cells for, and so are
+    /// 1,500,000 by 1,000 control points for a least-squares fit.
     #[test]
     fn coordinates_past_their_count_are_refused_before_they_are_read() {
         let mut k = BrepKernel::new();
@@ -1348,9 +1388,10 @@ mod tests {
         }
         let lost = vec![f64::NAN; 999_999];
         let message = refused(k.interpolate_points_impl(&lost, 3));
-        assert!(message.contains("333333 rows of 14 cells"), "{message}");
+        assert!(message.contains("8666662 cells"), "{message}");
+        let lost = vec![f64::NAN; 4_500_000];
         let message = refused(k.approximate_curve_impl(&lost, 3, 1000));
-        assert!(message.contains("334333 rows of 13 cells"), "{message}");
+        assert!(message.contains("6017008 cells"), "{message}");
     }
 
     /// The largest fits in the tests pass the fit limits.

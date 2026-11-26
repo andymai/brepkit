@@ -110,6 +110,74 @@ pub(crate) fn lspia_work(n: usize, m: usize, p: usize, iterations: usize) -> f64
     iterations.madd(pass, start)
 }
 
+/// The most cells of eight bytes an interpolation of `n` points at
+/// `degree` holds at once; `None` past `usize`.
+///
+/// They are its parameters and knots, each row's first column and basis
+/// values, its band of at most `3 p + 1` cells a row, and its right-hand
+/// sides and solved points, three cells each.
+#[must_use]
+pub fn interpolation_cells(n: usize, degree: usize) -> Option<usize> {
+    let p = degree.min(n.saturating_sub(1));
+    n.checked_mul(p.checked_mul(4)?.checked_add(11)?)?
+        .checked_add(p.checked_add(1)?)
+}
+
+/// The most cells of eight bytes a least-squares fit of `n` points by `m`
+/// control points at `degree` holds at once ([`approximate`]); `None` past
+/// `usize`.
+///
+/// They are its parameters and knots, the band of its normal matrix,
+/// `3 p + 1` cells a control point, its right-hand sides and solved
+/// points, three cells each, and one point's basis values; an
+/// interpolation's where `m` is not below `n`.
+#[must_use]
+pub fn least_squares_cells(n: usize, m: usize, degree: usize) -> Option<usize> {
+    if m >= n {
+        return interpolation_cells(n, degree);
+    }
+    let p = degree.min(m.saturating_sub(1));
+    n.checked_add(m.checked_mul(p.checked_mul(3)?.checked_add(8)?)?)?
+        .checked_add(p.checked_mul(2)?.checked_add(2)?)
+}
+
+/// The most cells of eight bytes an LSPIA fit of `n` points by `m` control
+/// points at `degree` holds at once ([`approximate_lspia`]); `None` past
+/// `usize`.
+///
+/// They are its parameters and knots, its control points and weights, each
+/// point's span and basis values with a header of four, and the largest of
+/// the step size's power iteration (two vectors a control point and one a
+/// point), the curve it checks once (its knots, points and weights again)
+/// and each pass's corrections.
+#[must_use]
+pub fn lspia_cells(n: usize, m: usize, degree: usize) -> Option<usize> {
+    let p = degree.min(n.saturating_sub(1));
+    let m = m.min(n).max(p + 1);
+    let held = n
+        .checked_mul(p.checked_add(6)?)?
+        .checked_add(m.checked_mul(5)?)?
+        .checked_add(p.checked_add(1)?)?;
+    let most = m
+        .checked_mul(2)?
+        .checked_add(n)?
+        .max(m.checked_mul(5)?.checked_add(p.checked_add(1)?)?);
+    held.checked_add(most)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The most cells a fit held at once on this thread, read from its
+    /// buffers' capacities.
+    pub(crate) static HELD_CELLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Notes that a fit holds `cells` at once.
+#[cfg(test)]
+pub(crate) fn note_held(cells: usize) {
+    HELD_CELLS.with(|most| most.set(most.get().max(cells)));
+}
+
 /// Interpolate a NURBS curve through a set of data points.
 ///
 /// Uses chord-length parameterization and a cubic (degree 3) B-spline.
@@ -432,6 +500,17 @@ fn solve_interpolation(
         }
     }
     let rhs: Vec<[f64; 3]> = points.iter().map(|p| [p.x(), p.y(), p.z()]).collect();
+    // The solved points join these at the end of the solve.
+    #[cfg(test)]
+    note_held(
+        params.len()
+            + knots.len()
+            + firsts.capacity()
+            + basis.capacity()
+            + band.capacity()
+            + 3 * rhs.capacity()
+            + 3 * n,
+    );
     solve_band(band, (kl, ku), rhs)
 }
 
@@ -554,6 +633,16 @@ fn solve_approximation(
     band[at(m - 1, m - 1)] = 1.0;
     rhs[0] = [points[0].x(), points[0].y(), points[0].z()];
     rhs[m - 1] = [points[n - 1].x(), points[n - 1].y(), points[n - 1].z()];
+    // The solved points join these at the end of the solve.
+    #[cfg(test)]
+    note_held(
+        params.len()
+            + knots.len()
+            + band.capacity()
+            + 3 * rhs.capacity()
+            + basis.capacity()
+            + 3 * m,
+    );
     solve_band(band, (kl, ku), rhs)
 }
 
@@ -877,6 +966,20 @@ pub fn approximate_lspia(
 
     // mu = 2 / (lambda_min + lambda_max) where lambda are eigenvalues of N^T N.
     // We approximate lambda_max via the power method and use a conservative mu.
+    #[cfg(test)]
+    let held = params.capacity()
+        + knots.capacity()
+        + 3 * control_points.capacity()
+        + weights.capacity()
+        + 4 * basis_data.capacity()
+        + basis_data
+            .iter()
+            .map(|(_, values)| values.capacity())
+            .sum::<usize>();
+    // The step's power iteration holds two vectors a control point and one
+    // a point, and the check copies the curve's knots, points and weights.
+    #[cfg(test)]
+    note_held(held + (2 * m + n).max(knots.len() + 4 * m));
     let mu = compute_lspia_step_size(&basis_data, p, m);
     // The curve is checked once: each pass reads it from the basis.
     NurbsCurve::new(p, knots.clone(), control_points.clone(), weights.clone())?;
@@ -884,6 +987,8 @@ pub fn approximate_lspia(
     for iter in 0..max_iterations {
         let mut max_err = 0.0f64;
         let mut deltas = vec![(0.0f64, 0.0f64, 0.0f64); m];
+        #[cfg(test)]
+        note_held(held + 3 * deltas.capacity());
 
         for i in 0..n {
             let q = basis_point(&basis_data[i], p, &control_points);
@@ -1780,5 +1885,43 @@ mod tests {
             steps(),
             count(n, CONTROLS)
         );
+    }
+
+    /// Each curve fit of 2,000 points, by 300 control points where it
+    /// approximates, at degrees 0, 1, 3 and 25: the most it holds at once,
+    /// read from its buffers' capacities, is its count. The interpolation at
+    /// degree 0, whose knots average no parameters, is refused for its work
+    /// before its solve holds its band.
+    #[test]
+    fn each_curve_fit_holds_at_most_its_count() {
+        let points = wave(2000);
+        let held = |fit: &dyn Fn() -> Result<NurbsCurve, MathError>| {
+            HELD_CELLS.with(|most| most.set(0));
+            drop(fit());
+            HELD_CELLS.with(std::cell::Cell::get)
+        };
+        for degree in [0, 1, 3, 25] {
+            let cases = [
+                (
+                    held(&|| interpolate(&points, degree)),
+                    interpolation_cells(2000, degree).unwrap(),
+                ),
+                (
+                    held(&|| approximate(&points, degree, 300)),
+                    least_squares_cells(2000, 300, degree).unwrap(),
+                ),
+                (
+                    held(&|| approximate_lspia(&points, degree, 300, 1e-9, 2)),
+                    lspia_cells(2000, 300, degree).unwrap(),
+                ),
+            ];
+            for (k, &(held, count)) in cases.iter().enumerate() {
+                let refused = degree == 0 && k == 0 && held == 0;
+                assert!(
+                    held == count || refused,
+                    "degree {degree}, fit {k}: {held} against {count}"
+                );
+            }
+        }
     }
 }

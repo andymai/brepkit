@@ -124,6 +124,29 @@ pub fn interpolate_surface(
         .iter()
         .map(|row| vec![1.0; row.len()])
         .collect();
+    #[cfg(test)]
+    {
+        let curves = |curves: &[crate::nurbs::curve::NurbsCurve]| {
+            cells::<crate::nurbs::curve::NurbsCurve>(curves.len())
+                + curves
+                    .iter()
+                    .map(|c| c.knots().len() + 3 * c.control_points().len() + c.weights().len())
+                    .sum::<usize>()
+        };
+        // The most one curve's interpolation held, noted by it.
+        let inner = fitting::HELD_CELLS.with(std::cell::Cell::get);
+        fitting::note_held(
+            inner
+                + rows_cells(points)
+                + curves(&row_curves)
+                + rows_cells(&col_points)
+                + curves(&col_curves)
+                + rows_cells(&control_points)
+                + rows_cells(&weights)
+                + knots_u.len()
+                + knots_v.len(),
+        );
+    }
 
     NurbsSurface::new(
         degree_u,
@@ -333,6 +356,41 @@ fn lspia_surface_work(
     let start = 2.0 * rows * cols + rows * bu * bu + cols * bv * bv + mu * mv;
     let pass = (rows * cols).madd(bu * bu + bv * bv + 7.0 * bu * bv, 5.0 * mu * mv);
     (iterations as f64).madd(pass, start)
+}
+
+/// The most cells of eight bytes an interpolation of a grid of `rows` by
+/// `cols` points holds at once ([`interpolate_surface`]), the grid
+/// included; `None` past `usize`.
+///
+/// They are the grid, three cells a point and three for each row's header;
+/// each row's curve and each column's, with their knots, points and
+/// weights; the columns of the row curves' points; the net and its
+/// weights; and the most one curve's interpolation holds
+/// ([`fitting::interpolation_cells`]).
+#[must_use]
+pub fn interpolate_surface_cells(
+    [rows, cols]: [usize; 2],
+    [degree_u, degree_v]: [usize; 2],
+) -> Option<usize> {
+    if rows < 2 || cols < 2 {
+        return Some(0);
+    }
+    let (pu, pv) = (degree_u.min(rows - 1), degree_v.min(cols - 1));
+    let curve = std::mem::size_of::<crate::nurbs::curve::NurbsCurve>().div_ceil(8);
+    let points = rows.checked_mul(cols)?;
+    // Each curve's points and weights hold four cells a point.
+    let row_curves = rows.checked_mul(cols.checked_mul(5)?.checked_add(pv + 1 + curve)?)?;
+    let col_curves = cols.checked_mul(rows.checked_mul(5)?.checked_add(pu + 1 + curve)?)?;
+    let inner =
+        fitting::interpolation_cells(cols, pv)?.max(fitting::interpolation_cells(rows, pu)?);
+    points
+        .checked_mul(10)?
+        .checked_add(rows.checked_mul(9)?)?
+        .checked_add(cols.checked_mul(3)?)?
+        .checked_add(row_curves)?
+        .checked_add(col_curves)?
+        .checked_add(rows + pu + 1 + cols + pv + 1)?
+        .checked_add(inner)
 }
 
 /// The most cells of eight bytes an LSPIA fit of a grid of `rows` by `cols`
@@ -756,6 +814,32 @@ mod tests {
                 held <= counted && counted <= limit && counted - held <= 128,
                 "{rows} by {cols}: held {held}, counted {counted}"
             );
+        }
+    }
+    /// Surface interpolations of grids of 40 by 30 and 3 by 200 points at
+    /// degrees 1, 3 and 25 by 3: the most each holds at once, read from its
+    /// buffers' capacities and with the most one curve's interpolation held,
+    /// is its count.
+    #[test]
+    fn a_surface_interpolation_holds_at_most_its_count() {
+        for (rows, cols) in [(40, 30), (3, 200)] {
+            for (degree_u, degree_v) in [(1, 1), (3, 3), (25, 3)] {
+                let grid: Vec<Vec<Point3>> = (0..rows)
+                    .map(|i| {
+                        (0..cols)
+                            .map(|j| {
+                                let z = ((i * 7 + j * 3) % 11) as f64 * 0.1;
+                                Point3::new(i as f64, j as f64, z)
+                            })
+                            .collect()
+                    })
+                    .collect();
+                fitting::HELD_CELLS.with(|most| most.set(0));
+                drop(interpolate_surface(&grid, degree_u, degree_v));
+                let held = fitting::HELD_CELLS.with(std::cell::Cell::get);
+                let count = interpolate_surface_cells([rows, cols], [degree_u, degree_v]).unwrap();
+                assert_eq!(held, count, "{rows} by {cols} at {degree_u}, {degree_v}");
+            }
         }
     }
 }
