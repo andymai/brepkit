@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795669647785,
+  "lastUpdate": 1795673372097,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -79325,6 +79325,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 23015886,
             "range": "± 301487",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "e2138b73103ab4779c500dbcb593c17b30552e34",
+          "message": "fix(operations): refine B-spline face grids to the deflection, and refuse past the sample limits (#2912)\n\n## Summary\n\n#2873 reported that the B-spline face meshers cap their grids and refine\nno further. Past a cap, a grid is coarser than its deflection needs, and\nthe mesher returns no error. Measured on main with exact rational\nB-spline fixtures:\n\n| Cap | Fixture | Off the surface on main | With this change |\n|---|---|---|---|\n| 1024 lines in a direction | quarter cylinder, δ = 1e-9 | 2.0e-8 (20 ×\nδ) | 9.4e-10 |\n| 65,536 grid cells | torus patch, δ = 4e-6 | 2.8e-5 (7 × δ) | within δ\n|\n| 65,536 untwist cells | z = xy patch, δ = 1e-6 | 6.8e-6 | within δ |\n| quadtree depth 6 | quarter cylinder, δ = 1e-6 | 5.2e-6 | 3.3e-7 |\n| 65,536 periodic cells | closed rational torus, δ = 1e-4 | 3.1e-4 |\n3.8e-5 |\n\nWith this change, each cap is removed or turned into a refusal. Every\ngrid takes the count its deflection needs, within the limits from #2859:\n1e6 samples in a direction and 1e7 in a face. A face past them is\nrefused with `TooManySamples`. The pose sweep, the truth audit and the\ngolden meshes give the same output as main.\n\nFixes #2873.\n\n## The change\n\n- **Lines in a direction.** `iso_breaks_over` refines until every span\nis within the deflection, and refuses past the limit, where it stopped\nat 1024 divisions.\n- **Grid cells.** `cap_lines`, `cap_grid` and `GRID_MAX_CELLS` are\nremoved in favour of `check_grid`.\n- **Untwisting.** `untwist_lines` and `untwisted_grid` refine until no\ncell strays, and refuse past the limits. The grid search keeps at most\n2^20 witnesses, and refuses before it stores a pass past the limits. So\na small twisted patch cannot use gigabytes first. After a pass runs out\nof room, the search goes on from a multiple of that pass's own grid. So\nevery probe it read stays on the next grid.\n- **Quadtree.** `MAX_DEPTH` and `MAX_CELLS` and its restart on an even\ngrid are removed. Leaves refine to the deflection, and `check_cells`\nrefuses past 1e7 cells or 64 levels. The tree is read from an explicit\nwork stack, so a deep branch cannot overflow the stack. A cell whose\nerror is not finite is refused at once.\n- **Vertices.** Before emission, the mesher counts the leaves' distinct\ncorners and refuses past the face limit, so the mesh holds at most 1e7\nvertices. The tree's cell limit stays as a bound on its work.\n- **Cell error.** A cell's middle and quarter points are read against\nits own triangles, and each side's middle against its chord. So a flat\npatch with uneven parameters is not refined as if it were curved. A thin\ntriangle is measured by its plane, formed from its two shorter sides,\nwithin a rounding allowance.\n- **Parameter lines.** The mesh refuses past 1e6 vertices on any one\nu-line or v-line, the edge limit.\n- **Spans that cannot be halved.** A span that needs cutting but has no\nmidpoint strictly inside it is refused. Each refinement level checks its\ncount before it grows past the limit.\n- **Periodic grid.** Its 4096-division and 65,536-cell caps are refusals\nnow, and `iso_divisions_over` refuses in place of a capped count. An\niso-line's middle is read against its chord as a segment. So a flat\npatch with crowded weights takes one division each way, where before it\nwas refused.\n- These meshers now return `Result`.\n\nThe angle tolerance on normals is still met only as far as before,\nbecause a normal's turn never settles across a crease.\n\n## Tests\n\n- Six new tests mesh a B-spline face past each former cap within its\ndeflection. They cover 1024 divisions, 65,536 grid cells, 65,536 untwist\ncells, the former tree depth, and a closed torus past 65,536 cells. A\ntwisted grid past its divisions is refused.\n- `a_creased_sheet_meshes_within_its_deflection` and\n`a_tree_past_the_sample_limit_is_refused` cover the quadtree.\n- Further tests refuse:\n  - a corner spike at the depth bound, on a 256 KB stack;\n  - a corner crowded by a 1e-80 weight;\n  - a surface with a NaN control point;\n  - a span that cannot be halved.\n- Flat patches 1e9 by 1e-4, and flat patches with weights crowded to one\nside, mesh on their 16 roots. On the first version of this change, one\nwas refused and another took 3 million leaves.\n- `a_creased_sheet_meshes_within_its_deflection` runs at 4e-4, where the\ntree needs more than 200,000 leaves. On main it stops at the old cap and\nis 1.5e-2 off, 38 times the deflection.\n- `corners_past_the_limit_are_refused_though_the_cells_are_within_it`\ncovers the vertex count.\n- `nurbs_crease_mesh::a_faceted_sheet_stays_bounded` now allows 1M\ntriangles, up from 500k. The tree divides at the folds it reads, about\n662k triangles in 1.6 s.\n- `flat_patches_with_crowded_weights_hold_on_their_first_lines` covers\nweights 1e-3, 1e-6 and 2^-20 at three deflections, in 3 poses. A crowded\nconic still divides.\n- `a_twisted_grid_out_of_room_on_a_grid_tried_between_keeps_its_peak`\nholds a narrow peak found on a 3×3 grid with no room to keep it, in 3\nposes.\n- The tessellate lib tests and 10 mesh files (235) pass, and so do all\nbrepkit-operations and brepkit-io tests (3404, 28 skipped).\n\n## Still open\n\n- A B-spline face's boundary strip meshes past the deflection, as on\nmain (#2910).\n- The quadtree tests cells at fixed probes, so a waving surface can read\nas flat. It refuses past the cell limit only after the work (#2911).\n- The untwist grid search can stop on a 1×1 grid where crowded weights\nhide a twist (#2919).",
+          "timestamp": "2026-11-26T06:05:41Z",
+          "tree_id": "a0842867c58c9a3fca893a953c5baed742d35724",
+          "url": "https://github.com/andymai/brepkit/commit/e2138b73103ab4779c500dbcb593c17b30552e34"
+        },
+        "date": 1795673357236,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 994434,
+            "range": "± 4480",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1050564,
+            "range": "± 3376",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12148,
+            "range": "± 15",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 609128,
+            "range": "± 1247",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22427789,
+            "range": "± 75391",
             "unit": "ns/iter"
           }
         ]
