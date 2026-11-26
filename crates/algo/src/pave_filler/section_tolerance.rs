@@ -65,25 +65,61 @@ pub fn perform(topo: &mut Topology, tol: Tolerance, arena: &mut GfaArena) -> Res
 }
 
 /// Moves each end at parameter `from` of the blocks of section `index` from
-/// `root` down to the parameter `to`, where `to` lies on the same side of
-/// the block's other end, and the section's range with them.
-fn move_end(arena: &mut GfaArena, index: usize, root: crate::ds::PaveBlockId, from: f64, to: f64) {
+/// `root` down to the parameter `to`, and the section's range with them.
+/// Nothing moves unless `to` lies inside the section's range, where its
+/// bound is proved, and every block with an end at `from` keeps its other
+/// end strictly on the same side of `to`. Returns whether the ends moved.
+fn move_end(
+    arena: &mut GfaArena,
+    index: usize,
+    root: crate::ds::PaveBlockId,
+    from: f64,
+    to: f64,
+) -> bool {
+    let Some(section) = arena.curves.get(index) else {
+        return false;
+    };
+    let (lo, hi) = (
+        section.t_range.0.min(section.t_range.1),
+        section.t_range.0.max(section.t_range.1),
+    );
+    if to.is_nan() || to < lo || to > hi {
+        return false;
+    }
+    let keeps_side = |other: f64| {
+        let (was, now) = (other - from, other - to);
+        now != 0.0 && was.is_sign_positive() == now.is_sign_positive()
+    };
+    let mut moves: Vec<(crate::ds::PaveBlockId, bool)> = Vec::new();
     let mut stack = vec![root];
     while let Some(id) = stack.pop() {
-        let Some(pb) = arena.pave_blocks.get_mut(id) else {
+        let Some(pb) = arena.pave_blocks.get(id) else {
             continue;
         };
-        let keeps_side = |other: f64| {
-            let (was, now) = (other - from, other - to);
-            now != 0.0 && was.is_sign_positive() == now.is_sign_positive()
-        };
-        if pb.start.parameter.to_bits() == from.to_bits() && keeps_side(pb.end.parameter) {
-            pb.start.parameter = to;
-        }
-        if pb.end.parameter.to_bits() == from.to_bits() && keeps_side(pb.start.parameter) {
-            pb.end.parameter = to;
+        for (at_start, end, other) in [
+            (true, pb.start.parameter, pb.end.parameter),
+            (false, pb.end.parameter, pb.start.parameter),
+        ] {
+            if end.to_bits() == from.to_bits() {
+                if !keeps_side(other) {
+                    return false;
+                }
+                moves.push((id, at_start));
+            }
         }
         stack.extend(pb.children.iter().copied());
+    }
+    if moves.is_empty() {
+        return false;
+    }
+    for (id, at_start) in moves {
+        if let Some(pb) = arena.pave_blocks.get_mut(id) {
+            if at_start {
+                pb.start.parameter = to;
+            } else {
+                pb.end.parameter = to;
+            }
+        }
     }
     if let Some(section) = arena.curves.get_mut(index) {
         if section.t_range.0.to_bits() == from.to_bits() {
@@ -93,6 +129,7 @@ fn move_end(arena: &mut GfaArena, index: usize, root: crate::ds::PaveBlockId, fr
             section.t_range.1 = to;
         }
     }
+    true
 }
 
 /// Ends each B-spline section on, and cuts it at, the vertices of its two
@@ -215,8 +252,8 @@ fn settle_on_vertices(
                     && let Some((pass, t)) = crate::surface_reach::point_off_spline(p, &curve)
                     && pass <= within
                     && pass < off_end
+                    && move_end(arena, index, root, pave.parameter, t)
                 {
-                    move_end(arena, index, root, pave.parameter, t);
                     raised.push((at, pass));
                 }
             }
@@ -478,6 +515,55 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A section over [2, 8] of a straight spline on [0, 10] that ends on a
+    /// vertex of its faces lying on the spline at 8.5, past the section: the
+    /// vertex's nearest point on the spline is outside the section, so the
+    /// end stays where it is, and so does the section's range.
+    #[test]
+    fn a_section_end_never_moves_past_its_own_range() {
+        let curve = NurbsCurve::new(
+            1,
+            vec![0.0, 0.0, 10.0, 10.0],
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(10.0, 0.0, 0.0)],
+            vec![1.0; 2],
+        )
+        .unwrap();
+        let mut topo = Topology::default();
+        let start = topo.add_vertex(Vertex::new(curve.evaluate(2.0), 1e-7));
+        let end = topo.add_vertex(Vertex::new(curve.evaluate(8.5), 1e-7));
+        let far = topo.add_vertex(Vertex::new(Point3::new(8.5, 5.0, 5.0), 1e-7));
+        let side = topo.add_edge(Edge::new(end, far, EdgeCurve::Line));
+        let wire = topo.add_wire(Wire::new(vec![OrientedEdge::new(side, true)], false).unwrap());
+        let plane = |normal: Vec3| FaceSurface::Plane { normal, d: 0.0 };
+        let face_a = topo.add_face(Face::new(wire, vec![], plane(Vec3::new(0.0, 0.0, 1.0))));
+        let face_b = topo.add_face(Face::new(wire, vec![], plane(Vec3::new(0.0, 1.0, 0.0))));
+        let section = topo.add_edge(Edge::new(start, end, EdgeCurve::NurbsCurve(curve.clone())));
+        let mut arena = GfaArena::new();
+        let pb = arena.pave_blocks.alloc(PaveBlock::new(
+            section,
+            Pave::new(start, 2.0),
+            Pave::new(end, 8.0),
+        ));
+        arena.curves.push(IntersectionCurveDS {
+            curve: EdgeCurve::NurbsCurve(curve.clone()),
+            face_a,
+            face_b,
+            bbox: Aabb3::from_points(curve.control_points().iter().copied()),
+            pave_blocks: vec![pb],
+            t_range: (2.0, 8.0),
+        });
+
+        super::perform(&mut topo, Tolerance::default(), &mut arena).unwrap();
+
+        let block = arena.pave_blocks.get(pb).unwrap();
+        assert_eq!(
+            (block.start.parameter, block.end.parameter),
+            (2.0, 8.0),
+            "the block's ends"
+        );
+        assert_eq!(arena.curves[0].t_range, (2.0, 8.0), "the section's range");
     }
 
     /// A cubic along a ruling of a cylinder of radius 2, `off` outside it,
