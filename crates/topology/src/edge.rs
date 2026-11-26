@@ -195,6 +195,9 @@ impl EdgeCurve {
         const END_EPS: f64 = 1e-6;
         // NURBS sub-span on-curve band (the weld scale).
         const WELD_EPS: f64 = 1e-5;
+        // How far a file's vertex may stand off its edge's curve and still
+        // bound a piece of it: a file's edge tolerance.
+        const FILE_EPS: f64 = 1e-4;
         match self {
             Self::Line => (0.0, 1.0),
             Self::Circle(c) => {
@@ -260,6 +263,27 @@ impl EdgeCurve {
                         && pb.distance < WELD_EPS
                         && dt.abs() > 1e-6 * (d1 - d0)
                         && (dt > 0.0 || curve_open || backward_shorter)
+                    {
+                        return (pa.parameter, pb.parameter);
+                    }
+                    // A file's vertices stand off its edge's curve by up to
+                    // the edge's tolerance, past the weld band (4e-5 on a
+                    // degree-7 piece of a longer section). On an open curve
+                    // both ends within that read at their projections: read
+                    // whole, the edge ran on to the curve's own ends, and the
+                    // faces it bounds took in area past their vertices.
+                    // That is taken only where the curve runs on past the
+                    // vertices by more than a hundredth of the edge: a curve
+                    // ending just past them reads whole, as it does in any
+                    // scale, and its vertices take the gap as tolerance.
+                    let chord = (end - start).length();
+                    let runs_on = ((p0 - start).length().max((p1 - end).length()))
+                        .min((p1 - start).length().max((p0 - end).length()));
+                    if curve_open
+                        && runs_on > 1e-2 * chord
+                        && pa.distance < FILE_EPS
+                        && pb.distance < FILE_EPS
+                        && dt.abs() > 1e-6 * (d1 - d0)
                     {
                         return (pa.parameter, pb.parameter);
                     }
@@ -723,6 +747,30 @@ mod tests {
         let tc = d0 + 0.9 * (d1 - d0);
         let pc = brepkit_math::traits::ParametricCurve::evaluate(&n, tc);
         assert_full_domain(curve.domain_with_endpoints(pc, pb), d0, d1);
+    }
+
+    /// A file's vertices stand off their edge's curve by up to the edge's
+    /// tolerance, past the weld band: the edge is still the piece between
+    /// them, not the whole curve.
+    #[test]
+    fn nurbs_domain_ends_a_file_s_tolerance_off_the_curve_are_trimmed() {
+        let curve = open_nurbs();
+        let EdgeCurve::NurbsCurve(n) = &curve else {
+            unreachable!()
+        };
+        let (d0, d1) = brepkit_math::traits::ParametricCurve::domain(n);
+        let ta = d0 + 0.25 * (d1 - d0);
+        let tb = d0 + 0.7 * (d1 - d0);
+        let off = Vec3::new(0.0, 0.0, 4e-5);
+        let pa = brepkit_math::traits::ParametricCurve::evaluate(n, ta);
+        let pb = brepkit_math::traits::ParametricCurve::evaluate(n, tb) + off;
+        for (start, end, want) in [(pa, pb, (ta, tb)), (pb, pa, (tb, ta))] {
+            let (t0, t1) = curve.domain_with_endpoints(start, end);
+            assert!(
+                (t0 - want.0).abs() < 1e-6 && (t1 - want.1).abs() < 1e-6,
+                "got ({t0}, {t1}), expected {want:?}"
+            );
+        }
     }
 
     #[test]
