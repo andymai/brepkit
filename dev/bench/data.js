@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795683616037,
+  "lastUpdate": 1795697293962,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -79487,6 +79487,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 18942738,
             "range": "± 46077",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "81bce01b8ab6d346a6d8e53337e878b2d46c0c2b",
+          "message": "fix(algo,math): prove B-spline section, edge and vertex tolerances, and merge arcs only on a proof (#2921)\n\n## Summary\n\n#2908 reported that B-spline section edges carry no tolerance. So a\nsection and a boundary edge that lie on one curve within their true\ndistances cannot be linked.\n\n#2867 listed edge dedups in the GFA that merge two edges by their ends\nor by samples. #2902 fixed three of its sites. This PR fixes two more:\nthe face splitter's arrangement dedup (site 1) and the wire walker's\nreverse test (site 6).\n\nMade strict alone, sites 1 and 6 refuse three tool-workflow cases that\nmain gets right by an unproved weld. This PR gives B-spline sections,\nB-spline edges and nearby vertices proved tolerances. With them, all\nthree cases pass on proofs.\n\nThe pose sweep, the truth audit and random sweep seeds 1 to 3 give the\nsame output as main.\n\nFixes #2908. Refs #2867.\n\n## The change\n\n- **Site 1.** `split_coendpoint_section_arc_inputs` keeps apart two\ninputs with one pair of chord ends, unless `same_section_curve` proves\nthem one curve. This replaces a sampled dedup.\n- **Site 6.** `trace_loops` skips a candidate as the reverse of the\narriving edge only where the two are proved one curve. A B-spline is no\nlonger read by angle alone. On a plane face, two edges drawn as one\nstraight segment count as one only where one of them is a line in space.\n- **Coplanar pairs.** In `process_coplanar_pair`, a sampled boundary\nedge that lies wholly inside its partner is registered as its own curve.\nA coplanar section is dropped as a duplicate only where it is proved one\ncurve with another. For a B-spline piece, the proof must hold within the\nsection's proved distance from its faces plus the edge's own tolerance.\n- **Proved distances.**\n- `spline_off_surface` and `point_off_surface` bound a spline's or a\npoint's distance from a cylinder, cone, sphere or torus. The point's\nbound counts the rounding at the sizes of the point and the frame.\n- `proved_distance` and `point_off_nurbs` do the same against a B-spline\nsurface.\n  - `surface_reach.rs` chooses the bound by the face's surface type.\n- **Section tolerances** (`section_tolerance.rs`):\n- Each B-spline section edge takes its proved distance from both faces\nas its tolerance.\n- A dangling end joins a face vertex within the vertex's tolerance plus\nthe section's.\n  - Each end moves to where the section passes its end vertex.\n- A face vertex that the section passes within those tolerances cuts the\nsection's blocks.\n- An end moves only inside the section's own range, and its blocks and\nrange move together.\n- Cuts at one parameter join the vertices they stand for, and a raised\ntolerance goes to the final vertex, plus the distance to it.\n- **Links.** `try_link` and the new `link_along_split_spline` link a\nB-spline section to B-spline boundary blocks. Each piece must be proved\none curve within the section's tolerance plus the edge's, along an edge\nthe filler split.\n- **Operand tolerances.** At boolean entry, `raise_to_proved_reach` and\n`raise_vertices_to_proved_reach` raise operand tolerances to proved\ndistances, capped at a tenth of size:\n  - B-spline edges, by their distance from their faces;\n- vertices near the other operand, by their distance from their faces\nand from their edges' curve ends, and by their edges' tolerances.\n- **Split and result edges.** A split edge takes its original edge's\ntolerance. A common block's edge takes the largest of its members'\ntolerances and the block's proved tolerance. So does an edge that\n`merge_duplicate_edges` keeps for its copies, and a block that a section\njoins. Before a boolean, imprint or split result leaves its store,\n`prove_edge_tolerances` gives each B-spline edge its proved distance\nfrom its faces, with the same cap.\n- **Knot insertion.** `curve_knot_insert` and `curve_split` give an\ninserted copy the value of an existing knot within `KNOT_EPS`. Before, a\ncut at 0.25 beside a knot at 0.24999999999999992 put the knots out of\norder.\n- **Face feed.** `section_runs` replaces\n`section_pieces_on_face_boundary`. A face takes only the runs of a\nsection's pieces that share no common block with its own boundary. It\nalso skips a block it already took. A line, circle or ellipse run is\nread between its two end vertices, and a run it cannot read refuses the\nsplit.\n- **B-spline windows.** A B-spline run or window is cut at its own\nparameters. It keeps a domain end only where a hodograph bound proves\nthe gap within the tolerance. After each cut, its knots must be\nnon-decreasing and its ends must lie on the window, or the split is\nrefused.\n\n## Tests\n\n- `two_b_splines_leaving_their_ends_close_together_bound_a_lens` and\n`two_half_ellipses_with_one_pair_of_ends_are_two_cells` fail on main.\nEach runs in 3 frames.\n- `two_half_ellipses_with_one_pair_of_ends_imprint_their_own_faces`\nchecks the same through the imprint operation, in 3 poses.\n- `a_b_spline_section_along_a_split_b_spline_edge_links_piece_by_piece`\nlinks a section along an edge bowed 1e-4 in 3 pieces, and leaves it\nunlinked at a bow of 1e-3, in 3 poses.\n-\n`a_section_end_joins_a_vertex_off_it_only_once_its_tolerance_is_raised`\nputs a corner 3e-6 off a B-spline face at a tolerance of 1e-7, in 3\nposes.\n- `the_fillet_material_and_the_clipped_scoop_meet_exactly` checks that\neach B-spline edge's tolerance in all four results covers its distance\nfrom its faces. Without the result pass, edges stand up to 2.67e-4 off\nwith no tolerance.\n- `a_section_end_never_moves_past_its_own_range` and\n`a_far_point_is_bounded_by_its_exact_distance` fail without their fixes.\nThe far point lies about 1e15 out from a cylinder, cone, sphere and\ntorus.\n- `a_section_joining_a_common_block_raises_its_tolerance`,\n`a_shared_edge_holds_the_tolerance_one_of_its_copies_needs`,\n`a_face_takes_only_the_pieces_of_a_section_off_its_boundary` and\n`a_face_refuses_a_section_it_cannot_read_apart_from_its_boundary` each\nrun in 3 poses and fail without their fixes.\n- `a_b_spline_piece_is_held_by_a_section_only_within_proved_tolerances`,\n`a_spline_run_is_cut_at_its_own_parameters`,\n`a_section_window_is_cut_at_its_own_parameters` and\n`an_edge_that_a_joined_set_merges_into_holds_its_tolerance` run in 3\nposes and fail without their fixes.\n- `a_split_beside_a_knot_keeps_the_knots_in_order` and\n`a_window_that_is_not_its_curves_part_is_refused` run in 3 poses.\n- Unit tests bound a spline off a cylinder and off a B-spline sheet.\nOthers bound a section and an edge off their faces, and refuse what the\nbounds cannot read.\n- The three scoop and fillet clip tests in brepkit-io pass. On main they\npass through the sampled dedups. With sites 1 and 6 strict and no proved\ntolerances, they fail.\n- brepkit-algo (858), brepkit-math (812), the boolean lib tests (235)\nand brepkit-io (638) pass, and so do all brepkit-operations and\nbrepkit-io tests (3415, 28 skipped).\n\n## Cost\n\nMeasured against the branch before the #2908 work (482400ae7), on the\nsame binaries, interleaved:\n\n- Pose sweep: 4.65 to 4.68 s, against 4.62 to 4.65 s before. Truth\naudit: 1.09 to 1.10 s, against 1.07 to 1.08 s.\n- B-spline tests that pass on both: 0 to 6 % slower.\n- `boolean_perf`, with no B-spline curves: −0.3 % to +1.9 % per case.\n- The result-edge pass takes 2.2 % to 4.8 % of a boolean with many\nB-spline edges, and 0.03 ms on 405 edges with none.\n\n## Still open\n\n- Deferred as contrived: near coordinates of 1e15, a jump of about 1.8\nat a knot of full multiplicity reads as continuous to rounding.\n- Deferred as contrived: the spline bounds near the underflow range.\n\n- `validate_solid` reads two edges of the scooped fillet intersection\n1.43 off their vertices, as on main (#2804).\n- `merge_duplicate_edges` (site 2 of #2867) still merges by samples. It\nwaits on #2804.\n- Line, circle and ellipse edges keep a sampled reach against analytic\nfaces (#2917).\n- Rational splines, degrees above 3 and periodic B-spline surfaces get\nno proved distance (#2920).",
+          "timestamp": "2026-11-26T12:43:37Z",
+          "tree_id": "31b5a4a7b02fefccd6172e3de78a292735ace559",
+          "url": "https://github.com/andymai/brepkit/commit/81bce01b8ab6d346a6d8e53337e878b2d46c0c2b"
+        },
+        "date": 1795697282660,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1257564,
+            "range": "± 9957",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1441564,
+            "range": "± 107880",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14535,
+            "range": "± 47",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 774615,
+            "range": "± 22410",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28533767,
+            "range": "± 244896",
             "unit": "ns/iter"
           }
         ]
