@@ -167,7 +167,10 @@ pub const MAX_FIT_DEGREE: u32 = 25;
 ///
 /// A least-squares fit holds a row of at most `3 * degree + 4` cells for
 /// each point and control point, and an interpolation a row of at most `4 *
-/// degree + 2` cells for each point. The largest fit in the
+/// degree + 2` cells for each point. An LSPIA surface fit holds its grid of
+/// points, three cells each, each side's basis values, and eleven cells for
+/// each control point: its point, weight and correction, and the copy of
+/// its point and weight each pass takes. The largest fit in the
 /// tests, through 1,500 points at degree 3, holds 21,000 cells.
 pub const MAX_FIT_CELLS: usize = 1 << 22;
 
@@ -188,6 +191,26 @@ pub fn validate_fit_cells(rows: usize, cells: usize, what: &str) -> Result<(), W
         reason: format!(
             "{what} needs {rows} rows of {cells} cells for its fit, and the cells must be at \
              most {MAX_FIT_CELLS}"
+        ),
+    })
+}
+
+/// Check that a fit's working arrays, `cells` cells in all, hold at most
+/// [`MAX_FIT_CELLS`] cells, before the fit allocates them. `None` stands for
+/// a count past `usize`.
+///
+/// # Errors
+///
+/// Returns [`WasmError::InvalidInput`] if they would hold more.
+pub fn validate_fit_total(cells: Option<usize>, what: &str) -> Result<(), WasmError> {
+    if cells.is_some_and(|total| total <= MAX_FIT_CELLS) {
+        return Ok(());
+    }
+    let count = cells.map_or_else(|| "more than usize".to_string(), |total| total.to_string());
+    Err(WasmError::InvalidInput {
+        reason: format!(
+            "{what} needs {count} cells for its fit, and the cells must be at most \
+             {MAX_FIT_CELLS}"
         ),
     })
 }

@@ -10,7 +10,7 @@ use brepkit_math::vec::Point3;
 
 use crate::error::{
     MAX_COUNT, MAX_FIT_DEGREE, MAX_GRID_SIDE, MAX_ITERATIONS, WasmError, validate_count,
-    validate_finite, validate_fit_cells, validate_tolerance,
+    validate_finite, validate_fit_cells, validate_fit_total, validate_tolerance,
 };
 use crate::handles::{edge_id_to_u32, face_id_to_u32};
 use crate::helpers::{parse_point_grid, parse_points};
@@ -522,9 +522,10 @@ impl BrepKernel {
         Ok(face_id_to_u32(self.nurbs_surface_to_face(surface)?))
     }
 
-    /// The checked body of `approximateSurfaceLspia`. Its arrays are each
-    /// side's basis values and the grid of control points, which the
-    /// bounded degrees and counts keep small beside the points.
+    /// The checked body of `approximateSurfaceLspia`. Its cells, counted
+    /// from its sizes before the grid of points is read, are the grid's
+    /// points, each side's basis values and its control net
+    /// ([`crate::error::MAX_FIT_CELLS`]).
     pub(crate) fn approximate_surface_lspia_impl(
         &mut self,
         coords: &[f64],
@@ -536,9 +537,17 @@ impl BrepKernel {
     ) -> Result<u32, WasmError> {
         let degree_u = validate_count(degree_u, "degree_u", MAX_FIT_DEGREE)?;
         let degree_v = validate_count(degree_v, "degree_v", MAX_FIT_DEGREE)?;
-        let grid = parse_point_grid(coords, rows as usize, cols as usize)?;
         let num_cps_u = validate_count(num_cps_u, "num_cps_u", MAX_GRID_SIDE)?;
         let num_cps_v = validate_count(num_cps_v, "num_cps_v", MAX_GRID_SIDE)?;
+        let (rows, cols) = (rows as usize, cols as usize);
+        let cells = cols
+            .checked_mul(3)
+            .and_then(|row| row.checked_add(degree_u + 1))
+            .and_then(|row| row.checked_mul(rows))
+            .and_then(|grid| grid.checked_add(cols.checked_mul(degree_v + 1)?))
+            .and_then(|sum| sum.checked_add(num_cps_u * num_cps_v * 11));
+        validate_fit_total(cells, "approximateSurfaceLspia")?;
+        let grid = parse_point_grid(coords, rows, cols)?;
         validate_tolerance(tolerance, "tolerance")?;
         let max_iterations = validate_count(max_iterations, "max_iterations", MAX_ITERATIONS)?;
         let surface = brepkit_math::nurbs::surface_fitting::approximate_surface_lspia(
@@ -1243,6 +1252,31 @@ mod tests {
         // 300,000 points need 4.2 million cells: past the limit of 2^22.
         let message = refused(k.interpolate_points_impl(&wave(300_000), 3));
         assert!(message.contains("300000 rows of 14 cells"), "{message}");
+    }
+
+    /// An LSPIA surface fit's grid of 2,000 by 1,000 points at degree 3 by
+    /// 8 by 8 control points holds 6,012,704 cells, past the limit of 2^22:
+    /// it is refused from its sizes, before the points (here none) are
+    /// read. A grid of 1,000 by 1,000 points holds 3,008,704, within it, and
+    /// runs.
+    #[test]
+    fn a_surface_lspia_grid_past_the_cells_is_refused_before_it_is_read() {
+        let mut k = BrepKernel::new();
+        let message =
+            refused(k.approximate_surface_lspia_impl(&[], [2000, 1000], [3, 3], [8, 8], 1e-3, 10));
+        assert!(message.contains("6012704 cells"), "{message}");
+        let grid: Vec<f64> = (0..1000)
+            .flat_map(|i| {
+                (0..1000).flat_map(move |j| {
+                    let (u, v) = (f64::from(i) / 999.0, f64::from(j) / 999.0);
+                    [u, v, 0.1 * (u * 3.0).sin() * v]
+                })
+            })
+            .collect();
+        assert!(
+            k.approximate_surface_lspia_impl(&grid, [1000, 1000], [3, 3], [8, 8], 1e-3, 2)
+                .is_ok()
+        );
     }
 
     /// The largest fits in the tests pass the fit limits.
