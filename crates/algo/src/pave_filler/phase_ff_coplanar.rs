@@ -394,7 +394,14 @@ fn process_coplanar_pair(
                 end,
                 mid,
             } => {
-                if !has_existing_section_along(arena, topo, target, (start, end), mid, tol) {
+                if !has_existing_section_along(
+                    arena,
+                    topo,
+                    target,
+                    (&along.curve, start, end),
+                    mid,
+                    tol,
+                ) {
                     create_curve_section_edge(
                         topo,
                         arena,
@@ -1719,16 +1726,18 @@ fn create_arc_section_edge(
     );
 }
 
-/// Whether `target` already has a section from `start` to `end` that runs
-/// through `mid`, a piece of an ellipse boundary edge: at its own middle for a
-/// line, a circle or an ellipse, and for a B-spline at the foot of `mid` on
-/// its span. A curve attached only to the other face of the pair does not
-/// count.
+/// Whether `target` already has a section that is the piece of an ellipse
+/// boundary edge along `piece` from `p_start` to `p_end`, through `mid`:
+/// with the piece's ends, and proved one curve with it along its whole
+/// length (see [`crate::builder::face_splitter::curves_one_curve`]). A
+/// circle or an ellipse through the piece's ends and middle can still part
+/// from it between them, and the thin regions there would be lost. A curve
+/// attached only to the other face of the pair does not count.
 fn has_existing_section_along(
     arena: &GfaArena,
     topo: &Topology,
     target: FaceId,
-    (p_start, p_end): (Point3, Point3),
+    (piece_curve, p_start, p_end): (&EdgeCurve, Point3, Point3),
     mid: Point3,
     tol: Tolerance,
 ) -> bool {
@@ -1740,27 +1749,17 @@ fn has_existing_section_along(
         {
             return false;
         }
-        let Some(((s, t_s), (e, t_e))) = section_ends(topo, arena, curve) else {
+        let Some(((s, _), (e, _))) = section_ends(topo, arena, curve) else {
             return false;
         };
         if !((near(s, p_start) && near(e, p_end)) || (near(s, p_end) && near(e, p_start))) {
             return false;
         }
-        let at = |t: f64| curve.curve.evaluate_with_endpoints(t, s, e);
-        match &curve.curve {
-            EdgeCurve::Line | EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
-                near(at(0.5 * (t_s + t_e)), mid)
-            }
-            EdgeCurve::NurbsCurve(nurbs) => {
-                let (lo, hi) = (t_s.min(t_e), t_s.max(t_e));
-                brepkit_math::nurbs::projection::project_point_to_curve(nurbs, mid, tol.linear)
-                    .is_ok_and(|foot| {
-                        foot.distance < tol.linear * 10.0
-                            && foot.parameter >= lo
-                            && foot.parameter <= hi
-                    })
-            }
-        }
+        crate::builder::face_splitter::curves_one_curve(
+            (piece_curve, p_start, p_end),
+            (&curve.curve, s, e),
+            tol.linear * 10.0,
+        )
     })
 }
 
@@ -2495,6 +2494,79 @@ mod tests {
                 }
             }
             assert!((total - TAU).abs() < 1e-9, "{total}");
+        }
+    }
+
+    /// An arc of the ellipse of semi-axes 3 and 2 from (0.6, -/+ 1.96)
+    /// through (3, 0), and an arc of the circle of radius 2 about (1, 0)
+    /// through the same three points: the same ends and middle, two curves
+    /// with thin regions between them. The circle as a section on a face
+    /// does not stand for the ellipse's piece there, but the ellipse does,
+    /// in three poses.
+    #[test]
+    fn an_ellipse_piece_through_a_circle_sections_ends_and_middle_is_kept() {
+        use brepkit_math::curves::Ellipse3D;
+        let tol = Tolerance::default();
+        for pose in test_poses() {
+            let mut topo = Topology::new();
+            let mut arena = GfaArena::new();
+            let target_rim = rim(&mut topo, 9.0);
+            let target = face_down(&mut topo, vec![target_rim], vec![]);
+            let at = |x: f64, y: f64| pose.mul_point(Point3::new(x, y, 0.0));
+            let along = |v: Vec3| {
+                pose.mul_point(Point3::new(v.x(), v.y(), v.z()))
+                    - pose.mul_point(Point3::new(0.0, 0.0, 0.0))
+            };
+            let normal = along(Vec3::new(0.0, 0.0, 1.0)).normalize().unwrap();
+            let ellipse = Ellipse3D::with_axes(
+                at(0.0, 0.0),
+                normal,
+                3.0,
+                2.0,
+                along(Vec3::new(1.0, 0.0, 0.0)).normalize().unwrap(),
+                along(Vec3::new(0.0, 1.0, 0.0)).normalize().unwrap(),
+            )
+            .unwrap();
+            let y0 = 2.0 * (1.0_f64 - 0.04).sqrt();
+            let (from, to, middle) = (at(0.6, -y0), at(0.6, y0), at(3.0, 0.0));
+            let circle = Circle3D::new(at(1.0, 0.0), normal, 2.0).unwrap();
+            let round = EdgeCurve::Circle(circle);
+            // The arc through the middle, read from whichever end its
+            // parameter runs from.
+            let (ends, span) = [(from, to), (to, from)]
+                .into_iter()
+                .map(|(p, q)| ((p, q), round.domain_with_endpoints(p, q)))
+                .find(|&((p, q), (c0, c1))| {
+                    (round.evaluate_with_endpoints(0.5 * (c0 + c1), p, q) - middle).length() < 1e-9
+                })
+                .unwrap();
+            record_section(&mut topo, &mut arena, target, round, ends, span);
+            let piece = EdgeCurve::Ellipse(ellipse.clone());
+            assert!(!has_existing_section_along(
+                &arena,
+                &topo,
+                target,
+                (&piece, from, to),
+                middle,
+                tol
+            ));
+            let (e0, e1) = EdgeCurve::Ellipse(ellipse.clone()).domain_with_endpoints(from, to);
+            record_section(
+                &mut topo,
+                &mut arena,
+                target,
+                EdgeCurve::Ellipse(ellipse),
+                (from, to),
+                (e0, e1),
+            );
+            assert!(has_existing_section_along(
+                &arena,
+                &topo,
+                target,
+                (&piece, from, to),
+                middle,
+                tol
+            ));
         }
     }
 }
