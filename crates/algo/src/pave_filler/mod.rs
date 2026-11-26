@@ -959,20 +959,27 @@ fn split_sections_at_triple_points(
             }
             paves.push(w[1]);
         }
-        for (n, w) in paves.windows(2).enumerate() {
-            let edge = topo.add_edge(Edge::new(w[0].vertex, w[1].vertex, original.curve.clone()));
+        // Each piece of a B-spline is its own span of the curve, cut by knot
+        // insertion with its parameters kept: a piece that keeps the whole
+        // curve reads all of it where its ends lie too near each other in
+        // the curve's parameter to find their span.
+        let pieces = pieces_of(&original.curve, &paves)?;
+        for (n, (w, piece_curve)) in paves.windows(2).zip(pieces).enumerate() {
+            let edge = topo.add_edge(Edge::new(w[0].vertex, w[1].vertex, piece_curve.clone()));
             let piece = arena.pave_blocks.alloc(PaveBlock::new(edge, w[0], w[1]));
             let t_range = (w[0].parameter, w[1].parameter);
             if n == 0 {
                 let first = &mut arena.curves[index];
                 first.pave_blocks = vec![piece];
                 first.t_range = t_range;
+                first.curve = piece_curve;
                 continue;
             }
             let next = arena.curves.len();
             let mut curve = original.clone();
             curve.pave_blocks = vec![piece];
             curve.t_range = t_range;
+            curve.curve = piece_curve;
             arena.curves.push(curve);
             arena.interference.ff.push(Interference::FF {
                 f1: original.face_a,
@@ -1426,9 +1433,14 @@ fn split_sections_at_boundary_crossings(
         let mut paves = vec![start];
         paves.extend(cuts.into_iter().map(|(at, v, _)| Pave::new(v, at)));
         paves.push(end);
-        for (n, w) in paves.windows(2).enumerate() {
+        // Each piece of a B-spline is its own span of the curve, cut by knot
+        // insertion with its parameters kept: a piece that keeps the whole
+        // curve reads all of it where its ends lie too near each other in
+        // the curve's parameter to find their span.
+        let pieces = pieces_of(&original.curve, &paves)?;
+        for (n, (w, piece_curve)) in paves.windows(2).zip(pieces).enumerate() {
             let piece_edge =
-                topo.add_edge(Edge::new(w[0].vertex, w[1].vertex, original.curve.clone()));
+                topo.add_edge(Edge::new(w[0].vertex, w[1].vertex, piece_curve.clone()));
             let piece = arena
                 .pave_blocks
                 .alloc(PaveBlock::new(piece_edge, w[0], w[1]));
@@ -1437,12 +1449,14 @@ fn split_sections_at_boundary_crossings(
                 let first = &mut arena.curves[index];
                 first.pave_blocks = vec![piece];
                 first.t_range = t_range;
+                first.curve = piece_curve;
                 continue;
             }
             let next = arena.curves.len();
             let mut curve = original.clone();
             curve.pave_blocks = vec![piece];
             curve.t_range = t_range;
+            curve.curve = piece_curve;
             arena.curves.push(curve);
             arena.interference.ff.push(Interference::FF {
                 f1: original.face_a,
@@ -1458,6 +1472,52 @@ fn split_sections_at_boundary_crossings(
         }
     }
     Ok(())
+}
+
+/// Each piece's curve between consecutive paves of a section: a B-spline's
+/// span between the paves' parameters, cut out by knot insertion with its
+/// parameters kept ([`spline_between`]), any other curve whole. The section
+/// is refused where a cut fails: a piece that kept the whole B-spline would
+/// read all of it.
+fn pieces_of(
+    curve: &brepkit_topology::edge::EdgeCurve,
+    paves: &[crate::ds::Pave],
+) -> Result<Vec<brepkit_topology::edge::EdgeCurve>, AlgoError> {
+    use brepkit_topology::edge::EdgeCurve;
+    paves
+        .windows(2)
+        .map(|w| match curve {
+            EdgeCurve::NurbsCurve(nurbs) => spline_between(nurbs, (w[0].parameter, w[1].parameter))
+                .map(EdgeCurve::NurbsCurve)
+                .ok_or_else(|| {
+                    AlgoError::IntersectionFailed(format!(
+                        "no piece of a B-spline section over [{}, {}]",
+                        w[0].parameter, w[1].parameter
+                    ))
+                }),
+            other => Ok(other.clone()),
+        })
+        .collect()
+}
+
+/// The span of a B-spline between parameters `t0` and `t1` of its domain,
+/// cut out by knot insertion with its parameters kept. `None` where a cut
+/// fails.
+fn spline_between(
+    nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
+    (t0, t1): (f64, f64),
+) -> Option<brepkit_math::nurbs::curve::NurbsCurve> {
+    use brepkit_math::nurbs::knot_ops::curve_split;
+    let (d0, d1) = nurbs.domain();
+    let (lo, hi) = (t0.min(t1), t0.max(t1));
+    let mut piece = nurbs.clone();
+    if lo > d0 {
+        piece = curve_split(&piece, lo).ok()?.1;
+    }
+    if hi < d1 {
+        piece = curve_split(&piece, hi).ok()?.0;
+    }
+    Some(piece)
 }
 
 /// Run the complete PaveFiller pipeline (both stages).

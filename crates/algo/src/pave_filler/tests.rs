@@ -3687,3 +3687,41 @@ fn a_small_piece_of_a_large_nurbs_sheet_is_boxed_to_the_piece() {
         }
     }
 }
+
+/// A B-spline section `(1000 t, 100 t^2, 0)` on [0, 1], cut at t = 1e-7:
+/// each piece is its own span of the curve, its parameters kept. The whole
+/// curve read between the first piece's ends reads all of its domain, so a
+/// piece that kept the whole curve would read all of it.
+#[test]
+fn a_bspline_section_cut_near_its_start_keeps_each_piece_to_its_span() {
+    use crate::ds::Pave;
+    use brepkit_math::madd::Madd;
+    use brepkit_math::nurbs::curve::NurbsCurve;
+    let mut topo = Topology::new();
+    let poles = vec![
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(500.0, 0.0, 0.0),
+        Point3::new(1000.0, 100.0, 0.0),
+    ];
+    let nurbs =
+        NurbsCurve::new(2, vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], poles, vec![1.0; 3]).unwrap();
+    let at = |t: f64| nurbs.evaluate(t);
+    let whole = EdgeCurve::NurbsCurve(nurbs.clone());
+    assert_eq!(whole.domain_with_endpoints(at(0.0), at(1e-7)), (0.0, 1.0));
+    let paves: Vec<Pave> = [0.0, 1e-7, 1.0]
+        .iter()
+        .map(|&t| Pave::new(topo.add_vertex(Vertex::new(at(t), 1e-7)), t))
+        .collect();
+    let pieces = super::pieces_of(&whole, &paves).unwrap();
+    for (piece, (t0, t1)) in pieces.iter().zip([(0.0, 1e-7), (1e-7, 1.0)]) {
+        let EdgeCurve::NurbsCurve(cut) = piece else {
+            panic!("a B-spline piece: {piece:?}");
+        };
+        assert_eq!(cut.domain(), (t0, t1));
+        assert_eq!(piece.domain_with_endpoints(at(t0), at(t1)), (t0, t1));
+        for k in 0..=8 {
+            let t = (t1 - t0).madd(f64::from(k) / 8.0, t0);
+            assert!((cut.evaluate(t) - at(t)).length() <= 1e-9, "{t}");
+        }
+    }
+}
