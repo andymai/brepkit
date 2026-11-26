@@ -4082,7 +4082,7 @@ fn cdt_in_surface_frame(
         &cdt_to_global,
         &boundary_uv,
         &hole_polys,
-        (cdt_u_scale, cdt_v_scale),
+        &from_cdt,
     )?;
     let boundary_pairs: Vec<(usize, usize)> = (0..n_boundary)
         .map(|i| (boundary_cdt_ids[i], boundary_cdt_ids[(i + 1) % n_boundary]))
@@ -4234,6 +4234,8 @@ fn cdt_in_surface_frame(
 /// can span the same chord (a plane face does, along a curve it holds), and
 /// the chord then bounds four triangles. The point joins each corner to the
 /// surface between them. Each pass splits the triangles left, until none is.
+/// The triangulation's points are read back to the face's parameters by
+/// `from_cdt` before they are tested against its trim.
 #[allow(clippy::too_many_arguments)]
 fn split_edge_ears(
     topo: &Topology,
@@ -4244,7 +4246,7 @@ fn split_edge_ears(
     cdt_to_global: &[Option<u32>],
     boundary_uv: &[(f64, f64)],
     hole_polys: &[Vec<(f64, f64)>],
-    (u_scale, v_scale): (f64, f64),
+    from_cdt: &dyn Fn(brepkit_math::vec::Point2) -> brepkit_math::vec::Point2,
 ) -> Result<(), crate::OperationsError> {
     use brepkit_math::vec::Point2;
     const MAX_PASSES: usize = 8;
@@ -4315,7 +4317,8 @@ fn split_edge_ears(
                 (p0.x() + p1.x() + p2.x()) / 3.0,
                 (p0.y() + p1.y() + p2.y()) / 3.0,
             );
-            if in_face((middle.x() / u_scale, middle.y() / v_scale)) {
+            let raw = from_cdt(middle);
+            if in_face((raw.x(), raw.y())) {
                 splits.push(middle);
             }
         }

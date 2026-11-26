@@ -5122,6 +5122,93 @@ fn a_twisted_patch_that_is_not_a_number_is_refused() {
     }
 }
 
+/// The corners of the flat unit square.
+const FLAT: [Point3; 4] = [
+    Point3::new(0.0, 0.0, 0.0),
+    Point3::new(1.0, 0.0, 0.0),
+    Point3::new(0.0, 1.0, 0.0),
+    Point3::new(1.0, 1.0, 0.0),
+];
+
+/// The triangles of `mesh`, and the total length of the edges that only
+/// one triangle holds.
+fn mesh_rim(mesh: &crate::tessellate::TriangleMesh) -> (Vec<[Point3; 3]>, f64) {
+    let triangles: Vec<[Point3; 3]> = mesh
+        .indices
+        .chunks(3)
+        .map(|t| [t[0], t[1], t[2]].map(|i| mesh.positions[i as usize]))
+        .collect();
+    let mut uses: DetHashMap<(u32, u32), usize> = DetHashMap::default();
+    for t in mesh.indices.chunks(3) {
+        for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            *uses.entry((a.min(b), a.max(b))).or_default() += 1;
+        }
+    }
+    let rim = uses
+        .iter()
+        .filter(|&(_, &n)| n == 1)
+        .map(|(&(a, b), _)| (mesh.positions[a as usize] - mesh.positions[b as usize]).length())
+        .sum();
+    (triangles, rim)
+}
+
+/// A segment of the circle of radius 0.9 about (0.5, -0.3), cut off by its
+/// chord from 60 to 120 degrees, on the flat unit square weighted 1, 1e-3
+/// and 1e-6 along `u = 0`, in three poses. The ears along the arc were
+/// tested against the trim with their paced middles read as parameters:
+/// at weight 1e-3 the first pass read 9 of the 11 ears' middles, all inside
+/// the face, as outside, and the mesh took 15 triangles where the even
+/// face takes 33. Read back
+/// through the chart, the paced faces split their ears as the even face
+/// does: 33 triangles, none of them on the arc alone.
+#[test]
+fn a_paced_faces_ears_split_as_an_even_faces_do() {
+    use brepkit_math::curves::Circle3D;
+    for pose in &twist_poses() {
+        let mut counts = Vec::new();
+        for w in [1.0, 1e-3, 1e-6] {
+            let patch = posed_patch(pose, FLAT, [[w, w], [1.0, 1.0]]);
+            let at =
+                |a: f64| Point3::new(0.9_f64.madd(a.cos(), 0.5), 0.9_f64.madd(a.sin(), -0.3), 0.0);
+            let third = std::f64::consts::FRAC_PI_3;
+            let (center, x, y) = (
+                pose(Point3::new(0.5, -0.3, 0.0)),
+                pose(at(third)),
+                pose(at(2.0 * third)),
+            );
+            let axis = pose(Point3::new(0.5, -0.3, 1.0)) - center;
+            let mut topo = Topology::new();
+            let v = [x, y].map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+            let arc = EdgeCurve::Circle(Circle3D::new(center, axis, 0.9).unwrap());
+            let edges = [
+                topo.add_edge(Edge::new(v[0], v[1], arc)),
+                topo.add_edge(Edge::new(v[1], v[0], EdgeCurve::Line)),
+            ];
+            let wire = Wire::new(
+                edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+                true,
+            )
+            .unwrap();
+            let wid = topo.add_wire(wire);
+            let face = topo.add_face(Face::new(wid, vec![], FaceSurface::Nurbs(patch)));
+            let mesh =
+                crate::tessellate::tessellate_with_tolerance(&topo, face, 1e-3, 0.0).unwrap();
+            let (triangles, _) = mesh_rim(&mesh);
+            let on_arc = |p: Point3| ((p - center).length() - 0.9).abs() < 1e-9;
+            let ears = triangles
+                .iter()
+                .filter(|t| t.iter().all(|&p| on_arc(p)))
+                .count();
+            assert_eq!(ears, 0, "w {w}");
+            counts.push(triangles.len());
+        }
+        assert!(
+            counts.windows(2).all(|pair| pair[0] == pair[1]),
+            "{counts:?}"
+        );
+    }
+}
+
 /// The twisted patch ([`TWIST`]) weighted 1, 1e-3 and 1e-6 along `u = 0`
 /// in three poses, trimmed to nine tenths of each way at its pace, meshed
 /// as a face at a deflection of 1e-3 with no angular tolerance. Its
