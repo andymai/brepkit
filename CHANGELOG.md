@@ -1,5 +1,13 @@
 # Changelog
 
+## [4.11.61](https://github.com/andymai/brepkit/compare/v4.11.60...v4.11.61) (2026-11-26)
+
+
+### Bug Fixes
+
+* **algo,math:** prove B-spline section, edge and vertex tolerances, and merge arcs only on a proof ([#2921](https://github.com/andymai/brepkit/issues/2921)) ([81bce01](https://github.com/andymai/brepkit/commit/81bce01b8ab6d346a6d8e53337e878b2d46c0c2b))
+* **operations:** read a crowded twisted patch's cells by a proved bound at its weights' pace ([#2929](https://github.com/andymai/brepkit/issues/2929)) ([7b54f4a](https://github.com/andymai/brepkit/commit/7b54f4a2a54d8020a353b00036cf021fa97d8edc))
+
 ## [4.11.60](https://github.com/andymai/brepkit/compare/v4.11.59...v4.11.60) (2026-11-26)
 
 
