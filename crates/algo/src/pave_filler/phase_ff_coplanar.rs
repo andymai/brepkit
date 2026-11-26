@@ -1386,6 +1386,17 @@ fn clip_to_region(
                 (along.at(nf, nf), e.p3_end, 2),
             ];
             let own = half_turns(&along.curve, along.ends);
+            // A closed edge's two ends are one point, which the merge below
+            // takes for one cut: its half turns' own ends cut it too, so a
+            // loop wholly inside the partner still comes as pieces round its
+            // turn.
+            if (along.ends.0 - along.ends.1).length() < tol {
+                for &(_, p, _) in own.iter().skip(1) {
+                    if let Some(at) = along.through(p, tol) {
+                        cuts.push((at, p, 0));
+                    }
+                }
+            }
             let unproved: Vec<&BoundaryEdge> = target
                 .edges
                 .iter()
@@ -2600,5 +2611,52 @@ mod tests {
                 assert!(met.is_empty(), "{met:?}");
             }
         }
+    }
+
+    /// A closed ellipse edge, one edge with no paves, wholly inside a face
+    /// of radius 9: it is cut into pieces round the whole turn from its seam,
+    /// each a piece to split the face along.
+    #[test]
+    fn a_closed_ellipse_wholly_inside_a_face_is_cut_round_its_turn() {
+        use brepkit_math::curves::Ellipse3D;
+        let tol = Tolerance::default();
+        let frame = PlaneFrame2D::canonical(Vec3::new(0.0, 0.0, -1.0), 0.0);
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let mut topo = Topology::new();
+        let target_rim = rim(&mut topo, 9.0);
+        let target = face_down(&mut topo, vec![target_rim], vec![]);
+        let ellipse = Ellipse3D::with_axes(
+            Point3::new(1.0, 2.0, 0.0),
+            up,
+            1.5,
+            1.0,
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap();
+        let seam = topo.add_vertex(Vertex::new(ellipse.evaluate(0.7), 1e-7));
+        let loop_edge = topo.add_edge(Edge::new(seam, seam, EdgeCurve::Ellipse(ellipse)));
+        let inner = face_down(&mut topo, vec![OrientedEdge::new(loop_edge, false)], vec![]);
+        let arena = GfaArena::new();
+        let mut target_region = face_region_2d(&topo, target, &frame).unwrap();
+        attach_paves(&mut target_region, &topo, &arena);
+        let mut inner_region = face_region_2d(&topo, inner, &frame).unwrap();
+        attach_paves(&mut inner_region, &topo, &arena);
+        let edge = inner_region
+            .edges
+            .iter()
+            .find(|e| e.eid == loop_edge)
+            .unwrap();
+        let mut out = Vec::new();
+        clip_to_region(edge, (target, &target_region), &frame, tol.linear, &mut out).unwrap();
+        let sweep: f64 = out
+            .iter()
+            .map(|piece| match piece {
+                SectionPiece::Curve { span, .. } => span.1 - span.0,
+                _ => 0.0,
+            })
+            .sum();
+        assert!(out.len() >= 2, "{}", out.len());
+        assert!((sweep - std::f64::consts::TAU).abs() < 1e-9, "{sweep}");
     }
 }

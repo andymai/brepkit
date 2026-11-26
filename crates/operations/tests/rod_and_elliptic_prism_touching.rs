@@ -604,6 +604,82 @@ mod tests {
         }
     }
 
+    /// A prism of semi-axes 1.5 and 1 about (4, 5) inside a rod of radius 4
+    /// about (4, 5), both from z = -1 to 3: the prism's rims lie wholly
+    /// inside the rod's caps, crossing nothing. The fuse is the rod, the rod
+    /// less the prism the rod bored through by the prism, and their common
+    /// part the prism, each exact in three poses.
+    #[test]
+    fn a_prism_wholly_inside_a_rod_with_flush_caps_is_exact() {
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let (rod_volume, prism_volume) = (PI * 16.0 * 4.0, PI * 1.5 * 4.0);
+        let in_prism = Point3::new(4.0, 5.0, 1.0);
+        let in_rod = Point3::new(7.0, 5.0, 1.0);
+        let outside = Point3::new(8.5, 5.0, 1.0);
+        for (name, pose) in poses() {
+            for (op, volume) in [
+                (BooleanOp::Fuse, rod_volume),
+                (BooleanOp::Cut, rod_volume - prism_volume),
+                (BooleanOp::Intersect, prism_volume),
+            ] {
+                let mut topo = Topology::new();
+                let rod = make_cylinder(&mut topo, 4.0, 4.0).unwrap();
+                transform_solid(&mut topo, rod, &(pose * Mat4::translation(4.0, 5.0, -1.0)))
+                    .unwrap();
+                let ellipse = Ellipse3D::with_axes(
+                    Point3::new(4.0, 5.0, -1.0),
+                    up,
+                    1.5,
+                    1.0,
+                    Vec3::new(1.0, 0.0, 0.0),
+                    Vec3::new(0.0, 1.0, 0.0),
+                )
+                .unwrap();
+                let v = topo.add_vertex(Vertex::new(ellipse.evaluate(0.7), 1e-7));
+                let rim = topo.add_edge(Edge::new(v, v, EdgeCurve::Ellipse(ellipse)));
+                let wire =
+                    topo.add_wire(Wire::new(vec![OrientedEdge::new(rim, true)], true).unwrap());
+                let base = topo.add_face(Face::new(
+                    wire,
+                    Vec::new(),
+                    FaceSurface::Plane {
+                        normal: up,
+                        d: -1.0,
+                    },
+                ));
+                let prism = extrude(&mut topo, base, up, 4.0).unwrap();
+                transform_solid(&mut topo, prism, &pose).unwrap();
+                // The GFA's own boolean too, past the containment shortcut
+                // above it: the caps' coplanar sections split the rod's caps
+                // along the prism's rims.
+                for raw in [false, true] {
+                    let what = format!("{op:?}, {name}, raw {raw}");
+                    let mut topo = topo.clone();
+                    let result = if raw {
+                        let op = match op {
+                            BooleanOp::Fuse => brepkit_algo::bop::BooleanOp::Fuse,
+                            BooleanOp::Cut => brepkit_algo::bop::BooleanOp::Cut,
+                            BooleanOp::Intersect => brepkit_algo::bop::BooleanOp::Intersect,
+                        };
+                        brepkit_algo::gfa::boolean(&mut topo, op, rod, prism)
+                            .map_err(|e| format!("{e}"))
+                    } else {
+                        boolean_with_options(&mut topo, op, rod, prism, exact())
+                            .map_err(|e| format!("{e}"))
+                    };
+                    assert!(result.is_ok(), "{what}: {result:?}");
+                    let result = result.unwrap();
+                    let (inside, out): (Vec<Point3>, Vec<Point3>) = match op {
+                        BooleanOp::Fuse => (vec![in_prism, in_rod], vec![outside]),
+                        BooleanOp::Cut => (vec![in_rod], vec![in_prism, outside]),
+                        BooleanOp::Intersect => (vec![in_prism], vec![in_rod, outside]),
+                    };
+                    assert_exact(&topo, result, volume, (&inside, &out), &pose, &what);
+                }
+            }
+        }
+    }
+
     /// The rod from z = 0 to 2 only, and the prism from z = -1 to 3: the rod
     /// lies in the prism but for the two thin lenses beside the touch, so
     /// neither holds the other. The fuse, the prism less the rod and their
