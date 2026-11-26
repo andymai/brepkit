@@ -211,14 +211,33 @@ fn pave_co_endpoint_curves(
         }
         // Coincident copies (an edge of each operand along one path, where
         // two stacked prisms meet) are one path: the group needs pieces only
-        // when it holds two. Copies whose middles agree within the vertex
-        // tolerance share one middle vertex so they split alike; a copy
-        // farther off gets a vertex on its own curve.
+        // when it holds two. An edge is a copy of a path's first edge only
+        // where the two are proved one curve within 100 tolerances along
+        // their whole length; a circle's and an ellipse's arcs through the
+        // same ends and middle are two paths. Copies whose middles agree
+        // within the vertex tolerance share one middle vertex so they split
+        // alike; a copy farther off gets a vertex on its own curve.
+        let one_path = |x: EdgeId, y: EdgeId| -> bool {
+            let read = |e: EdgeId| -> Option<(&EdgeCurve, Point3, Point3)> {
+                let edge = topo.edge(e).ok()?;
+                Some((
+                    edge.curve(),
+                    topo.vertex(edge.start()).ok()?.point(),
+                    topo.vertex(edge.end()).ok()?.point(),
+                ))
+            };
+            match (read(x), read(y)) {
+                (Some(a), Some(b)) => {
+                    crate::builder::face_splitter::curves_one_curve(a, b, tol.linear * 100.0)
+                }
+                _ => false,
+            }
+        };
         let mut paths: Vec<(Point3, Vec<usize>)> = Vec::new();
         for (i, m) in middles.iter().enumerate() {
             match paths
                 .iter_mut()
-                .find(|(mid, _)| (*mid - m.3).length() <= tol.linear * 100.0)
+                .find(|(_, copies)| one_path(middles[copies[0]].0, m.0))
             {
                 Some((_, copies)) => copies.push(i),
                 None => paths.push((m.3, vec![i])),

@@ -36,6 +36,34 @@ pub type Vec3 = Vector<3>;
 // Shared methods (all dimensions)
 // ---------------------------------------------------------------------------
 
+/// The least sum of squares that [`Vector::length`] takes as it comes,
+/// 2^-1000: each larger square is normal, and the root keeps its digits.
+const SQUARES_LOW: f64 = f64::from_bits(23 << 52);
+
+/// 2^600: a vector whose squares underflow is scaled up by it, which
+/// changes no digit.
+const SCALE_UP: f64 = f64::from_bits(1623 << 52);
+
+/// 2^-600: a vector whose squares overflow is scaled down by it, which
+/// changes no digit of a component large enough to count in its length.
+const SCALE_DOWN: f64 = f64::from_bits(423 << 52);
+
+/// A power of two by which a vector whose largest component is `size` comes
+/// near one in size.
+///
+/// The scaled size is from 2^-74 to 2^24, so that a product of two of its
+/// components neither overflows nor underflows. The scale is exact. It is
+/// one for a size that is zero or not finite.
+#[must_use]
+pub fn unit_scale(size: f64) -> f64 {
+    if !(size.is_finite() && size > 0.0) {
+        return 1.0;
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    let exponent = size.log2().floor().clamp(-1000.0, 1000.0) as i32;
+    2.0_f64.powi(-exponent)
+}
+
 impl<const N: usize> Vector<N> {
     /// Squared Euclidean length (avoids a sqrt).
     #[must_use]
@@ -49,26 +77,82 @@ impl<const N: usize> Vector<N> {
         sum
     }
 
-    /// Euclidean length.
+    /// Euclidean length, at every finite size: a vector whose squares
+    /// overflow or underflow is measured at a power of two of its size. It
+    /// is infinite only for a length past the largest float.
     #[must_use]
     pub fn length(self) -> f64 {
-        self.length_squared().sqrt()
+        let sum = self.length_squared();
+        if sum.is_finite() && sum >= SQUARES_LOW {
+            return sum.sqrt();
+        }
+        self.rescaled()
+            .map_or_else(|| sum.sqrt(), |(v, back)| v.length_squared().sqrt() * back)
     }
 
-    /// Return a unit-length vector in the same direction.
+    /// The vector times a power of two that brings its largest component
+    /// near one, and the power of two that undoes it; `None` for a zero
+    /// vector or a component that is not finite.
+    fn rescaled(self) -> Option<(Self, f64)> {
+        if !self.0.iter().all(|c| c.is_finite()) {
+            return None;
+        }
+        let most = self.0.iter().fold(0.0_f64, |m, c| m.max(c.abs()));
+        if most <= 0.0 {
+            return None;
+        }
+        let (by, back) = if most > 1.0 {
+            (SCALE_DOWN, SCALE_UP)
+        } else {
+            (SCALE_UP, SCALE_DOWN)
+        };
+        Some((Self(std::array::from_fn(|i| self.0[i] * by)), back))
+    }
+
+    /// The largest of the absolute values of the components; not a number
+    /// if a component is not.
+    #[must_use]
+    pub fn largest_component(self) -> f64 {
+        self.0.iter().fold(0.0_f64, |m, c| {
+            if m.is_nan() || c.is_nan() {
+                f64::NAN
+            } else {
+                m.max(c.abs())
+            }
+        })
+    }
+
+    /// The vector scaled by [`unit_scale`] of its largest component: the
+    /// same direction, with no product of two components out of range.
+    /// Two vectors so scaled give the sign of their dot or cross product,
+    /// and the angle between them, as they are.
+    #[must_use]
+    pub fn at_unit_size(self) -> Self {
+        let by = unit_scale(self.largest_component());
+        Self(std::array::from_fn(|i| self.0[i] * by))
+    }
+
+    /// Return a unit-length vector in the same direction. A vector of any
+    /// finite, non-zero size has one: one whose squares overflow or
+    /// underflow is scaled by a power of two first.
     ///
     /// # Errors
     ///
-    /// Returns [`MathError::ZeroVector`] if the vector is zero, has
-    /// denormalized length (< [`f64::MIN_POSITIVE`]), or has overflowed
-    /// length (non-finite).
+    /// Returns [`MathError::ZeroVector`] if the vector is zero or a
+    /// component is not finite.
     pub fn normalize(self) -> Result<Self, MathError> {
-        let len = self.length();
+        let sum = self.length_squared();
+        let v = if sum.is_finite() && sum >= SQUARES_LOW {
+            self
+        } else {
+            self.rescaled().ok_or(MathError::ZeroVector)?.0
+        };
+        let len = v.length_squared().sqrt();
         if !len.is_finite() || len < f64::MIN_POSITIVE {
             return Err(MathError::ZeroVector);
         }
         let inv = 1.0 / len;
-        Ok(Self(std::array::from_fn(|i| self.0[i] * inv)))
+        Ok(Self(std::array::from_fn(|i| v.0[i] * inv)))
     }
 }
 
@@ -145,6 +229,57 @@ impl Vector<3> {
             self.0[2].madd(rhs.0[0], -(self.0[0] * rhs.0[2])),
             self.0[0].madd(rhs.0[1], -(self.0[1] * rhs.0[0])),
         ])
+    }
+
+    /// The direction of the part of the vector square to the unit vector
+    /// `axis`.
+    ///
+    /// The vector is taken at a unit size first, so that neither the
+    /// projection nor the tests below overflow or lose digits at either end
+    /// of the range. A part of half the vector or more is taken as it is.
+    /// A shorter part is projected again, and is taken only where it is
+    /// longer than the most that rounding alone could leave square to the
+    /// axis; its direction is projected once more, so that it is square to
+    /// the axis to a few units of rounding.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MathError::ZeroVector`] if the vector is zero or not
+    /// finite, or its part square to `axis` could be rounding alone, as for
+    /// a vector along `axis`.
+    pub fn square_part(self, axis: Self) -> Result<Self, MathError> {
+        let v = self.at_unit_size();
+        let along = axis * v.dot(axis);
+        let part = v - along;
+        if part.length() >= 0.5 * v.length() {
+            return part.normalize();
+        }
+        let tilt = part.dot(axis);
+        let again = part - axis * tilt;
+        // With u the unit rounding, each component of `along` and `part`
+        // is within u of its size, and each of `again` within u of its
+        // size and of `axis * tilt`. The rounding of a dot product lies
+        // along the axis, which the second projection takes out. Error `e_i`
+        // in component i moves the part square to the axis by at most
+        // `e_i * sqrt(1 - axis_i^2)`. The bound is twice their sum.
+        let bound = (0..3)
+            .map(|i| {
+                let off_axis = (1.0 - axis.0[i] * axis.0[i]).max(0.0).sqrt();
+                let sizes = along.0[i].abs()
+                    + part.0[i].abs()
+                    + again.0[i].abs()
+                    + (axis.0[i] * tilt).abs();
+                sizes * off_axis
+            })
+            .sum::<f64>()
+            * f64::EPSILON;
+        let length = again.length();
+        let taken = length > bound && length.is_finite();
+        if !taken {
+            return Err(MathError::ZeroVector);
+        }
+        let unit = again.normalize()?;
+        (unit - axis * unit.dot(axis)).normalize()
     }
 }
 
@@ -374,6 +509,206 @@ impl_serde_for_array_newtype!(Position, "Position");
 mod tests {
     use super::*;
 
+    /// The square part of a vector near the axis, at 1e-15 to 0.3 off it,
+    /// at sizes 1e-200, 1 and 1e200, against z and against (1, 1, 1). A
+    /// part that rounding alone cannot leave is taken: a unit direction
+    /// square to the axis to 8 units of rounding, near the true one. A
+    /// vector along the axis in exact arithmetic leaves only rounding, and
+    /// is refused.
+    #[test]
+    fn a_square_part_near_the_axis_is_square_to_it_or_refused() {
+        let ulps = 8.0 * f64::EPSILON;
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let x = Vec3::new(1.0, 0.0, 0.0);
+        let diagonal = Vec3::new(1.0, 1.0, 1.0).normalize().unwrap();
+        let across = Vec3::new(1.0, -1.0, 0.0).normalize().unwrap();
+        for s in [1e-200, 1.0, 1e200] {
+            for off in [1e-15, 1e-12, 1e-9] {
+                let part = Vec3::new(off * s, 0.0, s).square_part(z).unwrap();
+                assert!(
+                    (part - x).length() <= ulps,
+                    "size {s}, {off} off z: {part:?}"
+                );
+            }
+            for off in [1e-14, 1e-12, 1e-10, 1e-9, 1e-7, 1e-4, 0.3] {
+                let v = (diagonal + across * off) * s;
+                let part = v.square_part(diagonal).unwrap();
+                assert!(
+                    part.dot(diagonal).abs() <= ulps,
+                    "size {s}, {off} off: {part:?}"
+                );
+                assert!(
+                    (part.length() - 1.0).abs() <= ulps,
+                    "size {s}, {off} off: {part:?}"
+                );
+                assert!(
+                    (part - across).length() <= 64.0 * f64::EPSILON / off,
+                    "size {s}, {off} off: {part:?}"
+                );
+            }
+            assert!(Vec3::new(0.0, 0.0, s).square_part(z).is_err(), "size {s}");
+            assert!(
+                Vec3::new(s, s, s).square_part(diagonal).is_err(),
+                "size {s}"
+            );
+            let tilted = Vec3::new(s, s, s * (1.0 + 1e-10)).square_part(diagonal);
+            if let Ok(part) = tilted {
+                assert!(part.dot(diagonal).abs() <= ulps, "size {s}: {part:?}");
+                assert!((part.length() - 1.0).abs() <= ulps, "size {s}: {part:?}");
+            }
+        }
+    }
+
+    /// The square part of a vector at either end of the float range: a
+    /// reference of 1.7e308 square to z, and one of the least subnormal
+    /// against (1, 1, 1). Each gives a unit direction square to the axis to
+    /// a few units of rounding. A vector along the axis is refused at any
+    /// size, and so is one that is not finite.
+    #[test]
+    fn a_square_part_holds_at_the_ends_of_the_float_range() {
+        let ulps = 8.0 * f64::EPSILON;
+        let z = Vec3::new(0.0, 0.0, 1.0);
+        let diagonal = Vec3::new(1.0, 1.0, 1.0).normalize().unwrap();
+        let least = f64::from_bits(1);
+        for (v, axis, want) in [
+            (
+                Vec3::new(1.7e308, 1.7e308, 0.0),
+                z,
+                Vec3::new(1.0, 1.0, 0.0).normalize().unwrap(),
+            ),
+            (
+                Vec3::new(least, 0.0, 0.0),
+                diagonal,
+                Vec3::new(2.0, -1.0, -1.0).normalize().unwrap(),
+            ),
+            (
+                Vec3::new(f64::MAX, -f64::MAX, f64::MAX),
+                diagonal,
+                Vec3::new(1.0, -2.0, 1.0).normalize().unwrap(),
+            ),
+        ] {
+            let part = v.square_part(axis).unwrap();
+            assert!(part.dot(axis).abs() <= ulps, "{v:?}: {part:?}");
+            assert!((part.length() - 1.0).abs() <= ulps, "{v:?}: {part:?}");
+            assert!((part - want).length() <= ulps, "{v:?}: {part:?}");
+        }
+        for s in [1.0, 1e-300, 1e300, least, f64::MAX] {
+            assert!(
+                Vec3::new(s, s, s).square_part(diagonal).is_err(),
+                "size {s}"
+            );
+        }
+        for bad in [
+            Vec3::new(f64::NAN, 1.0, 0.0),
+            Vec3::new(f64::INFINITY, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 0.0),
+        ] {
+            assert!(bad.square_part(z).is_err(), "{bad:?}");
+        }
+    }
+
+    /// A vector at a unit size at the ends of the float range: components
+    /// of `f64::MAX`, of the least subnormal, the two in one vector, and
+    /// zero. Each scaled vector is finite, its largest component is from
+    /// 2^-74 to 2^24, and each component keeps its sign. A vector with a
+    /// component that is not a number has no largest component.
+    #[test]
+    fn the_unit_size_holds_at_the_ends_of_the_float_range() {
+        let least = f64::from_bits(1);
+        for v in [
+            Vec3::new(f64::MAX, f64::MAX, -f64::MAX),
+            Vec3::new(least, 0.0, -least),
+            Vec3::new(f64::MAX, least, 0.0),
+            Vec3::new(-least, f64::MAX, 1.0),
+        ] {
+            let u = v.at_unit_size();
+            let most = u.largest_component();
+            assert!(u.0.iter().all(|c| c.is_finite()), "{v:?}: {u:?}");
+            assert!(
+                (2.0_f64.powi(-74)..=2.0_f64.powi(24)).contains(&most),
+                "{v:?}: {u:?}"
+            );
+            for (a, b) in v.0.iter().zip(u.0) {
+                assert!(
+                    b.to_bits() == 0 || a.signum().to_bits() == b.signum().to_bits(),
+                    "{v:?}: {u:?}"
+                );
+            }
+        }
+        let zero = Vec3::new(0.0, 0.0, 0.0);
+        assert_eq!(zero.at_unit_size(), zero);
+        for size in [0.0, f64::NAN, f64::INFINITY, -1.0] {
+            assert_eq!(unit_scale(size).to_bits(), 1.0_f64.to_bits(), "{size}");
+        }
+        assert_eq!(unit_scale(least).to_bits(), 2.0_f64.powi(1000).to_bits());
+        assert_eq!(
+            unit_scale(f64::MAX).to_bits(),
+            2.0_f64.powi(-1000).to_bits()
+        );
+        assert!(Vec3::new(f64::NAN, 1.0, 0.0).largest_component().is_nan());
+        assert!(Vec3::new(1.0, f64::NAN, 0.0).at_unit_size().y().is_nan());
+    }
+
+    /// A vector's length and direction hold at every finite size: squared,
+    /// a component of 1e200 overflows and one of 1e-200 underflows.
+    #[test]
+    fn a_vector_of_any_finite_size_has_a_length_and_a_direction() {
+        let sizes = [
+            1e200,
+            1e-200,
+            1e-310,
+            f64::MIN_POSITIVE,
+            1.7e308,
+            1e155,
+            1e-160,
+        ];
+        for s in sizes {
+            for (v, length) in [
+                (Vec3::new(s, 0.0, 0.0), s),
+                (Vec3::new(0.0, -s, 0.0), s),
+                (Vec3::new(0.0, 0.0, s), s),
+            ] {
+                assert_eq!(v.length().to_bits(), length.to_bits(), "{v:?}");
+                let unit = v.normalize().unwrap();
+                assert!((unit.length() - 1.0).abs() < 1e-15, "{v:?} gives {unit:?}");
+                assert!(
+                    (unit.dot(v) - v.length()).abs() <= 1e-15 * v.length(),
+                    "{v:?}"
+                );
+            }
+            let tilt = Vec3::new(3.0 * s / 4.0, 0.0, s);
+            if (3.0 * s / 4.0).is_normal() {
+                let unit = tilt.normalize().unwrap();
+                assert!(
+                    (unit.x() - 0.6).abs() < 1e-15 && (unit.z() - 0.8).abs() < 1e-15,
+                    "{s}: {unit:?}"
+                );
+                assert!(
+                    (tilt.length() / (1.25 * s) - 1.0).abs() < 1e-15,
+                    "{s}: {}",
+                    tilt.length()
+                );
+            }
+            let flat = Vec2::new(0.0, s);
+            assert_eq!(flat.length().to_bits(), s.to_bits());
+            assert!((flat.normalize().unwrap().y() - 1.0).abs() < 1e-15);
+        }
+        let past = Vec3::new(1.7e308, 1.7e308, 0.0);
+        assert!(past.length().is_infinite());
+        let unit = past.normalize().unwrap();
+        assert!(
+            (unit.x() - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-15,
+            "{unit:?}"
+        );
+        for bad in [
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(f64::NAN, 1.0, 0.0),
+            Vec3::new(f64::INFINITY, 1.0, 0.0),
+        ] {
+            assert!(bad.normalize().is_err(), "{bad:?}");
+        }
+    }
+
     #[test]
     fn vec3_dot() {
         let a = Vec3::new(1.0, 2.0, 3.0);
@@ -404,11 +739,16 @@ mod tests {
         assert!(v.normalize().is_err());
     }
 
+    /// A vector with a subnormal length still has a direction, and no
+    /// component of it is infinite.
     #[test]
-    fn vec3_denormal_normalize_fails() {
-        // Denormalized-length vector should be rejected (A1 fix)
+    fn vec3_denormal_normalize_gives_a_unit_vector() {
         let v = Vec3::new(1e-320, 0.0, 0.0);
-        assert!(v.normalize().is_err());
+        let unit = v.normalize().unwrap();
+        assert!(
+            (unit.x() - 1.0).abs() < 1e-15 && unit.y().abs() < 1e-15,
+            "{unit:?}"
+        );
     }
 
     #[test]

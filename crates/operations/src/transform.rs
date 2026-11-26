@@ -443,10 +443,13 @@ fn sphere_face_v_range(
     if seamed || !face.inner_wires().is_empty() {
         return Ok((v_lo, v_hi));
     }
+    // Offsets taken at a unit size by one power of two keep the sign of the
+    // sum, which products of offsets of 1e200 or 1e-200 would not.
+    let unit = brepkit_math::vec::unit_scale(sph.radius());
     let winding: f64 = samples
         .iter()
         .zip(samples.iter().cycle().skip(1))
-        .map(|(&a, &b)| (a - center).cross(b - center).dot(axis))
+        .map(|(&a, &b)| ((a - center) * unit).cross((b - center) * unit).dot(axis))
         .sum();
     let north = winding > 0.0;
     Ok(if north {
@@ -470,7 +473,11 @@ fn linear(matrix: &Mat4, v: Vec3) -> Vec3 {
 /// long", the test that a map keeps a circle a circle.
 const SHAPE_REL_TOL: f64 = 1e-9;
 
+/// Whether `a` and `b` are square to each other. Each is taken at a unit
+/// size first: their product and the product of their lengths would
+/// overflow together at 1e200, or underflow together at 1e-200, and pass.
 fn nearly_orthogonal(a: Vec3, b: Vec3) -> bool {
+    let (a, b) = (a.at_unit_size(), b.at_unit_size());
     a.dot(b).abs() <= SHAPE_REL_TOL * a.length() * b.length()
 }
 
@@ -875,7 +882,11 @@ fn transform_conic(
             (p, q)
         }
     } else {
-        let t0 = 0.5 * (2.0 * p.dot(q)).atan2(p.dot(p) - q.dot(q));
+        // One power of two for both axes keeps the angle and keeps the dot
+        // products in range.
+        let unit = brepkit_math::vec::unit_scale(p.largest_component().max(q.largest_component()));
+        let (sp, sq) = (p * unit, q * unit);
+        let t0 = 0.5 * (2.0 * sp.dot(sq)).atan2(sp.dot(sp) - sq.dot(sq));
         let (sin_t, cos_t) = t0.sin_cos();
         (p * cos_t + q * sin_t, q * cos_t - p * sin_t)
     };

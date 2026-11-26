@@ -1115,7 +1115,7 @@ impl Parabola3D {
             });
         }
         let axis_dir = axis_dir.normalize()?;
-        let u_axis = (u_axis - axis_dir * u_axis.dot(axis_dir)).normalize()?;
+        let u_axis = u_axis.square_part(axis_dir)?;
         Ok(Self {
             vertex,
             axis_dir,
@@ -1269,7 +1269,7 @@ impl Hyperbola3D {
             });
         }
         let u_axis = u_axis.normalize()?;
-        let v_axis = (v_axis - u_axis * v_axis.dot(u_axis)).normalize()?;
+        let v_axis = v_axis.square_part(u_axis)?;
         Ok(Self {
             center,
             normal: u_axis.cross(v_axis),
