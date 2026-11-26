@@ -1997,7 +1997,9 @@ pub(super) fn weight_paces(
 /// [`untwist_lines`] for a B-spline face, read by its cells' twist bounds
 /// ([`bilinear_cell_stray`]) at its weights' pace ([`weight_paces`]): the
 /// lines it adds halve each span at its pace, and the lines it was given
-/// keep their parameters.
+/// keep their parameters. Where two lines read one fraction of the pace, or
+/// lines it adds read back to one parameter, the lines are cut in the
+/// face's own parameters instead, still read by the cells' bounds.
 ///
 /// # Errors
 ///
@@ -2043,11 +2045,23 @@ pub(super) fn untwist_paced_lines(
     let bound = |(s0, s1): (f64, f64), (t0, t1): (f64, f64)| {
         bilinear_cell_stray(surface, (to_u(s0), to_u(s1)), (to_v(t0), to_v(t1)))
     };
+    let rising = |lines: &[f64]| lines.windows(2).all(|pair| pair[0] < pair[1]);
+    let unpaced = |us: &mut Vec<f64>, vs: &mut Vec<f64>| {
+        let bound = |u: (f64, f64), v: (f64, f64)| bilinear_cell_stray(surface, u, v);
+        untwist_lines(at, us, vs, deflection, Some(&bound))
+    };
     let mut ss: Vec<f64> = us.iter().map(|&u| pace_u.fraction(u)).collect();
     let mut ts: Vec<f64> = vs.iter().map(|&v| pace_v.fraction(v)).collect();
+    if !(rising(&ss) && rising(&ts)) {
+        return unpaced(us, vs);
+    }
     untwist_lines(&paced, &mut ss, &mut ts, deflection, Some(&bound))?;
-    *us = ss.into_iter().map(to_u).collect();
-    *vs = ts.into_iter().map(to_v).collect();
+    let paced_us: Vec<f64> = ss.into_iter().map(to_u).collect();
+    let paced_vs: Vec<f64> = ts.into_iter().map(to_v).collect();
+    if !(rising(&paced_us) && rising(&paced_vs)) {
+        return unpaced(us, vs);
+    }
+    (*us, *vs) = (paced_us, paced_vs);
     Ok(())
 }
 

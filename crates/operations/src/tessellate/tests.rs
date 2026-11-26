@@ -5122,6 +5122,50 @@ fn a_twisted_patch_that_is_not_a_number_is_refused() {
     }
 }
 
+/// A flat square and the twisted patch ([`TWIST`]) weighted 1e-20 along
+/// `u = 0`, in three poses. The lines at 0.5 and 1 read one fraction of the
+/// pace, 1, so the square's lines 0, 0.5 and 1 came back as 0, 1 and 1.
+/// Such lines are now cut in the face's own parameters: the given lines
+/// stay bit for bit and rise strictly, the square keeps them, and every
+/// cell's bound holds the deflection.
+#[test]
+fn lines_at_one_paced_fraction_keep_their_parameters() {
+    let square = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(0.0, 1.0, 0.0),
+        Point3::new(1.0, 1.0, 0.0),
+    ];
+    for pose in &twist_poses() {
+        for corners in [square, TWIST] {
+            let patch = posed_patch(pose, corners, [[1e-20, 1e-20], [1.0, 1.0]]);
+            let (mut us, mut vs) = (vec![0.0, 0.5, 1.0], vec![0.0, 1.0]);
+            let at = |u: f64, v: f64| patch.evaluate(u, v);
+            let found = super::nurbs::untwist_paced_lines(&patch, &at, &mut us, &mut vs, 1e-3);
+            found.unwrap();
+            let rising = |lines: &[f64]| lines.windows(2).all(|pair| pair[0] < pair[1]);
+            let kept =
+                |lines: &[f64], line: f64| lines.iter().any(|x| x.to_bits() == line.to_bits());
+            assert!(rising(&us) && rising(&vs), "{us:?} {vs:?}");
+            assert!(
+                [0.0, 0.5, 1.0].iter().all(|&line| kept(&us, line)),
+                "{us:?}"
+            );
+            for i in 0..us.len() - 1 {
+                for j in 0..vs.len() - 1 {
+                    let bound = super::nurbs::bilinear_cell_stray(
+                        &patch,
+                        (us[i], us[i + 1]),
+                        (vs[j], vs[j + 1]),
+                    )
+                    .unwrap();
+                    assert!(bound <= 1e-3, "{i} {j}: {bound}");
+                }
+            }
+        }
+    }
+}
+
 /// A flat unit square with equal weights, in three poses moved by 0, 1e3
 /// and 1e9: its two triangles hold it. The rounding of its corners, read
 /// at their distance from the origin, came to 3.6e-6 at 1e9, so at a
