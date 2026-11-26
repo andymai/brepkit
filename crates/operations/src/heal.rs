@@ -664,8 +664,11 @@ pub fn close_wire_gaps(
 ///
 /// A gap of a tenth of the edge's size or more is not raised: such a vertex
 /// does not lie at its curve's end, and the edge is read on another part of
-/// its curve or is broken. An open edge's size is the distance between its
-/// two vertices, and a closed edge's is the size of its whole curve. A
+/// its curve or is broken, unless the edge is a B-spline, the gap is under
+/// 1e-4 of the faces' extent, and the vertex stands beside its end of the
+/// curve (see [`beside_curve_end`]): a file's short edge stands off its
+/// curve so, by its tolerance. An open edge's size is the distance between
+/// its two vertices, and a closed edge's is the size of its whole curve. A
 /// vertex with such a gap on one edge keeps its tolerance for all its
 /// edges, so that the gap is still reported.
 ///
@@ -678,7 +681,24 @@ pub fn cover_curve_end_gaps(
     faces: &[FaceId],
 ) -> Result<usize, crate::OperationsError> {
     const PART_OF_EDGE: f64 = 0.1;
+    const PART_OF_EXTENT: f64 = 1e-4;
     let linear = Tolerance::new().linear;
+    // The faces' extent: a gap small against it is a file's tolerance
+    // though it is large against its edge.
+    let mut lo = Point3::new(f64::INFINITY, f64::INFINITY, f64::INFINITY);
+    let mut hi = Point3::new(f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for &face in faces {
+        for vid in brepkit_topology::explorer::face_vertices(topo, face)? {
+            let p = topo.vertex(vid)?.point();
+            lo = Point3::new(lo.x().min(p.x()), lo.y().min(p.y()), lo.z().min(p.z()));
+            hi = Point3::new(hi.x().max(p.x()), hi.y().max(p.y()), hi.z().max(p.z()));
+        }
+    }
+    let extent = if lo.x() <= hi.x() {
+        (hi - lo).length()
+    } else {
+        0.0
+    };
     let mut seen = HashSet::new();
     // The largest gap at each vertex, or `None` once an edge's gap at it is
     // past that edge's limit.
@@ -693,11 +713,11 @@ pub fn cover_curve_end_gaps(
                 continue;
             }
             let (start, end) = (edge.start(), edge.end());
+            let ends_at = (topo.vertex(start)?.point(), topo.vertex(end)?.point());
             let (ends, size) = if start == end {
                 (vec![start], closed_curve_size(edge.curve()))
             } else {
-                let (a, b) = (topo.vertex(start)?.point(), topo.vertex(end)?.point());
-                (vec![start, end], (b - a).length())
+                (vec![start, end], (ends_at.1 - ends_at.0).length())
             };
             for vid in ends {
                 let found = brepkit_check::validate::check_vertex_on_curve(topo, vid, eid, 0.0)
@@ -711,7 +731,11 @@ pub fn cover_curve_end_gaps(
                     continue;
                 }
                 let entry = gaps.entry(vid).or_insert(Some(0.0));
-                *entry = if gap < PART_OF_EDGE * size {
+                *entry = if gap < PART_OF_EDGE * size
+                    || (start != end
+                        && gap < PART_OF_EXTENT * extent
+                        && beside_curve_end(edge, ends_at, vid == start, gap, size))
+                {
                     entry.map(|largest| largest.max(gap))
                 } else {
                     None
@@ -727,6 +751,33 @@ pub fn cover_curve_end_gaps(
         }
     }
     Ok(raised)
+}
+
+/// Whether an open edge's vertex, `gap` off the end of the edge's span,
+/// stands beside that end: the gap is less than the edge's `size`, and the
+/// vertex's nearest point on the edge's B-spline curve lies within a quarter
+/// of the span from the end it bounds, so the span is not read on another
+/// part of the curve. A file's edge much shorter than its tolerance stands
+/// off its curve so by more than a tenth of its length (3.9e-3 on an edge
+/// 0.03 long). `ends` are the edge's start and end points.
+fn beside_curve_end(
+    edge: &Edge,
+    ends: (Point3, Point3),
+    at_start: bool,
+    gap: f64,
+    size: f64,
+) -> bool {
+    const PART_OF_SPAN: f64 = 0.25;
+    let EdgeCurve::NurbsCurve(curve) = edge.curve() else {
+        return false;
+    };
+    if gap >= size {
+        return false;
+    }
+    let (t0, t1) = edge.curve().domain_with_endpoints(ends.0, ends.1);
+    let (own, point) = if at_start { (t0, ends.0) } else { (t1, ends.1) };
+    brepkit_math::nurbs::projection::project_point_to_curve(curve, point, 1e-9)
+        .is_ok_and(|nearest| (nearest.parameter - own).abs() < PART_OF_SPAN * (t1 - t0).abs())
 }
 
 /// The size of a closed curve as a whole, wherever its ends lie on it and
