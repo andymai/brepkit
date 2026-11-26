@@ -172,4 +172,28 @@ mod tests {
         );
         assert!(result.is_err());
     }
+
+    /// A mirror across a plane whose normal has any finite size: squared, a
+    /// component of 1e200 overflows and one of 1e-200 underflows.
+    #[test]
+    fn a_mirror_across_a_normal_of_any_finite_size_builds() {
+        for s in [1e200, 1e-200] {
+            let mut topo = Topology::new();
+            let solid = crate::primitives::make_box(&mut topo, 1.0, 1.0, 1.0).unwrap();
+            let image = mirror(
+                &mut topo,
+                solid,
+                Point3::new(2.0, 0.0, 0.0),
+                Vec3::new(s, 0.0, 0.0),
+            )
+            .unwrap();
+            let bb = crate::measure::solid_bounding_box(&topo, image).unwrap();
+            assert!(
+                (bb.min.x() - 3.0).abs() < 1e-12 && (bb.max.x() - 4.0).abs() < 1e-12,
+                "{s}: {bb:?}"
+            );
+            let volume = crate::measure::solid_volume(&topo, image, 0.01).unwrap();
+            assert!((volume - 1.0).abs() < 1e-9, "{s}: {volume}");
+        }
+    }
 }

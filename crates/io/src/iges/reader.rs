@@ -953,16 +953,29 @@ mod tests {
         read_plane(&mut Params::of(&entity(1, 108, params))).is_ok()
     }
 
-    /// A plane's normal comes from the file. A normal whose length
-    /// overflows scales to no normal at all, and the reader refuses it, as it
-    /// refuses a parameter that is not finite. A circle, which the file holds
-    /// as a rational spline, is refused when a coordinate that sets its
-    /// radius is NaN or infinite.
+    /// A plane's normal comes from the file. A normal of any finite size,
+    /// one whose squares overflow too, gives the plane its direction; the
+    /// reader refuses a zero normal, as it refuses a parameter that is not
+    /// finite. A circle, which the file holds as a rational spline, is
+    /// refused when a coordinate that sets its radius is NaN or infinite.
     #[test]
     fn a_plane_or_circle_must_be_one_evaluation_can_walk() {
         assert!(plane_is_read("108,0.,0.,2.,3.,0,0.,0.,0.,0.;"));
-        for bad in [
+        let far = read_plane(&mut Params::of(&entity(
+            1,
+            108,
             "108,1E300,1E300,1E300,0.,0,0.,0.,0.,0.;",
+        )))
+        .unwrap();
+        assert!(
+            matches!(
+                far,
+                FaceSurface::Plane { normal, .. }
+                    if (normal.x() - 1.0 / 3.0_f64.sqrt()).abs() < 1e-15
+            ),
+            "{far:?}"
+        );
+        for bad in [
             "108,0.,0.,0.,3.,0,0.,0.,0.,0.;",
             "108,NaN,0.,1.,3.,0,0.,0.,0.,0.;",
             "108,0.,0.,1.,1E400,0,0.,0.,0.,0.;",

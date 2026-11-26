@@ -1,5 +1,14 @@
 # Changelog
 
+## [4.11.59](https://github.com/andymai/brepkit/compare/v4.11.58...v4.11.59) (2026-11-25)
+
+
+### Bug Fixes
+
+* **algo:** pave co-endpoint edges and find common blocks only on a whole-length proof ([#2902](https://github.com/andymai/brepkit/issues/2902)) ([57fa715](https://github.com/andymai/brepkit/commit/57fa715d440596aed0effaa0e58dca1b7f6c37f1))
+* **math:** give every finite non-zero vector a length and a direction, at any scale ([#2904](https://github.com/andymai/brepkit/issues/2904)) ([0c57ee0](https://github.com/andymai/brepkit/commit/0c57ee0dd53b934eaebe75f39a4c1850ddd8ff62))
+* **operations,algo:** hold no solid inside a B-spline-walled one it pokes out of, and end sections on rims ([#2899](https://github.com/andymai/brepkit/issues/2899)) ([b863d78](https://github.com/andymai/brepkit/commit/b863d78df55cd51df15b0b3256edc8a107a416b6))
+
 ## [4.11.58](https://github.com/andymai/brepkit/compare/v4.11.57...v4.11.58) (2026-11-25)
 
 
