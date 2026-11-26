@@ -812,28 +812,35 @@ mod tests {
         }
     }
     /// Surface interpolations of grids of 40 by 30 and 3 by 200 points at
-    /// degrees 1, 3 and 25 by 3: the most each holds at once, read from its
-    /// buffers' capacities and with the most one curve's interpolation held,
-    /// is its count.
+    /// degrees 1, 3 and 25 by 3, and of 440 by 440 points at degree 3: the
+    /// most each holds at once, read from its buffers' capacities and with
+    /// the most one curve's interpolation held, is its count. The grid of
+    /// 440 by 440 holds 3,902,372 cells.
     #[test]
     fn a_surface_interpolation_holds_at_most_its_count() {
-        for (rows, cols) in [(40, 30), (3, 200)] {
-            for (degree_u, degree_v) in [(1, 1), (3, 3), (25, 3)] {
-                let grid: Vec<Vec<Point3>> = (0..rows)
-                    .map(|i| {
-                        (0..cols)
-                            .map(|j| {
-                                let z = ((i * 7 + j * 3) % 11) as f64 * 0.1;
-                                Point3::new(i as f64, j as f64, z)
-                            })
-                            .collect()
-                    })
-                    .collect();
-                fitting::HELD_CELLS.with(|most| most.set(0));
-                drop(interpolate_surface(&grid, degree_u, degree_v));
-                let held = fitting::HELD_CELLS.with(std::cell::Cell::get);
-                let count = interpolate_surface_cells([rows, cols], [degree_u, degree_v]).unwrap();
-                assert_eq!(held, count, "{rows} by {cols} at {degree_u}, {degree_v}");
+        let degrees = [(1, 1), (3, 3), (25, 3)];
+        let cases = [(40, 30), (3, 200)]
+            .into_iter()
+            .flat_map(|size| degrees.map(|d| (size, d)))
+            .chain([((440, 440), (3, 3))]);
+        for ((rows, cols), (degree_u, degree_v)) in cases {
+            let grid: Vec<Vec<Point3>> = (0..rows)
+                .map(|i| {
+                    (0..cols)
+                        .map(|j| {
+                            let z = ((i * 7 + j * 3) % 11) as f64 * 0.1;
+                            Point3::new(i as f64, j as f64, z)
+                        })
+                        .collect()
+                })
+                .collect();
+            fitting::HELD_CELLS.with(|most| most.set(0));
+            drop(interpolate_surface(&grid, degree_u, degree_v));
+            let held = fitting::HELD_CELLS.with(std::cell::Cell::get);
+            let count = interpolate_surface_cells([rows, cols], [degree_u, degree_v]).unwrap();
+            assert_eq!(held, count, "{rows} by {cols} at {degree_u}, {degree_v}");
+            if rows == 440 {
+                assert_eq!(count, 3_902_372);
             }
         }
     }

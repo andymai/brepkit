@@ -507,17 +507,18 @@ impl BrepKernel {
         let degree_u = validate_count(degree_u, "degree_u", MAX_FIT_DEGREE)?;
         let degree_v = validate_count(degree_v, "degree_v", MAX_FIT_DEGREE)?;
         let (rows, cols) = (rows as usize, cols as usize);
+        // The fit's count holds the grid; a grid it cannot fit, which the
+        // count gives no cells, is still read before it is refused.
         let grid_cells = cols
             .checked_mul(3)
             .and_then(|row| row.checked_add(3))
             .and_then(|row| row.checked_mul(rows));
         let cells = grid_cells.and_then(|grid| {
-            grid.checked_add(
-                brepkit_math::nurbs::surface_fitting::interpolate_surface_cells(
-                    [rows, cols],
-                    [degree_u, degree_v],
-                )?,
+            brepkit_math::nurbs::surface_fitting::interpolate_surface_cells(
+                [rows, cols],
+                [degree_u, degree_v],
             )
+            .map(|fit| fit.max(grid))
         });
         validate_fit_total(cells, "interpolateSurface")?;
         let grid = parse_point_grid(coords, rows, cols)?;
@@ -1361,6 +1362,46 @@ mod tests {
             1e-3,
             1,
         ));
+        assert!(
+            message.contains(&format!("{} cells", cells(rows + 1))),
+            "{message}"
+        );
+    }
+
+    /// A cubic interpolation of a grid of 440 by 440 points holds 3,902,372
+    /// cells at its most, the grid included, within the limit of 2^22. The
+    /// binding counted the grid twice, 4,484,492 cells, and refused it. It
+    /// now runs, and so does the longest grid 440 points wide within the
+    /// limit, 472 rows at 4,185,540 cells. One row more, 4,194,389 cells,
+    /// is refused at the fit's own count.
+    #[test]
+    fn a_surface_interpolation_at_its_cell_limit_runs_and_one_row_more_is_refused() {
+        use brepkit_math::nurbs::surface_fitting::interpolate_surface_cells;
+        let mut k = BrepKernel::new();
+        let grid = |rows: usize, cols: usize| -> Vec<f64> {
+            (0..rows)
+                .flat_map(|i| {
+                    (0..cols).flat_map(move |j| {
+                        let (u, v) = (i as f64 / 7.0, j as f64 / 5.0);
+                        [u, v, 0.1 * (u * 3.0).sin() * v]
+                    })
+                })
+                .collect()
+        };
+        let cells = |rows: usize| interpolate_surface_cells([rows, 440], [3, 3]).unwrap();
+        let square = k.interpolate_surface_impl(&grid(440, 440), [440, 440], [3, 3]);
+        let mut rows = 440;
+        while cells(rows + 1) <= crate::error::MAX_FIT_CELLS {
+            rows += 1;
+        }
+        let long = u32::try_from(rows).unwrap();
+        let at_limit = k.interpolate_surface_impl(&grid(rows, 440), [long, 440], [3, 3]);
+        assert!(
+            square.is_ok() && at_limit.is_ok(),
+            "{square:?} {at_limit:?}"
+        );
+        let message =
+            refused(k.interpolate_surface_impl(&grid(rows + 1, 440), [long + 1, 440], [3, 3]));
         assert!(
             message.contains(&format!("{} cells", cells(rows + 1))),
             "{message}"
