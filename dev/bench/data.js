@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795649272575,
+  "lastUpdate": 1795658532557,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -79217,6 +79217,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28145725,
             "range": "± 324813",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "265643962+brepkit[bot]@users.noreply.github.com",
+            "name": "brepkit[bot]",
+            "username": "brepkit[bot]"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d9235519592179f448b470d1da6b5a12710ee981",
+          "message": "chore(main): release 4.11.59 (#2907)\n\n:robot: I have created a release *beep* *boop*\n---\n\n\n##\n[4.11.59](https://github.com/andymai/brepkit/compare/v4.11.58...v4.11.59)\n(2026-11-25)\n\n\n### Bug Fixes\n\n* **algo:** pave co-endpoint edges and find common blocks only on a\nwhole-length proof\n([#2902](https://github.com/andymai/brepkit/issues/2902))\n([57fa715](https://github.com/andymai/brepkit/commit/57fa715d440596aed0effaa0e58dca1b7f6c37f1))\n* **math:** give every finite non-zero vector a length and a direction,\nat any scale ([#2904](https://github.com/andymai/brepkit/issues/2904))\n([0c57ee0](https://github.com/andymai/brepkit/commit/0c57ee0dd53b934eaebe75f39a4c1850ddd8ff62))\n* **operations,algo:** hold no solid inside a B-spline-walled one it\npokes out of, and end sections on rims\n([#2899](https://github.com/andymai/brepkit/issues/2899))\n([b863d78](https://github.com/andymai/brepkit/commit/b863d78df55cd51df15b0b3256edc8a107a416b6))\n\n---\nThis PR was generated with [Release\nPlease](https://github.com/googleapis/release-please). See\n[documentation](https://github.com/googleapis/release-please#release-please).\n\nCo-authored-by: brepkit[bot] <265643962+brepkit[bot]@users.noreply.github.com>",
+          "timestamp": "2026-11-26T01:57:45Z",
+          "tree_id": "2571bf083e7f23d6e3a4b9d7aa1f37c8740a6cfa",
+          "url": "https://github.com/andymai/brepkit/commit/d9235519592179f448b470d1da6b5a12710ee981"
+        },
+        "date": 1795658517573,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1250077,
+            "range": "± 8628",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1324322,
+            "range": "± 9546",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 14386,
+            "range": "± 10",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 778842,
+            "range": "± 6835",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28037246,
+            "range": "± 96521",
             "unit": "ns/iter"
           }
         ]
