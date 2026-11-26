@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795673372097,
+  "lastUpdate": 1795675093208,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -79379,6 +79379,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22427789,
             "range": "± 75391",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "9f6af0a69f71dc0b36fdce2cc0c1c6a5575c6ab7",
+          "message": "fix(math): count each curve and surface fit's work before it runs, and refuse one past 1e9 (#2923)\n\n## Summary\n\n#2892 reported that curve and surface fits have no bound on their\nrunning time. Their callers bound their memory: the wasm limits allow\n2^22 cells, degree 25, 2^16 control points and 10,000 iterations. Within\nthose limits, on main:\n\n- The largest least-squares fit (2,362 points, 1,183 control points,\ndegree 25) runs 8.0 s, then returns an error.\n- The largest LSPIA fit (161,319 points, 2^16 control points) takes 5.8\ns for its start alone. Its full run counts 1.4e12 multiply-adds, about\n18 minutes.\n\nWith this change, each fit counts its multiply-adds before it allocates\nor runs, and refuses past 1e9. No fit in the test suites counts more\nthan 2.4e6. The pose sweep and the truth audit give the same output as\nmain at b863d78df.\n\nFixes #2892.\n\n## The change\n\n- **Work counts.** `interpolate`, `interpolate_at`, `approximate`,\n`approximate_lspia`, `interpolate_surface` and\n`approximate_surface_lspia` count their work from their sizes and the\ncaller's `max_iterations`:\n- the least-squares fit: m²·n for the normal matrix, plus the basis and\nthe solve;\n  - LSPIA: m·n for its start, plus iterations × n × ((p+1)² + 7(p+1));\n- the surface LSPIA: iterations × rows × columns × ((pu+1)² + (pv+1)² +\n7(pu+1)(pv+1));\n  - interpolation: n × ((p+1)² + p(2p+3) + 6p).\n- **Limit.** `MAX_FIT_WORK` is 1e9. Per counted multiply-add, the\nslowest fit took 2.4 ns natively and 3.4 ns in a wasm release build. So\na fit at the limit runs for about 3.4 s in wasm at most.\n- **Parameters.** An interpolation whose parameters do not strictly\nrise, or are not finite, is refused with\n`MathError::ParameterOutOfRange` before its solve allocates. Repeated\npoints give zero chords, and then the solver's band grew far past the\ncounted degree. The approximations refuse a point that is not finite,\nand both solves refuse a NaN pivot. A surface interpolation checks its\ninput rows, and each column of the row curves' control points that its\nsecond stage fits.\n- **Error.** A fit past the limit returns `MathError::TooMuchWork {\nwhat, work, limit }`. `MathError` is not `#[non_exhaustive]`, so the\nSemVer advisory flags the new variant.\n\n## Tests\n\n-\n`the_largest_curve_fits_within_the_memory_limits_are_refused_or_bounded`\nrefuses the largest least-squares and LSPIA inputs within the memory\nlimits in under 1 s. The largest interpolation, 41,120 points at degree\n25, counts 8.8e7 and runs.\n- `the_largest_surface_fits_within_the_memory_limits_are_refused`\nrefuses a 600 × 600 grid at degree 25, which counts 1.5e9. It also\nrefuses a degree-25 surface LSPIA over 10,000 iterations on 26 × 26\npoints.\n- `a_fit_just_within_the_work_limit_runs` runs an LSPIA fit with the\nmost passes the limit allows, and refuses one more pass.\n- `repeated_or_unreadable_points_are_refused_before_the_solve` refuses\n1,000 repeated origins and a NaN point. Before, the repeated origins ran\n0.8 s past their count.\n`a_grid_with_a_repeated_row_or_an_unreadable_point_is_refused` covers\nthe surface fits.\n`a_grid_is_read_by_the_columns_its_second_stage_interpolates` fits a 3 ×\n3 grid whose data column repeats a point, bit for bit as main does.\n- A temporary log recorded every fit over 1e6 in the suites. The largest\nwas an interpolation at 2.4e6, and the largest in the wasm tests was a\nsurface LSPIA at 1.5e6.\n- brepkit-math (808) and the lib tests of algo, blend, heal, offset and\nwasm (1497, 4 skipped) pass. So do all brepkit-operations and brepkit-io\ntests (3386, 28 skipped).\n\n## Still open\n\n- The least-squares fit sums dense terms, and the LSPIA start scans\nevery parameter for each control point (#2922). A sparse sum would let\nthe largest least-squares fit within the wasm limits run, not be\nrefused.",
+          "timestamp": "2026-11-26T06:34:20Z",
+          "tree_id": "1ebef5358e38c20309b91e26e1105013cde8efc0",
+          "url": "https://github.com/andymai/brepkit/commit/9f6af0a69f71dc0b36fdce2cc0c1c6a5575c6ab7"
+        },
+        "date": 1795675080653,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1000071,
+            "range": "± 5298",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1058172,
+            "range": "± 2931",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12178,
+            "range": "± 22",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 612405,
+            "range": "± 3198",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22595714,
+            "range": "± 61181",
             "unit": "ns/iter"
           }
         ]
