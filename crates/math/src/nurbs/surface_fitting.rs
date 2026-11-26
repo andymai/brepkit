@@ -75,16 +75,12 @@ pub fn interpolate_surface(
             num_cols as f64 * fitting::interpolation_work(num_rows, pu),
         ),
     )?;
-    // Each row and each column is interpolated by its chord lengths, so a
-    // point repeated along either, or one that is not a number, is refused
-    // before any is fitted. The columns of the row curves' control points
-    // repeat where the data's columns do.
+    // Each row is interpolated by its chord lengths, so a point repeated
+    // along one, or one that is not a number, is refused before any is
+    // fitted. The second stage interpolates the columns of the row curves'
+    // control points, not the data's, and `interpolate` reads each of those.
     for row in points {
         fitting::check_rising(&fitting::chord_length_params(row))?;
-    }
-    for j in 0..num_cols {
-        let column: Vec<Point3> = points.iter().map(|row| row[j]).collect();
-        fitting::check_rising(&fitting::chord_length_params(&column))?;
     }
 
     // Step 1: Fit curves through each row (u-direction).
@@ -572,8 +568,9 @@ mod tests {
         assert!(started.elapsed().as_secs() < 1, "{:?}", started.elapsed());
     }
 
-    /// A grid whose fifth row repeats its fourth, and one with a point that
-    /// is not a number, are refused before any row is fitted.
+    /// A grid whose fifth row repeats its fourth is refused, as its columns
+    /// of control points repeat too, and one with a point that is not a
+    /// number is refused before any row is fitted.
     #[test]
     fn a_grid_with_a_repeated_row_or_an_unreadable_point_is_refused() {
         let refused = |found: &Result<NurbsSurface, MathError>| {
@@ -591,5 +588,47 @@ mod tests {
         ] {
             assert!(refused(&found), "{found:?}");
         }
+    }
+
+    /// The flat 3 by 3 grid `(j, i, 0)` with its centre moved to (1, 0, 0):
+    /// its middle column of data repeats a point, but the column of the row
+    /// curves' control points that the second stage interpolates does not,
+    /// so the fit stands, the same as its two stages by hand. Rows that
+    /// repeat make a column of control points repeat, which is refused.
+    #[test]
+    fn a_grid_is_read_by_the_columns_its_second_stage_interpolates() {
+        let mut grid: Vec<Vec<Point3>> = (0..3)
+            .map(|i| {
+                (0..3)
+                    .map(|j| Point3::new(f64::from(j), f64::from(i), 0.0))
+                    .collect()
+            })
+            .collect();
+        grid[1][1] = Point3::new(1.0, 0.0, 0.0);
+        let surface = interpolate_surface(&grid, 2, 2).unwrap();
+        let rows: Vec<crate::nurbs::curve::NurbsCurve> = grid
+            .iter()
+            .map(|row| interpolate(row, 2).unwrap())
+            .collect();
+        let columns: Vec<crate::nurbs::curve::NurbsCurve> = (0..3)
+            .map(|j| {
+                let column: Vec<Point3> = rows.iter().map(|c| c.control_points()[j]).collect();
+                interpolate(&column, 2).unwrap()
+            })
+            .collect();
+        for (i, row) in surface.control_points().iter().enumerate() {
+            for (j, &point) in row.iter().enumerate() {
+                let by_hand = columns[j].control_points()[i];
+                let bits = |p: Point3| [p.x().to_bits(), p.y().to_bits(), p.z().to_bits()];
+                assert_eq!(bits(point), bits(by_hand), "{i} {j}");
+            }
+        }
+        let mut repeated = swell(6, 6);
+        repeated[3] = repeated[2].clone();
+        let found = interpolate_surface(&repeated, 2, 2);
+        assert!(
+            matches!(found, Err(MathError::ParameterOutOfRange { .. })),
+            "{found:?}"
+        );
     }
 }
