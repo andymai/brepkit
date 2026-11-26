@@ -1753,34 +1753,66 @@ fn split_stray([p00, p10, p01, p11]: [Point3; 4], probes: &[Point3]) -> f64 {
         .fold(0.0, f64::max)
 }
 
-/// The distance from `p` to the triangle `a`, `b`, `c`; to its longest side
-/// when the triangle has no area.
-pub(super) fn point_triangle_distance(p: Point3, a: Point3, b: Point3, c: Point3) -> f64 {
-    let segment = |a: Point3, b: Point3| {
-        let ab = b - a;
-        let len2 = ab.dot(ab);
-        let t = if len2 > 0.0 {
-            ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        (p - (a + ab * t)).length()
+/// The distance from `p` to the segment from `a` to `b`.
+fn point_segment_distance(p: Point3, a: Point3, b: Point3) -> f64 {
+    let ab = b - a;
+    let len2 = ab.dot(ab);
+    let t = if len2 > 0.0 {
+        ((p - a).dot(ab) / len2).clamp(0.0, 1.0)
+    } else {
+        0.0
     };
-    let edges = segment(a, b).min(segment(b, c)).min(segment(c, a));
-    let normal = (b - a).cross(c - a);
+    (p - (a + ab * t)).length()
+}
+
+/// The distance from `p` to the triangle `a`, `b`, `c`, with the doubt the
+/// rounding of its plane leaves, and never more than to its nearest side.
+///
+/// Each term of the triangle's normal rounds to within a few units in the
+/// last place of the two products it is the difference of. Where those
+/// products are large beside the normal, as on a sliver, the normal can
+/// tip; the distance from the plane takes that tip in. A sliver flat in its
+/// plane then reads as flat, and one whose plane the rounding hides reads
+/// as far as its nearest side.
+pub(super) fn point_triangle_distance(p: Point3, a: Point3, b: Point3, c: Point3) -> f64 {
+    let edges = point_segment_distance(p, a, b)
+        .min(point_segment_distance(p, b, c))
+        .min(point_segment_distance(p, c, a));
+    let (ab, ac) = (b - a, c - a);
+    let normal = ab.cross(ac);
     let area2 = normal.length();
-    let scale = (b - a).length().max((c - a).length()).max((c - b).length());
-    if area2 <= 1e-12 * scale * scale {
+    if !(area2 > 0.0 && area2.is_finite()) {
         return edges;
     }
     let n = normal * (1.0 / area2);
-    let off = (p - a).dot(n);
+    let terms = [
+        (ab.y() * ac.z()).abs() + (ab.z() * ac.y()).abs(),
+        (ab.z() * ac.x()).abs() + (ab.x() * ac.z()).abs(),
+        (ab.x() * ac.y()).abs() + (ab.y() * ac.x()).abs(),
+    ];
+    let tip = terms
+        .into_iter()
+        .zip([n.x(), n.y(), n.z()])
+        .map(|(term, along)| term * (1.0 - along * along).max(0.0).sqrt())
+        .sum::<f64>()
+        * (4.0 * f64::EPSILON)
+        / area2;
+    let d = p - a;
+    let off = d.dot(n);
+    let rounding = 4.0
+        * f64::EPSILON
+        * ((d.x() * n.x()).abs() + (d.y() * n.y()).abs() + (d.z() * n.z()).abs());
+    let doubt = d.length().madd(tip, rounding);
     let q = p - n * off;
     // Inside when `q` lies on the same side of every edge as the triangle.
     let inside = [(a, b), (b, c), (c, a)]
         .iter()
         .all(|&(x, y)| (y - x).cross(q - x).dot(n) >= 0.0);
-    if inside { off.abs() } else { edges }
+    if inside {
+        (off.abs() + doubt).min(edges)
+    } else {
+        edges
+    }
 }
 
 /// The parameters of a point of a face's boundary on the face's surface.
@@ -1967,6 +1999,7 @@ mod crease_tests {
 
     use super::{
         AdaptiveCell, MAX_TREE_DEPTH, check_cells, creases, force_subdivide, leaf_corners,
+        point_triangle_distance,
     };
 
     /// A half cylinder of two quarter arcs joined at `split`, smooth across it
@@ -2235,6 +2268,68 @@ mod crease_tests {
             refused(leaf_corners(&alike, 4, 1e-3)),
             "five leaves past four"
         );
+    }
+
+    /// A flat bilinear patch over `corners`, `[[p00, p01], [p10, p11]]`.
+    fn flat_patch(corners: [[Point3; 2]; 2], weights: [[f64; 2]; 2]) -> NurbsSurface {
+        NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            corners.iter().map(|row| row.to_vec()).collect(),
+            weights.iter().map(|row| row.to_vec()).collect(),
+        )
+        .unwrap()
+    }
+
+    /// A flat strip 1e9 long and 1e-4 wide: its cells' triangles are slivers
+    /// 1e13 times as long as wide, but their plane is exact, so the roots
+    /// hold the strip at a deflection of 1e-8.
+    #[test]
+    fn a_flat_sliver_meshes_on_its_roots() {
+        let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let strip = flat_patch(
+            [[p(0.0, 0.0), p(0.0, 1e-4)], [p(1e9, 0.0), p(1e9, 1e-4)]],
+            [[1.0; 2]; 2],
+        );
+        let mesh = super::tessellate_nurbs(&strip, 1e-8, 0.0).unwrap();
+        assert_eq!(mesh.mesh.indices.len() / 6, 16, "the leaves");
+        let inside = p(2.5e8, 2.5e-5);
+        assert!(point_triangle_distance(inside, p(0.0, 0.0), p(1e9, 0.0), p(1e9, 1e-4)) < 1e-12);
+    }
+
+    /// A tilted sliver's plane is in doubt, so a point off it reads at least
+    /// as far as it lies, and a triangle with no area reads by its sides.
+    #[test]
+    fn a_tilted_sliver_reads_no_nearer_than_it_lies() {
+        let axis = brepkit_math::vec::Vec3::new(1.0, 2.0, 3.0) * (1.0 / 14.0_f64.sqrt());
+        let (sin, cos) = 0.7_f64.sin_cos();
+        let turn = |x: f64, y: f64, z: f64| {
+            let v = brepkit_math::vec::Vec3::new(x, y, z);
+            let r = v * cos + axis.cross(v) * sin + axis * (axis.dot(v) * (1.0 - cos));
+            Point3::new(r.x(), r.y(), r.z())
+        };
+        for (long, wide) in [(1.0, 1e-6), (1e6, 1e-6), (1e9, 1e-4)] {
+            let (a, b, c) = (
+                turn(0.0, 0.0, 0.0),
+                turn(long, 0.0, 0.0),
+                turn(long, wide, 0.0),
+            );
+            let off = 1e-3 * wide;
+            let found = point_triangle_distance(turn(0.75 * long, 0.5 * wide, off), a, b, c);
+            assert!(
+                found >= 0.999 * off && found <= wide,
+                "{long} by {wide}: {found}"
+            );
+        }
+        let line = point_triangle_distance(
+            Point3::new(0.5, 1.0, 0.0),
+            Point3::new(0.0, 0.0, 0.0),
+            Point3::new(1.0, 0.0, 0.0),
+            Point3::new(2.0, 0.0, 0.0),
+        );
+        assert!((line - 1.0).abs() < 1e-15, "{line}");
     }
 
     #[test]
