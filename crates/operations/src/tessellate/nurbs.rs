@@ -1888,7 +1888,12 @@ pub(super) fn tessellate_nurbs(
 
     conforming_pass(surface, &mut cells, &roots, deflection)?;
 
-    let corners = leaf_corners(&cells, super::MAX_FACE_SAMPLES, deflection)?;
+    let corners = leaf_corners(
+        &cells,
+        super::MAX_FACE_SAMPLES,
+        super::MAX_LINE_SAMPLES,
+        deflection,
+    )?;
     drop(cells);
     let positions = corners
         .uvs
@@ -1927,20 +1932,25 @@ struct LeafCorners {
 }
 
 /// The corners of the leaves of `cells`, refused before the mesh takes room
-/// for them when the corners or the leaves pass `limit`.
+/// for them when the corners or the leaves pass `limit`, or the corners on
+/// one parameter line pass `line_limit`.
 ///
 /// The cell limit does not hold the corners: a leaf halved beside one that
 /// is not puts a corner at the middle of their shared side, so the corners
 /// can outnumber the cells. Each leaf gives two triangles, so the leaf count
-/// holds the triangles to twice the limit, as a grid's are.
+/// holds the triangles to twice the limit, as a grid's are. A grid's row is
+/// held to the edge limit, and so is each line of the tree.
 fn leaf_corners(
     cells: &[AdaptiveCell],
     limit: usize,
+    line_limit: usize,
     deflection: f64,
 ) -> Result<LeafCorners, crate::OperationsError> {
-    let refused = |what: &str, count: usize| {
+    let refused = |what: &str, count: usize, limit: usize| {
         super::too_many_samples(what, count as f64, limit as f64, deflection)
     };
+    let mut on_u_lines: DetHashMap<u64, usize> = DetHashMap::default();
+    let mut on_v_lines: DetHashMap<u64, usize> = DetHashMap::default();
     let mut numbers: DetHashMap<(u64, u64), u32> = DetHashMap::default();
     let mut uvs: Vec<[f64; 2]> = Vec::new();
     let mut quads: Vec<[u32; 4]> = Vec::new();
@@ -1949,6 +1959,7 @@ fn leaf_corners(
             return Err(refused(
                 "a B-spline face's mesh cells",
                 limit.saturating_add(1),
+                limit,
             ));
         }
         let mut quad = [0_u32; 4];
@@ -1962,9 +1973,21 @@ fn leaf_corners(
             *number = match numbers.entry((u.to_bits(), v.to_bits())) {
                 std::collections::hash_map::Entry::Occupied(found) => *found.get(),
                 std::collections::hash_map::Entry::Vacant(slot) => {
-                    let past = || refused("a B-spline face's mesh vertices", next + 1);
+                    let past = || refused("a B-spline face's mesh vertices", next + 1, limit);
                     if next == limit {
                         return Err(past());
+                    }
+                    let on_u = on_u_lines.entry(u.to_bits()).or_insert(0);
+                    *on_u += 1;
+                    let on_v = on_v_lines.entry(v.to_bits()).or_insert(0);
+                    *on_v += 1;
+                    let most = (*on_u).max(*on_v);
+                    if most > line_limit {
+                        return Err(refused(
+                            "a B-spline face's mesh along one parameter line",
+                            most,
+                            line_limit,
+                        ));
                     }
                     uvs.push([u, v]);
                     *slot.insert(u32::try_from(next).map_err(|_| past())?)
@@ -2238,21 +2261,21 @@ mod crease_tests {
             }
         }
         assert_eq!(cells.len(), 53, "the cells");
-        let corners = leaf_corners(&cells, 65, 1e-3).unwrap();
+        let corners = leaf_corners(&cells, 65, 65, 1e-3).unwrap();
         assert_eq!((corners.uvs.len(), corners.quads.len()), (65, 40));
         let refused = |found: Result<_, crate::OperationsError>| {
             matches!(found, Err(crate::OperationsError::TooManySamples { .. }))
         };
-        assert!(refused(leaf_corners(&cells, 64, 1e-3)));
+        assert!(refused(leaf_corners(&cells, 64, 64, 1e-3)));
         let alike: Vec<AdaptiveCell> = (0..5)
             .map(|_| AdaptiveCell {
                 children: None,
                 ..root
             })
             .collect();
-        assert!(leaf_corners(&alike, 5, 1e-3).is_ok());
+        assert!(leaf_corners(&alike, 5, 5, 1e-3).is_ok());
         assert!(
-            refused(leaf_corners(&alike, 4, 1e-3)),
+            refused(leaf_corners(&alike, 4, 4, 1e-3)),
             "five leaves past four"
         );
     }
@@ -2350,6 +2373,36 @@ mod crease_tests {
         .unwrap();
         let mesh = super::tessellate_nurbs(&sheet, 1e-6, 0.0).unwrap();
         assert_eq!(mesh.mesh.indices.len() / 6, 16, "the sheet's leaves");
+    }
+
+    /// A root halved four times down its side at `u = 0`: 17 corners along
+    /// that line, and 68 in all. The line passes a limit of 16 though the
+    /// mesh does not pass its own.
+    #[test]
+    fn corners_past_the_line_limit_are_refused() {
+        let surface = creased_bumps();
+        let mut cells = vec![AdaptiveCell {
+            u_min: 0.0,
+            u_max: 1.0,
+            v_min: 0.0,
+            v_max: 1.0,
+            depth: 0,
+            children: None,
+        }];
+        let mut next = 0;
+        while next < cells.len() {
+            if cells[next].depth < 4 && cells[next].u_min <= 0.0 {
+                force_subdivide(&surface, &mut cells, next, 1e-3).unwrap();
+            }
+            next += 1;
+        }
+        let corners = leaf_corners(&cells, 1000, 17, 1e-3).unwrap();
+        let on_side = corners.uvs.iter().filter(|uv| uv[0] <= 0.0).count();
+        assert_eq!((on_side, corners.uvs.len()), (17, 68));
+        assert!(matches!(
+            leaf_corners(&cells, 1000, 16, 1e-3),
+            Err(crate::OperationsError::TooManySamples { .. })
+        ));
     }
 
     #[test]

@@ -266,6 +266,10 @@ const MAX_EDGE_SAMPLES: f64 = 1e6;
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub(super) const MAX_DIVISIONS: usize = MAX_EDGE_SAMPLES as usize - 1;
 
+/// [`MAX_EDGE_SAMPLES`] as a count.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub(super) const MAX_LINE_SAMPLES: usize = MAX_EDGE_SAMPLES as usize;
+
 /// The refusal of `what`, which would take `samples` samples at
 /// `deflection`, past `limit`.
 pub(super) fn too_many_samples(
