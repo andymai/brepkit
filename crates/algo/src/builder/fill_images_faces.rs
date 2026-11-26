@@ -3995,7 +3995,9 @@ fn run_window(
 /// Whether the non-rational curve `n` stays within `tol` of its point at
 /// `t0` over `(t0, t1)`: it moves no faster than the largest of its first
 /// derivative's control points, so no farther than that speed times the
-/// span. A rational curve is never held so.
+/// span. A knot of full multiplicity can break the curve there, past any
+/// speed: one in the span holds the curve only where the two control points
+/// it parts meet within rounding. A rational curve is never held so.
 fn stays_within(
     n: &brepkit_math::nurbs::curve::NurbsCurve,
     (t0, t1): (f64, f64),
@@ -4013,8 +4015,17 @@ fn stays_within(
         let (Some(&lo), Some(&hi)) = (knots.get(i + 1), knots.get(i + 1 + p as usize)) else {
             return false;
         };
+        let step = (pair[1] - pair[0]).length();
         if hi > lo {
-            speed = speed.max((pair[1] - pair[0]).length() * f64::from(p) / (hi - lo));
+            speed = speed.max(step * f64::from(p) / (hi - lo));
+        } else if lo >= t0 && lo <= t1 {
+            let size = [pair[0], pair[1]]
+                .iter()
+                .map(|q| q.x().abs().max(q.y().abs()).max(q.z().abs()))
+                .fold(0.0_f64, f64::max);
+            if step > 8.0 * f64::EPSILON * size {
+                return false;
+            }
         }
     }
     speed * (t1 - t0) * (1.0 + 1e-9) <= tol
@@ -9291,6 +9302,54 @@ mod tests {
                     "{name}, {what}: the window starts {:e} off the range's start",
                     (window.evaluate(w0) - spline.evaluate(want)).length()
                 );
+            }
+        }
+    }
+
+    /// A degree-1 spline with a knot of full multiplicity at 1e-12, where it
+    /// jumps from 0 to 100 along its line: a range from 2e-12 is cut there,
+    /// as a section's window and as a run of its pieces, and never keeps the
+    /// domain's start across the jump. The same spline with no jump, its two
+    /// control points at the knot one point, keeps that start. Upright,
+    /// turned and mirrored.
+    #[test]
+    fn a_window_keeps_no_domain_end_across_a_break() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        for (name, origin, [u, _, w]) in run_poses() {
+            let at = |a: f64| origin + u * a;
+            for (what, jump, keeps_start) in [("broken", 100.0, false), ("whole", 0.0, true)] {
+                let spline = NurbsCurve::new(
+                    1,
+                    vec![0.0, 0.0, 1e-12, 1e-12, 1.0, 1.0],
+                    vec![at(0.0), at(0.0), at(jump), at(jump + 1.0)],
+                    vec![1.0; 4],
+                )
+                .unwrap();
+                let (t0, t1) = (2e-12, 0.5);
+                let want = if keeps_start { 0.0 } else { t0 };
+                let curve = EdgeCurve::NurbsCurve(spline.clone());
+                let start = spline.evaluate(t0) + w * 2e-5;
+                let SectionWindow::Cut(EdgeCurve::NurbsCurve(window)) =
+                    window_curve(&curve, (t0, t1), (start, spline.evaluate(t1)), 1e-7)
+                else {
+                    unreachable!("{name}, {what}: the window is not cut")
+                };
+                let Some(EdgeCurve::NurbsCurve(run)) = run_window(&curve, (t0, t1), true, 1e-7)
+                else {
+                    unreachable!("{name}, {what}: the run has no window")
+                };
+                for (kind, cut) in [("window", &window), ("run", &run)] {
+                    let (c0, _) = cut.domain();
+                    assert!(
+                        (c0 - want).abs() <= f64::EPSILON,
+                        "{name}, {what}: the {kind} starts at {c0:e}"
+                    );
+                    assert!(
+                        (cut.evaluate(c0) - spline.evaluate(want)).length() < 1e-9,
+                        "{name}, {what}: the {kind} starts {:e} off the range's start",
+                        (cut.evaluate(c0) - spline.evaluate(want)).length()
+                    );
+                }
             }
         }
     }
