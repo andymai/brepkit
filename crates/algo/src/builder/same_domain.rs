@@ -2722,6 +2722,9 @@ fn nurbs_patch_on(
     let mut held = 0usize;
     let mut held_at = [[false; N]; N];
     let mut agree = 0.0;
+    // Whether every sample held lies on the patch's own edges, the two
+    // surfaces tangent there.
+    let mut along_edges = true;
     for (i, row) in held_at.iter_mut().enumerate() {
         for (j, cell) in row.iter_mut().enumerate() {
             #[allow(clippy::cast_precision_loss)]
@@ -2733,8 +2736,12 @@ fn nurbs_patch_on(
             let proj = lies_on(p)?;
             held += 1;
             *cell = true;
+            let edge = i == 0 || i == N - 1 || j == 0 || j == N - 1;
             if let (Ok(a), Ok(b)) = (na.normal(proj.u, proj.v), nb.normal(u, v)) {
                 agree += a.dot(b);
+                along_edges &= edge && a.dot(b).abs() >= 1.0 - 1e-6;
+            } else {
+                along_edges = false;
             }
         }
     }
@@ -2758,7 +2765,10 @@ fn nurbs_patch_on(
             cells += 1;
         }
     }
-    (held >= N * 2 && cells > 0).then_some(agree >= 0.0)
+    // Two pieces of one surface (a closed extrusion's wall in two faces)
+    // meet only along their edges, the surfaces tangent there: they hold
+    // the patch's edge rows and no cell, and lie on one surface.
+    (held >= N * 2 && (cells > 0 || along_edges)).then_some(agree >= 0.0)
 }
 
 /// Check if two surfaces represent the same geometric domain.

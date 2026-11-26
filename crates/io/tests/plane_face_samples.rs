@@ -141,3 +141,18 @@ fn a_peg_cut_across_its_closed_spline_wall_is_exact() {
         |_, _| 351.820_608_6,
     );
 }
+
+/// Two pieces of a part fused back along a closed B-spline wall that each
+/// holds half of: the halves meet only along their two edges, which reads
+/// as no cell of either's sample grid lying on the other, and the fuse fell
+/// back. They lie on one surface.
+#[test]
+fn halves_of_a_closed_spline_wall_fuse_exactly() {
+    check(
+        BooleanOp::Fuse,
+        "split_wall_fuse_a.step",
+        "split_wall_fuse_b.step",
+        // As brepkit measures a reference kernel's result of the same fuse.
+        |_, _| 1_200.956_7,
+    );
+}
