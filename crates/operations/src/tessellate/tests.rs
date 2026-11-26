@@ -4809,6 +4809,42 @@ fn grid_lines_stand_close_only_where_the_surface_turns() {
     assert!(us.len() < 40, "{} lines", us.len());
 }
 
+/// A span with no parameter strictly between its ends cannot be cut: one
+/// that still fails its chord test is refused at once. Here a cylinder turns
+/// 1e16 radians a unit of `u`, so the span from 1 to the next float after
+/// it turns some 2.2 radians and sags far past the deflection.
+#[test]
+fn a_span_that_cannot_be_halved_is_refused_at_once() {
+    let at = |u: f64, v: f64| Point3::new((1e16 * u).cos(), (1e16 * u).sin(), v);
+    let normal_at = |u: f64, _: f64| Vec3::new((1e16 * u).cos(), (1e16 * u).sin(), 0.0);
+    let span = ((1.0, 1.0 + f64::EPSILON), (0.0, 1.0));
+    let started = std::time::Instant::now();
+    let found =
+        super::nurbs::iso_breaks_over(&at, &normal_at, true, span, &[], 0.001, 0.3, 999_999);
+    assert!(
+        matches!(found, Err(crate::OperationsError::TooManySamples { .. })),
+        "{found:?}"
+    );
+    assert!(started.elapsed().as_secs() < 1, "{:?}", started.elapsed());
+}
+
+/// A sag that every span keeps cut eightfold passes the division limit in
+/// one level: z = u (1 - u) to 1e-14 needs some 2.5e6 lines. The lines are
+/// refused as the count passes the limit, not after the level is filled.
+#[test]
+fn lines_past_the_division_limit_are_refused_as_they_pass_it() {
+    let at = |u: f64, v: f64| Point3::new(u, v, u * (1.0 - u));
+    let normal_at = |_: f64, _: f64| Vec3::new(0.0, 0.0, 1.0);
+    let unit = ((0.0, 1.0), (0.0, 1.0));
+    let found =
+        super::nurbs::iso_breaks_over(&at, &normal_at, true, unit, &[], 1e-14, 0.0, 999_999);
+    assert!(
+        matches!(&found, Err(crate::OperationsError::TooManySamples { samples, .. })
+            if *samples <= 1_000_008.0),
+        "{found:?}"
+    );
+}
+
 #[test]
 fn a_span_is_cut_by_what_it_needs() {
     use super::nurbs::parts_needed;

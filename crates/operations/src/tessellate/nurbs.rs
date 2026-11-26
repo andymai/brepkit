@@ -13,7 +13,7 @@ pub(super) struct AdaptiveCell {
     u_max: f64,
     v_min: f64,
     v_max: f64,
-    depth: u8,
+    depth: u16,
     /// Indices into the cell vec; `None` means this is a leaf cell.
     children: Option<[usize; 4]>,
 }
@@ -21,7 +21,14 @@ pub(super) struct AdaptiveCell {
 /// The depth past which a cell is divided for its distance from the
 /// surface alone, not for the turn of its normals: across a crease the roots
 /// do not hold, the normals disagree however small the cell gets.
-const ANGULAR_DEPTH: u8 = 6;
+const ANGULAR_DEPTH: u16 = 6;
+
+/// The deepest a cell lies below its root. A cell there is 2^-64 of its
+/// root's width, far past any feature a face's own parameters can show: a
+/// cell that still strays there is refused. The deepest tree in the meshing
+/// tests reaches 9, and a whole tree of 16 roots reaches the sample limit by
+/// its tenth level, so a cell past it lies on a narrow branch.
+const MAX_TREE_DEPTH: u16 = 64;
 
 /// Initial grid resolution (cells per direction).
 const INITIAL_CELLS: usize = 4;
@@ -532,7 +539,17 @@ fn cell_refinement_error(
     });
     let twist = split_stray([p00, p10, p01, p11], &probes);
 
-    sag.max(max_edge_sag).max(normal_sag).max(twist)
+    // A point that is not a number would drop out of a plain maximum, and
+    // the cell would pass.
+    [sag, max_edge_sag, normal_sag, twist]
+        .into_iter()
+        .fold(0.0_f64, |m, e| {
+            if m.is_nan() || e.is_nan() {
+                f64::NAN
+            } else {
+                m.max(e)
+            }
+        })
 }
 
 /// Linear interpolation (midpoint) of two points.
@@ -674,99 +691,113 @@ fn root_lines(lo: f64, hi: f64, creases: &[f64]) -> Vec<f64> {
     lines
 }
 
-/// Build the adaptive quadtree by recursive subdivision, until each leaf
-/// lies within `threshold` of the surface.
+/// Build the adaptive quadtree below the cell `root`, until each leaf lies
+/// within `threshold` of the surface. The cells are read from a stack of
+/// their own, each branch whole before the next, as a recursion would read
+/// them, so that a deep branch takes no call stack.
 ///
 /// # Errors
 ///
 /// Returns [`crate::OperationsError::TooManySamples`] if the tree would take
-/// more cells than the sample limit, or a cell that cannot be halved still
-/// strays.
+/// more cells than the sample limit, a cell past [`MAX_TREE_DEPTH`] or one
+/// that cannot be halved still strays, or the surface is not finite in a
+/// cell.
 #[allow(clippy::similar_names)]
 fn build_quadtree(
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
     cells: &mut Vec<AdaptiveCell>,
-    cell_idx: usize,
+    root: usize,
     threshold: f64,
     angular_tol: f64,
     creases: &Creases,
 ) -> Result<(), crate::OperationsError> {
-    let cell = &cells[cell_idx];
-    let u_min = cell.u_min;
-    let u_max = cell.u_max;
-    let v_min = cell.v_min;
-    let v_max = cell.v_max;
-    let depth = cell.depth;
+    let mut work = vec![root];
+    while let Some(cell_idx) = work.pop() {
+        let cell = &cells[cell_idx];
+        let u_min = cell.u_min;
+        let u_max = cell.u_max;
+        let v_min = cell.v_min;
+        let v_max = cell.v_max;
+        let depth = cell.depth;
 
-    let error = cell_refinement_error(surface, u_min, u_max, v_min, v_max, creases);
-    let angular_exceeded = depth < ANGULAR_DEPTH
-        && cell_exceeds_angular(surface, u_min, u_max, v_min, v_max, angular_tol, creases);
-    if error <= threshold && !angular_exceeded {
-        return Ok(());
-    }
+        let error = cell_refinement_error(surface, u_min, u_max, v_min, v_max, creases);
+        if !error.is_finite() {
+            return Err(super::endless_samples(
+                "a B-spline face's cell, whose surface is not finite",
+                threshold,
+            ));
+        }
+        let angular_exceeded = depth < ANGULAR_DEPTH
+            && cell_exceeds_angular(surface, u_min, u_max, v_min, v_max, angular_tol, creases);
+        if error <= threshold && !angular_exceeded {
+            continue;
+        }
 
-    let u_mid = 0.5 * (u_min + u_max);
-    let v_mid = 0.5 * (v_min + v_max);
-    check_cells(
-        cells.len(),
-        (u_min, u_mid, u_max),
-        (v_min, v_mid, v_max),
-        threshold,
-    )?;
-    let child_depth = depth.saturating_add(1);
+        let u_mid = 0.5 * (u_min + u_max);
+        let v_mid = 0.5 * (v_min + v_max);
+        check_cells(
+            cells.len(),
+            depth,
+            (u_min, u_mid, u_max),
+            (v_min, v_mid, v_max),
+            threshold,
+        )?;
+        let child_depth = depth + 1;
 
-    let c0 = cells.len();
-    cells.push(AdaptiveCell {
-        u_min,
-        u_max: u_mid,
-        v_min,
-        v_max: v_mid,
-        depth: child_depth,
-        children: None,
-    });
-    cells.push(AdaptiveCell {
-        u_min: u_mid,
-        u_max,
-        v_min,
-        v_max: v_mid,
-        depth: child_depth,
-        children: None,
-    });
-    cells.push(AdaptiveCell {
-        u_min,
-        u_max: u_mid,
-        v_min: v_mid,
-        v_max,
-        depth: child_depth,
-        children: None,
-    });
-    cells.push(AdaptiveCell {
-        u_min: u_mid,
-        u_max,
-        v_min: v_mid,
-        v_max,
-        depth: child_depth,
-        children: None,
-    });
+        let c0 = cells.len();
+        cells.push(AdaptiveCell {
+            u_min,
+            u_max: u_mid,
+            v_min,
+            v_max: v_mid,
+            depth: child_depth,
+            children: None,
+        });
+        cells.push(AdaptiveCell {
+            u_min: u_mid,
+            u_max,
+            v_min,
+            v_max: v_mid,
+            depth: child_depth,
+            children: None,
+        });
+        cells.push(AdaptiveCell {
+            u_min,
+            u_max: u_mid,
+            v_min: v_mid,
+            v_max,
+            depth: child_depth,
+            children: None,
+        });
+        cells.push(AdaptiveCell {
+            u_min: u_mid,
+            u_max,
+            v_min: v_mid,
+            v_max,
+            depth: child_depth,
+            children: None,
+        });
 
-    cells[cell_idx].children = Some([c0, c0 + 1, c0 + 2, c0 + 3]);
-
-    for i in 0..4 {
-        build_quadtree(surface, cells, c0 + i, threshold, angular_tol, creases)?;
+        cells[cell_idx].children = Some([c0, c0 + 1, c0 + 2, c0 + 3]);
+        work.extend([c0 + 3, c0 + 2, c0 + 1, c0]);
     }
     Ok(())
 }
 
 /// Refuses four more cells for a tree of `count`, from the halving of a cell
-/// at the middles `u` and `v`, past the sample limit, or where a middle does
-/// not part its cell: such a cell cannot be halved.
+/// at `depth` at the middles `u` and `v`, past the sample limit, at
+/// [`MAX_TREE_DEPTH`], or where a middle does not part its cell: such a cell
+/// cannot be halved.
 fn check_cells(
     count: usize,
+    depth: u16,
     (u_min, u_mid, u_max): (f64, f64, f64),
     (v_min, v_mid, v_max): (f64, f64, f64),
     deflection: f64,
 ) -> Result<(), crate::OperationsError> {
-    if !(u_min < u_mid && u_mid < u_max && v_min < v_mid && v_mid < v_max) {
+    if depth >= MAX_TREE_DEPTH
+        || !(u_min < u_mid && u_mid < u_max && v_min < v_mid && v_mid < v_max)
+    {
         return Err(super::endless_samples("a B-spline face's cell", deflection));
     }
     super::check_total("a B-spline face's cells", count as u64 + 4, deflection)
@@ -824,7 +855,7 @@ fn conforming_pass(
 fn needs_conforming_subdivision(
     cells: &[AdaptiveCell],
     roots: &RootGrid,
-    depth: u8,
+    depth: u16,
     u_min: f64,
     u_max: f64,
     v_min: f64,
@@ -852,27 +883,28 @@ fn needs_conforming_subdivision(
 }
 
 /// Find the depth of the leaf cell containing the given parameter point.
-fn find_leaf_depth_at(cells: &[AdaptiveCell], roots: &RootGrid, u: f64, v: f64) -> Option<u8> {
+fn find_leaf_depth_at(cells: &[AdaptiveCell], roots: &RootGrid, u: f64, v: f64) -> Option<u16> {
     let root = roots.holding(u, v)?;
-    find_leaf_depth_recursive(cells, root, u, v)
+    find_leaf_depth_below(cells, root, u, v)
 }
 
-/// Recursively find the leaf depth at a given point within a cell subtree.
-fn find_leaf_depth_recursive(cells: &[AdaptiveCell], idx: usize, u: f64, v: f64) -> Option<u8> {
-    let cell = &cells[idx];
-    if u < cell.u_min || u > cell.u_max || v < cell.v_min || v > cell.v_max {
+/// The depth of the leaf holding a point below the cell `idx`, read down
+/// the tree; one past a cell none of whose children holds it.
+fn find_leaf_depth_below(cells: &[AdaptiveCell], idx: usize, u: f64, v: f64) -> Option<u16> {
+    let holds = |cell: &AdaptiveCell| {
+        !(u < cell.u_min || u > cell.u_max || v < cell.v_min || v > cell.v_max)
+    };
+    let mut cell = &cells[idx];
+    if !holds(cell) {
         return None;
     }
-
-    match cell.children {
-        None => Some(cell.depth),
-        Some(children) => {
-            for &child in &children {
-                if let Some(d) = find_leaf_depth_recursive(cells, child, u, v) {
-                    return Some(d);
-                }
-            }
-            Some(cell.depth + 1)
+    loop {
+        match cell.children {
+            None => return Some(cell.depth),
+            Some(children) => match children.iter().find(|&&child| holds(&cells[child])) {
+                Some(&child) => cell = &cells[child],
+                None => return Some(cell.depth + 1),
+            },
         }
     }
 }
@@ -890,16 +922,18 @@ fn force_subdivide(
     let u_max = cell.u_max;
     let v_min = cell.v_min;
     let v_max = cell.v_max;
-    let child_depth = cell.depth.saturating_add(1);
+    let depth = cell.depth;
 
     let u_mid = 0.5 * (u_min + u_max);
     let v_mid = 0.5 * (v_min + v_max);
     check_cells(
         cells.len(),
+        depth,
         (u_min, u_mid, u_max),
         (v_min, v_mid, v_max),
         deflection,
     )?;
+    let child_depth = depth + 1;
 
     let c0 = cells.len();
     cells.push(AdaptiveCell {
@@ -1332,16 +1366,35 @@ pub(super) fn iso_breaks_over(
 
     // Level by level: each level reads again only the spans the one before
     // cut. A span that never holds is cut on every level, so the count
-    // passes `max_divisions` and is refused.
+    // passes `max_divisions` and is refused, as it passes it: the spans
+    // still to come take one each at least.
     let mut spans = vec![(lo, hi, false)];
     loop {
-        let mut next = Vec::with_capacity(spans.len() * 2);
+        let mut next = Vec::with_capacity((spans.len() * 2).min(max_divisions + 1));
         let mut cut = false;
-        for &(a, b, held) in &spans {
+        for (k, &(a, b, held)) in spans.iter().enumerate() {
             let n = if held { 1 } else { parts(a, b) };
             if n == 1 {
                 next.push((a, b, true));
                 continue;
+            }
+            // A span with no parameter strictly between its ends cannot be
+            // cut: its parts would be the span again and empty spans.
+            let mid = 0.5 * (a + b);
+            if !(a.min(b) < mid && mid < a.max(b)) {
+                return Err(super::endless_samples(
+                    "a B-spline face's grid lines",
+                    deflection,
+                ));
+            }
+            let projected = next.len() + n + (spans.len() - k - 1);
+            if projected > max_divisions {
+                return Err(too_many_divisions(
+                    "a B-spline face's grid lines",
+                    projected,
+                    max_divisions,
+                    deflection,
+                ));
             }
             cut = true;
             for part in 0..n {
@@ -1360,14 +1413,6 @@ pub(super) fn iso_breaks_over(
                 );
                 next.push((from, to, false));
             }
-        }
-        if next.len() > max_divisions {
-            return Err(too_many_divisions(
-                "a B-spline face's grid lines",
-                next.len(),
-                max_divisions,
-                deflection,
-            ));
         }
         spans = next;
         if !cut {
@@ -1936,7 +1981,7 @@ mod crease_tests {
     use brepkit_math::nurbs::surface::NurbsSurface;
     use brepkit_math::vec::Point3;
 
-    use super::{check_cells, creases};
+    use super::{MAX_TREE_DEPTH, check_cells, creases};
 
     /// A half cylinder of two quarter arcs joined at `split`, smooth across it
     /// however narrow either span.
@@ -2033,21 +2078,122 @@ mod crease_tests {
         assert!(worst <= deflection, "a triangle {worst} off the surface");
     }
 
+    /// A patch 1e300 across each way, linear in its parameters but for a
+    /// spike of height 1 at one corner, over a span 1e-300 wide each way:
+    /// each cell holding the corner reads the spike's fall, down to cells
+    /// near 1e-300 wide, some 2,000 halvings down one corner.
+    fn corner_spike() -> NurbsSurface {
+        let (t, d) = (1e-300, 1e300);
+        let knots = vec![0.0, 0.0, 0.0, t, 2.0 * t, d, d, d];
+        // Each control point over its Greville abscissa keeps the patch
+        // linear in its parameters.
+        let greville = [0.0, 0.5 * t, 1.5 * t, 0.5 * (2.0 * t + d), d];
+        let points = greville
+            .iter()
+            .enumerate()
+            .map(|(i, &gu)| {
+                greville
+                    .iter()
+                    .enumerate()
+                    .map(|(j, &gv)| {
+                        let z = if i == 0 && j == 0 { 1.0 } else { 0.0 };
+                        Point3::new(3.0 * gu / d, 3.0 * gv / d, z)
+                    })
+                    .collect()
+            })
+            .collect();
+        NurbsSurface::new(2, 2, knots.clone(), knots, points, vec![vec![1.0; 5]; 5]).unwrap()
+    }
+
+    /// The spike drives the tree down one corner. On a 256 KB stack the
+    /// tree is refused at its depth bound, with no overflow.
+    #[test]
+    fn a_spike_at_a_corner_is_refused_at_the_depth_bound_on_a_small_stack() {
+        let found = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(|| super::tessellate_nurbs(&corner_spike(), 1e-3, 0.0).map(|m| m.uvs.len()))
+            .unwrap()
+            .join()
+            .unwrap();
+        assert!(
+            matches!(found, Err(crate::OperationsError::TooManySamples { .. })),
+            "{found:?}"
+        );
+    }
+
+    /// A patch with a control point that is not a number is refused at its
+    /// first cell, not divided down to the sample limit.
+    #[test]
+    fn a_surface_that_is_not_finite_is_refused_at_once() {
+        let points = vec![
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+            vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, f64::NAN)],
+        ];
+        let surface = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            points,
+            vec![vec![1.0; 2]; 2],
+        )
+        .unwrap();
+        let started = std::time::Instant::now();
+        let found = super::tessellate_nurbs(&surface, 0.1, 0.0).map(|m| m.uvs.len());
+        assert!(
+            matches!(found, Err(crate::OperationsError::TooManySamples { .. })),
+            "{found:?}"
+        );
+        assert!(started.elapsed().as_secs() < 1, "{:?}", started.elapsed());
+    }
+
+    /// A rational square patch with a weight of 1e-80 at one corner crowds
+    /// its parameters there: the tree divides down that corner past its
+    /// depth bound, far short of the sample limit, and is refused, with no
+    /// depth counted past its type.
+    #[test]
+    fn a_corner_crowded_by_its_weight_is_refused_at_the_depth_bound() {
+        let points = vec![
+            vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+            vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
+        ];
+        let surface = NurbsSurface::new(
+            1,
+            1,
+            vec![0.0, 0.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            points,
+            vec![vec![1e-80, 1.0], vec![1.0, 1.0]],
+        )
+        .unwrap();
+        let found = super::tessellate_nurbs(&surface, 0.1, 0.0).map(|m| m.uvs.len());
+        assert!(
+            matches!(found, Err(crate::OperationsError::TooManySamples { .. })),
+            "{found:?}"
+        );
+    }
+
     /// A tree past the sample limit is refused before it takes the cells,
-    /// and so is a cell whose middle does not part it.
+    /// and so is a cell at the depth bound, or one whose middle does not
+    /// part it.
     #[test]
     fn a_tree_past_the_sample_limit_is_refused() {
         let halves = (0.0, 0.5, 1.0);
-        assert!(check_cells(9_999_996, halves, halves, 1e-3).is_ok());
-        assert!(matches!(
-            check_cells(9_999_997, halves, halves, 1e-3),
-            Err(crate::OperationsError::TooManySamples { .. })
-        ));
+        let refused = |found: Result<(), crate::OperationsError>| {
+            matches!(found, Err(crate::OperationsError::TooManySamples { .. }))
+        };
+        assert!(check_cells(9_999_996, 0, halves, halves, 1e-3).is_ok());
+        assert!(refused(check_cells(9_999_997, 0, halves, halves, 1e-3)));
+        assert!(check_cells(4, MAX_TREE_DEPTH - 1, halves, halves, 1e-3).is_ok());
+        assert!(refused(check_cells(
+            4,
+            MAX_TREE_DEPTH,
+            halves,
+            halves,
+            1e-3
+        )));
         let tiny = (1.0, 1.0, 1.0 + f64::EPSILON);
-        assert!(matches!(
-            check_cells(4, tiny, halves, 1e-3),
-            Err(crate::OperationsError::TooManySamples { .. })
-        ));
+        assert!(refused(check_cells(4, 0, tiny, halves, 1e-3)));
     }
 
     #[test]
