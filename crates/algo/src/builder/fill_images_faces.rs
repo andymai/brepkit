@@ -2717,6 +2717,10 @@ fn build_section_edges(
         .unwrap_or_default();
 
     let mut sections = Vec::new();
+    // The common blocks this face takes from its curve sections: a block two
+    // sections share is one edge, taken once.
+    let mut taken: std::collections::HashSet<crate::ds::CommonBlockId> =
+        std::collections::HashSet::new();
 
     for source in sources {
         match source {
@@ -2759,12 +2763,49 @@ fn build_section_edges(
                     continue;
                 }
 
-                // A section in pieces, each sharing its edge with one of this
-                // face's own boundary edges, lies on the boundary: the face
-                // already has those edges, which the whole curve would trace
-                // again beside them.
-                if section_pieces_on_face_boundary(topo, arena, curve_ds, face_id) {
-                    continue;
+                // A section in pieces that share their edge with this face's
+                // own boundary edges, or with a block the face took from
+                // another section, lies on that edge: the face takes only
+                // its other pieces, and none where every piece is such.
+                let blocks = curve_blocks(arena, curve_ds);
+                match section_runs(topo, arena, curve_ds, face_id, &taken) {
+                    SectionRuns::Nothing => continue,
+                    SectionRuns::Whole => taken.extend(blocks),
+                    SectionRuns::Pieces(runs) => {
+                        taken.extend(blocks);
+                        for (curve_3d, start, end) in runs {
+                            let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
+                                &curve_3d,
+                                start,
+                                end,
+                                face.surface(),
+                                &wire_pts,
+                                None,
+                            );
+                            let is_closed = (start - end).length() < tol * 100.0;
+                            let (start_uv_pt, end_uv_pt) = section_end_uv_hints(
+                                &curve_3d,
+                                start,
+                                is_closed,
+                                face.surface(),
+                                &pcurve,
+                            );
+                            sections.push(SectionEdge {
+                                curve_3d,
+                                pcurve_a: pcurve.clone(),
+                                pcurve_b: pcurve,
+                                start,
+                                end,
+                                start_uv_a: start_uv_pt,
+                                end_uv_a: end_uv_pt,
+                                start_uv_b: start_uv_pt,
+                                end_uv_b: end_uv_pt,
+                                target_face: None,
+                                pave_block_id: None,
+                            });
+                        }
+                        continue;
+                    }
                 }
 
                 // Find start/end 3D points by evaluating the curve at its
@@ -3775,17 +3816,44 @@ fn closed_curve_coincides_with_boundary(
     false
 }
 
-/// Whether a section curve is split into two or more pieces that each share
-/// their edge with an edge of `face_id`'s own boundary (a rim shared by two
-/// coincident walls, which the pave filler split at a vertex of one).
-fn section_pieces_on_face_boundary(
+/// The common blocks the pieces of `curve_ds` lie in.
+fn curve_blocks(
+    arena: &GfaArena,
+    curve_ds: &crate::ds::IntersectionCurveDS,
+) -> Vec<crate::ds::CommonBlockId> {
+    arena
+        .collect_leaf_pave_blocks(&curve_ds.pave_blocks)
+        .iter()
+        .filter_map(|pb| arena.pb_to_cb.get(pb).copied())
+        .collect()
+}
+
+/// What of a curve section a face takes.
+enum SectionRuns {
+    /// The whole curve.
+    Whole,
+    /// None of it.
+    Nothing,
+    /// Each run of pieces as its curve and its two ends.
+    Pieces(Vec<(EdgeCurve, Point3, Point3)>),
+}
+
+/// What of `curve_ds` the face `face_id` takes: the runs of its pieces that
+/// lie in no common block with one of the face's own boundary edges and in
+/// none of `taken`, each as the curve's window over the run between its end
+/// vertices. Nothing where no piece is left. The whole curve where every
+/// piece is left, where a piece is closed, or where a run's window is not
+/// read.
+fn section_runs(
     topo: &Topology,
     arena: &GfaArena,
     curve_ds: &crate::ds::IntersectionCurveDS,
     face_id: FaceId,
-) -> bool {
+    taken: &std::collections::HashSet<crate::ds::CommonBlockId>,
+) -> SectionRuns {
+    use brepkit_topology::vertex::VertexId;
     let Ok(face) = topo.face(face_id) else {
-        return false;
+        return SectionRuns::Whole;
     };
     let own: Vec<EdgeId> = std::iter::once(face.outer_wire())
         .chain(face.inner_wires().iter().copied())
@@ -3797,14 +3865,14 @@ fn section_pieces_on_face_boundary(
                 .collect::<Vec<_>>()
         })
         .collect();
-    let leaves = arena.collect_leaf_pave_blocks(&curve_ds.pave_blocks);
-    leaves.len() >= 2
-        && leaves.iter().all(|pb| {
-            arena
-                .pb_to_cb
-                .get(pb)
-                .and_then(|&cb| arena.common_blocks.get(cb))
-                .is_some_and(|cb| {
+    let mut pieces: Vec<(f64, f64, VertexId, VertexId, bool)> = Vec::new();
+    for leaf in arena.collect_leaf_pave_blocks(&curve_ds.pave_blocks) {
+        let Some(pb) = arena.pave_blocks.get(leaf) else {
+            return SectionRuns::Whole;
+        };
+        let on = arena.pb_to_cb.get(&leaf).is_some_and(|&cb| {
+            taken.contains(&cb)
+                || arena.common_blocks.get(cb).is_some_and(|cb| {
                     cb.pave_blocks.iter().any(|&other| {
                         arena
                             .pave_blocks
@@ -3812,7 +3880,55 @@ fn section_pieces_on_face_boundary(
                             .is_some_and(|o| own.contains(&o.original_edge))
                     })
                 })
-        })
+        });
+        let (a, b) = (
+            arena.resolve_vertex(pb.start.vertex),
+            arena.resolve_vertex(pb.end.vertex),
+        );
+        pieces.push(if pb.start.parameter <= pb.end.parameter {
+            (pb.start.parameter, pb.end.parameter, a, b, on)
+        } else {
+            (pb.end.parameter, pb.start.parameter, b, a, on)
+        });
+    }
+    if pieces.iter().all(|p| !p.4) {
+        return SectionRuns::Whole;
+    }
+    if pieces.iter().all(|p| p.4) {
+        return SectionRuns::Nothing;
+    }
+    if pieces.iter().any(|p| p.2 == p.3) {
+        return SectionRuns::Whole;
+    }
+    pieces.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let point = |v: VertexId| {
+        topo.vertex(v)
+            .ok()
+            .map(brepkit_topology::vertex::Vertex::point)
+    };
+    let mut runs = Vec::new();
+    let mut k = 0;
+    while k < pieces.len() {
+        if pieces[k].4 {
+            k += 1;
+            continue;
+        }
+        let first = k;
+        while k + 1 < pieces.len() && !pieces[k + 1].4 {
+            k += 1;
+        }
+        let (lo, from) = (pieces[first].0, pieces[first].2);
+        let (hi, to) = (pieces[k].1, pieces[k].3);
+        let (Some(a), Some(b)) = (point(from), point(to)) else {
+            return SectionRuns::Whole;
+        };
+        let Some(window) = window_curve(&curve_ds.curve, (lo, hi), (a, b)) else {
+            return SectionRuns::Whole;
+        };
+        runs.push((window, a, b));
+        k += 1;
+    }
+    SectionRuns::Pieces(runs)
 }
 
 /// Whether a section sampled as `section_pts` (3D points along its interior)

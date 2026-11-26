@@ -147,6 +147,28 @@ pub fn proved_distance(
     bound.is_finite().then_some(bound)
 }
 
+/// An upper bound of the distance of `p` from `surface`: its distance from
+/// the surface's point at the parameters its projection finds, which is a
+/// point of the surface whether or not it is the nearest, with the
+/// roundings of reading that point. `None` where no projection is found or
+/// a weight is not a positive normal float.
+#[must_use]
+pub fn point_off_nurbs(p: Point3, surface: &NurbsSurface) -> Option<f64> {
+    if !surface
+        .weights()
+        .iter()
+        .flatten()
+        .all(|&w| w > 0.0 && w.is_normal())
+    {
+        return None;
+    }
+    let found =
+        brepkit_math::nurbs::projection::project_point_to_surface(surface, p, 1e-12).ok()?;
+    let foot = surface.evaluate(found.u, found.v);
+    let bound = (p - foot).length() + surface_rounding(surface) + 8.0 * f64::EPSILON * largest(p);
+    bound.is_finite().then_some(bound)
+}
+
 /// Whether the walk can read `surface`: not periodic, with every weight a
 /// positive normal float.
 fn readable(surface: &NurbsSurface) -> bool {

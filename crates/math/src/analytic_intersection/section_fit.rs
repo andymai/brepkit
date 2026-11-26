@@ -620,6 +620,19 @@ pub fn spline_off_surface(
     bound.is_finite().then_some(bound)
 }
 
+/// An upper bound of the distance of `p` from `surface`.
+///
+/// The bound is the distance the surface's closed form reads
+/// ([`Carrier::distance`], exact for a point beside the surface), with its
+/// rounding. `None` where the form has no gradient at `p` (on an axis or at
+/// a centre).
+#[must_use]
+pub fn point_off_surface(p: Point3, surface: &AnalyticSurface<'_>) -> Option<f64> {
+    let (off, _) = surface.distance(p)?;
+    let bound = off.abs() + 64.0 * f64::EPSILON * surface.scale(p);
+    bound.is_finite().then_some(bound)
+}
+
 /// The bound `here` of the cubic Bezier `ctrl`, or the greater of its
 /// halves' bounds, halved again while they exceed `aim` and tighten by a
 /// quarter or more, `depth` more times at most.

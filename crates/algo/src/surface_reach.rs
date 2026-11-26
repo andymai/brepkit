@@ -6,7 +6,7 @@
 //! ([`crate::builder::nurbs_pcurve::proved_distance`]).
 
 use brepkit_math::nurbs::curve::NurbsCurve;
-use brepkit_math::vec::Vec3;
+use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::face::FaceSurface;
 
 /// An upper bound of the distance from `surface` of every point of `curve`
@@ -32,6 +32,44 @@ pub fn spline_off_face(
             aim,
         ),
     }
+}
+
+/// An upper bound of the distance of `p` from `surface`, or `None` where
+/// none is proved.
+pub fn point_off_face(p: Point3, surface: &FaceSurface) -> Option<f64> {
+    match surface {
+        FaceSurface::Plane { normal, d } => {
+            let off = normal.x() * p.x() + normal.y() * p.y() + normal.z() * p.z() - d;
+            let size = p.x().abs().max(p.y().abs()).max(p.z().abs());
+            let bound = off.abs() + 16.0 * f64::EPSILON * (size + d.abs());
+            bound.is_finite().then_some(bound)
+        }
+        FaceSurface::Nurbs(s) => crate::builder::nurbs_pcurve::point_off_nurbs(p, s),
+        FaceSurface::Cylinder(_)
+        | FaceSurface::Cone(_)
+        | FaceSurface::Sphere(_)
+        | FaceSurface::Torus(_) => {
+            brepkit_math::analytic_intersection::point_off_surface(p, &surface.as_analytic()?)
+        }
+    }
+}
+
+/// An upper bound of the distance of `p` from the B-spline `curve`: its
+/// distance from the curve's point at the parameter its projection finds,
+/// with the roundings of reading that point, and that parameter. `None`
+/// where no projection is found.
+pub fn point_off_spline(p: Point3, curve: &NurbsCurve) -> Option<(f64, f64)> {
+    let found = brepkit_math::nurbs::projection::project_point_to_curve(curve, p, 1e-12).ok()?;
+    let foot = curve.evaluate(found.parameter);
+    let size = curve
+        .control_points()
+        .iter()
+        .map(|q| q.x().abs().max(q.y().abs()).max(q.z().abs()))
+        .fold(p.x().abs().max(p.y().abs()).max(p.z().abs()), f64::max);
+    #[allow(clippy::cast_precision_loss)]
+    let roundings = (24 * (curve.degree() + 1) + 8) as f64;
+    let bound = (p - foot).length() + roundings * f64::EPSILON * size;
+    bound.is_finite().then_some((bound, found.parameter))
 }
 
 /// The greatest distance from the plane `normal . p = d` of the Bezier

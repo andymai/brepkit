@@ -490,6 +490,7 @@ pub fn prove_source_pcurves(
         }
         let near = if unbounded { None } else { near };
         raise_to_proved_reach(topo, source, near, tol)?;
+        raise_vertices_to_proved_reach(topo, source, near)?;
         prove_nurbs_pcurves(topo, source, near, tol)?;
     }
     Ok(())
@@ -578,6 +579,133 @@ fn raise_to_proved_reach(
             if bound > edge.tolerance().unwrap_or(0.0) {
                 edge.set_tolerance(Some(bound));
             }
+        }
+    }
+    Ok(())
+}
+
+/// Raises the tolerance of each vertex of a face of `solid` whose edges' box
+/// meets `near` (of each face where `near` is `None`) to a proved bound on
+/// its distance from the face's B-spline surface
+/// ([`crate::surface_reach::point_off_face`]), from the end of each of its
+/// edges' curves that is not a line, and to each of its edges' tolerances,
+/// where that exceeds it. A vertex an
+/// earlier boolean placed on one surface can stand off a B-spline face it
+/// bounds by that boolean's fit error; [`widen_tolerances`] covers the
+/// analytic faces. A distance of [`PART_OF_EDGE`] of the size of an edge of
+/// the vertex or more is not a fit's: such a vertex keeps its tolerance.
+fn raise_vertices_to_proved_reach(
+    topo: &mut Topology,
+    solid: SolidId,
+    near: Option<brepkit_math::aabb::Aabb3>,
+) -> Result<(), AlgoError> {
+    use brepkit_topology::edge::EdgeCurve;
+    let mut reach: HashMap<VertexId, f64> = HashMap::new();
+    let mut unproved: std::collections::HashSet<VertexId> = std::collections::HashSet::new();
+    let mut least_size: HashMap<VertexId, f64> = HashMap::new();
+    let mut read = |v: VertexId, off: Option<f64>| match off {
+        Some(off) => {
+            let r = reach.entry(v).or_insert(0.0);
+            *r = r.max(off);
+        }
+        None => {
+            unproved.insert(v);
+        }
+    };
+    for face_id in brepkit_topology::explorer::solid_faces(topo, solid)? {
+        let face = topo.face(face_id)?;
+        let mut edges = Vec::new();
+        for wire in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            edges.extend(topo.wire(wire)?.edges().iter().map(OrientedEdge::edge));
+        }
+        let spline_face = matches!(face.surface(), FaceSurface::Nurbs(_));
+        let mut curved = false;
+        for &edge_id in &edges {
+            curved |= !matches!(topo.edge(edge_id)?.curve(), EdgeCurve::Line);
+        }
+        if !spline_face && !curved {
+            continue;
+        }
+        if let Some(near) = near
+            && !edges_box(topo, &edges)?.is_some_and(|b| b.intersects(near))
+        {
+            continue;
+        }
+        for edge_id in edges {
+            let edge = topo.edge(edge_id)?;
+            let ends = [edge.start(), edge.end()];
+            let (sp, ep) = (topo.vertex(ends[0])?.point(), topo.vertex(ends[1])?.point());
+            // A vertex holds the ends of its edges' tolerance tubes.
+            if let Some(held) = edge.tolerance() {
+                read(ends[0], Some(held));
+                read(ends[1], Some(held));
+            }
+            let size = if ends[0] == ends[1] {
+                match edge.curve() {
+                    EdgeCurve::Line => 0.0,
+                    EdgeCurve::Circle(c) => 2.0 * c.radius(),
+                    EdgeCurve::Ellipse(e) => 2.0 * e.semi_major().max(e.semi_minor()),
+                    EdgeCurve::NurbsCurve(n) => widest_apart(n.control_points()),
+                }
+            } else {
+                (ep - sp).length()
+            };
+            for v in ends {
+                let least = least_size.entry(v).or_insert(f64::INFINITY);
+                *least = least.min(size);
+            }
+            if spline_face {
+                read(
+                    ends[0],
+                    crate::surface_reach::point_off_face(sp, face.surface()),
+                );
+                if ends[1] != ends[0] {
+                    read(
+                        ends[1],
+                        crate::surface_reach::point_off_face(ep, face.surface()),
+                    );
+                }
+            }
+            if !matches!(edge.curve(), EdgeCurve::Line) {
+                // Each vertex against the end of the span it stands at: a
+                // curve stored against its edge, its ends off the vertices
+                // by more than the span reading's band, reads its span the
+                // curve's way round.
+                let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+                let (a, b) = (
+                    edge.curve().evaluate_with_endpoints(t0, sp, ep),
+                    edge.curve().evaluate_with_endpoints(t1, sp, ep),
+                );
+                let size = [sp, ep, a, b]
+                    .iter()
+                    .map(|q| q.x().abs().max(q.y().abs()).max(q.z().abs()))
+                    .fold(0.0_f64, f64::max);
+                let rounding = 64.0 * f64::EPSILON * size;
+                let along = ((sp - a).length(), (ep - b).length());
+                let against = ((sp - b).length(), (ep - a).length());
+                let (at_start, at_end) =
+                    if ends[0] == ends[1] || along.0.max(along.1) <= against.0.max(against.1) {
+                        along
+                    } else {
+                        against
+                    };
+                for (v, off) in [(ends[0], at_start + rounding), (ends[1], at_end + rounding)] {
+                    read(v, off.is_finite().then_some(off));
+                }
+            }
+        }
+    }
+    for (v, off) in reach {
+        if unproved.contains(&v)
+            || !least_size
+                .get(&v)
+                .is_some_and(|&size| off < PART_OF_EDGE * size)
+        {
+            continue;
+        }
+        let vertex = topo.vertex_mut(v)?;
+        if off > vertex.tolerance() {
+            vertex.set_tolerance(off);
         }
     }
     Ok(())
