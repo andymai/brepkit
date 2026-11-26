@@ -248,6 +248,10 @@ pub(super) fn check_reach(topo: &Topology, face: FaceId) -> Result<(), crate::Op
 /// 45 times the largest face.
 const MAX_SAMPLES: f64 = 1e7;
 
+/// [`MAX_SAMPLES`] as a count.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub(super) const MAX_FACE_SAMPLES: usize = MAX_SAMPLES as usize;
+
 /// The most samples the mesher takes along one edge, one path across a
 /// face, or one direction of a face's grid.
 ///

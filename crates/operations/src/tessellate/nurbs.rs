@@ -1870,97 +1870,24 @@ pub(super) fn tessellate_nurbs(
 
     conforming_pass(surface, &mut cells, &roots, deflection)?;
 
-    let leaf_count = cells.iter().filter(|c| c.children.is_none()).count();
-    let mut eval_cache: DetHashMap<(u64, u64), (Point3, Vec3)> = DetHashMap::default();
-    let mut positions = Vec::with_capacity(leaf_count * 4);
-    let mut normals = Vec::with_capacity(leaf_count * 4);
-    let mut uvs: Vec<[f64; 2]> = Vec::with_capacity(leaf_count * 4);
-    let mut indices = Vec::with_capacity(leaf_count * 6);
-    let mut vertex_map: DetHashMap<(u64, u64), u32> = DetHashMap::default();
-
-    let get_or_insert_vertex = |u: f64,
-                                v: f64,
-                                eval_cache: &mut DetHashMap<(u64, u64), (Point3, Vec3)>,
-                                positions: &mut Vec<Point3>,
-                                normals: &mut Vec<Vec3>,
-                                uvs: &mut Vec<[f64; 2]>,
-                                vertex_map: &mut DetHashMap<(u64, u64), u32>|
-     -> u32 {
-        let key = (u.to_bits(), v.to_bits());
-        if let Some(&idx) = vertex_map.get(&key) {
-            return idx;
-        }
-        let &mut (pos, nrm) = eval_cache.entry(key).or_insert_with(|| {
-            let p = surface.evaluate(u, v);
-            let n = safe_normal(surface, u, v);
-            (p, n)
-        });
-        #[allow(clippy::cast_possible_truncation)]
-        let idx = positions.len() as u32;
-        positions.push(pos);
-        normals.push(nrm);
-        uvs.push([u, v]);
-        vertex_map.insert(key, idx);
-        idx
-    };
-
-    for cell in &cells {
-        if cell.children.is_some() {
-            continue;
-        }
-
-        let i00 = get_or_insert_vertex(
-            cell.u_min,
-            cell.v_min,
-            &mut eval_cache,
-            &mut positions,
-            &mut normals,
-            &mut uvs,
-            &mut vertex_map,
-        );
-        let i10 = get_or_insert_vertex(
-            cell.u_max,
-            cell.v_min,
-            &mut eval_cache,
-            &mut positions,
-            &mut normals,
-            &mut uvs,
-            &mut vertex_map,
-        );
-        let i11 = get_or_insert_vertex(
-            cell.u_max,
-            cell.v_max,
-            &mut eval_cache,
-            &mut positions,
-            &mut normals,
-            &mut uvs,
-            &mut vertex_map,
-        );
-        let i01 = get_or_insert_vertex(
-            cell.u_min,
-            cell.v_max,
-            &mut eval_cache,
-            &mut positions,
-            &mut normals,
-            &mut uvs,
-            &mut vertex_map,
-        );
+    let corners = leaf_corners(&cells, super::MAX_FACE_SAMPLES, deflection)?;
+    drop(cells);
+    let positions = corners
+        .uvs
+        .iter()
+        .map(|&[u, v]| surface.evaluate(u, v))
+        .collect();
+    let normals = corners
+        .uvs
+        .iter()
+        .map(|&[u, v]| safe_normal(surface, u, v))
+        .collect();
+    let mut indices = Vec::with_capacity(corners.quads.len() * 6);
+    for [i00, i10, i11, i01] in corners.quads {
         if handedness > 0.0 {
-            indices.push(i00);
-            indices.push(i10);
-            indices.push(i11);
-
-            indices.push(i00);
-            indices.push(i11);
-            indices.push(i01);
+            indices.extend([i00, i10, i11, i00, i11, i01]);
         } else {
-            indices.push(i00);
-            indices.push(i11);
-            indices.push(i10);
-
-            indices.push(i00);
-            indices.push(i01);
-            indices.push(i11);
+            indices.extend([i00, i11, i10, i00, i01, i11]);
         }
     }
 
@@ -1970,8 +1897,65 @@ pub(super) fn tessellate_nurbs(
             normals,
             indices,
         },
-        uvs,
+        uvs: corners.uvs,
     })
+}
+
+/// The corners of a tree's leaves, each once, in the order the mesh numbers
+/// them, and the corners of each leaf as indices into them.
+struct LeafCorners {
+    uvs: Vec<[f64; 2]>,
+    quads: Vec<[u32; 4]>,
+}
+
+/// The corners of the leaves of `cells`, refused before the mesh takes room
+/// for them when the corners or the leaves pass `limit`.
+///
+/// The cell limit does not hold the corners: a leaf halved beside one that
+/// is not puts a corner at the middle of their shared side, so the corners
+/// can outnumber the cells. Each leaf gives two triangles, so the leaf count
+/// holds the triangles to twice the limit, as a grid's are.
+fn leaf_corners(
+    cells: &[AdaptiveCell],
+    limit: usize,
+    deflection: f64,
+) -> Result<LeafCorners, crate::OperationsError> {
+    let refused = |what: &str, count: usize| {
+        super::too_many_samples(what, count as f64, limit as f64, deflection)
+    };
+    let mut numbers: DetHashMap<(u64, u64), u32> = DetHashMap::default();
+    let mut uvs: Vec<[f64; 2]> = Vec::new();
+    let mut quads: Vec<[u32; 4]> = Vec::new();
+    for cell in cells.iter().filter(|c| c.children.is_none()) {
+        if quads.len() == limit {
+            return Err(refused(
+                "a B-spline face's mesh cells",
+                limit.saturating_add(1),
+            ));
+        }
+        let mut quad = [0_u32; 4];
+        for (number, (u, v)) in quad.iter_mut().zip([
+            (cell.u_min, cell.v_min),
+            (cell.u_max, cell.v_min),
+            (cell.u_max, cell.v_max),
+            (cell.u_min, cell.v_max),
+        ]) {
+            let next = uvs.len();
+            *number = match numbers.entry((u.to_bits(), v.to_bits())) {
+                std::collections::hash_map::Entry::Occupied(found) => *found.get(),
+                std::collections::hash_map::Entry::Vacant(slot) => {
+                    let past = || refused("a B-spline face's mesh vertices", next + 1);
+                    if next == limit {
+                        return Err(past());
+                    }
+                    uvs.push([u, v]);
+                    *slot.insert(u32::try_from(next).map_err(|_| past())?)
+                }
+            };
+        }
+        quads.push(quad);
+    }
+    Ok(LeafCorners { uvs, quads })
 }
 
 #[cfg(test)]
@@ -1981,7 +1965,9 @@ mod crease_tests {
     use brepkit_math::nurbs::surface::NurbsSurface;
     use brepkit_math::vec::Point3;
 
-    use super::{MAX_TREE_DEPTH, check_cells, creases};
+    use super::{
+        AdaptiveCell, MAX_TREE_DEPTH, check_cells, creases, force_subdivide, leaf_corners,
+    };
 
     /// A half cylinder of two quarter arcs joined at `split`, smooth across it
     /// however narrow either span.
@@ -2194,6 +2180,60 @@ mod crease_tests {
         )));
         let tiny = (1.0, 1.0, 1.0 + f64::EPSILON);
         assert!(refused(check_cells(4, 0, tiny, halves, 1e-3)));
+    }
+
+    /// A root halved twice, then each other quarter of a quarter halved once
+    /// more: 53 cells and 40 leaves, but 65 corners, since each leaf halved
+    /// beside whole ones puts corners at the middles of its sides.
+    #[test]
+    fn corners_past_the_limit_are_refused_though_the_cells_are_within_it() {
+        let surface = creased_bumps();
+        let root = AdaptiveCell {
+            u_min: 0.0,
+            u_max: 1.0,
+            v_min: 0.0,
+            v_max: 1.0,
+            depth: 0,
+            children: None,
+        };
+        let mut cells = vec![AdaptiveCell {
+            children: None,
+            ..root
+        }];
+        let mut next = 0;
+        while next < cells.len() {
+            if cells[next].depth < 2 {
+                force_subdivide(&surface, &mut cells, next, 1e-3).unwrap();
+            }
+            next += 1;
+        }
+        let quarters: Vec<usize> = (0..cells.len())
+            .filter(|&i| cells[i].children.is_none())
+            .collect();
+        for i in quarters {
+            let (u, v) = (cells[i].u_min * 4.0, cells[i].v_min * 4.0);
+            if (u + v) % 2.0 < 0.5 {
+                force_subdivide(&surface, &mut cells, i, 1e-3).unwrap();
+            }
+        }
+        assert_eq!(cells.len(), 53, "the cells");
+        let corners = leaf_corners(&cells, 65, 1e-3).unwrap();
+        assert_eq!((corners.uvs.len(), corners.quads.len()), (65, 40));
+        let refused = |found: Result<_, crate::OperationsError>| {
+            matches!(found, Err(crate::OperationsError::TooManySamples { .. }))
+        };
+        assert!(refused(leaf_corners(&cells, 64, 1e-3)));
+        let alike: Vec<AdaptiveCell> = (0..5)
+            .map(|_| AdaptiveCell {
+                children: None,
+                ..root
+            })
+            .collect();
+        assert!(leaf_corners(&alike, 5, 1e-3).is_ok());
+        assert!(
+            refused(leaf_corners(&alike, 4, 1e-3)),
+            "five leaves past four"
+        );
     }
 
     #[test]
