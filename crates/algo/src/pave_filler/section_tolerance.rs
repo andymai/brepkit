@@ -28,9 +28,6 @@ use crate::error::AlgoError;
 pub fn perform(topo: &mut Topology, tol: Tolerance, arena: &mut GfaArena) -> Result<(), AlgoError> {
     let mut proved = Vec::new();
     for section in &arena.curves {
-        let EdgeCurve::NurbsCurve(curve) = &section.curve else {
-            continue;
-        };
         let Some(pb) = section
             .pave_blocks
             .first()
@@ -38,21 +35,10 @@ pub fn perform(topo: &mut Topology, tol: Tolerance, arena: &mut GfaArena) -> Res
         else {
             continue;
         };
-        let (t0, t1) = section.t_range;
-        let span = (t0.min(t1), t0.max(t1));
-        let off = |face| -> Result<Option<f64>, AlgoError> {
-            Ok(crate::surface_reach::spline_off_face(
-                curve,
-                span,
-                topo.face(face)?.surface(),
-                tol.linear,
-            ))
-        };
-        if let (Some(a), Some(b)) = (off(section.face_a)?, off(section.face_b)?) {
-            let bound = a.max(b);
-            if bound > tol.linear {
-                proved.push((pb.original_edge, bound));
-            }
+        if let Some(bound) = proved_off_faces(topo, section, tol)?
+            && bound > tol.linear
+        {
+            proved.push((pb.original_edge, bound));
         }
     }
     for (edge, bound) in proved {
@@ -62,6 +48,37 @@ pub fn perform(topo: &mut Topology, tol: Tolerance, arena: &mut GfaArena) -> Res
         }
     }
     settle_on_vertices(topo, tol, arena)
+}
+
+/// The greater of a B-spline section's proved bounds off its two faces'
+/// surfaces over its range, where both are proved. `None` for any other
+/// section and where a bound is not proved.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a face lookup fails.
+pub fn proved_off_faces(
+    topo: &Topology,
+    section: &crate::ds::IntersectionCurveDS,
+    tol: Tolerance,
+) -> Result<Option<f64>, AlgoError> {
+    let EdgeCurve::NurbsCurve(curve) = &section.curve else {
+        return Ok(None);
+    };
+    let (t0, t1) = section.t_range;
+    let span = (t0.min(t1), t0.max(t1));
+    let off = |face| -> Result<Option<f64>, AlgoError> {
+        Ok(crate::surface_reach::spline_off_face(
+            curve,
+            span,
+            topo.face(face)?.surface(),
+            tol.linear,
+        ))
+    };
+    Ok(match (off(section.face_a)?, off(section.face_b)?) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        _ => None,
+    })
 }
 
 /// Moves each end at parameter `from` of the blocks of section `index` from

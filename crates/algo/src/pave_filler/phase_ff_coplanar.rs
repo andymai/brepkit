@@ -411,15 +411,17 @@ fn process_coplanar_pair(
                 start,
                 end,
                 mid,
+                edge,
             } => {
+                let held = topo.edge(edge)?.tolerance();
                 if !has_existing_section_along(
                     arena,
                     topo,
                     target,
                     (&along.curve, start, end),
-                    mid,
+                    (mid, held),
                     tol,
-                ) {
+                )? {
                     create_curve_section_edge(
                         topo,
                         arena,
@@ -587,6 +589,8 @@ enum SectionPiece {
         start: Point3,
         end: Point3,
         mid: Point3,
+        /// The boundary edge the piece is of.
+        edge: brepkit_topology::edge::EdgeId,
     },
 }
 
@@ -1527,6 +1531,7 @@ fn clip_to_region(
                             start,
                             end,
                             mid,
+                            edge: e.eid,
                         });
                         continue;
                     }
@@ -1671,6 +1676,7 @@ fn clip_to_region(
                     start,
                     end,
                     mid: mid3,
+                    edge: e.eid,
                 });
             }
         }
@@ -1971,42 +1977,61 @@ fn create_arc_section_edge(
 /// [`crate::builder::face_splitter::curves_one_curve`]). A circle or an
 /// ellipse through the piece's ends and middle can still part from it
 /// between them, and the thin regions there would be lost. A curve attached
-/// only to the other face of the pair does not count. A B-spline edge and a
-/// section along it are two fits, held one curve within the splitter's weld
-/// band of ten times the linear tolerance.
+/// only to the other face of the pair does not count.
+///
+/// An exact piece is one curve with a section within the linear tolerance.
+/// A B-spline piece and a section along it are each off the true section:
+/// they are one curve within the section's proved distance from its two
+/// faces and the edge's own tolerance, `held`. A section whose distance is
+/// not proved holds no such piece: a section twice over is refused later,
+/// and a piece dropped would be lost.
+///
+/// # Errors
+///
+/// Returns [`AlgoError`] if a face lookup fails.
 fn has_existing_section_along(
     arena: &GfaArena,
     topo: &Topology,
     target: FaceId,
     (piece_curve, p_start, p_end): (&EdgeCurve, Point3, Point3),
-    mid: Point3,
+    (mid, held): (Point3, Option<f64>),
     tol: Tolerance,
-) -> bool {
-    let reach = if matches!(piece_curve, EdgeCurve::NurbsCurve(_)) {
-        10.0 * tol.linear
-    } else {
-        tol.linear
-    };
-    let near = |p: Point3, q: Point3| (p - q).length() <= reach;
+) -> Result<bool, AlgoError> {
     let piece = Aabb3::from_points([p_start, p_end, mid]);
-    arena.curves.iter().any(|curve| {
-        if (curve.face_a != target && curve.face_b != target)
-            || !curve.bbox.expanded(reach).intersects(piece)
-        {
-            return false;
+    let spline = matches!(piece_curve, EdgeCurve::NurbsCurve(_));
+    for curve in &arena.curves {
+        if curve.face_a != target && curve.face_b != target {
+            continue;
+        }
+        let reach = if !spline {
+            tol.linear
+        } else if matches!(curve.curve, EdgeCurve::NurbsCurve(_)) {
+            match super::section_tolerance::proved_off_faces(topo, curve, tol)? {
+                Some(off) => off.max(tol.linear) + held.unwrap_or(0.0),
+                None => continue,
+            }
+        } else {
+            tol.linear + held.unwrap_or(0.0)
+        };
+        if !curve.bbox.expanded(reach).intersects(piece) {
+            continue;
         }
         let Some(((s, _), (e, _))) = section_ends(topo, arena, curve) else {
-            return false;
+            continue;
         };
+        let near = |p: Point3, q: Point3| (p - q).length() <= reach;
         if !((near(s, p_start) && near(e, p_end)) || (near(s, p_end) && near(e, p_start))) {
-            return false;
+            continue;
         }
-        crate::builder::face_splitter::curves_one_curve(
+        if crate::builder::face_splitter::curves_one_curve(
             (piece_curve, p_start, p_end),
             (&curve.curve, s, e),
             reach,
-        )
-    })
+        ) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Register one section along a boundary edge's curve, from `span.0`
@@ -2323,6 +2348,131 @@ mod tests {
     use brepkit_math::curves::Circle3D;
     use brepkit_topology::face::Face;
     use brepkit_topology::wire::{OrientedEdge, Wire};
+
+    /// A straight cubic section of a plane and of a cylinder it rules, and a
+    /// B-spline piece of a coplanar edge with the section's ends that bows
+    /// `bow` off it at its middle. The face holds the piece already only where
+    /// they are one curve within the section's proved distance from its faces
+    /// and the edge's own tolerance: 5 linear tolerances off with no edge
+    /// tolerance, the piece is kept; with an edge tolerance of 1e-6, or on
+    /// the section itself, it is held. A rational section, whose distance
+    /// from the cylinder is not proved, holds no piece. Upright, turned and
+    /// mirrored.
+    #[test]
+    fn a_b_spline_piece_is_held_by_a_section_only_within_proved_tolerances() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use brepkit_math::surfaces::CylindricalSurface;
+        let axis = Vec3::new(1.0, 2.0, 3.0).normalize().unwrap();
+        let (sin, cos) = 0.7f64.sin_cos();
+        let turn = |e: Vec3| e * cos + axis.cross(e) * sin + axis * (axis.dot(e) * (1.0 - cos));
+        let mirror = |e: Vec3| Vec3::new(-e.x(), e.y(), e.z());
+        let o = Point3::new(3.0, -2.0, 5.0);
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let poses: [(&str, Point3, [Vec3; 3]); 3] = [
+            ("upright", Point3::new(0.0, 0.0, 0.0), [x, y, z]),
+            ("turned", o, [turn(x), turn(y), turn(z)]),
+            (
+                "mirrored",
+                Point3::new(-o.x(), o.y(), o.z()),
+                [mirror(turn(x)), mirror(turn(y)), mirror(turn(z))],
+            ),
+        ];
+        let tol = Tolerance::default();
+        for (name, origin, [u, v, w]) in poses {
+            let at = |a: f64, b: f64| origin + u * a + v * b;
+            let cubic = |bow: f64, weights: Vec<f64>| {
+                NurbsCurve::new(
+                    3,
+                    vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                    vec![
+                        at(0.0, 0.0),
+                        at(3.0, bow / 0.75),
+                        at(7.0, bow / 0.75),
+                        at(10.0, 0.0),
+                    ],
+                    weights,
+                )
+                .unwrap()
+            };
+            for (what, bow, held, rational, holds) in [
+                ("5 tolerances off", 5.0 * tol.linear, None, false, false),
+                (
+                    "5 tolerances off, edge held 1e-6",
+                    5.0 * tol.linear,
+                    Some(1e-6),
+                    false,
+                    true,
+                ),
+                ("on the section", 0.0, None, false, true),
+                ("on a rational section", 0.0, None, true, false),
+            ] {
+                let weights = if rational {
+                    vec![1.0, 2.0, 2.0, 1.0]
+                } else {
+                    vec![1.0; 4]
+                };
+                let section_curve = cubic(0.0, weights);
+                let piece = cubic(bow, vec![1.0; 4]);
+                let mut topo = Topology::default();
+                let a = topo.add_vertex(Vertex::new(at(0.0, 0.0), 1e-7));
+                let b = topo.add_vertex(Vertex::new(at(10.0, 0.0), 1e-7));
+                let section = topo.add_edge(Edge::new(
+                    a,
+                    b,
+                    EdgeCurve::NurbsCurve(section_curve.clone()),
+                ));
+                let wire = topo
+                    .add_wire(Wire::new(vec![OrientedEdge::new(section, true)], false).unwrap());
+                let target = topo.add_face(Face::new(
+                    wire,
+                    vec![],
+                    FaceSurface::Plane {
+                        normal: w,
+                        d: w.dot(Vec3::new(origin.x(), origin.y(), origin.z())),
+                    },
+                ));
+                let wall = topo.add_face(Face::new(
+                    wire,
+                    vec![],
+                    FaceSurface::Cylinder(
+                        CylindricalSurface::new(origin + v * 2.0, u, 2.0).unwrap(),
+                    ),
+                ));
+                let mut arena = GfaArena::new();
+                let pb = arena.pave_blocks.alloc(PaveBlock::new(
+                    section,
+                    Pave::new(a, 0.0),
+                    Pave::new(b, 1.0),
+                ));
+                arena.curves.push(IntersectionCurveDS {
+                    curve: EdgeCurve::NurbsCurve(section_curve.clone()),
+                    face_a: target,
+                    face_b: wall,
+                    bbox: Aabb3::from_points(section_curve.control_points().iter().copied()),
+                    pave_blocks: vec![pb],
+                    t_range: (0.0, 1.0),
+                });
+                let held_by = has_existing_section_along(
+                    &arena,
+                    &topo,
+                    target,
+                    (
+                        &EdgeCurve::NurbsCurve(piece.clone()),
+                        at(0.0, 0.0),
+                        at(10.0, 0.0),
+                    ),
+                    (piece.evaluate(0.5), held),
+                    tol,
+                )
+                .unwrap();
+                assert_eq!(held_by, holds, "{name}, {what}");
+            }
+        }
+    }
 
     /// A face on the plane `z = 0`, facing down, bounded by `outer` and by
     /// the holes `inner`, each a loop of edges.
@@ -2789,14 +2939,17 @@ mod tests {
                 .unwrap();
             record_section(&mut topo, &mut arena, target, round, ends, span);
             let piece = EdgeCurve::Ellipse(ellipse.clone());
-            assert!(!has_existing_section_along(
-                &arena,
-                &topo,
-                target,
-                (&piece, from, to),
-                middle,
-                tol
-            ));
+            assert!(
+                !has_existing_section_along(
+                    &arena,
+                    &topo,
+                    target,
+                    (&piece, from, to),
+                    (middle, None),
+                    tol
+                )
+                .unwrap()
+            );
             let (e0, e1) = EdgeCurve::Ellipse(ellipse.clone()).domain_with_endpoints(from, to);
             record_section(
                 &mut topo,
@@ -2806,14 +2959,17 @@ mod tests {
                 (from, to),
                 (e0, e1),
             );
-            assert!(has_existing_section_along(
-                &arena,
-                &topo,
-                target,
-                (&piece, from, to),
-                middle,
-                tol
-            ));
+            assert!(
+                has_existing_section_along(
+                    &arena,
+                    &topo,
+                    target,
+                    (&piece, from, to),
+                    (middle, None),
+                    tol
+                )
+                .unwrap()
+            );
         }
     }
 
@@ -3280,14 +3436,17 @@ mod tests {
         let span = wider.domain_with_endpoints(near.0, near.1);
         record_section(&mut topo, &mut arena, target, wider, near, span);
         let piece = EdgeCurve::Ellipse(ellipse);
-        assert!(!has_existing_section_along(
-            &arena,
-            &topo,
-            target,
-            (&piece, from, to),
-            middle,
-            tol
-        ));
+        assert!(
+            !has_existing_section_along(
+                &arena,
+                &topo,
+                target,
+                (&piece, from, to),
+                (middle, None),
+                tol
+            )
+            .unwrap()
+        );
     }
 
     /// The whole ellipse of semi-axes 3 and 2 about the origin, against a
