@@ -1,5 +1,14 @@
 # Changelog
 
+## [4.11.60](https://github.com/andymai/brepkit/compare/v4.11.59...v4.11.60) (2026-11-26)
+
+
+### Bug Fixes
+
+* **algo:** cut a coplanar cap along its partner's ellipse rim at proved crossings ([#2913](https://github.com/andymai/brepkit/issues/2913)) ([d5a3251](https://github.com/andymai/brepkit/commit/d5a32518502a891a032d6295b70cd91cbc563b54))
+* **math:** count each curve and surface fit's work before it runs, and refuse one past 1e9 ([#2923](https://github.com/andymai/brepkit/issues/2923)) ([9f6af0a](https://github.com/andymai/brepkit/commit/9f6af0a69f71dc0b36fdce2cc0c1c6a5575c6ab7))
+* **operations:** refine B-spline face grids to the deflection, and refuse past the sample limits ([#2912](https://github.com/andymai/brepkit/issues/2912)) ([e2138b7](https://github.com/andymai/brepkit/commit/e2138b73103ab4779c500dbcb593c17b30552e34))
+
 ## [4.11.59](https://github.com/andymai/brepkit/compare/v4.11.58...v4.11.59) (2026-11-25)
 
 
