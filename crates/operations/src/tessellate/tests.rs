@@ -5122,6 +5122,35 @@ fn a_twisted_patch_that_is_not_a_number_is_refused() {
     }
 }
 
+/// A flat unit square with equal weights, in three poses moved by 0, 1e3
+/// and 1e9: its two triangles hold it. The rounding of its corners, read
+/// at their distance from the origin, came to 3.6e-6 at 1e9, so at a
+/// deflection of 1e-6 both searches cut it until they were refused. Read
+/// from the net's first point, the rounding follows the cell, and both
+/// keep their first grid and lines.
+#[test]
+fn a_flat_square_far_from_the_origin_keeps_its_first_grid() {
+    let square = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1.0, 0.0, 0.0),
+        Point3::new(0.0, 1.0, 0.0),
+        Point3::new(1.0, 1.0, 0.0),
+    ];
+    for shift in [0.0, 1e3, 1e9] {
+        for pose in &twist_poses() {
+            let moved = |p: Point3| {
+                let q = pose(p);
+                Point3::new(q.x() + shift, q.y() - 0.5 * shift, q.z() + 0.25 * shift)
+            };
+            let patch = posed_patch(&moved, square, [[1.0; 2]; 2]);
+            let grid = bounded_grid(&patch, 1e-6);
+            let lines = paced_lines(&patch, 1e-6);
+            assert_eq!(grid.unwrap(), (1, 1), "{shift}");
+            assert_eq!(lines.unwrap(), (vec![0.0, 1.0], vec![0.0, 1.0]), "{shift}");
+        }
+    }
+}
+
 /// The saddle S(u, v) = (20u, 20v, 10uv) trimmed to its corner u, v in 0
 /// to 0.1 twists 0.1 there, which two triangles hold to 0.025: its straight
 /// edges keep their ends at deflection 0.1. The whole saddle twists 10, and

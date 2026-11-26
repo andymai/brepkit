@@ -2076,9 +2076,11 @@ pub(super) fn untwist_paced_lines(
 ///
 /// The bound holds the rounding of what it is read from. The weights are
 /// scaled by a power of two and read only by their ratios, so a scale
-/// common to all of them leaves it as it is. The twist carries the rounding
-/// of the corners' differences, and the bound the rounding of the corners,
-/// within `16 ε` of the span's largest control point each. A corner that is
+/// common to all of them leaves it as it is. The corners are read from the
+/// span's net less its first point, so the rounding follows the cell, not
+/// its distance from the origin: the twist carries the rounding of the
+/// corners' differences, and the bound the rounding of the corners, within
+/// `16 ε` of the net's farthest point from its first each. A corner that is
 /// not finite, or a weight that is not, gives no bound.
 pub(super) fn bilinear_cell_stray(
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
@@ -2113,35 +2115,39 @@ pub(super) fn bilinear_cell_stray(
         *points.get(su)?.get(sv - 1)?,
         *points.get(su)?.get(sv)?,
     ];
-    let most = net
-        .iter()
-        .map(|p| Vec3::new(p.x(), p.y(), p.z()).length())
-        .fold(0.0, f64::max);
+    // The net read from its first point, so that rounding follows the
+    // cell's size, not its distance from the origin.
+    let local = net.map(|p| p - net[0]);
+    let most = local.iter().map(|d| d.length()).fold(0.0, f64::max);
     let unit =
         brepkit_math::vec::unit_scale(block.iter().flatten().fold(0.0, |m: f64, &w| m.max(w)));
     let block = block.map(|row| row.map(|w| w * unit));
-    let denominator = |u: f64, v: f64| {
+    // The corner at `(u, v)` less the net's first point, with the surface's
+    // denominator there.
+    let corner = |u: f64, v: f64| {
         let (a, b) = ((u - ua) / (ub - ua), (v - va) / (vb - va));
-        let near = (1.0 - b).madd(block[0][0], b * block[0][1]);
-        let far = (1.0 - b).madd(block[1][0], b * block[1][1]);
-        (1.0 - a).madd(near, a * far)
+        let terms = [
+            (1.0 - a) * (1.0 - b) * block[0][0],
+            (1.0 - a) * b * block[0][1],
+            a * (1.0 - b) * block[1][0],
+            a * b * block[1][1],
+        ];
+        let h = terms.iter().sum::<f64>();
+        let sum = terms
+            .iter()
+            .zip(&local)
+            .fold(Vec3::new(0.0, 0.0, 0.0), |sum, (&c, &d)| sum + d * c);
+        (Point3::new(sum.x() / h, sum.y() / h, sum.z() / h), h)
     };
-    let (h00, h10, h01, h11) = (
-        denominator(u0, v0),
-        denominator(u1, v0),
-        denominator(u0, v1),
-        denominator(u1, v1),
-    );
-    let corners = [
-        surface.evaluate(u0, v0),
-        surface.evaluate(u1, v0),
-        surface.evaluate(u0, v1),
-        surface.evaluate(u1, v1),
+    let [(p00, h00), (p10, h10), (p01, h01), (p11, h11)] = [
+        corner(u0, v0),
+        corner(u1, v0),
+        corner(u0, v1),
+        corner(u1, v1),
     ];
-    if !corners.iter().all(|p| finite(*p)) {
+    if ![p00, p10, p01, p11].iter().all(|p| finite(*p)) {
         return None;
     }
-    let [p00, p10, p01, p11] = corners;
     let eps = f64::EPSILON;
     let (d1, d2) = (p00 - p10, p11 - p01);
     let twist = d1 + d2;
