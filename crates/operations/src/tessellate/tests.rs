@@ -4643,59 +4643,116 @@ fn a_tapered_patch_strays_most_toward_its_narrow_end() {
     assert!(worst <= 0.11, "{n_u} x {n_v}: a cell strays {worst}");
 }
 
-/// The twisted patch on (0, 0, 0), (1, 0, 0), (0, 1, 0) and (1, 1, 1),
-/// weighted `w` along `u = 0` and 1 along `u = 1`, in three poses: the
-/// patch of equal weights on its corners, reached at a pace crowded toward
-/// `u = 0`, and a corner crowded alone.
-fn crowded_twists() -> Vec<(f64, NurbsSurface)> {
-    let turn = |angle: f64, axis: Vec3, shift: Vec3| {
+/// Three poses of a patch: as it is, and turned and moved two ways.
+fn twist_poses() -> Vec<Box<dyn Fn(Point3) -> Point3>> {
+    let turn = |angle: f64, axis: Vec3, shift: Vec3| -> Box<dyn Fn(Point3) -> Point3> {
         let k = axis * (1.0 / axis.length());
         let (sin, cos) = angle.sin_cos();
-        move |p: Point3| {
+        Box::new(move |p: Point3| {
             let v = Vec3::new(p.x(), p.y(), p.z());
             let r = v * cos + k.cross(v) * sin + k * (k.dot(v) * (1.0 - cos));
             Point3::new(r.x() + shift.x(), r.y() + shift.y(), r.z() + shift.z())
-        }
+        })
     };
-    let poses = [
+    vec![
         turn(0.0, Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, 0.0)),
         turn(0.7, Vec3::new(1.0, 2.0, 3.0), Vec3::new(5.0, -3.0, 2.0)),
         turn(2.1, Vec3::new(-2.0, 1.0, 0.5), Vec3::new(-100.0, 40.0, 7.0)),
-    ];
+    ]
+}
+
+/// The degree-1 patch of one span over the unit square on the corners
+/// `[p00, p10, p01, p11]`, moved by `pose`, weighted `[[w00, w01], [w10,
+/// w11]]`.
+fn posed_patch(
+    pose: &dyn Fn(Point3) -> Point3,
+    [p00, p10, p01, p11]: [Point3; 4],
+    weights: [[f64; 2]; 2],
+) -> NurbsSurface {
+    let knots = vec![0.0, 0.0, 1.0, 1.0];
+    NurbsSurface::new(
+        1,
+        1,
+        knots.clone(),
+        knots,
+        vec![vec![pose(p00), pose(p01)], vec![pose(p10), pose(p11)]],
+        weights.iter().map(|row| row.to_vec()).collect(),
+    )
+    .unwrap()
+}
+
+/// The corners of the twisted patch on (0, 0, 0), (1, 0, 0), (0, 1, 0) and
+/// (1, 1, 1).
+const TWIST: [Point3; 4] = [
+    Point3::new(0.0, 0.0, 0.0),
+    Point3::new(1.0, 0.0, 0.0),
+    Point3::new(0.0, 1.0, 0.0),
+    Point3::new(1.0, 1.0, 1.0),
+];
+
+/// The twisted patch ([`TWIST`]), weighted `w` along `u = 0` and 1 along
+/// `u = 1`, in three poses: the patch of equal weights on its corners,
+/// reached at a pace crowded toward `u = 0`, and a corner crowded alone.
+fn crowded_twists() -> Vec<(f64, NurbsSurface)> {
     let mut patches = Vec::new();
     for w in [1.0, 1e-3, 1e-6] {
-        for pose in &poses {
-            let corners = vec![
-                vec![
-                    pose(Point3::new(0.0, 0.0, 0.0)),
-                    pose(Point3::new(0.0, 1.0, 0.0)),
-                ],
-                vec![
-                    pose(Point3::new(1.0, 0.0, 0.0)),
-                    pose(Point3::new(1.0, 1.0, 1.0)),
-                ],
-            ];
-            let knots = vec![0.0, 0.0, 1.0, 1.0];
-            let patch = NurbsSurface::new(
-                1,
-                1,
-                knots.clone(),
-                knots,
-                corners,
-                vec![vec![w, w], vec![1.0, 1.0]],
-            )
-            .unwrap();
-            patches.push((w, patch));
+        for pose in &twist_poses() {
+            patches.push((w, posed_patch(pose, TWIST, [[w, w], [1.0, 1.0]])));
         }
     }
     patches
 }
 
+/// The grid the search for a twisted face's straight edges takes on
+/// `patch` over its whole box: even at its weights' pace, each cell read by
+/// its twist's bound.
+fn bounded_grid(
+    patch: &NurbsSurface,
+    deflection: f64,
+) -> Result<(usize, usize), crate::OperationsError> {
+    let full = ((0.0, 1.0), (0.0, 1.0));
+    let (pace_u, pace_v) = super::nurbs::weight_paces(patch, full.0, full.1);
+    let at = |s: f64, t: f64| patch.evaluate(pace_u.at(s), pace_v.at(t));
+    let bound = |(s0, s1): (f64, f64), (t0, t1): (f64, f64)| {
+        super::nurbs::bilinear_cell_stray(
+            patch,
+            (pace_u.at(s0), pace_u.at(s1)),
+            (pace_v.at(t0), pace_v.at(t1)),
+        )
+    };
+    super::nurbs::untwisted_grid_bounded(
+        &at,
+        &bound,
+        full,
+        (1, 1),
+        deflection,
+        super::MAX_DIVISIONS,
+    )
+}
+
+/// The lines a face's grid search cuts on `patch`, from its box's sides.
+fn paced_lines(
+    patch: &NurbsSurface,
+    deflection: f64,
+) -> Result<(Vec<f64>, Vec<f64>), crate::OperationsError> {
+    let (mut us, mut vs) = (vec![0.0, 1.0], vec![0.0, 1.0]);
+    let at = |u: f64, v: f64| patch.evaluate(u, v);
+    super::nurbs::untwist_paced_lines(patch, &at, &mut us, &mut vs, deflection)?;
+    Ok((us, vs))
+}
+
 /// The farthest any cell of the grid `us` by `vs` on `patch` strays from its
 /// triangles by the proved bound ([`super::nurbs::bilinear_cell_stray`]),
 /// and, as a check on it, the farthest that points of every `stride`th cell,
-/// spread at the patch's pace, stand off them.
-fn proved_cell_strays(patch: &NurbsSurface, us: &[f64], vs: &[f64], stride: usize) -> (f64, f64) {
+/// spread at the patch's pace, stand off them on `frame`, the patch in
+/// another pose.
+fn proved_cell_strays(
+    patch: &NurbsSurface,
+    frame: &NurbsSurface,
+    us: &[f64],
+    vs: &[f64],
+    stride: usize,
+) -> (f64, f64) {
     use super::nurbs::{bilinear_cell_stray, point_triangle_distance, weight_paces};
     let (Some(&u_hi), Some(&v_hi)) = (us.last(), vs.last()) else {
         return (0.0, 0.0);
@@ -4709,7 +4766,7 @@ fn proved_cell_strays(patch: &NurbsSurface, us: &[f64], vs: &[f64], stride: usiz
             if i % stride != 0 || j % stride != 0 {
                 continue;
             }
-            let at = |u: f64, v: f64| patch.evaluate(u, v);
+            let at = |u: f64, v: f64| frame.evaluate(u, v);
             let (p00, p10, p01, p11) = (
                 at(us[i], vs[j]),
                 at(us[i + 1], vs[j]),
@@ -4771,8 +4828,13 @@ fn a_crowded_twisted_patchs_grid_holds_its_twist() {
                 (0..=n).map(|k| pace.at(k as f64 / n as f64)).collect()
             };
             let stride = if deflection < 1e-4 { 97 } else { 1 };
-            let (most, sampled) =
-                proved_cell_strays(&patch, &lines(n_u, &pace_u), &lines(n_v, &pace_v), stride);
+            let (most, sampled) = proved_cell_strays(
+                &patch,
+                &patch,
+                &lines(n_u, &pace_u),
+                &lines(n_v, &pace_v),
+                stride,
+            );
             assert!(
                 most <= 0.5 * deflection,
                 "w {w}: {n_u} x {n_v} strays {most}"
@@ -4822,7 +4884,7 @@ fn a_crowded_twisted_patchs_lines_hold_its_twist() {
             let at = |u: f64, v: f64| patch.evaluate(u, v);
             super::nurbs::untwist_paced_lines(&patch, &at, &mut us, &mut vs, deflection).unwrap();
             let stride = if deflection < 1e-4 { 61 } else { 1 };
-            let (most, sampled) = proved_cell_strays(&patch, &us, &vs, stride);
+            let (most, sampled) = proved_cell_strays(&patch, &patch, &us, &vs, stride);
             assert!(
                 most <= deflection,
                 "w {w}: {} x {} strays {most}",
@@ -4890,6 +4952,172 @@ fn a_crowded_patch_with_no_twist_keeps_its_first_grid() {
             let (mut us, mut vs) = (vec![0.0, 1.0], vec![0.0, 1.0]);
             super::nurbs::untwist_paced_lines(&flat, &on, &mut us, &mut vs, deflection).unwrap();
             assert_eq!((us, vs), (vec![0.0, 1.0], vec![0.0, 1.0]));
+        }
+    }
+}
+
+/// The grid, the lines and the straight edges' samples a twisted patch
+/// takes at `deflection`, the edges' counts sorted.
+type Taken = (
+    Result<(usize, usize), String>,
+    Result<(Vec<f64>, Vec<f64>), String>,
+    Result<Vec<usize>, String>,
+);
+
+fn taken(patch: &NurbsSurface, deflection: f64) -> Taken {
+    use brepkit_topology::builder::make_polygon_wire;
+    let on = |u: f64, v: f64| patch.evaluate(u, v);
+    let mut topo = Topology::new();
+    let wire = make_polygon_wire(
+        &mut topo,
+        &[on(0.0, 0.0), on(1.0, 0.0), on(1.0, 1.0), on(0.0, 1.0)],
+        1e-7,
+    )
+    .unwrap();
+    let face = Face::new(wire, vec![], FaceSurface::Nurbs(patch.clone()));
+    let edges =
+        super::edge_sampling::twisted_straight_edge_samples(&topo, &face, deflection, 0.0, false)
+            .map(|samples| {
+                let mut counts: Vec<usize> =
+                    samples.iter().map(|(_, points)| points.len()).collect();
+                counts.sort_unstable();
+                counts
+            });
+    (
+        bounded_grid(patch, deflection).map_err(|e| e.to_string()),
+        paced_lines(patch, deflection).map_err(|e| e.to_string()),
+        edges.map_err(|e| e.to_string()),
+    )
+}
+
+/// The twisted patch ([`TWIST`]) in three poses, with all four weights 1,
+/// 1e200 or 1e-200, and with the crowded weights 1e-3 along `u = 0` and 1
+/// along `u = 1` times each: the surface is the same at each scale. The
+/// products of its weights overflowed or underflowed at 1e200 and 1e-200,
+/// and the pace they gave was not a number: the grid stayed one cell, the
+/// straight edges had no samples, and the lines it was given came back as
+/// two lines at 1. At each scale it now takes the grid, the lines and the
+/// edges' samples of the weights unscaled, the same lines bit for bit where
+/// the weights are all alike, and 25 by 25 cells, 17 by 17 lines and 26
+/// samples along each edge in all.
+#[test]
+fn a_common_weight_scale_keeps_a_twisted_patchs_grid() {
+    let deflection = 1e-3;
+    let expected = (Ok((25, 25)), (17, 17), Ok(vec![26; 4]));
+    for (crowd, alike) in [(1.0, true), (1e-3, false)] {
+        for pose in &twist_poses() {
+            let at = |scale: f64| {
+                taken(
+                    &posed_patch(
+                        pose,
+                        TWIST,
+                        [[crowd * scale, crowd * scale], [scale, scale]],
+                    ),
+                    deflection,
+                )
+            };
+            let unscaled = at(1.0);
+            let (us, vs) = unscaled.1.clone().unwrap();
+            assert_eq!(
+                (unscaled.0.clone(), (us.len(), vs.len()), unscaled.2.clone()),
+                expected,
+                "crowd {crowd}"
+            );
+            for scale in [1e200, 1e-200] {
+                let scaled = at(scale);
+                let (su, sv) = scaled.1.clone().unwrap();
+                assert_eq!(
+                    (&scaled.0, su.len(), sv.len(), &scaled.2),
+                    (&unscaled.0, us.len(), vs.len(), &unscaled.2),
+                    "crowd {crowd} at {scale}"
+                );
+                let near = |a: &[f64], b: &[f64]| {
+                    a.iter().zip(b).all(|(x, y)| {
+                        if alike {
+                            x.to_bits() == y.to_bits()
+                        } else {
+                            (x - y).abs() <= 1e-12
+                        }
+                    })
+                };
+                assert!(
+                    near(&su, &us) && near(&sv, &vs),
+                    "crowd {crowd} at {scale}: {su:?} {us:?}"
+                );
+            }
+        }
+    }
+}
+
+/// The sliver patch on (0, 0, 0), (1e8, 0, 0), (-1e8, 1, 0) and (0, 2, 1):
+/// its sides are 1e8 long and its twist (0, 1, 1). The Gram determinant of
+/// its sides, 1e16, rounded to zero beside their squares of 1e32, and its
+/// bound read the gap between its splits as zero, so both searches kept it
+/// one cell, whose middle strays 0.11 from its triangles. In three poses
+/// its bound now reads 0.25, and at a deflection of 1e-3 the grid search
+/// takes 30 by 30 cells, bounded within 3.9e-4, and the line search 29 by
+/// 29 lines, bounded within 6.5e-4. The strays are sampled on the patch as
+/// it is, where its triangles' planes round least: 2.7e-4 and 3.3e-4.
+#[test]
+fn a_sliver_cells_bound_holds_its_twist() {
+    let sliver = [
+        Point3::new(0.0, 0.0, 0.0),
+        Point3::new(1e8, 0.0, 0.0),
+        Point3::new(-1e8, 1.0, 0.0),
+        Point3::new(0.0, 2.0, 1.0),
+    ];
+    let deflection = 1e-3;
+    let poses = twist_poses();
+    let upright = posed_patch(&poses[0], sliver, [[1.0; 2]; 2]);
+    let at = |u: f64, v: f64| upright.evaluate(u, v);
+    let whole = cell_strays(&at, (0.0, 0.0), (1.0, 1.0));
+    assert!(whole > 0.1, "{whole}");
+    #[allow(clippy::cast_precision_loss)]
+    let even = |n: usize| -> Vec<f64> { (0..=n).map(|k| k as f64 / n as f64).collect() };
+    for pose in &poses {
+        let patch = posed_patch(pose, sliver, [[1.0; 2]; 2]);
+        let bound = super::nurbs::bilinear_cell_stray(&patch, (0.0, 1.0), (0.0, 1.0)).unwrap();
+        assert!(bound >= whole, "{bound} below {whole}");
+        let (n_u, n_v) = bounded_grid(&patch, deflection).unwrap();
+        let (most, sampled) = proved_cell_strays(&patch, &upright, &even(n_u), &even(n_v), 1);
+        assert!(
+            most <= 0.5 * deflection && sampled <= most,
+            "{n_u} x {n_v}: bound {most}, sampled {sampled}"
+        );
+        let (us, vs) = paced_lines(&patch, deflection).unwrap();
+        let (most, sampled) = proved_cell_strays(&patch, &upright, &us, &vs, 1);
+        assert!(
+            most <= deflection && sampled <= most,
+            "{} x {} lines: bound {most}, sampled {sampled}",
+            us.len(),
+            vs.len()
+        );
+    }
+}
+
+/// The twisted patch ([`TWIST`]) in three poses, with a control point or a
+/// weight that is not a number: the surface is not a number anywhere, and
+/// a plain maximum dropped each probe's stray, so both searches kept one
+/// cell and the lines they were given. Both now refuse it.
+#[test]
+fn a_twisted_patch_that_is_not_a_number_is_refused() {
+    let refused = |found: Option<&crate::OperationsError>| {
+        matches!(found, Some(crate::OperationsError::TooManySamples { .. }))
+    };
+    for pose in &twist_poses() {
+        let mut patches = vec![posed_patch(pose, TWIST, [[1.0, f64::NAN], [1.0, 1.0]])];
+        for k in 0..4 {
+            let mut corners = TWIST;
+            corners[k] = Point3::new(f64::NAN, 0.0, 0.0);
+            patches.push(posed_patch(pose, corners, [[1.0; 2]; 2]));
+        }
+        for patch in &patches {
+            let grid = bounded_grid(patch, 1e-3);
+            let lines = paced_lines(patch, 1e-3);
+            assert!(
+                refused(grid.as_ref().err()) && refused(lines.as_ref().err()),
+                "{grid:?} {lines:?}"
+            );
         }
     }
 }

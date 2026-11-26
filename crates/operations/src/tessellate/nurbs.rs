@@ -1420,8 +1420,9 @@ pub(super) fn iso_breaks_over(
 /// # Errors
 ///
 /// Returns [`crate::OperationsError::TooManySamples`] if the grid the
-/// halving needs is past the sample limit. A stray falls with the square of
-/// a cell's size, so the passes end where the surface is smooth.
+/// halving needs is past the sample limit, or the surface is not finite at
+/// a line's crossing or a probe. A stray falls with the square of a cell's
+/// size, so the passes end where the surface is smooth.
 pub(super) fn untwist_lines(
     at: &dyn Fn(f64, f64) -> Point3,
     us: &mut Vec<f64>,
@@ -1439,6 +1440,9 @@ pub(super) fn untwist_lines(
             .iter()
             .map(|&u| vs.iter().map(|&v| at(u, v)).collect())
             .collect();
+        if !corners.iter().flatten().all(|&p| finite(p)) {
+            return Err(not_finite(deflection));
+        }
         for i in 0..us.len() - 1 {
             for j in 0..vs.len() - 1 {
                 if (cut_u[i] && cut_v[j]) || !(fresh_u[i] || fresh_v[j]) {
@@ -1453,14 +1457,22 @@ pub(super) fn untwist_lines(
                 let (u0, v0) = (us[i], vs[j]);
                 let (du, dv) = (us[i + 1] - u0, vs[j + 1] - v0);
                 let read = bound.and_then(|bound| bound((u0, us[i + 1]), (v0, vs[j + 1])));
-                let strays = read.map_or_else(
-                    || {
-                        PROBES.iter().any(|&(a, b)| {
-                            split_stray(cell, &[at(du.madd(a, u0), dv.madd(b, v0))]) > deflection
-                        })
-                    },
-                    |stray| stray > deflection,
-                );
+                let strays = if let Some(stray) = read {
+                    stray.is_nan() || stray > deflection
+                } else {
+                    let mut strays = false;
+                    for &(a, b) in &PROBES {
+                        let stray = split_stray(cell, &[at(du.madd(a, u0), dv.madd(b, v0))]);
+                        if stray.is_nan() {
+                            return Err(not_finite(deflection));
+                        }
+                        if stray > deflection {
+                            strays = true;
+                            break;
+                        }
+                    }
+                    strays
+                };
                 if strays {
                     cut_u[i] = true;
                     cut_v[j] = true;
@@ -1588,8 +1600,8 @@ const MAX_WITNESSES: usize = 1 << 20;
 /// # Errors
 ///
 /// Returns [`crate::OperationsError::TooManySamples`] if a direction needs
-/// more than `max_divisions` divisions, or the grid more cells than the
-/// sample limit.
+/// more than `max_divisions` divisions, the grid more cells than the sample
+/// limit, or the surface is not finite at a point a cell is read at.
 #[allow(clippy::too_many_lines)]
 pub(super) fn untwisted_grid_keeping(
     at: &dyn Fn(f64, f64) -> Point3,
@@ -1634,6 +1646,9 @@ pub(super) fn untwisted_grid_keeping(
                     continue;
                 }
                 for (stray, uv) in probe_strays(at, corner, (du, dv)) {
+                    if stray.is_nan() {
+                        return (stray, more, most);
+                    }
                     worst = worst.max(stray);
                     if stray > half {
                         past.push((stray, uv));
@@ -1737,7 +1752,16 @@ pub(super) fn untwisted_grid_keeping(
         let stray = witnesses
             .iter()
             .map(|&uv| stray_at((n_u, n_v), uv))
-            .fold(scanned, f64::max);
+            .fold(scanned, |a, b| {
+                if a.is_nan() || b.is_nan() {
+                    f64::NAN
+                } else {
+                    a.max(b)
+                }
+            });
+        if stray.is_nan() {
+            return Err(not_finite(deflection));
+        }
         let (held_u, held_v) = (holds(true, n_u), holds(false, n_v));
         if stray <= half && held_u && held_v {
             break;
@@ -1793,7 +1817,7 @@ pub(super) fn untwisted_grid_keeping(
             Some(t)
                 if t != chain
                     && past_limits(t).is_ok()
-                    && !witnesses.iter().any(|&uv| stray_at(t, uv) > half) =>
+                    && witnesses.iter().all(|&uv| stray_at(t, uv) <= half) =>
             {
                 t
             }
@@ -1872,45 +1896,57 @@ pub(super) type ChordTest<'a> = &'a dyn Fn(bool, usize) -> bool;
 /// grid of the patch of equal weights, whose cells halve their twist as
 /// they halve, however the weights crowd. Other weights are read at the
 /// pace of the geometric means of each direction's two edges.
+///
+/// The move reads only the ratio `a1 / a0`, so a scale common to all the
+/// weights leaves the pace as it is. A ratio, a span or a box whose moved
+/// fractions are not finite and rising gives the even pace.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Pace {
     knots: (f64, f64),
-    weights: (f64, f64),
+    /// The far end's weight over the near end's.
+    ratio: f64,
     from: f64,
     to: f64,
 }
 
 impl Pace {
     /// The pace over `lo` to `hi` of a span from `knots.0` to `knots.1`
-    /// whose ends weigh `weights`.
-    fn new(knots: (f64, f64), weights: (f64, f64), (lo, hi): (f64, f64)) -> Self {
+    /// whose far end weighs `ratio` times its near end; `None` where its
+    /// moved fractions are not finite and rising.
+    fn new(knots: (f64, f64), ratio: f64, (lo, hi): (f64, f64)) -> Option<Self> {
         let mut pace = Self {
             knots,
-            weights,
+            ratio,
             from: 0.0,
             to: 1.0,
         };
         (pace.from, pace.to) = (pace.moved(lo), pace.moved(hi));
-        pace
+        let rising = pace.from.is_finite() && pace.to.is_finite() && pace.from < pace.to;
+        (ratio.is_finite() && ratio > 0.0 && rising).then_some(pace)
     }
 
     /// An even pace over `lo` to `hi`.
     pub(super) fn even(lo: f64, hi: f64) -> Self {
-        Self::new((lo, hi), (1.0, 1.0), (lo, hi))
+        Self {
+            knots: (lo, hi),
+            ratio: 1.0,
+            from: 0.0,
+            to: 1.0,
+        }
     }
 
     /// The span's moved fraction at `u`.
     fn moved(&self, u: f64) -> f64 {
-        let ((k0, k1), (w0, w1)) = (self.knots, self.weights);
+        let ((k0, k1), r) = (self.knots, self.ratio);
         let t = (u - k0) / (k1 - k0);
-        w1 * t / w0.madd(1.0 - t, w1 * t)
+        r * t / 1.0.madd(1.0 - t, r * t)
     }
 
     /// The parameter at the fraction `s` of the box at this pace.
     pub(super) fn at(&self, s: f64) -> f64 {
-        let ((k0, k1), (w0, w1)) = (self.knots, self.weights);
+        let ((k0, k1), r) = (self.knots, self.ratio);
         let g = (self.to - self.from).madd(s, self.from);
-        (k1 - k0).madd(w0 * g / w1.madd(1.0 - g, w0 * g), k0)
+        (k1 - k0).madd(g / r.madd(1.0 - g, g), k0)
     }
 
     /// The fraction of the box at this pace at the parameter `u`.
@@ -1934,22 +1970,27 @@ pub(super) fn weight_paces(
         && kv.len() == 4
         && w.len() == 2
         && w.iter()
-            .all(|row| row.len() == 2 && row.iter().all(|&x| x > 0.0));
+            .all(|row| row.len() == 2 && row.iter().all(|&x| x > 0.0 && x.is_finite()));
     if !one_span {
         return even;
     }
-    let mean = |a: f64, b: f64| (a * b).sqrt();
+    // The ratio of the geometric means `√(f0 f1)` and `√(n0 n1)`, from the
+    // roots of the weights' ratios, so no product of weights overflows or
+    // underflows.
+    let ratio = |(n0, n1): (f64, f64), (f0, f1): (f64, f64)| (f0 / n0).sqrt() * (f1 / n1).sqrt();
     (
         Pace::new(
             (ku[1], ku[2]),
-            (mean(w[0][0], w[0][1]), mean(w[1][0], w[1][1])),
+            ratio((w[0][0], w[0][1]), (w[1][0], w[1][1])),
             u,
-        ),
+        )
+        .unwrap_or(even.0),
         Pace::new(
             (kv[1], kv[2]),
-            (mean(w[0][0], w[1][0]), mean(w[0][1], w[1][1])),
+            ratio((w[0][0], w[1][0]), (w[0][1], w[1][1])),
             v,
-        ),
+        )
+        .unwrap_or(even.1),
     )
 }
 
@@ -1973,6 +2014,10 @@ pub(super) fn untwist_paced_lines(
     else {
         return Ok(());
     };
+    // A box with no width has no fractions to read a pace at.
+    if !(u_lo < u_hi && v_lo < v_hi) {
+        return untwist_lines(at, us, vs, deflection, None);
+    }
     let (pace_u, pace_v) = weight_paces(surface, (u_lo, u_hi), (v_lo, v_hi));
     // A given line keeps its own parameter, not one read back from the pace.
     let given = |lines: &[f64], pace: &Pace| -> DetHashMap<u64, f64> {
@@ -2028,6 +2073,13 @@ pub(super) fn untwist_paced_lines(
 /// lies between the two splits, so a point stands off either at most the
 /// splits' gap, which is widest where the diagonals cross: `|γ|` times the
 /// fraction of `P00 P11` there. A flat cell strays nowhere.
+///
+/// The bound holds the rounding of what it is read from. The weights are
+/// scaled by a power of two and read only by their ratios, so a scale
+/// common to all of them leaves it as it is. The twist carries the rounding
+/// of the corners' differences, and the bound the rounding of the corners,
+/// within `16 ε` of the span's largest control point each. A corner that is
+/// not finite, or a weight that is not, gives no bound.
 pub(super) fn bilinear_cell_stray(
     surface: &brepkit_math::nurbs::surface::NurbsSurface,
     (u0, u1): (f64, f64),
@@ -2044,7 +2096,7 @@ pub(super) fn bilinear_cell_stray(
     };
     let (su, ua, ub) = span(surface.knots_u(), u0, u1)?;
     let (sv, va, vb) = span(surface.knots_v(), v0, v1)?;
-    let weights = surface.weights();
+    let (weights, points) = (surface.weights(), surface.control_points());
     let block = [
         [
             *weights.get(su - 1)?.get(sv - 1)?,
@@ -2052,9 +2104,22 @@ pub(super) fn bilinear_cell_stray(
         ],
         [*weights.get(su)?.get(sv - 1)?, *weights.get(su)?.get(sv)?],
     ];
-    if !block.iter().flatten().all(|&w| w > 0.0) {
+    if !block.iter().flatten().all(|&w| w > 0.0 && w.is_finite()) {
         return None;
     }
+    let net = [
+        *points.get(su - 1)?.get(sv - 1)?,
+        *points.get(su - 1)?.get(sv)?,
+        *points.get(su)?.get(sv - 1)?,
+        *points.get(su)?.get(sv)?,
+    ];
+    let most = net
+        .iter()
+        .map(|p| Vec3::new(p.x(), p.y(), p.z()).length())
+        .fold(0.0, f64::max);
+    let unit =
+        brepkit_math::vec::unit_scale(block.iter().flatten().fold(0.0, |m: f64, &w| m.max(w)));
+    let block = block.map(|row| row.map(|w| w * unit));
     let denominator = |u: f64, v: f64| {
         let (a, b) = ((u - ua) / (ub - ua), (v - va) / (vb - va));
         let near = (1.0 - b).madd(block[0][0], b * block[0][1]);
@@ -2067,43 +2132,91 @@ pub(super) fn bilinear_cell_stray(
         denominator(u0, v1),
         denominator(u1, v1),
     );
-    let (p00, p10, p01, p11) = (
+    let corners = [
         surface.evaluate(u0, v0),
         surface.evaluate(u1, v0),
         surface.evaluate(u0, v1),
         surface.evaluate(u1, v1),
-    );
-    let twist = (p00 - p10) + (p11 - p01);
-    let rho = ((h00 * h11) / (h10 * h01)).sqrt();
-    let by_weights = twist.length() * rho.max(1.0) / (2.0 * (1.0 + rho));
-    let bound =
-        splits_gap(p10 - p00, p01 - p00, twist).map_or(by_weights, |gap| gap.min(by_weights));
+    ];
+    if !corners.iter().all(|p| finite(*p)) {
+        return None;
+    }
+    let [p00, p10, p01, p11] = corners;
+    let eps = f64::EPSILON;
+    let (d1, d2) = (p00 - p10, p11 - p01);
+    let twist = d1 + d2;
+    // Each difference and their sum round within half `ε` of the parts.
+    let doubt = 2.0 * eps * (d1.length() + d2.length());
+    // `ρ` and `1 / ρ` from the roots of the denominators' ratios. A weight
+    // too small to keep its digits beside the largest, or a ratio past the
+    // range of a double, leaves the bound for any weights: half the twist.
+    let rho = (h00 / h10).sqrt() * (h11 / h01).sqrt();
+    let q = rho.min(rho.recip());
+    let kept = block.iter().flatten().all(|&w| w >= f64::MIN_POSITIVE);
+    let q = if kept && q >= 0.0 && q.is_finite() {
+        q
+    } else {
+        0.0
+    };
+    let by_weights = (twist.length() + doubt) / (2.0 * (1.0 + q)) * eps.madd(16.0, 1.0);
+    let bound = splits_gap(p10 - p00, p01 - p00, twist, doubt)
+        .map_or(by_weights, |gap| gap.min(by_weights));
+    let bound = (16.0 * eps).madd(most, bound);
     bound.is_finite().then_some(bound)
+}
+
+/// Whether each coordinate of `p` is finite.
+fn finite(p: Point3) -> bool {
+    p.x().is_finite() && p.y().is_finite() && p.z().is_finite()
+}
+
+/// The refusal of a grid whose surface is not finite at a point it reads.
+fn not_finite(deflection: f64) -> crate::OperationsError {
+    super::endless_samples("a face's grid, whose surface is not finite", deflection)
 }
 
 /// The widest gap between the two splits of a cell from a corner along the
 /// sides `e1` and `e2`, with twist `twist`, measured along the normal of
 /// the sides' plane, where the corners seen along that normal make a convex
-/// quad: `None` otherwise.
-fn splits_gap(e1: Vec3, e2: Vec3, twist: Vec3) -> Option<f64> {
+/// quad: `None` otherwise, and where the rounding of the sides' plane could
+/// tip it by more than a twentieth of a radian. `doubt` bounds how far
+/// `twist` rounds from the twist of the corners.
+///
+/// The twist's part in the plane is `α e1 + β e2`, with `α = (T × e2) · n /
+/// |e1 × e2|` and `β = (e1 × T) · n / |e1 × e2|`. These hold none of the
+/// cancellation of the sides' Gram determinant `|e1|² |e2|² - (e1 · e2)²`,
+/// which rounds to zero on a sliver whose sides are long beside its width.
+/// Each term carries the rounding of what it is read from, and the gap is
+/// read at the ends of those doubts that widen it.
+fn splits_gap(e1: Vec3, e2: Vec3, twist: Vec3, doubt: f64) -> Option<f64> {
+    let eps = f64::EPSILON;
+    let (l1, l2, lt) = (e1.length(), e2.length(), twist.length());
     let across = e1.cross(e2);
     let area2 = across.length();
-    if !(area2 > 0.0 && area2.is_finite()) {
+    // Each term of the cross product rounds within `ε` of the two products
+    // it is the difference of, and the sides round within half `ε` each.
+    let off = 4.0 * eps * l1 * l2;
+    let clear = area2 > 64.0 * off;
+    if !clear {
         return None;
     }
     let normal = across * (1.0 / area2);
-    let lift = twist.dot(normal);
-    // The twist's part in the plane, `α e1 + β e2`.
-    let flat = twist - normal * lift;
-    let (g11, g12, g22) = (e1.dot(e1), e1.dot(e2), e2.dot(e2));
-    let det = g11.madd(g22, -(g12 * g12));
-    let (r1, r2) = (flat.dot(e1), flat.dot(e2));
-    let alpha = g22.madd(r1, -(g12 * r2)) / det;
-    let beta = g11.madd(r2, -(g12 * r1)) / det;
+    // How far the normal can tip from that of the corners' sides.
+    let tip = (3.0 * off).madd(1.0 / area2, 2.0 * eps);
+    let lift = twist.dot(normal).abs() + tip.madd(lt + doubt, (eps * lt).madd(4.0, doubt));
+    let rel = (2.0 * off).madd(1.0 / area2, 4.0 * eps);
+    // The lower end of `α` or `β` from its triple product along the normal.
+    let low = |side: f64, triple: f64| {
+        let part = triple / area2;
+        let spread = 1.25 * side * eps.madd(8.0, tip).madd(lt, doubt) / area2;
+        part - rel.madd(part.abs(), spread)
+    };
+    let alpha = low(l2, twist.cross(e2).dot(normal));
+    let beta = low(l1, e1.cross(twist).dot(normal));
     // The diagonals cross inside both when the quad is convex, `P00 P11` at
     // the fraction `1 / (2 + α + β)`.
     let convex = alpha > -1.0 && beta > -1.0 && alpha + beta > -1.0;
-    convex.then(|| lift.abs() / (2.0 + alpha + beta))
+    convex.then(|| lift / (2.0 + alpha + beta) * eps.madd(4.0, 1.0))
 }
 
 /// Where in a cell [`probe_strays`] reads it: its middle and quarter points.
@@ -2116,8 +2229,17 @@ const PROBES: [(f64, f64); 5] = [
 ];
 
 /// How far the farthest of `probes` lies from the two triangles a cell with
-/// corners `[p00, p10, p01, p11]` splits into, along either diagonal.
+/// corners `[p00, p10, p01, p11]` splits into, along either diagonal: not a
+/// number where a corner or a probe is not finite, which a plain maximum
+/// would drop.
 fn split_stray([p00, p10, p01, p11]: [Point3; 4], probes: &[Point3]) -> f64 {
+    if ![p00, p10, p01, p11]
+        .iter()
+        .chain(probes)
+        .all(|&p| finite(p))
+    {
+        return f64::NAN;
+    }
     let split = |p: Point3, a: Point3, b: Point3, c: Point3, d: Point3| {
         point_triangle_distance(p, a, b, c).min(point_triangle_distance(p, a, c, d))
     };
