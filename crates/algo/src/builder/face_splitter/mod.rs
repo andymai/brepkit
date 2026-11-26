@@ -11523,8 +11523,11 @@ fn split_face_2d_impl(
         })
     });
     // Build wire loops via angular-sorting traversal.
+    let flat = is_plane && !u_periodic && !v_periodic;
     let mut loops = if round_a_pole {
         super::wire_builder::build_wire_loops_round_a_pole(&all_edges, tol.linear)
+    } else if flat {
+        super::wire_builder::build_wire_loops_flat(&all_edges, tol.linear, false)
     } else {
         build_wire_loops(&all_edges, tol.linear, u_periodic && !strip, v_periodic)
     };
@@ -11635,9 +11638,13 @@ fn split_face_2d_impl(
         if signed_area_2d(&boundary_pts) < 0.0 {
             cw_loops = true;
             if loops.len() <= 1 {
-                let retry = build_wire_loops_with_winding(
-                    &all_edges, tol.linear, u_periodic, v_periodic, true,
-                );
+                let retry = if flat {
+                    super::wire_builder::build_wire_loops_flat(&all_edges, tol.linear, true)
+                } else {
+                    build_wire_loops_with_winding(
+                        &all_edges, tol.linear, u_periodic, v_periodic, true,
+                    )
+                };
                 if retry.len() > loops.len() {
                     loops = retry;
                 }
@@ -12081,8 +12088,11 @@ fn split_face_2d_impl(
             // The mirrored turn rule as a legacy fallback: adopt the retry only
             // when it is strictly healthier — more loops and none of the broken
             // signatures.
-            let retry =
-                build_wire_loops_with_winding(&all_edges, tol.linear, u_periodic, v_periodic, true);
+            let retry = if flat {
+                super::wire_builder::build_wire_loops_flat(&all_edges, tol.linear, true)
+            } else {
+                build_wire_loops_with_winding(&all_edges, tol.linear, u_periodic, v_periodic, true)
+            };
             // Adoption bar: zero degenerate areas, NO NEW broken flags relative to
             // the greedy result, and a strict improvement — either the greedy had
             // degenerate loops (which the retry cleared) or the retry partitions
