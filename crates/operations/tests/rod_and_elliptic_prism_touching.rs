@@ -680,6 +680,109 @@ mod tests {
         }
     }
 
+    /// A prism on an open arc of the ellipse of semi-axes 1.5 and 1 about
+    /// (4, 5), over `sweep` of its parameter from `start`, and two lines back
+    /// to its centre, wholly inside a rod of radius 4 with flush caps. The
+    /// rod's caps part along the arc, not along its other part or its
+    /// chord: the fuse, the cut and the common part are exact for arcs of
+    /// 3 pi / 2, a hair over pi and a hair under a turn, starting at 0 and
+    /// at pi, in three poses.
+    #[test]
+    fn a_prism_on_an_open_ellipse_arc_inside_a_rod_with_flush_caps_is_exact() {
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let rod_volume = PI * 16.0 * 4.0;
+        for (name, pose) in poses() {
+            for sweep in [1.5 * PI, PI + 0.05, 2.0 * PI - 0.05] {
+                for start in [0.0, PI] {
+                    let prism_volume = 4.0 * 0.75 * sweep;
+                    let ellipse = Ellipse3D::with_axes(
+                        Point3::new(4.0, 5.0, -1.0),
+                        up,
+                        1.5,
+                        1.0,
+                        Vec3::new(1.0, 0.0, 0.0),
+                        Vec3::new(0.0, 1.0, 0.0),
+                    )
+                    .unwrap();
+                    let at = |t: f64, r: f64| {
+                        let p = ellipse.evaluate(t);
+                        Point3::new(4.0 + r * (p.x() - 4.0), 5.0 + r * (p.y() - 5.0), 1.0)
+                    };
+                    let in_prism = at(start + 0.5 * sweep, 0.5);
+                    let in_gap = at(start + sweep + 0.5 * (2.0 * PI - sweep), 0.9);
+                    let in_rod = Point3::new(7.0, 5.0, 1.0);
+                    let outside = Point3::new(8.5, 5.0, 1.0);
+                    for (op, volume) in [
+                        (BooleanOp::Fuse, rod_volume),
+                        (BooleanOp::Cut, rod_volume - prism_volume),
+                        (BooleanOp::Intersect, prism_volume),
+                    ] {
+                        let mut topo = Topology::new();
+                        let rod = make_cylinder(&mut topo, 4.0, 4.0).unwrap();
+                        transform_solid(
+                            &mut topo,
+                            rod,
+                            &(pose * Mat4::translation(4.0, 5.0, -1.0)),
+                        )
+                        .unwrap();
+                        let a = topo.add_vertex(Vertex::new(ellipse.evaluate(start), 1e-7));
+                        let b = topo.add_vertex(Vertex::new(ellipse.evaluate(start + sweep), 1e-7));
+                        let c = topo.add_vertex(Vertex::new(Point3::new(4.0, 5.0, -1.0), 1e-7));
+                        let edges = [
+                            topo.add_edge(Edge::new(a, b, EdgeCurve::Ellipse(ellipse.clone()))),
+                            topo.add_edge(Edge::new(b, c, EdgeCurve::Line)),
+                            topo.add_edge(Edge::new(c, a, EdgeCurve::Line)),
+                        ];
+                        let wire = topo.add_wire(
+                            Wire::new(
+                                edges.iter().map(|&e| OrientedEdge::new(e, true)).collect(),
+                                true,
+                            )
+                            .unwrap(),
+                        );
+                        let base = topo.add_face(Face::new(
+                            wire,
+                            Vec::new(),
+                            FaceSurface::Plane {
+                                normal: up,
+                                d: -1.0,
+                            },
+                        ));
+                        let prism = extrude(&mut topo, base, up, 4.0).unwrap();
+                        transform_solid(&mut topo, prism, &pose).unwrap();
+                        for raw in [false, true] {
+                            let what =
+                                format!("{op:?}, {name}, sweep {sweep}, start {start}, raw {raw}");
+                            let mut topo = topo.clone();
+                            let result = if raw {
+                                let op = match op {
+                                    BooleanOp::Fuse => brepkit_algo::bop::BooleanOp::Fuse,
+                                    BooleanOp::Cut => brepkit_algo::bop::BooleanOp::Cut,
+                                    BooleanOp::Intersect => brepkit_algo::bop::BooleanOp::Intersect,
+                                };
+                                brepkit_algo::gfa::boolean(&mut topo, op, rod, prism)
+                                    .map_err(|e| format!("{e}"))
+                            } else {
+                                boolean_with_options(&mut topo, op, rod, prism, exact())
+                                    .map_err(|e| format!("{e}"))
+                            };
+                            assert!(result.is_ok(), "{what}: {result:?}");
+                            let result = result.unwrap();
+                            let (inside, out): (Vec<Point3>, Vec<Point3>) = match op {
+                                BooleanOp::Fuse => (vec![in_prism, in_gap, in_rod], vec![outside]),
+                                BooleanOp::Cut => (vec![in_gap, in_rod], vec![in_prism, outside]),
+                                BooleanOp::Intersect => {
+                                    (vec![in_prism], vec![in_gap, in_rod, outside])
+                                }
+                            };
+                            assert_exact(&topo, result, volume, (&inside, &out), &pose, &what);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// The rod from z = 0 to 2 only, and the prism from z = -1 to 3: the rod
     /// lies in the prism but for the two thin lenses beside the touch, so
     /// neither holds the other. The fuse, the prism less the rod and their

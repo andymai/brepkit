@@ -2764,4 +2764,141 @@ mod tests {
             assert!(parallel.as_ref().is_some_and(Vec::is_empty), "{parallel:?}");
         }
     }
+
+    /// A face bounded by an open arc of the ellipse of semi-axes 1.5 and 1
+    /// over `sweep` of its parameter from `start`, and two lines back to its
+    /// centre, wholly inside a face of radius 9. The arc's half turns, and
+    /// the sections it gives the larger face, each lie on the arc's own
+    /// range, read from its stored start the way its parameter runs, and
+    /// together cover the whole arc: for arcs of 3 pi / 2, a hair over pi
+    /// and a hair under a turn, starting at 0 and at pi, in three poses in
+    /// the plane.
+    #[test]
+    fn an_open_ellipse_arc_partitions_its_partner_along_itself() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::mat::Mat4;
+        use std::f64::consts::{PI, TAU};
+        let tol = Tolerance::default();
+        let frame = PlaneFrame2D::canonical(Vec3::new(0.0, 0.0, -1.0), 0.0);
+        let poses = [
+            Mat4::identity(),
+            Mat4::translation(3.0, -2.0, 0.0) * Mat4::rotation_z(0.6),
+            Mat4::translation(1.0, 0.5, 0.0) * Mat4::scale(-1.0, 1.0, 1.0),
+        ];
+        for pose in poses {
+            for sweep in [1.5 * PI, PI + 0.05, TAU - 0.05] {
+                for start in [0.0, PI] {
+                    let what = format!("sweep {sweep}, start {start}, {pose:?}");
+                    let mut topo = Topology::new();
+                    let target_rim = rim(&mut topo, 9.0);
+                    let target = face_down(&mut topo, vec![target_rim], vec![]);
+                    let along = |v: Vec3| {
+                        pose.mul_point(Point3::new(v.x(), v.y(), v.z()))
+                            - pose.mul_point(Point3::new(0.0, 0.0, 0.0))
+                    };
+                    let centre = pose.mul_point(Point3::new(1.0, 2.0, 0.0));
+                    let (u, v) = (
+                        along(Vec3::new(1.0, 0.0, 0.0)),
+                        along(Vec3::new(0.0, 1.0, 0.0)),
+                    );
+                    let ellipse = Ellipse3D::with_axes(centre, u.cross(v), 1.5, 1.0, u, v).unwrap();
+                    let (a, b, c) = (
+                        topo.add_vertex(Vertex::new(ellipse.evaluate(start), 1e-7)),
+                        topo.add_vertex(Vertex::new(ellipse.evaluate(start + sweep), 1e-7)),
+                        topo.add_vertex(Vertex::new(centre, 1e-7)),
+                    );
+                    let arc = topo.add_edge(Edge::new(a, b, EdgeCurve::Ellipse(ellipse.clone())));
+                    let back = topo.add_edge(Edge::new(b, c, EdgeCurve::Line));
+                    let close = topo.add_edge(Edge::new(c, a, EdgeCurve::Line));
+                    // The face's normal is -z: its outline runs clockwise
+                    // seen from +z, against the arc where the arc runs the
+                    // other way.
+                    let outline = if ellipse.normal().z() > 0.0 {
+                        vec![
+                            OrientedEdge::new(close, false),
+                            OrientedEdge::new(back, false),
+                            OrientedEdge::new(arc, false),
+                        ]
+                    } else {
+                        vec![
+                            OrientedEdge::new(arc, true),
+                            OrientedEdge::new(back, true),
+                            OrientedEdge::new(close, true),
+                        ]
+                    };
+                    let pacman = face_down(&mut topo, outline, vec![]);
+                    let mut arena = GfaArena::new();
+                    let mut regions = Vec::new();
+                    for face in [pacman, target] {
+                        let mut region = face_region_2d(&topo, face, &frame).unwrap();
+                        attach_paves(&mut region, &topo, &arena);
+                        regions.push(region);
+                    }
+                    process_coplanar_pair(
+                        &mut topo,
+                        &mut arena,
+                        &mut Vec::new(),
+                        (pacman, &regions[0]),
+                        (target, &regions[1]),
+                        &frame,
+                        tol,
+                    )
+                    .unwrap();
+                    let on_arc = |p: Point3| (ellipse.project(p) - start).rem_euclid(TAU);
+                    let covers = |pieces: Vec<(EdgeCurve, Point3, Point3)>, what: &str| {
+                        let mut covered = 0.0;
+                        for (curve, s, e) in pieces {
+                            let (t0, t1) = curve.domain_with_endpoints(s, e);
+                            covered += t1 - t0;
+                            for k in 0..=8 {
+                                let p = curve.evaluate_with_endpoints(
+                                    (t1 - t0).madd(f64::from(k) / 8.0, t0),
+                                    s,
+                                    e,
+                                );
+                                let at = on_arc(p);
+                                assert!(
+                                    at <= sweep + 1e-9 || at >= TAU - 1e-9,
+                                    "{what}: off the arc at {at}"
+                                );
+                            }
+                        }
+                        assert!((covered - sweep).abs() < 1e-9, "{what}: covered {covered}");
+                    };
+                    let edge = topo.edge(arc).unwrap();
+                    let turns = half_turns(
+                        edge.curve(),
+                        (
+                            topo.vertex(edge.start()).unwrap().point(),
+                            topo.vertex(edge.end()).unwrap().point(),
+                        ),
+                    );
+                    assert!(turns.len() >= 2, "{what}: {} half turns", turns.len());
+                    for (curve, s, e) in &turns {
+                        let (t0, t1) = curve.domain_with_endpoints(*s, *e);
+                        assert!(
+                            t1 - t0 <= 0.99 * PI + 1e-12,
+                            "{what}: a turn of {}",
+                            t1 - t0
+                        );
+                    }
+                    covers(turns, &format!("{what}, half turns"));
+                    let mut sections = Vec::new();
+                    for curve in &arena.curves {
+                        let EdgeCurve::Ellipse(_) = &curve.curve else {
+                            continue;
+                        };
+                        let pb = arena.pave_blocks.get(curve.pave_blocks[0]).unwrap();
+                        let edge = topo.edge(pb.original_edge).unwrap();
+                        let (s, e) = (
+                            topo.vertex(edge.start()).unwrap().point(),
+                            topo.vertex(edge.end()).unwrap().point(),
+                        );
+                        sections.push((edge.curve().clone(), s, e));
+                    }
+                    covers(sections, &format!("{what}, sections"));
+                }
+            }
+        }
+    }
 }
