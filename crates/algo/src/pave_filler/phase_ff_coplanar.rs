@@ -116,7 +116,9 @@ pub fn perform(
             let frame = PlaneFrame2D::canonical(na, da);
             for fid in [fa, fb] {
                 if let Entry::Vacant(slot) = regions.entry(fid) {
-                    slot.insert(face_region_2d(topo, fid, &frame)?);
+                    let mut region = face_region_2d(topo, fid, &frame, tol.linear)?;
+                    attach_paves(&mut region, topo, arena);
+                    slot.insert(region);
                 }
             }
             process_coplanar_pair(
@@ -161,7 +163,8 @@ fn compute_face_bboxes(
     Ok(bboxes)
 }
 
-/// Compute AABB for a face by sampling its boundary edges.
+/// Compute AABB for a face by sampling its boundary edges. A circle's or an
+/// ellipse's samples are grown by how far the curve can stray from them.
 fn compute_face_bbox(topo: &Topology, face_id: FaceId) -> Result<Aabb3, AlgoError> {
     let edges = brepkit_topology::explorer::face_edges(topo, face_id)?;
     let mut points = Vec::new();
@@ -173,10 +176,13 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId) -> Result<Aabb3, AlgoErro
         let (t0, t1) = edge.curve().domain_with_endpoints(start_pos, end_pos);
 
         let n: usize = 8;
+        let grow = conic_sag(edge.curve(), (t1 - t0) / n as f64);
+        let out = Vec3::new(grow, grow, grow);
         for i in 0..=n {
             let t = t0 + (t1 - t0) * (i as f64 / n as f64);
             let pt = edge.curve().evaluate_with_endpoints(t, start_pos, end_pos);
-            points.push(pt);
+            points.push(pt + out);
+            points.push(pt - out);
         }
     }
 
@@ -185,6 +191,20 @@ fn compute_face_bbox(topo: &Topology, face_id: FaceId) -> Result<Aabb3, AlgoErro
             "face {face_id:?} has no boundary point, or one that is not finite"
         ))
     })
+}
+
+/// How far a circle or an ellipse strays at most from the chord between its
+/// points a parameter `step` apart: an eighth of the step squared times a
+/// bound on its second derivative. Zero for any other curve.
+fn conic_sag(curve: &EdgeCurve, step: f64) -> f64 {
+    let bend = match curve {
+        EdgeCurve::Circle(c) => c.radius() * (c.u_axis().length() + c.v_axis().length()),
+        EdgeCurve::Ellipse(e) => e
+            .semi_major()
+            .madd(e.u_axis().length(), e.semi_minor() * e.v_axis().length()),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => 0.0,
+    };
+    0.125 * step * step * bend * (1.0 + 1e-9)
 }
 
 /// Whether a section on the face the piece must split already runs from
@@ -330,12 +350,12 @@ fn process_coplanar_pair(
     let mut pieces: Vec<SectionPiece> = Vec::new();
     for e in &region_b.edges {
         if coincident_boundary_edge(e, &region_a.edges, tol.linear).is_none() {
-            clip_to_region(e, (face_a, region_a), frame, tol.linear, &mut pieces);
+            clip_to_region(e, (face_a, region_a), frame, tol.linear, &mut pieces)?;
         }
     }
     for e in &region_a.edges {
         if coincident_boundary_edge(e, &region_b.edges, tol.linear).is_none() {
-            clip_to_region(e, (face_b, region_b), frame, tol.linear, &mut pieces);
+            clip_to_region(e, (face_b, region_b), frame, tol.linear, &mut pieces)?;
         }
     }
     let faces = [face_a, face_b];
@@ -384,6 +404,34 @@ fn process_coplanar_pair(
                     );
                 }
             }
+            SectionPiece::Curve {
+                target,
+                along,
+                span,
+                start,
+                end,
+                mid,
+            } => {
+                if !has_existing_section_along(
+                    arena,
+                    topo,
+                    target,
+                    (&along.curve, start, end),
+                    mid,
+                    tol,
+                ) {
+                    create_curve_section_edge(
+                        topo,
+                        arena,
+                        minted,
+                        faces,
+                        &along,
+                        (start, end),
+                        span,
+                        tol,
+                    );
+                }
+            }
         }
     }
 
@@ -428,6 +476,65 @@ struct BoundaryEdge {
     p3_start: Point3,
     p3_end: Point3,
     shape: Shape2,
+    /// The ellipse a sampled edge stands for, which its pieces follow.
+    along: Option<CurveSpan>,
+    /// The paves an ellipse edge has from the earlier phases, each a point
+    /// and its parameter: where it crosses or touches another edge.
+    paves: Vec<(Point3, f64)>,
+    /// The edge's curve and its ends in the edge's own order.
+    own: (EdgeCurve, Point3, Point3),
+}
+
+/// An edge's curve over the edge, read in its wire's direction: the
+/// sampled polyline's parameter `s` in `[0, n]` stands for the curve's at
+/// the same fraction of `span`, from its start in the wire's direction.
+#[derive(Clone)]
+struct CurveSpan {
+    curve: EdgeCurve,
+    /// The edge's ends in its own order, which the curve reads its
+    /// parameters from.
+    ends: (Point3, Point3),
+    span: (f64, f64),
+    forward: bool,
+}
+
+impl CurveSpan {
+    /// The curve's parameter at the polyline's `s` of `n`.
+    fn at(&self, s: f64, n: f64) -> f64 {
+        let (t0, t1) = self.span;
+        let f = if self.forward { s / n } else { 1.0 - s / n };
+        (t1 - t0).madd(f, t0)
+    }
+
+    fn point(&self, t: f64) -> Point3 {
+        self.curve
+            .evaluate_with_endpoints(t, self.ends.0, self.ends.1)
+    }
+
+    /// The parameter in the span of the ellipse's point nearest `p`, where
+    /// `p` lies within `reach` of it. `None` for any other curve.
+    fn through(&self, p: Point3, reach: f64) -> Option<f64> {
+        let EdgeCurve::Ellipse(e) = &self.curve else {
+            return None;
+        };
+        let t = e.project(p);
+        ((e.evaluate(t) - p).length() <= reach)
+            .then(|| self.param_of(p, t))
+            .flatten()
+    }
+
+    /// The parameter in the span of a pave at `p` whose own parameter is
+    /// `t`: an ellipse's read round a turn into the span from the point, a
+    /// B-spline's as it is. `None` past the span.
+    fn param_of(&self, p: Point3, t: f64) -> Option<f64> {
+        let (lo, hi) = (self.span.0.min(self.span.1), self.span.0.max(self.span.1));
+        let t = match &self.curve {
+            EdgeCurve::Ellipse(e) => lo + (e.project(p) - lo).rem_euclid(std::f64::consts::TAU),
+            _ => t,
+        };
+        let slack = 1e-9 * (hi - lo).abs().max(1.0);
+        (t >= lo - slack && t <= hi + slack).then_some(t.clamp(lo, hi))
+    }
 }
 
 /// A face's boundary in the plane's frame: every wire's edges, and the
@@ -436,6 +543,23 @@ struct Region2 {
     edges: Vec<BoundaryEdge>,
     lo: Point2,
     hi: Point2,
+    /// The face's region read on its own curves, holes included: lines,
+    /// circles and ellipses as they are, a B-spline by its bounded Bezier
+    /// pieces. `None` where it cannot be built.
+    exact: Option<brepkit_topology::planar::PlanarRegion>,
+}
+
+impl Region2 {
+    /// Whether `p` lies inside the region and farther than `tol` from its
+    /// boundary: read on the region's own curves where they are known, an
+    /// answer they cannot settle counting as not inside, and else on the
+    /// sampled boundary.
+    fn holds(&self, p: Point2, tol: f64) -> bool {
+        match &self.exact {
+            Some(region) => region.side(p, tol) == Some(true),
+            None => !on_boundary(p, &self.edges, tol) && inside_region(p, self, tol),
+        }
+    }
 }
 
 /// A clipped piece of a boundary edge inside the partner face; `target` is
@@ -449,6 +573,17 @@ enum SectionPiece {
     Arc {
         target: FaceId,
         circle: brepkit_math::curves::Circle3D,
+        start: Point3,
+        end: Point3,
+        mid: Point3,
+    },
+    /// A piece of an ellipse boundary edge, along its curve
+    /// from parameter `span.0` (at `start`) to `span.1` (at `end`),
+    /// `span.0 < span.1`.
+    Curve {
+        target: FaceId,
+        along: CurveSpan,
+        span: (f64, f64),
         start: Point3,
         end: Point3,
         mid: Point3,
@@ -501,11 +636,13 @@ fn lerp3(a: Point3, b: Point3, t: f64) -> Point3 {
     )
 }
 
-/// Collect a face's boundary (outer and inner wires) in the frame.
+/// Collect a face's boundary (outer and inner wires) in the frame, its
+/// exact region read to the linear tolerance `tol`.
 fn face_region_2d(
     topo: &Topology,
     face_id: FaceId,
     frame: &PlaneFrame2D,
+    tol: f64,
 ) -> Result<Region2, AlgoError> {
     use std::f64::consts::TAU;
     let face = topo.face(face_id)?;
@@ -573,6 +710,7 @@ fn face_region_2d(
                         (p2_start, p2_end),
                         oe.is_forward(),
                         frame,
+                        tol,
                     ) =>
                 {
                     grow(Point2::new(
@@ -606,6 +744,30 @@ fn face_region_2d(
                     Shape2::Poly(poly)
                 }
             };
+            let along = matches!(
+                (&shape, edge.curve()),
+                (Shape2::Poly(_), EdgeCurve::Ellipse(_))
+            )
+            .then(|| CurveSpan {
+                curve: edge.curve().clone(),
+                ends: (v_start, v_end),
+                span: edge.curve().domain_with_endpoints(v_start, v_end),
+                forward: oe.is_forward(),
+            });
+            // A spline read as an arc stands for the circle it traces, which
+            // the finder reads: from the end its parameter runs from, as the
+            // frame's counterclockwise way round is the circle's own.
+            let own = match (&shape, edge.curve()) {
+                (Shape2::Arc(arc), EdgeCurve::NurbsCurve(_)) => {
+                    let (from, to) = if arc.sweep > 0.0 {
+                        (p3_start, p3_end)
+                    } else {
+                        (p3_end, p3_start)
+                    };
+                    (EdgeCurve::Circle(arc.circle.clone()), from, to)
+                }
+                _ => (edge.curve().clone(), v_start, v_end),
+            };
             edges.push(BoundaryEdge {
                 eid: oe.edge(),
                 p2_start,
@@ -613,10 +775,65 @@ fn face_region_2d(
                 p3_start,
                 p3_end,
                 shape,
+                along,
+                paves: Vec::new(),
+                own,
             });
         }
     }
-    Ok(Region2 { edges, lo, hi })
+    let exact = brepkit_topology::planar::face_region_2d(
+        topo,
+        face_id,
+        frame.origin,
+        frame.u_axis,
+        frame.v_axis,
+        tol,
+    )
+    .ok()
+    .flatten();
+    // Without the exact region, the face would be read by its samples: an
+    // ellipse among its edges then lies off them by their sag.
+    if exact.is_none() && edges.iter().any(|e| e.along.is_some()) {
+        return Err(AlgoError::IntersectionFailed(format!(
+            "face {face_id:?} has an ellipse edge and no exact region in its plane"
+        )));
+    }
+    Ok(Region2 {
+        edges,
+        lo,
+        hi,
+        exact,
+    })
+}
+
+/// Give each ellipse edge of `region` its paves from the earlier phases:
+/// every pave of its pave blocks and their children, ends and extra paves
+/// alike, as a point and its parameter.
+fn attach_paves(region: &mut Region2, topo: &Topology, arena: &GfaArena) {
+    for e in &mut region.edges {
+        if e.along.is_none() {
+            continue;
+        }
+        let mut pending: Vec<_> = arena
+            .edge_pave_blocks
+            .get(&e.eid)
+            .cloned()
+            .unwrap_or_default();
+        while let Some(pb_id) = pending.pop() {
+            let Some(pb) = arena.pave_blocks.get(pb_id) else {
+                continue;
+            };
+            pending.extend(pb.children.iter().copied());
+            for pave in [pb.start, pb.end]
+                .into_iter()
+                .chain(pb.extra_paves.iter().copied())
+            {
+                if let Ok(v) = topo.vertex(arena.resolve_vertex(pave.vertex)) {
+                    e.paves.push((v.point(), pave.parameter));
+                }
+            }
+        }
+    }
 }
 
 /// The arc a NURBS boundary edge traces in the pair's frame, when it is a
@@ -625,8 +842,11 @@ fn face_region_2d(
 /// arc exactly when its two control legs are equal and its middle weight,
 /// over the root of the product of its end weights, is the sine of half the
 /// angle at its middle control point (the cosine of half its sweep). Every
-/// span must lie on one circle. `p2_start` and `p2_end` are the edge's ends
-/// in its wire's direction, `forward` that direction against the edge's own.
+/// span must lie on one circle, and is proved within `tol` of it along its
+/// whole length ([`span_off_circle`]). `p2_start` and `p2_end` are the
+/// edge's ends in its wire's direction, `forward` that direction against
+/// the edge's own.
+#[allow(clippy::too_many_arguments)]
 fn nurbs_arc(
     curve: &EdgeCurve,
     nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
@@ -634,6 +854,7 @@ fn nurbs_arc(
     (p2_start, p2_end): (Point2, Point2),
     forward: bool,
     frame: &PlaneFrame2D,
+    tol: f64,
 ) -> Option<Arc2> {
     use std::f64::consts::{PI, TAU};
     if nurbs.degree() != 2 || !nurbs.weights().iter().all(|w| w.is_finite() && *w > 0.0) {
@@ -652,6 +873,7 @@ fn nurbs_arc(
         .collect();
     breaks.dedup();
     let mut circle_2d: Option<(Point2, f64)> = None;
+    let mut spans: Vec<([Point2; 3], [f64; 3], f64)> = Vec::new();
     for w in breaks.windows(2) {
         let poles = brepkit_math::nurbs::decompose::curve_bezier_between(nurbs, w[0], w[1]).ok()?;
         let [first, middle, last] = poles.as_slice() else {
@@ -659,19 +881,21 @@ fn nurbs_arc(
         };
         let mut points = [Point2::new(0.0, 0.0); 3];
         let mut weights = [0.0; 3];
+        let mut lift = 0.0_f64;
         for (k, &[x, y, z, h]) in [first, middle, last].into_iter().enumerate() {
             if h.is_nan() || h <= 0.0 {
                 return None;
             }
             let pole = Point3::new(x / h, y / h, z / h);
-            if (pole - frame.origin).dot(frame.normal).abs()
-                > 1e-9 * (1.0 + (pole - frame.origin).length())
-            {
+            let off = (pole - frame.origin).dot(frame.normal).abs();
+            if off > 1e-9 * (1.0 + (pole - frame.origin).length()) {
                 return None;
             }
+            lift = lift.max(off);
             points[k] = frame.project(pole);
             weights[k] = h;
         }
+        spans.push((points, weights, lift));
         let leg = |a: Point2, b: Point2| (b.x() - a.x()).hypot(b.y() - a.y());
         let (l0, l1) = (leg(points[1], points[0]), leg(points[1], points[2]));
         if l0 <= 0.0 || l1 <= 0.0 || (l0 - l1).abs() > 1e-9 * (l0 + l1) {
@@ -698,6 +922,13 @@ fn nurbs_arc(
         }
     }
     let (center, radius) = circle_2d?;
+    // The span lies in the hull of its poles, so no farther off the plane
+    // than they are.
+    if spans.iter().any(|&(points, weights, lift)| {
+        span_off_circle(points, weights, (center, radius)) + lift > tol
+    }) {
+        return None;
+    }
     let eps = 1e-9 * (1.0 + radius);
     let off = |p: Point2| ((p.x() - center.x()).hypot(p.y() - center.y()) - radius).abs();
     if off(p2_start) > eps || off(p2_end) > eps {
@@ -724,6 +955,41 @@ fn nurbs_arc(
         sweep,
         circle,
     })
+}
+
+/// A bound on how far the rational quadratic with `points` and `weights`
+/// strays from the circle about `center` of `radius`, in the plane. With
+/// `V(t)` the weighted sum of the poles less the centre and `D(t)` that of
+/// the weights, both in the Bernstein basis, `|V|^2 - r^2 D^2` is a quartic
+/// whose Bernstein coefficients bound it; over `D^2`, no less than the least
+/// weight squared, it is the squared distance from the centre less `r^2`,
+/// which is at least `r` times the distance from the circle. Rounding is
+/// added in full. Infinite for a circle of no radius or a weight of none.
+fn span_off_circle(points: [Point2; 3], weights: [f64; 3], (center, radius): (Point2, f64)) -> f64 {
+    let least = weights.iter().copied().fold(f64::INFINITY, f64::min);
+    if !(radius > 0.0 && least > 0.0) {
+        return f64::INFINITY;
+    }
+    let arm = points.map(|p| (p.x() - center.x(), p.y() - center.y()));
+    let r2 = radius * radius;
+    let (mut term, mut size) = ([[0.0; 3]; 3], 0.0_f64);
+    for i in 0..3 {
+        for j in 0..3 {
+            let dot = arm[i].0.madd(arm[j].0, arm[i].1 * arm[j].1);
+            let w = weights[i] * weights[j];
+            term[i][j] = w * (dot - r2);
+            size += w * (arm[i].0.hypot(arm[i].1) * arm[j].0.hypot(arm[j].1) + r2);
+        }
+    }
+    let quartic = [
+        term[0][0],
+        term[0][1],
+        (2.0 * term[0][2] + 4.0 * term[1][1]) / 6.0,
+        term[1][2],
+        term[2][2],
+    ];
+    let most = quartic.iter().fold(0.0_f64, |m, c| m.max(c.abs()));
+    (8.0 * f64::EPSILON).madd(size, most) / (least * least * radius)
 }
 
 /// The centre of the circle through three points, `None` when they are
@@ -1089,13 +1355,27 @@ fn clip_to_region(
     frame: &PlaneFrame2D,
     tol: f64,
     out: &mut Vec<SectionPiece>,
-) {
+) -> Result<(), AlgoError> {
     match &e.shape {
         Shape2::Arc(arc) => {
             let len = arc.sweep.abs();
             let mut ss = vec![0.0, len];
             for t in &target.edges {
-                arc_crossings(arc, t, tol, &mut ss);
+                if t.along.is_none() {
+                    arc_crossings(arc, t, tol, &mut ss);
+                    continue;
+                }
+                let mine = (&e.own.0, e.own.1, e.own.2);
+                for p in ellipse_meetings(mine, t, tol)? {
+                    let p2 = frame.project(p);
+                    let off = (p2.x() - arc.center.x()).hypot(p2.y() - arc.center.y());
+                    if (off - arc.radius).abs() <= tol
+                        && let Some(s) =
+                            arc_offset_of(arc, angle_of(arc.center, p2), tol / arc.radius)
+                    {
+                        ss.push(s.clamp(0.0, len));
+                    }
+                }
             }
             ss.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
             ss.dedup_by(|x, y| (*x - *y).abs() * arc.radius < tol);
@@ -1106,7 +1386,7 @@ fn clip_to_region(
                     continue;
                 }
                 let mid2 = arc_point(arc, 0.5 * (sa + sb));
-                if on_boundary(mid2, &target.edges, tol) || !inside_region(mid2, target, tol) {
+                if !target.holds(mid2, tol) {
                     continue;
                 }
                 let on_circle = |p2: Point2| -> Point3 {
@@ -1137,11 +1417,21 @@ fn clip_to_region(
             let d = Point2::new(b.x() - a.x(), b.y() - a.y());
             let seg_len = d.x().hypot(d.y());
             if seg_len < tol {
-                return;
+                return Ok(());
             }
             let mut ts = vec![0.0, 1.0];
+            let d3 = e.p3_end - e.p3_start;
             for t in &target.edges {
-                seg_crossings(a, b, t, tol, &mut ts);
+                if t.along.is_none() {
+                    seg_crossings(a, b, t, tol, &mut ts);
+                    continue;
+                }
+                for p in ellipse_meetings((&EdgeCurve::Line, e.p3_start, e.p3_end), t, tol)? {
+                    let x = (p - e.p3_start).dot(d3) / d3.dot(d3);
+                    if (0.0..=1.0).contains(&x) && (p - (e.p3_start + d3 * x)).length() <= tol {
+                        ts.push(x);
+                    }
+                }
             }
             ts.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
             ts.dedup_by(|x, y| (*x - *y).abs() * seg_len < tol);
@@ -1152,7 +1442,7 @@ fn clip_to_region(
                 }
                 let tm = 0.5 * (ta + tb);
                 let mid = Point2::new(d.x().madd(tm, a.x()), d.y().madd(tm, a.y()));
-                if on_boundary(mid, &target.edges, tol) || !inside_region(mid, target, tol) {
+                if !target.holds(mid, tol) {
                     continue;
                 }
                 out.push(SectionPiece::Line {
@@ -1163,64 +1453,302 @@ fn clip_to_region(
             }
         }
         Shape2::Poly(poly) => {
-            // A sampled curve is walked sample by sample for its crossings
-            // and its in-region runs; each run is emitted as the chord
-            // between the run's ends (the true curve piece is the regular FF
-            // phase's job, this only partitions the partner consistently).
             let n = poly.len().saturating_sub(1);
             if n == 0 {
-                return;
+                return Ok(());
             }
-            // Cumulative parameter: sub-segment k spans [k, k + 1].
-            let mut ss: Vec<f64> = vec![0.0, n as f64];
-            for (k, w) in poly.windows(2).enumerate() {
-                let mut local = Vec::new();
-                for t in &target.edges {
-                    seg_crossings(w[0], w[1], t, tol, &mut local);
+            let nf = n as f64;
+            // Where the samples cross `edges`, as the polyline's parameter:
+            // sub-segment k spans [k, k + 1].
+            let sampled = |edges: &[&BoundaryEdge]| -> Vec<f64> {
+                let mut ss = Vec::new();
+                for (k, w) in poly.windows(2).enumerate() {
+                    let mut local = Vec::new();
+                    for t in edges {
+                        seg_crossings(w[0], w[1], t, tol, &mut local);
+                    }
+                    ss.extend(local.into_iter().map(|x| x + k as f64));
                 }
-                ss.extend(local.into_iter().map(|x| x + k as f64));
+                ss
+            };
+            let Some(along) = &e.along else {
+                // A B-spline keeps its chords: the regular FF phase gives its
+                // true pieces, and this only partitions the partner alike.
+                let mut ss: Vec<f64> = vec![0.0, nf];
+                ss.extend(sampled(&target.edges.iter().collect::<Vec<_>>()));
+                ss.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
+                let at = |s: f64| -> Point2 {
+                    let k = (s.floor() as usize).min(n - 1);
+                    let f = s - k as f64;
+                    let (c, d) = (poly[k], poly[k + 1]);
+                    Point2::new(
+                        (d.x() - c.x()).madd(f, c.x()),
+                        (d.y() - c.y()).madd(f, c.y()),
+                    )
+                };
+                let dist = |s0: f64, s1: f64| {
+                    let (p, q) = (at(s0), at(s1));
+                    (q.x() - p.x()).hypot(q.y() - p.y())
+                };
+                ss.dedup_by(|x, y| dist(*x, *y) < tol);
+                for w in ss.windows(2) {
+                    let (sa, sb) = (w[0], w[1]);
+                    if dist(sa, sb) < tol {
+                        continue;
+                    }
+                    let mid = at(0.5 * (sa + sb));
+                    if !target.holds(mid, tol) {
+                        continue;
+                    }
+                    let start = if sa <= 0.0 {
+                        e.p3_start
+                    } else {
+                        frame.unproject(at(sa))
+                    };
+                    let end = if sb >= nf {
+                        e.p3_end
+                    } else {
+                        frame.unproject(at(sb))
+                    };
+                    out.push(SectionPiece::Line {
+                        target: target_face,
+                        start,
+                        end,
+                    });
+                }
+                return Ok(());
+            };
+            // An ellipse is cut where it meets the partner's boundary, each
+            // place proved: against a line, a circle or an ellipse of the
+            // boundary by `section_meetings`, read in pieces of at most a
+            // half turn, whose ends are checked on the other curve, and at
+            // its own paves, where it crosses or touches the other solid's
+            // edges. A B-spline of the boundary is met where the samples
+            // cross it. Each run between the cuts follows the ellipse: its
+            // chord stands off the ellipse by its sag, and the partner's
+            // split along it would meet no edge of the face the ellipse
+            // bounds. A meeting no bound settles refuses the pair.
+            let mut cuts: Vec<(f64, Point3, u8)> = vec![
+                (along.at(0.0, nf), e.p3_start, 2),
+                (along.at(nf, nf), e.p3_end, 2),
+            ];
+            let own = half_turns(&along.curve, along.ends);
+            // A closed edge's two ends are one point, which the merge below
+            // takes for one cut: its half turns' own ends cut it too, so a
+            // loop wholly inside the partner still comes as pieces round its
+            // turn.
+            if (along.ends.0 - along.ends.1).length() <= tol {
+                for &(_, p, _) in own.iter().skip(1) {
+                    if let Some(at) = along.through(p, tol) {
+                        cuts.push((at, p, 0));
+                    }
+                }
             }
-            ss.sort_by(|x, y| x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal));
-            let at = |s: f64| -> Point2 {
-                let k = (s.floor() as usize).min(n - 1);
-                let f = s - k as f64;
-                let (c, d) = (poly[k], poly[k + 1]);
-                Point2::new(
-                    (d.x() - c.x()).madd(f, c.x()),
-                    (d.y() - c.y()).madd(f, c.y()),
-                )
-            };
-            let dist = |s0: f64, s1: f64| {
-                let (p, q) = (at(s0), at(s1));
-                (q.x() - p.x()).hypot(q.y() - p.y())
-            };
-            ss.dedup_by(|x, y| dist(*x, *y) < tol);
-            for w in ss.windows(2) {
-                let (sa, sb) = (w[0], w[1]);
-                if dist(sa, sb) < tol {
+            let unproved: Vec<&BoundaryEdge> = target
+                .edges
+                .iter()
+                .filter(|t| matches!(t.own.0, EdgeCurve::NurbsCurve(_)))
+                .collect();
+            for s in sampled(&unproved) {
+                let t = along.at(s, nf);
+                cuts.push((t, along.point(t), 0));
+            }
+            for t in &target.edges {
+                if matches!(t.own.0, EdgeCurve::NurbsCurve(_)) {
                     continue;
                 }
-                let mid = at(0.5 * (sa + sb));
-                if on_boundary(mid, &target.edges, tol) || !inside_region(mid, target, tol) {
+                let theirs = half_turns(&t.own.0, (t.own.1, t.own.2));
+                for &(_, p, _) in &theirs {
+                    if let Some(at) = along.through(p, tol) {
+                        cuts.push((at, p, 1));
+                    }
+                }
+                for &(_, p, _) in &own {
+                    if on_edge(p, t, frame, tol)
+                        && let Some(at) = along.through(p, tol)
+                    {
+                        cuts.push((at, p, 1));
+                    }
+                }
+                for mine in &own {
+                    for other in &theirs {
+                        let met = crate::builder::face_splitter::section_meetings(
+                            (&mine.0, mine.1, mine.2),
+                            (&other.0, other.1, other.2),
+                            tol,
+                        )
+                        .ok_or_else(|| {
+                            AlgoError::IntersectionFailed(
+                                "an ellipse edge's meeting with a coplanar face's boundary \
+                                 is not settled"
+                                    .into(),
+                            )
+                        })?;
+                        for p in met {
+                            if let Some(at) = along.through(p, tol) {
+                                cuts.push((at, p, 1));
+                            }
+                        }
+                    }
+                }
+            }
+            // The edge's own paves cut it too, at their points: where it
+            // touches the partner's boundary no crossing shows, and a section
+            // running on through the touch would leave the partner's face
+            // pinched there, round no vertex.
+            cuts.extend(
+                e.paves
+                    .iter()
+                    .filter_map(|&(p, t)| along.param_of(p, t).map(|t| (t, p, 1))),
+            );
+            cuts.sort_by(|a, b| {
+                if along.forward {
+                    a.0.total_cmp(&b.0)
+                } else {
+                    b.0.total_cmp(&a.0)
+                }
+            });
+            let mut merged: Vec<(f64, Point3, u8)> = Vec::with_capacity(cuts.len());
+            for cut in cuts {
+                match merged.last_mut() {
+                    Some(last) if (last.1 - cut.1).length() <= tol => {
+                        if cut.2 > last.2 {
+                            *last = cut;
+                        }
+                    }
+                    _ => merged.push(cut),
+                }
+            }
+            for w in merged.windows(2) {
+                let ((ta, start, _), (tb, end, _)) = (w[0], w[1]);
+                if (end - start).length() < tol {
                     continue;
                 }
-                let start = if sa <= 0.0 {
-                    e.p3_start
+                let mid3 = along.point(f64::midpoint(ta, tb));
+                let mid = frame.project(mid3);
+                if !target.holds(mid, tol) {
+                    continue;
+                }
+                let (span, start, end) = if ta <= tb {
+                    ((ta, tb), start, end)
                 } else {
-                    frame.unproject(at(sa))
+                    ((tb, ta), end, start)
                 };
-                let end = if sb >= n as f64 {
-                    e.p3_end
-                } else {
-                    frame.unproject(at(sb))
-                };
-                out.push(SectionPiece::Line {
+                out.push(SectionPiece::Curve {
                     target: target_face,
+                    along: along.clone(),
+                    span,
                     start,
                     end,
+                    mid: mid3,
                 });
             }
         }
+    }
+    Ok(())
+}
+
+/// Where `mine`, a line or a circle of this face's boundary given as its
+/// curve and its ends, meets the partner's ellipse edge `t`, each point
+/// proved on the two curves, never on the ellipse's samples: the meetings
+/// `section_meetings` finds between their half turns, the ends of `t`'s half
+/// turns, which the caller keeps where they lie on `mine`, and the ends of
+/// `mine`'s that lie on the ellipse. A pair no bound settles, or one the
+/// finder leaves unread, refuses the face pair. Nothing for any other edge.
+fn ellipse_meetings(
+    mine: (&EdgeCurve, Point3, Point3),
+    t: &BoundaryEdge,
+    tol: f64,
+) -> Result<Vec<Point3>, AlgoError> {
+    let Some(along) = &t.along else {
+        return Ok(Vec::new());
+    };
+    let own = half_turns(mine.0, (mine.1, mine.2));
+    let theirs = half_turns(&t.own.0, (t.own.1, t.own.2));
+    if own.is_empty() || theirs.is_empty() {
+        return Err(AlgoError::IntersectionFailed(
+            "a boundary edge meets a coplanar face's ellipse edge on a curve the finder \
+             cannot read"
+                .into(),
+        ));
+    }
+    let mut met: Vec<Point3> = theirs.iter().map(|&(_, p, _)| p).collect();
+    met.extend(
+        own.iter()
+            .map(|&(_, p, _)| p)
+            .filter(|&p| along.through(p, tol).is_some()),
+    );
+    for m in &own {
+        for o in &theirs {
+            met.extend(
+                crate::builder::face_splitter::section_meetings(
+                    (&m.0, m.1, m.2),
+                    (&o.0, o.1, o.2),
+                    tol,
+                )
+                .ok_or_else(|| {
+                    AlgoError::IntersectionFailed(
+                        "a boundary edge's meeting with a coplanar face's ellipse edge is \
+                             not settled"
+                            .into(),
+                    )
+                })?,
+            );
+        }
+    }
+    Ok(met)
+}
+
+/// `curve` from `start` to `end` in pieces of at most a half turn, each as
+/// the curve and its two ends: a line whole, a circle or an ellipse cut at
+/// equal steps of its parameter. Nothing for a B-spline.
+fn half_turns(
+    curve: &EdgeCurve,
+    (start, end): (Point3, Point3),
+) -> Vec<(EdgeCurve, Point3, Point3)> {
+    match curve {
+        EdgeCurve::Line => vec![(EdgeCurve::Line, start, end)],
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => {
+            // A whole conic runs a turn from its own seam, wherever that
+            // lies on its parameter: its domain starts at the seam's.
+            let (t0, t1) = if (start - end).length() < 1e-9 {
+                let from = match curve {
+                    EdgeCurve::Circle(c) => c.project(start),
+                    EdgeCurve::Ellipse(e) => e.project(start),
+                    EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => 0.0,
+                };
+                (from, from + std::f64::consts::TAU)
+            } else {
+                curve.domain_with_endpoints(start, end)
+            };
+            let pieces = ((t1 - t0).abs() / (0.99 * std::f64::consts::PI))
+                .ceil()
+                .max(1.0);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let count = pieces as usize;
+            let at = |k: usize| {
+                if k == 0 {
+                    start
+                } else if k == count {
+                    end
+                } else {
+                    curve.evaluate_with_endpoints((t1 - t0).madd(k as f64 / pieces, t0), start, end)
+                }
+            };
+            (0..count)
+                .map(|k| (curve.clone(), at(k), at(k + 1)))
+                .collect()
+        }
+        EdgeCurve::NurbsCurve(_) => Vec::new(),
+    }
+}
+
+/// Whether `p` lies on the boundary edge `t`: on its ellipse, read by the
+/// ellipse's nearest point, or on its 2D shape.
+fn on_edge(p: Point3, t: &BoundaryEdge, frame: &PlaneFrame2D, tol: f64) -> bool {
+    match &t.along {
+        Some(along) => along.through(p, tol).is_some(),
+        None => point_on_edge_2d(frame.project(p), t, tol),
     }
 }
 
@@ -1403,6 +1931,96 @@ fn create_arc_section_edge(
 
     log::debug!(
         "FF-coplanar: faces {face_a:?} and {face_b:?} arc section t=[{t_s:.4},{t_e:.4}] \
+         (curve_index={curve_index}, edge={edge_id:?}, pb={pb_id:?})",
+    );
+}
+
+/// Whether `target` already has a section that is the piece of an ellipse
+/// boundary edge along `piece` from `p_start` to `p_end`, through `mid`:
+/// with the piece's ends, and proved one curve with it along its whole
+/// length (see [`crate::builder::face_splitter::curves_one_curve`]). A
+/// circle or an ellipse through the piece's ends and middle can still part
+/// from it between them, and the thin regions there would be lost. A curve
+/// attached only to the other face of the pair does not count.
+fn has_existing_section_along(
+    arena: &GfaArena,
+    topo: &Topology,
+    target: FaceId,
+    (piece_curve, p_start, p_end): (&EdgeCurve, Point3, Point3),
+    mid: Point3,
+    tol: Tolerance,
+) -> bool {
+    let near = |p: Point3, q: Point3| (p - q).length() <= tol.linear;
+    let piece = Aabb3::from_points([p_start, p_end, mid]);
+    arena.curves.iter().any(|curve| {
+        if (curve.face_a != target && curve.face_b != target)
+            || !curve.bbox.expanded(tol.linear).intersects(piece)
+        {
+            return false;
+        }
+        let Some(((s, _), (e, _))) = section_ends(topo, arena, curve) else {
+            return false;
+        };
+        if !((near(s, p_start) && near(e, p_end)) || (near(s, p_end) && near(e, p_start))) {
+            return false;
+        }
+        crate::builder::face_splitter::curves_one_curve(
+            (piece_curve, p_start, p_end),
+            (&curve.curve, s, e),
+            tol.linear,
+        )
+    })
+}
+
+/// Register one section along an ellipse boundary edge's curve, from `span.0`
+/// (at `p_s`) to `span.1` (at `p_e`), the way the regular FF phase registers
+/// its sections.
+#[allow(clippy::too_many_arguments)]
+fn create_curve_section_edge(
+    topo: &mut Topology,
+    arena: &mut GfaArena,
+    minted: &mut Vec<(Point3, VertexId)>,
+    faces: [FaceId; 2],
+    along: &CurveSpan,
+    (p_s, p_e): (Point3, Point3),
+    (t_s, t_e): (f64, f64),
+    tol: Tolerance,
+) {
+    if (p_e - p_s).length() < tol.linear {
+        return;
+    }
+    let [face_a, face_b] = faces;
+    let start_vid = find_or_create_vertex(topo, arena, minted, faces, p_s, tol);
+    let end_vid = find_or_create_vertex(topo, arena, minted, faces, p_e, tol);
+    let edge_id = topo.add_edge(Edge::new(start_vid, end_vid, along.curve.clone()));
+    let pb = PaveBlock::new(edge_id, Pave::new(start_vid, t_s), Pave::new(end_vid, t_e));
+    let pb_id = arena.pave_blocks.alloc(pb);
+    arena
+        .edge_pave_blocks
+        .entry(edge_id)
+        .or_default()
+        .push(pb_id);
+    let n: usize = 16;
+    let bbox = Aabb3::from_points(
+        (0..=n).map(|k| along.point((t_e - t_s).madd(k as f64 / n as f64, t_s))),
+    )
+    .expanded(conic_sag(&along.curve, (t_e - t_s) / n as f64));
+    let curve_index = arena.curves.len();
+    arena.curves.push(IntersectionCurveDS {
+        curve: along.curve.clone(),
+        face_a,
+        face_b,
+        bbox,
+        pave_blocks: vec![pb_id],
+        t_range: (t_s, t_e),
+    });
+    arena.interference.ff.push(Interference::FF {
+        f1: face_a,
+        f2: face_b,
+        curve_index,
+    });
+    log::debug!(
+        "FF-coplanar: faces {face_a:?} and {face_b:?} curve section t=[{t_s:.4},{t_e:.4}] \
          (curve_index={curve_index}, edge={edge_id:?}, pb={pb_id:?})",
     );
 }
@@ -1754,8 +2372,8 @@ mod tests {
         .unwrap();
 
         let frame = PlaneFrame2D::canonical(Vec3::new(0.0, 0.0, -1.0), 0.0);
-        let region_ring = face_region_2d(&topo, ring_end, &frame).unwrap();
-        let region_block = face_region_2d(&topo, block_bottom, &frame).unwrap();
+        let region_ring = face_region_2d(&topo, ring_end, &frame, 1e-7).unwrap();
+        let region_block = face_region_2d(&topo, block_bottom, &frame, 1e-7).unwrap();
         process_coplanar_pair(
             &mut topo,
             &mut arena,
@@ -1984,7 +2602,7 @@ mod tests {
             ],
             vec![],
         );
-        let region = face_region_2d(&topo, face, &frame).unwrap();
+        let region = face_region_2d(&topo, face, &frame, 1e-7).unwrap();
         let edge = region.edges.iter().find(|e| e.eid == arc).unwrap();
         assert!(matches!(edge.shape, Shape2::Poly(_)), "read as an arc");
     }
@@ -2019,7 +2637,7 @@ mod tests {
                         }
                     }
                     let face = face_down(&mut topo, loop_edges, vec![]);
-                    let region = face_region_2d(&topo, face, &frame).unwrap();
+                    let region = face_region_2d(&topo, face, &frame, 1e-7).unwrap();
                     let edge = region.edges.into_iter().find(|e| e.eid == rim).unwrap();
                     match edge.shape {
                         Shape2::Arc(arc) => Some(arc),
@@ -2045,6 +2663,1182 @@ mod tests {
                     "{label}: start"
                 );
                 assert!((exact.sweep - spline.sweep).abs() < 1e-12, "{label}: sweep");
+            }
+        }
+    }
+
+    fn test_poses() -> [brepkit_math::mat::Mat4; 3] {
+        use brepkit_math::mat::Mat4;
+        [
+            Mat4::identity(),
+            Mat4::translation(3.0, -2.0, 1.0) * Mat4::rotation_x(0.4) * Mat4::rotation_z(0.6),
+            Mat4::translation(1.0, 0.5, -2.0) * Mat4::scale(-1.0, 1.0, 1.0),
+        ]
+    }
+
+    /// A whole circle whose seam lies at its parameter pi comes in pieces of
+    /// at most a half turn, from the seam round to the seam, in three poses.
+    #[test]
+    fn a_closed_circle_seamed_at_pi_comes_in_half_turns_from_its_seam() {
+        use std::f64::consts::{PI, TAU};
+        for pose in test_poses() {
+            let centre = pose.mul_point(Point3::new(1.0, 2.0, 0.0));
+            let normal = (pose.mul_point(Point3::new(0.0, 0.0, 1.0))
+                - pose.mul_point(Point3::new(0.0, 0.0, 0.0)))
+            .normalize()
+            .unwrap();
+            let circle = Circle3D::new(centre, normal, 2.0).unwrap();
+            let seam = circle.evaluate(PI);
+            let curve = EdgeCurve::Circle(circle);
+            let pieces = half_turns(&curve, (seam, seam));
+            assert!((pieces[0].1 - seam).length() < 1e-12, "{pose:?}");
+            assert!((pieces[pieces.len() - 1].2 - seam).length() < 1e-12);
+            let mut total = 0.0;
+            for (k, (c, a, b)) in pieces.iter().enumerate() {
+                let (t0, t1) = c.domain_with_endpoints(*a, *b);
+                let sweep = t1 - t0;
+                assert!(sweep > 0.0 && sweep <= PI, "piece {k}: {sweep}");
+                total += sweep;
+                if k + 1 < pieces.len() {
+                    assert!((*b - pieces[k + 1].1).length() < 1e-12);
+                }
+            }
+            assert!((total - TAU).abs() < 1e-9, "{total}");
+        }
+    }
+
+    /// An arc of the ellipse of semi-axes 3 and 2 from (0.6, -/+ 1.96)
+    /// through (3, 0), and an arc of the circle of radius 2 about (1, 0)
+    /// through the same three points: the same ends and middle, two curves
+    /// with thin regions between them. The circle as a section on a face
+    /// does not stand for the ellipse's piece there, but the ellipse does,
+    /// in three poses.
+    #[test]
+    fn an_ellipse_piece_through_a_circle_sections_ends_and_middle_is_kept() {
+        use brepkit_math::curves::Ellipse3D;
+        let tol = Tolerance::default();
+        for pose in test_poses() {
+            let mut topo = Topology::new();
+            let mut arena = GfaArena::new();
+            let target_rim = rim(&mut topo, 9.0);
+            let target = face_down(&mut topo, vec![target_rim], vec![]);
+            let at = |x: f64, y: f64| pose.mul_point(Point3::new(x, y, 0.0));
+            let along = |v: Vec3| {
+                pose.mul_point(Point3::new(v.x(), v.y(), v.z()))
+                    - pose.mul_point(Point3::new(0.0, 0.0, 0.0))
+            };
+            let normal = along(Vec3::new(0.0, 0.0, 1.0)).normalize().unwrap();
+            let ellipse = Ellipse3D::with_axes(
+                at(0.0, 0.0),
+                normal,
+                3.0,
+                2.0,
+                along(Vec3::new(1.0, 0.0, 0.0)).normalize().unwrap(),
+                along(Vec3::new(0.0, 1.0, 0.0)).normalize().unwrap(),
+            )
+            .unwrap();
+            let y0 = 2.0 * (1.0_f64 - 0.04).sqrt();
+            let (from, to, middle) = (at(0.6, -y0), at(0.6, y0), at(3.0, 0.0));
+            let circle = Circle3D::new(at(1.0, 0.0), normal, 2.0).unwrap();
+            let round = EdgeCurve::Circle(circle);
+            // The arc through the middle, read from whichever end its
+            // parameter runs from.
+            let (ends, span) = [(from, to), (to, from)]
+                .into_iter()
+                .map(|(p, q)| ((p, q), round.domain_with_endpoints(p, q)))
+                .find(|&((p, q), (c0, c1))| {
+                    (round.evaluate_with_endpoints(0.5 * (c0 + c1), p, q) - middle).length() < 1e-9
+                })
+                .unwrap();
+            record_section(&mut topo, &mut arena, target, round, ends, span);
+            let piece = EdgeCurve::Ellipse(ellipse.clone());
+            assert!(!has_existing_section_along(
+                &arena,
+                &topo,
+                target,
+                (&piece, from, to),
+                middle,
+                tol
+            ));
+            let (e0, e1) = EdgeCurve::Ellipse(ellipse.clone()).domain_with_endpoints(from, to);
+            record_section(
+                &mut topo,
+                &mut arena,
+                target,
+                EdgeCurve::Ellipse(ellipse),
+                (from, to),
+                (e0, e1),
+            );
+            assert!(has_existing_section_along(
+                &arena,
+                &topo,
+                target,
+                (&piece, from, to),
+                middle,
+                tol
+            ));
+        }
+    }
+
+    /// Two segments crossing inside both meet once, at the crossing; two
+    /// meeting only at an end, or lying apart, meet nowhere the finder must
+    /// report: in three poses.
+    #[test]
+    fn two_segments_crossing_inside_both_meet_at_the_crossing() {
+        let tol = 1e-7;
+        let line = EdgeCurve::Line;
+        for pose in test_poses() {
+            let p = |x: f64, y: f64| pose.mul_point(Point3::new(x, y, 0.0));
+            let met = crate::builder::face_splitter::section_meetings(
+                (&line, p(-1.0, 0.0), p(1.0, 0.0)),
+                (&line, p(0.0, -1.0), p(0.0, 1.0)),
+                tol,
+            )
+            .unwrap();
+            assert_eq!(met.len(), 1, "{pose:?}");
+            assert!((met[0] - p(0.0, 0.0)).length() < 1e-9, "{met:?}");
+            for (a, b) in [
+                ((p(0.0, 0.0), p(1.0, 0.0)), (p(0.0, 0.0), p(0.0, 1.0))),
+                ((p(0.0, 0.0), p(1.0, 0.0)), (p(0.0, 1.0), p(1.0, 1.0))),
+            ] {
+                let met = crate::builder::face_splitter::section_meetings(
+                    (&line, a.0, a.1),
+                    (&line, b.0, b.1),
+                    tol,
+                )
+                .unwrap();
+                assert!(met.is_empty(), "{met:?}");
+            }
+        }
+    }
+
+    /// A face bounded by one closed ellipse of semi-axes 3 and 2, and an
+    /// arc of the concentric ellipse of semi-axes 2.997 and 1.998 over its
+    /// parameters 0 to pi / 3: the arc lies inside the face, though its
+    /// middle lies outside the 16 chords the face's rim was once read as.
+    /// It is a piece to split the face along.
+    #[test]
+    fn an_ellipse_arc_just_inside_an_ellipse_face_is_a_piece() {
+        use brepkit_math::curves::Ellipse3D;
+        let tol = Tolerance::default();
+        let frame = PlaneFrame2D::canonical(Vec3::new(0.0, 0.0, -1.0), 0.0);
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let (x, y) = (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let mut topo = Topology::new();
+        let outer = Ellipse3D::with_axes(origin, up, 3.0, 2.0, x, y).unwrap();
+        let seam = topo.add_vertex(Vertex::new(outer.evaluate(2.0), 1e-7));
+        let rim = topo.add_edge(Edge::new(seam, seam, EdgeCurve::Ellipse(outer)));
+        let target = face_down(&mut topo, vec![OrientedEdge::new(rim, false)], vec![]);
+        let inner = Ellipse3D::with_axes(origin, up, 2.997, 1.998, x, y).unwrap();
+        let third = std::f64::consts::FRAC_PI_3;
+        let (a, b, c) = (
+            topo.add_vertex(Vertex::new(inner.evaluate(0.0), 1e-7)),
+            topo.add_vertex(Vertex::new(inner.evaluate(third), 1e-7)),
+            topo.add_vertex(Vertex::new(Point3::new(1.0, 0.5, 0.0), 1e-7)),
+        );
+        let arc = topo.add_edge(Edge::new(a, b, EdgeCurve::Ellipse(inner)));
+        let back = topo.add_edge(Edge::new(b, c, EdgeCurve::Line));
+        let close = topo.add_edge(Edge::new(c, a, EdgeCurve::Line));
+        let piece_face = face_down(
+            &mut topo,
+            vec![
+                OrientedEdge::new(arc, true),
+                OrientedEdge::new(back, true),
+                OrientedEdge::new(close, true),
+            ],
+            vec![],
+        );
+        let arena = GfaArena::new();
+        let mut target_region = face_region_2d(&topo, target, &frame, 1e-7).unwrap();
+        attach_paves(&mut target_region, &topo, &arena);
+        let mut piece_region = face_region_2d(&topo, piece_face, &frame, 1e-7).unwrap();
+        attach_paves(&mut piece_region, &topo, &arena);
+        let edge = piece_region.edges.iter().find(|e| e.eid == arc).unwrap();
+        let mut out = Vec::new();
+        clip_to_region(edge, (target, &target_region), &frame, tol.linear, &mut out).unwrap();
+        assert_eq!(out.len(), 1, "{}", out.len());
+        assert!(matches!(out[0], SectionPiece::Curve { .. }));
+    }
+
+    /// A closed ellipse edge, one edge with no paves, wholly inside a face
+    /// of radius 9: it is cut into pieces round the whole turn from its seam,
+    /// each a piece to split the face along.
+    #[test]
+    fn a_closed_ellipse_wholly_inside_a_face_is_cut_round_its_turn() {
+        use brepkit_math::curves::Ellipse3D;
+        let tol = Tolerance::default();
+        let frame = PlaneFrame2D::canonical(Vec3::new(0.0, 0.0, -1.0), 0.0);
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let mut topo = Topology::new();
+        let target_rim = rim(&mut topo, 9.0);
+        let target = face_down(&mut topo, vec![target_rim], vec![]);
+        let ellipse = Ellipse3D::with_axes(
+            Point3::new(1.0, 2.0, 0.0),
+            up,
+            1.5,
+            1.0,
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap();
+        let seam = topo.add_vertex(Vertex::new(ellipse.evaluate(0.7), 1e-7));
+        let loop_edge = topo.add_edge(Edge::new(seam, seam, EdgeCurve::Ellipse(ellipse)));
+        let inner = face_down(&mut topo, vec![OrientedEdge::new(loop_edge, false)], vec![]);
+        let arena = GfaArena::new();
+        let mut target_region = face_region_2d(&topo, target, &frame, 1e-7).unwrap();
+        attach_paves(&mut target_region, &topo, &arena);
+        let mut inner_region = face_region_2d(&topo, inner, &frame, 1e-7).unwrap();
+        attach_paves(&mut inner_region, &topo, &arena);
+        let edge = inner_region
+            .edges
+            .iter()
+            .find(|e| e.eid == loop_edge)
+            .unwrap();
+        let mut out = Vec::new();
+        clip_to_region(edge, (target, &target_region), &frame, tol.linear, &mut out).unwrap();
+        let sweep: f64 = out
+            .iter()
+            .map(|piece| match piece {
+                SectionPiece::Curve { span, .. } => span.1 - span.0,
+                _ => 0.0,
+            })
+            .sum();
+        assert!(out.len() >= 2, "{}", out.len());
+        assert!((sweep - std::f64::consts::TAU).abs() < 1e-9, "{sweep}");
+    }
+
+    /// A segment along x at z = 0 and one along y at z = 1 lie in no one
+    /// plane: no meeting set is given for them. Two parallel segments at
+    /// those heights lie in one plane and meet nowhere. In three poses.
+    #[test]
+    fn two_skew_segments_are_refused() {
+        let tol = 1e-7;
+        let line = EdgeCurve::Line;
+        for pose in test_poses() {
+            let p = |x: f64, y: f64, z: f64| pose.mul_point(Point3::new(x, y, z));
+            let skew = crate::builder::face_splitter::section_meetings(
+                (&line, p(-1.0, 0.0, 0.0), p(1.0, 0.0, 0.0)),
+                (&line, p(0.0, -1.0, 1.0), p(0.0, 1.0, 1.0)),
+                tol,
+            );
+            assert!(skew.is_none(), "{skew:?}");
+            let parallel = crate::builder::face_splitter::section_meetings(
+                (&line, p(-1.0, 0.0, 0.0), p(1.0, 0.0, 0.0)),
+                (&line, p(-1.0, 0.0, 1.0), p(1.0, 0.0, 1.0)),
+                tol,
+            );
+            assert!(parallel.as_ref().is_some_and(Vec::is_empty), "{parallel:?}");
+        }
+    }
+
+    /// A face bounded by an open arc of the ellipse of semi-axes 1.5 and 1
+    /// over `sweep` of its parameter from `start`, and two lines back to its
+    /// centre, wholly inside a face of radius 9. The arc's half turns, and
+    /// the sections it gives the larger face, each lie on the arc's own
+    /// range, read from its stored start the way its parameter runs, and
+    /// together cover the whole arc: for arcs of 3 pi / 2, a hair over pi
+    /// and a hair under a turn, starting at 0 and at pi, in three poses in
+    /// the plane.
+    #[test]
+    fn an_open_ellipse_arc_partitions_its_partner_along_itself() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::mat::Mat4;
+        use std::f64::consts::{PI, TAU};
+        let tol = Tolerance::default();
+        let frame = PlaneFrame2D::canonical(Vec3::new(0.0, 0.0, -1.0), 0.0);
+        let poses = [
+            Mat4::identity(),
+            Mat4::translation(3.0, -2.0, 0.0) * Mat4::rotation_z(0.6),
+            Mat4::translation(1.0, 0.5, 0.0) * Mat4::scale(-1.0, 1.0, 1.0),
+        ];
+        for pose in poses {
+            for sweep in [1.5 * PI, PI + 0.05, TAU - 0.05] {
+                for start in [0.0, PI] {
+                    let what = format!("sweep {sweep}, start {start}, {pose:?}");
+                    let mut topo = Topology::new();
+                    let target_rim = rim(&mut topo, 9.0);
+                    let target = face_down(&mut topo, vec![target_rim], vec![]);
+                    let along = |v: Vec3| {
+                        pose.mul_point(Point3::new(v.x(), v.y(), v.z()))
+                            - pose.mul_point(Point3::new(0.0, 0.0, 0.0))
+                    };
+                    let centre = pose.mul_point(Point3::new(1.0, 2.0, 0.0));
+                    let (u, v) = (
+                        along(Vec3::new(1.0, 0.0, 0.0)),
+                        along(Vec3::new(0.0, 1.0, 0.0)),
+                    );
+                    let ellipse = Ellipse3D::with_axes(centre, u.cross(v), 1.5, 1.0, u, v).unwrap();
+                    let (a, b, c) = (
+                        topo.add_vertex(Vertex::new(ellipse.evaluate(start), 1e-7)),
+                        topo.add_vertex(Vertex::new(ellipse.evaluate(start + sweep), 1e-7)),
+                        topo.add_vertex(Vertex::new(centre, 1e-7)),
+                    );
+                    let arc = topo.add_edge(Edge::new(a, b, EdgeCurve::Ellipse(ellipse.clone())));
+                    let back = topo.add_edge(Edge::new(b, c, EdgeCurve::Line));
+                    let close = topo.add_edge(Edge::new(c, a, EdgeCurve::Line));
+                    // The face's normal is -z: its outline runs clockwise
+                    // seen from +z, against the arc where the arc runs the
+                    // other way.
+                    let outline = if ellipse.normal().z() > 0.0 {
+                        vec![
+                            OrientedEdge::new(close, false),
+                            OrientedEdge::new(back, false),
+                            OrientedEdge::new(arc, false),
+                        ]
+                    } else {
+                        vec![
+                            OrientedEdge::new(arc, true),
+                            OrientedEdge::new(back, true),
+                            OrientedEdge::new(close, true),
+                        ]
+                    };
+                    let pacman = face_down(&mut topo, outline, vec![]);
+                    let mut arena = GfaArena::new();
+                    let mut regions = Vec::new();
+                    for face in [pacman, target] {
+                        let mut region = face_region_2d(&topo, face, &frame, 1e-7).unwrap();
+                        attach_paves(&mut region, &topo, &arena);
+                        regions.push(region);
+                    }
+                    process_coplanar_pair(
+                        &mut topo,
+                        &mut arena,
+                        &mut Vec::new(),
+                        (pacman, &regions[0]),
+                        (target, &regions[1]),
+                        &frame,
+                        tol,
+                    )
+                    .unwrap();
+                    let on_arc = |p: Point3| (ellipse.project(p) - start).rem_euclid(TAU);
+                    let covers = |pieces: Vec<(EdgeCurve, Point3, Point3)>, what: &str| {
+                        let mut covered = 0.0;
+                        for (curve, s, e) in pieces {
+                            let (t0, t1) = curve.domain_with_endpoints(s, e);
+                            covered += t1 - t0;
+                            for k in 0..=8 {
+                                let p = curve.evaluate_with_endpoints(
+                                    (t1 - t0).madd(f64::from(k) / 8.0, t0),
+                                    s,
+                                    e,
+                                );
+                                let at = on_arc(p);
+                                assert!(
+                                    at <= sweep + 1e-9 || at >= TAU - 1e-9,
+                                    "{what}: off the arc at {at}"
+                                );
+                            }
+                        }
+                        assert!((covered - sweep).abs() < 1e-9, "{what}: covered {covered}");
+                    };
+                    let edge = topo.edge(arc).unwrap();
+                    let turns = half_turns(
+                        edge.curve(),
+                        (
+                            topo.vertex(edge.start()).unwrap().point(),
+                            topo.vertex(edge.end()).unwrap().point(),
+                        ),
+                    );
+                    assert!(turns.len() >= 2, "{what}: {} half turns", turns.len());
+                    for (curve, s, e) in &turns {
+                        let (t0, t1) = curve.domain_with_endpoints(*s, *e);
+                        assert!(
+                            t1 - t0 <= 0.99 * PI + 1e-12,
+                            "{what}: a turn of {}",
+                            t1 - t0
+                        );
+                    }
+                    covers(turns, &format!("{what}, half turns"));
+                    let mut sections = Vec::new();
+                    for curve in &arena.curves {
+                        let EdgeCurve::Ellipse(_) = &curve.curve else {
+                            continue;
+                        };
+                        let pb = arena.pave_blocks.get(curve.pave_blocks[0]).unwrap();
+                        let edge = topo.edge(pb.original_edge).unwrap();
+                        let (s, e) = (
+                            topo.vertex(edge.start()).unwrap().point(),
+                            topo.vertex(edge.end()).unwrap().point(),
+                        );
+                        sections.push((edge.curve().clone(), s, e));
+                    }
+                    covers(sections, &format!("{what}, sections"));
+                }
+            }
+        }
+    }
+
+    /// Three poses that keep the plane z = 0: upright, turned in it and
+    /// mirrored across x = 0.
+    fn in_plane_poses() -> [brepkit_math::mat::Mat4; 3] {
+        use brepkit_math::mat::Mat4;
+        [
+            Mat4::identity(),
+            Mat4::translation(3.0, -2.0, 0.0) * Mat4::rotation_z(0.6),
+            Mat4::translation(1.0, 0.5, 0.0) * Mat4::scale(-1.0, 1.0, 1.0),
+        ]
+    }
+
+    /// A face of normal -z bounded by the whole ellipse of semi-axes `axes`
+    /// about `centre` along x and y, placed by `pose`, from its point at
+    /// `seam`. Its parameter runs counterclockwise about the normal of its
+    /// own axes, which a mirror turns over.
+    fn ellipse_face_down(
+        topo: &mut Topology,
+        pose: &brepkit_math::mat::Mat4,
+        centre: (f64, f64),
+        axes: (f64, f64),
+        seam: f64,
+    ) -> (FaceId, brepkit_math::curves::Ellipse3D) {
+        let along = |v: Vec3| {
+            pose.mul_point(Point3::new(v.x(), v.y(), v.z()))
+                - pose.mul_point(Point3::new(0.0, 0.0, 0.0))
+        };
+        let (u, v) = (
+            along(Vec3::new(1.0, 0.0, 0.0)),
+            along(Vec3::new(0.0, 1.0, 0.0)),
+        );
+        let ellipse = brepkit_math::curves::Ellipse3D::with_axes(
+            pose.mul_point(Point3::new(centre.0, centre.1, 0.0)),
+            u.cross(v),
+            axes.0,
+            axes.1,
+            u,
+            v,
+        )
+        .unwrap();
+        let vertex = topo.add_vertex(Vertex::new(ellipse.evaluate(seam), 1e-7));
+        let edge = topo.add_edge(Edge::new(
+            vertex,
+            vertex,
+            EdgeCurve::Ellipse(ellipse.clone()),
+        ));
+        let forward = ellipse.normal().z() < 0.0;
+        (
+            face_down(topo, vec![OrientedEdge::new(edge, forward)], vec![]),
+            ellipse,
+        )
+    }
+
+    /// A face of normal -z bounded by the polygon through `corners`, given
+    /// counterclockwise about +z, placed by `pose`.
+    fn polygon_face_down(
+        topo: &mut Topology,
+        pose: &brepkit_math::mat::Mat4,
+        corners: &[(f64, f64)],
+    ) -> FaceId {
+        let vertices: Vec<_> = corners
+            .iter()
+            .map(|&(x, y)| {
+                topo.add_vertex(Vertex::new(pose.mul_point(Point3::new(x, y, 0.0)), 1e-7))
+            })
+            .collect();
+        let edges: Vec<_> = (0..vertices.len())
+            .map(|k| {
+                topo.add_edge(Edge::new(
+                    vertices[k],
+                    vertices[(k + 1) % vertices.len()],
+                    EdgeCurve::Line,
+                ))
+            })
+            .collect();
+        let turned =
+            pose.mul_point(Point3::new(1.0, 0.0, 0.0)) - pose.mul_point(Point3::new(0.0, 0.0, 0.0));
+        let up = turned.cross(
+            pose.mul_point(Point3::new(0.0, 1.0, 0.0)) - pose.mul_point(Point3::new(0.0, 0.0, 0.0)),
+        );
+        let outline = if up.z() > 0.0 {
+            edges
+                .iter()
+                .rev()
+                .map(|&e| OrientedEdge::new(e, false))
+                .collect()
+        } else {
+            edges.iter().map(|&e| OrientedEdge::new(e, true)).collect()
+        };
+        face_down(topo, outline, vec![])
+    }
+
+    /// The coplanar phase's sections between `faces`, as each section's
+    /// curve and its two ends.
+    fn coplanar_sections(
+        topo: &mut Topology,
+        faces: [FaceId; 2],
+        tol: Tolerance,
+    ) -> Vec<(EdgeCurve, Point3, Point3)> {
+        let frame = PlaneFrame2D::canonical(Vec3::new(0.0, 0.0, -1.0), 0.0);
+        let mut arena = GfaArena::new();
+        let mut regions = Vec::new();
+        for face in faces {
+            let mut region = face_region_2d(topo, face, &frame, tol.linear).unwrap();
+            attach_paves(&mut region, topo, &arena);
+            regions.push(region);
+        }
+        process_coplanar_pair(
+            topo,
+            &mut arena,
+            &mut Vec::new(),
+            (faces[0], &regions[0]),
+            (faces[1], &regions[1]),
+            &frame,
+            tol,
+        )
+        .unwrap();
+        arena
+            .curves
+            .iter()
+            .map(|curve| {
+                let pb = arena.pave_blocks.get(curve.pave_blocks[0]).unwrap();
+                let edge = topo.edge(pb.original_edge).unwrap();
+                (
+                    edge.curve().clone(),
+                    topo.vertex(edge.start()).unwrap().point(),
+                    topo.vertex(edge.end()).unwrap().point(),
+                )
+            })
+            .collect()
+    }
+
+    /// Whether an ellipse section runs over the parameter `t` of its curve,
+    /// short of its ends.
+    fn covers(sections: &[(EdgeCurve, Point3, Point3)], t: f64) -> bool {
+        use std::f64::consts::TAU;
+        sections.iter().any(|(curve, s, e)| {
+            let EdgeCurve::Ellipse(_) = curve else {
+                return false;
+            };
+            let (t0, t1) = curve.domain_with_endpoints(*s, *e);
+            let at = (t - t0).rem_euclid(TAU);
+            at > 0.0 && at < t1 - t0
+        })
+    }
+
+    /// An existing section on the face 5 tolerances off an ellipse piece,
+    /// its ends 5 tolerances off the piece's, is another curve: the finder
+    /// proves the two apart, so the piece is not taken for it.
+    #[test]
+    fn a_section_five_tolerances_off_an_ellipse_piece_is_not_the_piece() {
+        use brepkit_math::curves::Ellipse3D;
+        let tol = Tolerance::default();
+        let mut topo = Topology::new();
+        let mut arena = GfaArena::new();
+        let target_rim = rim(&mut topo, 9.0);
+        let target = face_down(&mut topo, vec![target_rim], vec![]);
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let (x, y) = (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
+        let ellipse = Ellipse3D::with_axes(Point3::new(0.0, 0.0, 0.0), up, 3.0, 2.0, x, y).unwrap();
+        let off = 5.0 * tol.linear;
+        let wider =
+            Ellipse3D::with_axes(Point3::new(0.0, 0.0, 0.0), up, 3.0 + off, 2.0 + off, x, y)
+                .unwrap();
+        let (from, to, middle) = (
+            ellipse.evaluate(-1.0),
+            ellipse.evaluate(1.0),
+            ellipse.evaluate(0.0),
+        );
+        let near = (wider.evaluate(-1.0), wider.evaluate(1.0));
+        assert!((near.0 - from).length() < 10.0 * tol.linear);
+        let wider = EdgeCurve::Ellipse(wider);
+        let span = wider.domain_with_endpoints(near.0, near.1);
+        record_section(&mut topo, &mut arena, target, wider, near, span);
+        let piece = EdgeCurve::Ellipse(ellipse);
+        assert!(!has_existing_section_along(
+            &arena,
+            &topo,
+            target,
+            (&piece, from, to),
+            middle,
+            tol
+        ));
+    }
+
+    /// The whole ellipse of semi-axes 3 and 2 about the origin, against a
+    /// square of side 10 with a slot 5 tolerances wide cut down to y = 1
+    /// along x = 0. The ellipse crosses the slot's two walls 5 tolerances
+    /// apart: the stretch between them lies outside the square, and no
+    /// section on the square runs over it, in three poses.
+    #[test]
+    fn an_ellipse_across_a_slot_five_tolerances_wide_gives_no_section_over_it() {
+        use std::f64::consts::FRAC_PI_2;
+        let tol = Tolerance::default();
+        let w = 2.5 * tol.linear;
+        for pose in in_plane_poses() {
+            let mut topo = Topology::new();
+            let (face, ellipse) = ellipse_face_down(&mut topo, &pose, (0.0, 0.0), (3.0, 2.0), 0.0);
+            let square = polygon_face_down(
+                &mut topo,
+                &pose,
+                &[
+                    (-5.0, -5.0),
+                    (5.0, -5.0),
+                    (5.0, 5.0),
+                    (w, 5.0),
+                    (w, 1.0),
+                    (-w, 1.0),
+                    (-w, 5.0),
+                    (-5.0, 5.0),
+                ],
+            );
+            let sections = coplanar_sections(&mut topo, [face, square], tol);
+            let top = ellipse.project(pose.mul_point(Point3::new(0.0, 2.0, 0.0)));
+            assert!(
+                (ellipse.evaluate(top) - pose.mul_point(Point3::new(0.0, 2.0, 0.0))).length()
+                    < 1e-12
+            );
+            assert!(!covers(&sections, top), "{pose:?}: a section over the slot");
+            assert!(covers(&sections, top + FRAC_PI_2), "{pose:?}");
+        }
+    }
+
+    /// Two circles of radius 1000 touching at (1000, 0, 0), the second's
+    /// plane turned 5e-10 about its own diameter along y: at the touch it
+    /// stands 5 tolerances above the first's plane, though its ends lie in
+    /// it. They lie in no one plane within the tolerance. Two circles of
+    /// radius 1e-3 whose normals part by 2e-9 lie in one within 2e-12.
+    #[test]
+    fn two_circles_read_in_one_plane_by_their_points_not_their_normals() {
+        use brepkit_math::curves::Circle3D;
+        let tol = 1e-7;
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let (x, y) = (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
+        let a = Circle3D::with_axes(Point3::new(0.0, 0.0, 0.0), up, 1000.0, x, y).unwrap();
+        let tilt = 5e-10_f64;
+        let tilted = Vec3::new(tilt.sin(), 0.0, tilt.cos());
+        let b = Circle3D::with_axes(
+            Point3::new(2000.0, 0.0, 0.0),
+            tilted,
+            1000.0,
+            Vec3::new(-tilt.cos(), 0.0, tilt.sin()),
+            Vec3::new(0.0, -1.0, 0.0),
+        )
+        .unwrap();
+        let (b0, b1) = (b.evaluate(-1.5), b.evaluate(1.5));
+        assert!(b0.z().abs() < 0.5 * tol && b1.z().abs() < 0.5 * tol);
+        assert!((b.evaluate(0.0).z() - 5e-7).abs() < 1e-12);
+        let a_arc = (a.evaluate(-0.5), a.evaluate(0.5));
+        assert!((a.evaluate(0.0) - Point3::new(1000.0, 0.0, 0.0)).length() < 1e-12);
+        let met = crate::builder::face_splitter::section_meetings(
+            (&EdgeCurve::Circle(a), a_arc.0, a_arc.1),
+            (&EdgeCurve::Circle(b), b0, b1),
+            tol,
+        );
+        assert!(met.is_none(), "{met:?}");
+        let small = Circle3D::with_axes(Point3::new(0.0, 0.0, 0.0), up, 1e-3, x, y).unwrap();
+        let tilt = 2e-9_f64;
+        let other = Circle3D::with_axes(
+            Point3::new(1.5e-3, 0.0, 0.0),
+            Vec3::new(tilt.sin(), 0.0, tilt.cos()),
+            1e-3,
+            Vec3::new(tilt.cos(), 0.0, -tilt.sin()),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap();
+        let met = crate::builder::face_splitter::section_meetings(
+            (
+                &EdgeCurve::Circle(small.clone()),
+                small.evaluate(-1.5),
+                small.evaluate(1.5),
+            ),
+            (
+                &EdgeCurve::Circle(other.clone()),
+                other.evaluate(1.5),
+                other.evaluate(1.5 + 3.0),
+            ),
+            tol,
+        );
+        assert!(met.as_ref().is_some_and(|m| m.len() == 2), "{met:?}");
+    }
+
+    /// An ellipse of semi-axes 1.5 and 1 inside a disc of radius 3, its far
+    /// end on x 0.5 tolerances short of the rim, or 2 tolerances past it,
+    /// with its seam on that end or across from it, in three poses. Short
+    /// of the rim, the sections on the disc run round the whole ellipse.
+    /// Past it, none runs over the far end, which lies outside the disc,
+    /// and no section strays more than a tolerance past the rim.
+    #[test]
+    fn an_ellipse_grazing_a_disc_rim_is_kept_inside_and_dropped_outside() {
+        use std::f64::consts::{PI, TAU};
+        let tol = Tolerance::default();
+        for pose in in_plane_poses() {
+            let origin = pose.mul_point(Point3::new(0.0, 0.0, 0.0));
+            for (gap, inside) in [(0.5 * tol.linear, true), (-2.0 * tol.linear, false)] {
+                for seam in [0.0, PI] {
+                    let what = format!("gap {gap:e}, seam {seam}, {pose:?}");
+                    let mut topo = Topology::new();
+                    let circle = Circle3D::new(origin, Vec3::new(0.0, 0.0, 1.0), 3.0).unwrap();
+                    let v = topo.add_vertex(Vertex::new(circle.evaluate(2.4), 1e-7));
+                    let edge = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+                    let disc = face_down(&mut topo, vec![OrientedEdge::new(edge, false)], vec![]);
+                    let (face, _) =
+                        ellipse_face_down(&mut topo, &pose, (1.5 - gap, 0.0), (1.5, 1.0), seam);
+                    let sections: Vec<_> = coplanar_sections(&mut topo, [face, disc], tol)
+                        .into_iter()
+                        .filter(|(c, _, _)| matches!(c, EdgeCurve::Ellipse(_)))
+                        .collect();
+                    let mut covered = 0.0;
+                    for (curve, s, e) in &sections {
+                        let (t0, t1) = curve.domain_with_endpoints(*s, *e);
+                        covered += t1 - t0;
+                        for k in 0..=64 {
+                            let p = curve.evaluate_with_endpoints(
+                                (t1 - t0).madd(f64::from(k) / 64.0, t0),
+                                *s,
+                                *e,
+                            );
+                            assert!(
+                                (p - origin).length() <= 3.0 + tol.linear,
+                                "{what}: a section past the rim at {p:?}"
+                            );
+                        }
+                    }
+                    if inside {
+                        assert!((covered - TAU).abs() < 1e-9, "{what}: covered {covered}");
+                    } else {
+                        assert!(!covers(&sections, 0.0), "{what}: a section past the rim");
+                        assert!(covered > TAU - 0.01, "{what}: covered {covered}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The arc of the ellipse of semi-axes 3 and 2 about the origin from its
+    /// parameter -1 to 1, and the line x = 2.9 from y = -1 to 1 lifted `h`
+    /// off its plane: in the plane's view the line crosses the arc twice.
+    /// A quarter of the tolerance is all the finder reads off one plane:
+    /// lifted half the tolerance, the pair is refused, not read as apart;
+    /// lifted an eighth, the two meetings are found. In three poses.
+    #[test]
+    fn an_ellipse_arc_and_a_line_off_its_plane_are_read_within_a_quarter_tolerance() {
+        use brepkit_math::curves::Ellipse3D;
+        let tol = 1e-7;
+        for pose in test_poses() {
+            let at = |x: f64, y: f64, z: f64| pose.mul_point(Point3::new(x, y, z));
+            let along = |v: Vec3| at(v.x(), v.y(), v.z()) - at(0.0, 0.0, 0.0);
+            let (u, v) = (
+                along(Vec3::new(1.0, 0.0, 0.0)),
+                along(Vec3::new(0.0, 1.0, 0.0)),
+            );
+            let ellipse =
+                Ellipse3D::with_axes(at(0.0, 0.0, 0.0), u.cross(v), 3.0, 2.0, u, v).unwrap();
+            // The arc runs counterclockwise about its normal, which a mirror
+            // turns over: read it from whichever end its parameter starts.
+            let (from, to) = (ellipse.evaluate(-1.0), ellipse.evaluate(1.0));
+            let curve = EdgeCurve::Ellipse(ellipse.clone());
+            let (from, to) = if (curve.domain_with_endpoints(from, to).1
+                - curve.domain_with_endpoints(from, to).0)
+                < std::f64::consts::PI
+            {
+                (from, to)
+            } else {
+                (to, from)
+            };
+            for (h, read) in [(0.5 * tol, false), (0.125 * tol, true)] {
+                let met = crate::builder::face_splitter::section_meetings(
+                    (&curve, from, to),
+                    (&EdgeCurve::Line, at(2.9, -1.0, h), at(2.9, 1.0, h)),
+                    tol,
+                );
+                if read {
+                    assert!(
+                        met.as_ref().is_some_and(|m| m.len() == 2),
+                        "{h:e}, {pose:?}: {met:?}"
+                    );
+                } else {
+                    assert!(met.is_none(), "{h:e}, {pose:?}: {met:?}");
+                }
+            }
+        }
+    }
+
+    /// Two arcs of one ellipse that overlap meet along the stretch between
+    /// their inner ends, which those ends stand for: no other point is
+    /// given, and the pair is not refused.
+    #[test]
+    fn two_overlapping_arcs_of_one_ellipse_meet_only_at_their_ends() {
+        use brepkit_math::curves::Ellipse3D;
+        let tol = 1e-7;
+        for pose in test_poses() {
+            let at = |x: f64, y: f64, z: f64| pose.mul_point(Point3::new(x, y, z));
+            let along = |v: Vec3| at(v.x(), v.y(), v.z()) - at(0.0, 0.0, 0.0);
+            let (u, v) = (
+                along(Vec3::new(1.0, 0.0, 0.0)),
+                along(Vec3::new(0.0, 1.0, 0.0)),
+            );
+            let ellipse =
+                Ellipse3D::with_axes(at(0.0, 0.0, 0.0), u.cross(v), 3.0, 2.0, u, v).unwrap();
+            let curve = EdgeCurve::Ellipse(ellipse.clone());
+            let met = crate::builder::face_splitter::section_meetings(
+                (&curve, ellipse.evaluate(0.0), ellipse.evaluate(2.0)),
+                (&curve, ellipse.evaluate(1.0), ellipse.evaluate(3.0)),
+                tol,
+            );
+            assert!(met.as_ref().is_some_and(Vec::is_empty), "{pose:?}: {met:?}");
+        }
+    }
+
+    /// A square of side 10 about the origin with a hole bounded by the whole
+    /// ellipse of semi-axes 3 and 2 about the origin, from its point at
+    /// `seam`, placed by `pose`, and the ellipse.
+    fn square_with_an_elliptic_hole(
+        topo: &mut Topology,
+        pose: &brepkit_math::mat::Mat4,
+        seam: f64,
+    ) -> (FaceId, brepkit_math::curves::Ellipse3D) {
+        let square = polygon_face_down(
+            topo,
+            pose,
+            &[(-5.0, -5.0), (5.0, -5.0), (5.0, 5.0), (-5.0, 5.0)],
+        );
+        let (oval, ellipse) = ellipse_face_down(topo, pose, (0.0, 0.0), (3.0, 2.0), seam);
+        let outer = topo.face(square).unwrap().outer_wire();
+        // The hole runs the other way round from the ellipse face's outline.
+        let rim = topo
+            .wire(topo.face(oval).unwrap().outer_wire())
+            .unwrap()
+            .edges()[0];
+        let hole = vec![OrientedEdge::new(rim.edge(), !rim.is_forward())];
+        let outline = topo.wire(outer).unwrap().edges().to_vec();
+        (face_down(topo, outline, vec![hole]), ellipse)
+    }
+
+    /// The square with the elliptic hole, against a rectangle from x = 1 to
+    /// 6 and y = -1 to 1, or a disc of radius 1 about (3, 0), each across the
+    /// hole's rim, seamed at 0 and at pi, in three poses. The rectangle's
+    /// and the disc's edges cut the square only outside the hole: no section
+    /// lies inside the hole farther than a tolerance from its rim, though
+    /// the rim's sixteen chords run inside it.
+    #[test]
+    fn sections_across_an_elliptic_hole_stop_at_its_true_rim() {
+        use std::f64::consts::PI;
+        let tol = Tolerance::default();
+        for pose in in_plane_poses() {
+            for seam in [0.0, PI] {
+                for disc in [false, true] {
+                    let what = format!("disc {disc}, seam {seam}, {pose:?}");
+                    let mut topo = Topology::new();
+                    let (holed, ellipse) = square_with_an_elliptic_hole(&mut topo, &pose, seam);
+                    let other = if disc {
+                        let circle = Circle3D::new(
+                            pose.mul_point(Point3::new(3.0, 0.0, 0.0)),
+                            Vec3::new(0.0, 0.0, 1.0),
+                            1.0,
+                        )
+                        .unwrap();
+                        let v = topo.add_vertex(Vertex::new(circle.evaluate(2.4), 1e-7));
+                        let edge = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(circle)));
+                        face_down(&mut topo, vec![OrientedEdge::new(edge, false)], vec![])
+                    } else {
+                        polygon_face_down(
+                            &mut topo,
+                            &pose,
+                            &[(1.0, -1.0), (6.0, -1.0), (6.0, 1.0), (1.0, 1.0)],
+                        )
+                    };
+                    let sections = coplanar_sections(&mut topo, [other, holed], tol);
+                    let (c, u, v) = (ellipse.center(), ellipse.u_axis(), ellipse.v_axis());
+                    let in_hole = |p: Point3| {
+                        let (x, y) = ((p - c).dot(u) / 3.0, (p - c).dot(v) / 2.0);
+                        x.hypot(y) < 1.0
+                            && (ellipse.evaluate(ellipse.project(p)) - p).length() > tol.linear
+                    };
+                    let mut lines = 0;
+                    for (curve, s, e) in &sections {
+                        if matches!(curve, EdgeCurve::Ellipse(_)) {
+                            continue;
+                        }
+                        lines += 1;
+                        let (t0, t1) = curve.domain_with_endpoints(*s, *e);
+                        for k in 0..=64 {
+                            let p = curve.evaluate_with_endpoints(
+                                (t1 - t0).madd(f64::from(k) / 64.0, t0),
+                                *s,
+                                *e,
+                            );
+                            assert!(!in_hole(p), "{what}: a section inside the hole at {p:?}");
+                        }
+                    }
+                    assert!(lines >= 2, "{what}: {sections:?}");
+                }
+            }
+        }
+    }
+
+    /// A triangle inside the ellipse face of semi-axes 3 and 2, one of its
+    /// sides the chord between the ellipse's points at 0 and pi / 8, where
+    /// the face's sixteen samples start. The chord lies inside the ellipse,
+    /// not on it: the side is a section of the face, not a shared boundary,
+    /// in three poses.
+    #[test]
+    fn a_side_along_a_chord_of_an_ellipse_rim_is_a_section_not_the_rim() {
+        use std::f64::consts::PI;
+        let tol = Tolerance::default();
+        for pose in in_plane_poses() {
+            let mut topo = Topology::new();
+            let (oval, ellipse) = ellipse_face_down(&mut topo, &pose, (0.0, 0.0), (3.0, 2.0), 0.0);
+            let corner = |t: f64| {
+                let p = ellipse.evaluate(t) - ellipse.center();
+                (p.dot(ellipse.u_axis()), p.dot(ellipse.v_axis()))
+            };
+            let (a, b) = (corner(0.0), corner(PI / 8.0));
+            // The corners in the frame before `pose`, whose x and y the
+            // ellipse's axes are, taken counterclockwise.
+            let corners = if a.0 * b.1 - a.1 * b.0 > 0.0 {
+                [(0.0, 0.0), a, b]
+            } else {
+                [(0.0, 0.0), b, a]
+            };
+            let triangle = polygon_face_down(&mut topo, &pose, &corners);
+            let sections = coplanar_sections(&mut topo, [triangle, oval], tol);
+            let (p, q) = (ellipse.evaluate(0.0), ellipse.evaluate(PI / 8.0));
+            let along_chord = sections.iter().any(|(curve, s, e)| {
+                matches!(curve, EdgeCurve::Line)
+                    && (((*s - p).length() < 1e-9 && (*e - q).length() < 1e-9)
+                        || ((*s - q).length() < 1e-9 && (*e - p).length() < 1e-9))
+            });
+            assert!(along_chord, "{pose:?}: {sections:?}");
+        }
+    }
+
+    /// The box the coplanar phase gives the face bounded by the ellipse of
+    /// semi-axes 3 and 2 seamed at 0.3, whose samples miss its ends of
+    /// either axis, holds the whole ellipse, in three poses.
+    #[test]
+    fn an_ellipse_faces_box_holds_its_whole_rim() {
+        for pose in in_plane_poses() {
+            let mut topo = Topology::new();
+            let (oval, ellipse) = ellipse_face_down(&mut topo, &pose, (1.0, 2.0), (3.0, 2.0), 0.3);
+            let bbox = compute_face_bbox(&topo, oval).unwrap();
+            for k in 0..=720 {
+                let p = ellipse.evaluate(f64::from(k) * std::f64::consts::TAU / 720.0);
+                assert!(bbox.contains_point(p), "{pose:?}: {p:?} outside {bbox:?}");
+            }
+        }
+    }
+
+    /// The box of each section an ellipse face gives a disc it lies in holds
+    /// the section's whole arc, not only its samples, in three poses.
+    #[test]
+    fn an_ellipse_sections_box_holds_its_whole_arc() {
+        use std::f64::consts::TAU;
+        let tol = Tolerance::default();
+        let frame = PlaneFrame2D::canonical(Vec3::new(0.0, 0.0, -1.0), 0.0);
+        for pose in in_plane_poses() {
+            let mut topo = Topology::new();
+            let disc_rim = Circle3D::new(
+                pose.mul_point(Point3::new(0.0, 0.0, 0.0)),
+                Vec3::new(0.0, 0.0, 1.0),
+                9.0,
+            )
+            .unwrap();
+            let v = topo.add_vertex(Vertex::new(disc_rim.evaluate(2.4), 1e-7));
+            let edge = topo.add_edge(Edge::new(v, v, EdgeCurve::Circle(disc_rim)));
+            let disc = face_down(&mut topo, vec![OrientedEdge::new(edge, false)], vec![]);
+            let (oval, _) = ellipse_face_down(&mut topo, &pose, (1.0, 2.0), (3.0, 2.0), 0.3);
+            let mut arena = GfaArena::new();
+            let mut regions = Vec::new();
+            for face in [oval, disc] {
+                let mut region = face_region_2d(&topo, face, &frame, tol.linear).unwrap();
+                attach_paves(&mut region, &topo, &arena);
+                regions.push(region);
+            }
+            process_coplanar_pair(
+                &mut topo,
+                &mut arena,
+                &mut Vec::new(),
+                (oval, &regions[0]),
+                (disc, &regions[1]),
+                &frame,
+                tol,
+            )
+            .unwrap();
+            let mut seen = 0;
+            for curve in &arena.curves {
+                let EdgeCurve::Ellipse(ellipse) = &curve.curve else {
+                    continue;
+                };
+                seen += 1;
+                let (t0, t1) = curve.t_range;
+                for k in 0..=512 {
+                    let t = (t1 - t0).madd(f64::from(k) / 512.0, t0);
+                    let p = ellipse.evaluate(t.rem_euclid(TAU));
+                    assert!(
+                        curve.bbox.contains_point(p),
+                        "{pose:?}: {p:?} outside {:?}",
+                        curve.bbox
+                    );
+                }
+            }
+            assert!(seen >= 2, "{pose:?}: {seen}");
+        }
+    }
+
+    /// A face bounded by the half of the ellipse of semi-axes 3 and 2 from
+    /// its parameter 0 to pi, closed by a B-spline along the diameter whose
+    /// middle weight is zero, has no exact region: the face is refused, not
+    /// read by the ellipse's chords.
+    #[test]
+    fn a_face_with_an_ellipse_and_no_exact_region_is_refused() {
+        use brepkit_math::curves::Ellipse3D;
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use std::f64::consts::PI;
+        let mut topo = Topology::new();
+        let ellipse = Ellipse3D::with_axes(
+            Point3::new(0.0, 0.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            3.0,
+            2.0,
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+        )
+        .unwrap();
+        let (p, q) = (ellipse.evaluate(0.0), ellipse.evaluate(PI));
+        let (a, b) = (
+            topo.add_vertex(Vertex::new(p, 1e-7)),
+            topo.add_vertex(Vertex::new(q, 1e-7)),
+        );
+        let arc = topo.add_edge(Edge::new(a, b, EdgeCurve::Ellipse(ellipse)));
+        let spline = NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+            vec![q, Point3::new(0.0, 0.0, 0.0), p],
+            vec![1.0, 0.0, 1.0],
+        )
+        .unwrap();
+        let diameter = topo.add_edge(Edge::new(b, a, EdgeCurve::NurbsCurve(spline)));
+        let face = face_down(
+            &mut topo,
+            vec![
+                OrientedEdge::new(diameter, false),
+                OrientedEdge::new(arc, false),
+            ],
+            vec![],
+        );
+        let frame = PlaneFrame2D::canonical(Vec3::new(0.0, 0.0, -1.0), 0.0);
+        assert!(face_region_2d(&topo, face, &frame, 1e-7).is_err());
+    }
+
+    /// Whether some section of `kind` runs over `p`: its curve passes
+    /// through `p` within 1e-9, at a parameter inside the section's range.
+    fn runs_over(sections: &[(EdgeCurve, Point3, Point3)], p: Point3) -> bool {
+        use std::f64::consts::TAU;
+        sections.iter().any(|(curve, s, e)| {
+            let t = match curve {
+                EdgeCurve::Circle(c) => c.project(p),
+                EdgeCurve::Ellipse(el) => el.project(p),
+                EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return false,
+            };
+            let (t0, t1) = curve.domain_with_endpoints(*s, *e);
+            let at = t0 + (t - t0).rem_euclid(TAU);
+            at <= t1 && (curve.evaluate_with_endpoints(at, *s, *e) - p).length() < 1e-9
+        })
+    }
+
+    /// A disc of radius 1.5 about (2.5, 0) whose rim is a whole turn stored
+    /// as a rational quadratic, against the face of the ellipse of
+    /// semi-axes 3 and 2 about the origin, in three poses. The rim crosses
+    /// the ellipse twice. Each way round, the sections follow each curve
+    /// over its run inside the other face and no farther: the rim's run
+    /// inside the ellipse, through (1, 0), is kept, and the ellipse's run
+    /// inside the disc, through (3, 0), is kept.
+    #[test]
+    fn a_rational_quadratic_rim_across_an_ellipse_is_cut_where_they_cross() {
+        use std::f64::consts::TAU;
+        let tol = Tolerance::default();
+        for pose in in_plane_poses() {
+            let mut topo = Topology::new();
+            let (oval, ellipse) = ellipse_face_down(&mut topo, &pose, (0.0, 0.0), (3.0, 2.0), 0.0);
+            let centre = pose.mul_point(Point3::new(2.5, 0.0, 0.0));
+            let circle = Circle3D::with_axes(
+                centre,
+                Vec3::new(0.0, 0.0, 1.0),
+                1.5,
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            )
+            .unwrap();
+            let seam = topo.add_vertex(Vertex::new(circle.evaluate(0.0), 1e-7));
+            let rim = topo.add_edge(Edge::new(
+                seam,
+                seam,
+                EdgeCurve::NurbsCurve(rational_arc(&circle, 4)),
+            ));
+            let disc = face_down(&mut topo, vec![OrientedEdge::new(rim, false)], vec![]);
+            let sections = coplanar_sections(&mut topo, [disc, oval], tol);
+            let (c, u, v) = (ellipse.center(), ellipse.u_axis(), ellipse.v_axis());
+            let in_oval = |p: Point3| ((p - c).dot(u) / 3.0).hypot((p - c).dot(v) / 2.0);
+            let in_disc = |p: Point3| (p - centre).length() / 1.5;
+            let n = 20_000;
+            for k in 0..n {
+                let t = TAU * f64::from(k) / f64::from(n);
+                for (p, inside, what) in [
+                    (circle.evaluate(t), in_oval(circle.evaluate(t)), "rim"),
+                    (ellipse.evaluate(t), in_disc(ellipse.evaluate(t)), "ellipse"),
+                ] {
+                    if (inside - 1.0).abs() < 1e-6 {
+                        continue;
+                    }
+                    assert_eq!(
+                        runs_over(&sections, p),
+                        inside < 1.0,
+                        "{pose:?}: the {what} at {p:?}, {inside} of the way out"
+                    );
+                }
+            }
+            assert!(runs_over(
+                &sections,
+                pose.mul_point(Point3::new(1.0, 0.0, 0.0))
+            ));
+            assert!(runs_over(
+                &sections,
+                pose.mul_point(Point3::new(3.0, 0.0, 0.0))
+            ));
+        }
+    }
+
+    /// A quarter of the circle of radius 1e5 about the origin as a rational
+    /// quadratic, its corner weight cos 45 degrees, reads as its arc. With
+    /// the weight 9e-10 heavier, within the shape test's slack, the curve
+    /// strays from any circle through its ends and middle by far more than
+    /// the tolerance: it is not read as one.
+    #[test]
+    fn a_rational_quadratic_is_read_as_an_arc_only_within_the_tolerance() {
+        use std::f64::consts::FRAC_1_SQRT_2;
+        let frame = PlaneFrame2D::canonical(Vec3::new(0.0, 0.0, -1.0), 0.0);
+        let r = 1e5;
+        let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        for (corner, arc) in [(FRAC_1_SQRT_2, true), (FRAC_1_SQRT_2 + 9e-10, false)] {
+            let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+                2,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                vec![p(r, 0.0), p(r, r), p(0.0, r)],
+                vec![1.0, corner, 1.0],
+            )
+            .unwrap();
+            let mut topo = Topology::new();
+            let [east, north, origin] =
+                [p(r, 0.0), p(0.0, r), p(0.0, 0.0)].map(|q| topo.add_vertex(Vertex::new(q, 1e-7)));
+            let rim = topo.add_edge(Edge::new(east, north, EdgeCurve::NurbsCurve(curve)));
+            let down = topo.add_edge(Edge::new(north, origin, EdgeCurve::Line));
+            let back = topo.add_edge(Edge::new(origin, east, EdgeCurve::Line));
+            let face = face_down(
+                &mut topo,
+                vec![
+                    OrientedEdge::new(back, false),
+                    OrientedEdge::new(down, false),
+                    OrientedEdge::new(rim, false),
+                ],
+                vec![],
+            );
+            let region = face_region_2d(&topo, face, &frame, 1e-7).unwrap();
+            let edge = region.edges.iter().find(|e| e.eid == rim).unwrap();
+            assert_eq!(matches!(edge.shape, Shape2::Arc(_)), arc, "corner {corner}");
+            if arc {
+                assert!(
+                    matches!(edge.own.0, EdgeCurve::Circle(_)),
+                    "corner {corner}"
+                );
             }
         }
     }

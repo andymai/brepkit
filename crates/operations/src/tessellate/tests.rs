@@ -192,7 +192,7 @@ fn tessellate_flat_surface_few_triangles() {
     )
     .unwrap();
 
-    let mesh = tessellate_nurbs(&surface, 0.1, 0.0).mesh;
+    let mesh = tessellate_nurbs(&surface, 0.1, 0.0).unwrap().mesh;
 
     assert_eq!(
         mesh.indices.len() / 3,
@@ -243,8 +243,8 @@ fn tessellate_curved_surface_more_at_curves() {
     .unwrap();
 
     let deflection = 0.05;
-    let flat_mesh = tessellate_nurbs(&flat, deflection, 0.0).mesh;
-    let curved_mesh = tessellate_nurbs(&curved, deflection, 0.0).mesh;
+    let flat_mesh = tessellate_nurbs(&flat, deflection, 0.0).unwrap().mesh;
+    let curved_mesh = tessellate_nurbs(&curved, deflection, 0.0).unwrap().mesh;
 
     let flat_tris = flat_mesh.indices.len() / 3;
     let curved_tris = curved_mesh.indices.len() / 3;
@@ -1007,8 +1007,8 @@ fn curvature_adaptive_refines_high_curvature() {
     )
     .unwrap();
 
-    let fine_mesh = tessellate_nurbs(&dome, 0.01, 0.0).mesh;
-    let coarse_mesh = tessellate_nurbs(&dome, 0.5, 0.0).mesh;
+    let fine_mesh = tessellate_nurbs(&dome, 0.01, 0.0).unwrap().mesh;
+    let coarse_mesh = tessellate_nurbs(&dome, 0.5, 0.0).unwrap().mesh;
 
     assert!(
         fine_mesh.indices.len() / 3 > coarse_mesh.indices.len() / 3,
@@ -1046,7 +1046,7 @@ fn curvature_adaptive_midpoint_sag_check() {
     .unwrap();
 
     let deflection = 0.05;
-    let mesh = tessellate_nurbs(&surface, deflection, 0.0).mesh;
+    let mesh = tessellate_nurbs(&surface, deflection, 0.0).unwrap().mesh;
 
     let tri_count = mesh.indices.len() / 3;
     assert!(
@@ -4179,6 +4179,7 @@ fn a_flat_trapezoid_needs_no_grid_for_its_twist() {
         let surface = patch(lift);
         let at = |u: f64, v: f64| surface.evaluate(u, v);
         super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.01, 1024, None)
+            .unwrap()
     };
     assert_eq!(grid(0.0), (1, 1));
     let (n_u, n_v) = grid(10.0);
@@ -4255,7 +4256,8 @@ fn a_saddle_flattening_mid_patch_is_meshed_at_its_middle() {
         );
         let at = |u: f64, v: f64| saddle.evaluate(u, v);
         let (n_u, n_v) =
-            super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.05, 1024, None);
+            super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.05, 1024, None)
+                .unwrap();
         #[allow(clippy::cast_precision_loss)]
         let (du, dv) = (1.0 / n_u as f64, 1.0 / n_v as f64);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -4314,7 +4316,8 @@ fn a_twisted_patch_grows_its_grid_by_what_its_worst_cell_needs() {
         deflection,
         1024,
         None,
-    );
+    )
+    .unwrap();
     assert!(
         worst(grid) <= 0.5 * deflection,
         "{grid:?} strays {}",
@@ -4354,11 +4357,13 @@ fn a_twisted_grid_keeps_two_creases_in_separate_chords() {
             unit,
             deflection,
             angular_tol,
-            1024,
+            (1024, 1024),
         )
+        .unwrap()
     };
     let start = (sized(true), sized(false));
-    let grid = super::nurbs::untwisted_grid(&at, unit, start, deflection, 1024, Some(&holds));
+    let grid =
+        super::nurbs::untwisted_grid(&at, unit, start, deflection, 1024, Some(&holds)).unwrap();
     assert!(grid != start, "{start:?} needs no refinement");
     assert!(
         holds(true, grid.0) && holds(false, grid.1),
@@ -4404,7 +4409,8 @@ fn a_twisted_grid_steps_on_to_a_count_its_chords_hold() {
         deflection,
         1024,
         Some(&thirds),
-    );
+    )
+    .unwrap();
     assert!(
         thirds(true, grid.0) && thirds(false, grid.1),
         "grew to {grid:?}"
@@ -4440,12 +4446,118 @@ fn a_twisted_grid_keeps_a_narrow_peak_it_has_found() {
         deflection,
         1024,
         None,
-    );
+    )
+    .unwrap();
     let stray = stray_in_grid(&at, grid, (0.125, 0.125));
     assert!(
         stray <= 0.5 * deflection,
         "{grid:?}: the peak stands {stray} off"
     );
+}
+
+/// The narrow peak above with no room for witnesses: the search takes only
+/// whole multiples of its grids, each with the probes of the one before on
+/// its vertices or probes, and the grid taken still holds the peak.
+#[test]
+fn a_twisted_grid_with_no_room_for_witnesses_keeps_a_narrow_peak() {
+    let h = |t: f64| (1.0 - (t - 0.125).abs() / 0.003).max(0.0);
+    let at = |u: f64, v: f64| Point3::new(u, v, 0.7 * u * v + 0.217 * h(u) * h(v));
+    let deflection = 0.2;
+    let mut held = 0;
+    let grid = super::nurbs::untwisted_grid_keeping(
+        &at,
+        ((0.0, 1.0), (0.0, 1.0)),
+        (1, 1),
+        deflection,
+        1024,
+        None,
+        (0, &mut held),
+    )
+    .unwrap();
+    let stray = stray_in_grid(&at, grid, (0.125, 0.125));
+    assert!(
+        stray <= 0.5 * deflection,
+        "{grid:?}: the peak stands {stray} off"
+    );
+    assert_eq!(held, 1, "the probes held at once");
+}
+
+/// S(u, v) = (u, v, 0.0192uv + 0.003 h(u) h(v)), h(t) = max(0, 1 - |t - 1/6|
+/// / 0.006), at deflection 0.002 from a 2 by 2 grid with room for 4
+/// witnesses: the 2 by 2 grid's four cells stray at their middles and fill
+/// the room, and the 3 by 3 grid tried next finds the peak at a cell's
+/// middle with no room left to keep it. A 4 by 4 grid leaves the peak
+/// between its probes, 0.0031 off their triangles. The grid taken goes on
+/// from multiples of the 3 by 3 grid and holds the peak within half the
+/// deflection, in three poses.
+#[test]
+fn a_twisted_grid_out_of_room_on_a_grid_tried_between_keeps_its_peak() {
+    let turn = |angle: f64, axis: Vec3, shift: Vec3| {
+        let k = axis * (1.0 / axis.length());
+        let (sin, cos) = angle.sin_cos();
+        move |p: Point3| {
+            let v = Vec3::new(p.x(), p.y(), p.z());
+            let r = v * cos + k.cross(v) * sin + k * (k.dot(v) * (1.0 - cos));
+            Point3::new(r.x() + shift.x(), r.y() + shift.y(), r.z() + shift.z())
+        }
+    };
+    let poses = [
+        turn(0.0, Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, 0.0)),
+        turn(0.7, Vec3::new(1.0, 2.0, 3.0), Vec3::new(5.0, -3.0, 2.0)),
+        turn(2.1, Vec3::new(-2.0, 1.0, 0.5), Vec3::new(-100.0, 40.0, 7.0)),
+    ];
+    let h = |t: f64| (1.0 - (t - 1.0 / 6.0).abs() / 0.006).max(0.0);
+    let deflection = 0.002;
+    for pose in &poses {
+        let at = |u: f64, v: f64| pose(Point3::new(u, v, 0.0192 * u * v + 0.003 * h(u) * h(v)));
+        let mut held = 0;
+        let found = super::nurbs::untwisted_grid_keeping(
+            &at,
+            ((0.0, 1.0), (0.0, 1.0)),
+            (2, 2),
+            deflection,
+            1024,
+            None,
+            (4, &mut held),
+        );
+        match found {
+            Ok(grid) => {
+                let stray = stray_in_grid(&at, grid, (1.0 / 6.0, 1.0 / 6.0));
+                assert!(
+                    stray <= 0.5 * deflection,
+                    "{grid:?}: the peak stands {stray} off"
+                );
+            }
+            Err(e) => assert!(
+                matches!(e, crate::OperationsError::TooManySamples { .. }),
+                "{e:?}"
+            ),
+        }
+    }
+}
+
+/// The saddle S(u, v) = (u, v, uv) at deflection 1e-6 needs some 700
+/// divisions each way, past a limit of 128. Every probe of every grid up to
+/// 128 by 128 strays, some 110,000 in all; with room for 1,000 witnesses
+/// the search holds at most twice that at once, and is refused.
+#[test]
+fn a_twisted_grid_past_its_limit_holds_its_witnesses_to_their_room() {
+    let at = |u: f64, v: f64| Point3::new(u, v, u * v);
+    let mut held = 0;
+    let found = super::nurbs::untwisted_grid_keeping(
+        &at,
+        ((0.0, 1.0), (0.0, 1.0)),
+        (1, 1),
+        1e-6,
+        128,
+        None,
+        (1000, &mut held),
+    );
+    assert!(
+        matches!(found, Err(crate::OperationsError::TooManySamples { .. })),
+        "{found:?}"
+    );
+    assert!(held <= 2001, "{held} probes held at once");
 }
 
 /// The stray of the grid's cell holding `(u, v)` there, from either split.
@@ -4488,7 +4600,8 @@ fn a_twisted_grid_keeps_a_narrow_peak_where_its_chords_hold() {
         deflection,
         1024,
         Some(&not_eight),
-    );
+    )
+    .unwrap();
     assert!(
         not_eight(true, grid.0) && not_eight(false, grid.1),
         "{grid:?}"
@@ -4515,7 +4628,8 @@ fn a_tapered_patch_strays_most_toward_its_narrow_end() {
     );
     let at = |u: f64, v: f64| taper.evaluate(u, v);
     let (n_u, n_v) =
-        super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.11, 1024, None);
+        super::nurbs::untwisted_grid(&at, ((0.0, 1.0), (0.0, 1.0)), (1, 1), 0.11, 1024, None)
+            .unwrap();
     #[allow(clippy::cast_precision_loss)]
     let (du, dv) = (1.0 / n_u as f64, 1.0 / n_v as f64);
     let worst = (0..n_u)
@@ -4787,8 +4901,10 @@ fn grid_lines_stand_close_only_where_the_surface_turns() {
         }
     };
     let unit = ((0.0, 1.0), (0.0, 1.0));
-    let us = super::nurbs::iso_breaks_over(&at, &normal_at, true, unit, &[], 0.01, 0.3, 1024);
-    let vs = super::nurbs::iso_breaks_over(&at, &normal_at, false, unit, &[], 0.01, 0.3, 1024);
+    let us =
+        super::nurbs::iso_breaks_over(&at, &normal_at, true, unit, &[], 0.01, 0.3, 1024).unwrap();
+    let vs =
+        super::nurbs::iso_breaks_over(&at, &normal_at, false, unit, &[], 0.01, 0.3, 1024).unwrap();
     assert_eq!(vs, vec![0.0, 1.0], "the extruded direction is straight");
     let on_run = us.iter().filter(|&&u| u < 0.85).count();
     let on_curl = us.iter().filter(|&&u| u > 0.9).count();
@@ -4796,6 +4912,42 @@ fn grid_lines_stand_close_only_where_the_surface_turns() {
     assert!(on_curl >= 10, "{on_curl} lines on the curl: {us:?}");
     // Even lines at the curl's spacing would take ten times as many.
     assert!(us.len() < 40, "{} lines", us.len());
+}
+
+/// A span with no parameter strictly between its ends cannot be cut: one
+/// that still fails its chord test is refused at once. Here a cylinder turns
+/// 1e16 radians a unit of `u`, so the span from 1 to the next float after
+/// it turns some 2.2 radians and sags far past the deflection.
+#[test]
+fn a_span_that_cannot_be_halved_is_refused_at_once() {
+    let at = |u: f64, v: f64| Point3::new((1e16 * u).cos(), (1e16 * u).sin(), v);
+    let normal_at = |u: f64, _: f64| Vec3::new((1e16 * u).cos(), (1e16 * u).sin(), 0.0);
+    let span = ((1.0, 1.0 + f64::EPSILON), (0.0, 1.0));
+    let started = std::time::Instant::now();
+    let found =
+        super::nurbs::iso_breaks_over(&at, &normal_at, true, span, &[], 0.001, 0.3, 999_999);
+    assert!(
+        matches!(found, Err(crate::OperationsError::TooManySamples { .. })),
+        "{found:?}"
+    );
+    assert!(started.elapsed().as_secs() < 1, "{:?}", started.elapsed());
+}
+
+/// A sag that every span keeps cut eightfold passes the division limit in
+/// one level: z = u (1 - u) to 1e-14 needs some 2.5e6 lines. The lines are
+/// refused as the count passes the limit, not after the level is filled.
+#[test]
+fn lines_past_the_division_limit_are_refused_as_they_pass_it() {
+    let at = |u: f64, v: f64| Point3::new(u, v, u * (1.0 - u));
+    let normal_at = |_: f64, _: f64| Vec3::new(0.0, 0.0, 1.0);
+    let unit = ((0.0, 1.0), (0.0, 1.0));
+    let found =
+        super::nurbs::iso_breaks_over(&at, &normal_at, true, unit, &[], 1e-14, 0.0, 999_999);
+    assert!(
+        matches!(&found, Err(crate::OperationsError::TooManySamples { samples, .. })
+            if *samples <= 1_000_008.0),
+        "{found:?}"
+    );
 }
 
 #[test]
@@ -4816,12 +4968,12 @@ fn a_span_is_cut_by_what_it_needs() {
 fn only_twisted_cells_are_cut() {
     let flat = |u: f64, v: f64| Point3::new(10.0 * u, 10.0 * v, 0.0);
     let (mut us, mut vs) = (vec![0.0, 0.5, 1.0], vec![0.0, 1.0]);
-    super::nurbs::untwist_lines(&flat, &mut us, &mut vs, 0.01);
+    super::nurbs::untwist_lines(&flat, &mut us, &mut vs, 0.01).unwrap();
     assert_eq!((us.len(), vs.len()), (3, 2));
 
     let twisted = |u: f64, v: f64| Point3::new(10.0 * u, 10.0 * v, 4.0 * u * v);
     let (mut us, mut vs) = (vec![0.0, 1.0], vec![0.0, 1.0]);
-    super::nurbs::untwist_lines(&twisted, &mut us, &mut vs, 0.01);
+    super::nurbs::untwist_lines(&twisted, &mut us, &mut vs, 0.01).unwrap();
     assert!(us.len() > 2 && vs.len() > 2, "{} x {}", us.len(), vs.len());
     // A bilinear cell's middle stands a quarter of its twist off its
     // triangles: 4 du dv / 4 here.
@@ -7319,4 +7471,470 @@ fn a_sliver_of_a_ball_is_counted_by_its_own_rows() {
         matches!(samples, Ok((positions, triangles)) if triangles > 0 && positions < 100_000),
         "{samples:?}"
     );
+}
+
+/// A solid of the one face `face`, as a sheet is.
+fn one_face_solid(topo: &mut Topology, face: brepkit_topology::face::FaceId) -> SolidId {
+    use brepkit_topology::shell::Shell;
+    use brepkit_topology::solid::Solid;
+    let shell = topo.add_shell(Shell::new(vec![face]).unwrap());
+    topo.add_solid(Solid::new(shell, vec![]))
+}
+
+/// The rational quadratic quarter arcs of a circle about z, as control
+/// points `(x, y)` and weights, from `(1, 0)` to `(0, 1)`.
+const QUARTER: [((f64, f64), f64); 3] = [
+    ((1.0, 0.0), 1.0),
+    ((1.0, 1.0), std::f64::consts::FRAC_1_SQRT_2),
+    ((0.0, 1.0), 1.0),
+];
+
+/// A rational B-spline quarter cylinder of radius 1 about z, from z = 0 to
+/// z = 1: exact, so a point's distance from the cylinder is how far it
+/// stands off the face's surface.
+fn nurbs_quarter_cylinder(topo: &mut Topology) -> brepkit_topology::face::FaceId {
+    let points = QUARTER
+        .iter()
+        .map(|&((x, y), _)| vec![Point3::new(x, y, 0.0), Point3::new(x, y, 1.0)])
+        .collect();
+    let weights = QUARTER.iter().map(|&(_, w)| vec![w, w]).collect();
+    let surface = NurbsSurface::new(
+        2,
+        1,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        points,
+        weights,
+    )
+    .unwrap();
+    iso_bounded_face(topo, surface)
+}
+
+/// A rational B-spline patch of a torus of radii 3 and 1 about z: a quarter
+/// of the way round its axis by a quarter of the way round its tube, from
+/// its outer equator up to its top.
+fn nurbs_torus_patch(topo: &mut Topology) -> brepkit_topology::face::FaceId {
+    let tube = [
+        ((4.0, 0.0), 1.0),
+        ((4.0, 1.0), std::f64::consts::FRAC_1_SQRT_2),
+        ((3.0, 1.0), 1.0),
+    ];
+    let points = QUARTER
+        .iter()
+        .map(|&((cx, cy), _)| {
+            tube.iter()
+                .map(|&((r, z), _)| Point3::new(cx * r, cy * r, z))
+                .collect()
+        })
+        .collect();
+    let weights = QUARTER
+        .iter()
+        .map(|&(_, wa)| tube.iter().map(|&(_, wt)| wa * wt).collect())
+        .collect();
+    let surface = NurbsSurface::new(
+        2,
+        2,
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        points,
+        weights,
+    )
+    .unwrap();
+    iso_bounded_face(topo, surface)
+}
+
+/// A face on the whole of `surface`, bounded by its four iso-curves at the
+/// ends of its domain, each a B-spline edge on the surface. A surface closed
+/// both ways is bounded by its two seams from one vertex, each run there
+/// and back.
+fn iso_bounded_face(topo: &mut Topology, surface: NurbsSurface) -> brepkit_topology::face::FaceId {
+    use brepkit_math::nurbs::curve::NurbsCurve;
+    let cps = surface.control_points().to_vec();
+    let ws = surface.weights().to_vec();
+    let (rows, cols) = (cps.len(), cps[0].len());
+    let along_u = |j: usize| {
+        NurbsCurve::new(
+            surface.degree_u(),
+            surface.knots_u().to_vec(),
+            (0..rows).map(|i| cps[i][j]).collect(),
+            (0..rows).map(|i| ws[i][j]).collect(),
+        )
+        .unwrap()
+    };
+    let along_v = |i: usize| {
+        NurbsCurve::new(
+            surface.degree_v(),
+            surface.knots_v().to_vec(),
+            cps[i].clone(),
+            ws[i].clone(),
+        )
+        .unwrap()
+    };
+    // A degree-1 direction's iso-curves are straight: lines, as a file holds
+    // them.
+    let curve = |nurbs: NurbsCurve| {
+        if nurbs.degree() == 1 && nurbs.control_points().len() == 2 {
+            EdgeCurve::Line
+        } else {
+            EdgeCurve::NurbsCurve(nurbs)
+        }
+    };
+    let closed = surface.is_periodic_u() && surface.is_periodic_v();
+    let wire = if closed {
+        let corner = topo.add_vertex(Vertex::new(cps[0][0], 1e-7));
+        let u_seam = topo.add_edge(Edge::new(corner, corner, EdgeCurve::NurbsCurve(along_u(0))));
+        let v_seam = topo.add_edge(Edge::new(corner, corner, EdgeCurve::NurbsCurve(along_v(0))));
+        vec![
+            OrientedEdge::new(u_seam, true),
+            OrientedEdge::new(v_seam, true),
+            OrientedEdge::new(u_seam, false),
+            OrientedEdge::new(v_seam, false),
+        ]
+    } else {
+        let mut corner = |i: usize, j: usize| topo.add_vertex(Vertex::new(cps[i][j], 1e-7));
+        let (c00, c10, c11, c01) = (
+            corner(0, 0),
+            corner(rows - 1, 0),
+            corner(rows - 1, cols - 1),
+            corner(0, cols - 1),
+        );
+        let bottom = topo.add_edge(Edge::new(c00, c10, curve(along_u(0))));
+        let right = topo.add_edge(Edge::new(c10, c11, curve(along_v(rows - 1))));
+        let top = topo.add_edge(Edge::new(c01, c11, curve(along_u(cols - 1))));
+        let left = topo.add_edge(Edge::new(c00, c01, curve(along_v(0))));
+        vec![
+            OrientedEdge::new(bottom, true),
+            OrientedEdge::new(right, true),
+            OrientedEdge::new(top, false),
+            OrientedEdge::new(left, false),
+        ]
+    };
+    let wire = topo.add_wire(Wire::new(wire, true).unwrap());
+    topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface)))
+}
+
+/// A smooth, closed rational B-spline torus of radii 3 and 1 about z: each
+/// way a whole circle of four rational quadratic quarters.
+fn closed_rational_torus() -> NurbsSurface {
+    let s = std::f64::consts::FRAC_1_SQRT_2;
+    let circle: [((f64, f64), f64); 9] = [
+        ((1.0, 0.0), 1.0),
+        ((1.0, 1.0), s),
+        ((0.0, 1.0), 1.0),
+        ((-1.0, 1.0), s),
+        ((-1.0, 0.0), 1.0),
+        ((-1.0, -1.0), s),
+        ((0.0, -1.0), 1.0),
+        ((1.0, -1.0), s),
+        ((1.0, 0.0), 1.0),
+    ];
+    let knots = vec![
+        0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+    ];
+    let points = circle
+        .iter()
+        .map(|&((cx, cy), _)| {
+            circle
+                .iter()
+                .map(|&((a, b), _)| {
+                    let r = 3.0 + a;
+                    Point3::new(cx * r, cy * r, b)
+                })
+                .collect()
+        })
+        .collect();
+    let weights = circle
+        .iter()
+        .map(|&(_, wa)| circle.iter().map(|&(_, wt)| wa * wt).collect())
+        .collect();
+    NurbsSurface::new(2, 2, knots.clone(), knots, points, weights).unwrap()
+}
+
+fn off_cylinder(p: Point3) -> f64 {
+    (p.x().hypot(p.y()) - 1.0).abs()
+}
+
+fn off_torus(p: Point3) -> f64 {
+    ((p.x().hypot(p.y()) - 3.0).hypot(p.z()) - 1.0).abs()
+}
+
+/// The farthest any corner, edge middle or centroid of `mesh`'s triangles
+/// stands off a surface, by `off`.
+fn worst_off(mesh: &TriangleMesh, off: &dyn Fn(Point3) -> f64) -> f64 {
+    worst_off_inside(mesh, off, &|_| false)
+}
+
+/// [`worst_off`] over the triangles with no corner on the boundary, by
+/// `on_boundary`.
+fn worst_off_inside(
+    mesh: &TriangleMesh,
+    off: &dyn Fn(Point3) -> f64,
+    on_boundary: &dyn Fn(Point3) -> bool,
+) -> f64 {
+    let mid = |a: Point3, b: Point3| {
+        Point3::new(
+            0.5 * (a.x() + b.x()),
+            0.5 * (a.y() + b.y()),
+            0.5 * (a.z() + b.z()),
+        )
+    };
+    mesh.indices
+        .chunks_exact(3)
+        .map(|t| [0, 1, 2].map(|k| mesh.positions[t[k] as usize]))
+        .filter(|corners| !corners.iter().any(|&p| on_boundary(p)))
+        .map(|[a, b, c]| {
+            let centroid = Point3::new(
+                (a.x() + b.x() + c.x()) / 3.0,
+                (a.y() + b.y() + c.y()) / 3.0,
+                (a.z() + b.z() + c.z()) / 3.0,
+            );
+            [a, b, c, mid(a, b), mid(b, c), mid(c, a), centroid]
+                .into_iter()
+                .map(off)
+                .fold(0.0, f64::max)
+        })
+        .fold(0.0, f64::max)
+}
+
+/// A B-spline quarter cylinder of radius 1 meshed to 1e-9 needs some 20,000
+/// divisions round its arc, past the solid mesher's former cap of 1024 a
+/// direction, which left the mesh 2.0e-8 off the cylinder. Meshed to 1e-15
+/// it needs some 2.5e7, past the sample limit, and is refused.
+#[test]
+fn a_spline_face_past_1024_divisions_a_direction_meshes_within_its_deflection() {
+    let mut topo = Topology::new();
+    let face = nurbs_quarter_cylinder(&mut topo);
+    let solid = one_face_solid(&mut topo, face);
+    let deflection = 1e-9;
+    let mesh = tessellate_solid(&topo, solid, deflection).unwrap();
+    let worst = worst_off(&mesh, &off_cylinder);
+    assert!(worst <= deflection, "{worst:e} off the cylinder");
+    let fine = tessellate_solid(&topo, solid, 1e-15).map(|m| m.positions.len());
+    assert!(
+        matches!(fine, Err(crate::OperationsError::TooManySamples { .. })),
+        "{fine:?}"
+    );
+}
+
+/// A B-spline patch of a torus of radii 3 and 1, a quarter round each way,
+/// meshed to 4e-6 needs a grid of some 450,000 samples, past the solid
+/// mesher's former cap of 65,536 cells, which thinned the lines and left the
+/// grid 2.8e-5 off the torus. The grid's triangles now lie within the
+/// deflection. Those that reach a boundary sample are left out: the
+/// boundary is sampled to the whole deflection, and a triangle across its
+/// strip can stand off by more. Meshed to 1e-9 the patch needs some 2.5e9
+/// cells, past the sample limit, and is refused.
+#[test]
+fn a_spline_face_past_65536_grid_cells_meshes_within_its_deflection() {
+    let mut topo = Topology::new();
+    let face = nurbs_torus_patch(&mut topo);
+    let solid = one_face_solid(&mut topo, face);
+    let deflection = 4e-6;
+    let mesh = tessellate_solid(&topo, solid, deflection).unwrap();
+    // A point on the patch's boundary lies a quarter turn or none round the
+    // axis or round the tube.
+    let on_boundary = |p: Point3| {
+        let round = p.y().atan2(p.x());
+        let tube = p.z().atan2(p.x().hypot(p.y()) - 3.0);
+        [round, tube]
+            .iter()
+            .any(|&a| a.abs() < 1e-9 || (a - std::f64::consts::FRAC_PI_2).abs() < 1e-9)
+    };
+    let worst = worst_off_inside(&mesh, &off_torus, &on_boundary);
+    assert!(worst <= deflection, "{worst:e} off the torus");
+    let fine = tessellate_solid(&topo, solid, 1e-9).map(|m| m.positions.len());
+    assert!(
+        matches!(fine, Err(crate::OperationsError::TooManySamples { .. })),
+        "{fine:?}"
+    );
+}
+
+/// A twisted bilinear patch, z = x y over the unit square, has straight
+/// iso-lines: its grid is cut for its twist alone, and meshed to 1e-6 it
+/// needs some 500 by 500 cells. The twist pass used to stop at 65,536 cells,
+/// 6.8e-6 off the patch.
+#[test]
+fn a_twisted_spline_face_past_65536_cells_meshes_within_its_deflection() {
+    let mut topo = Topology::new();
+    let points = vec![
+        vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
+        vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 1.0)],
+    ];
+    let surface = NurbsSurface::new(
+        1,
+        1,
+        vec![0.0, 0.0, 1.0, 1.0],
+        vec![0.0, 0.0, 1.0, 1.0],
+        points,
+        vec![vec![1.0; 2]; 2],
+    )
+    .unwrap();
+    let face = iso_bounded_face(&mut topo, surface);
+    let solid = one_face_solid(&mut topo, face);
+    let deflection = 1e-6;
+    let mesh = tessellate_solid(&topo, solid, deflection).unwrap();
+    // How far a point stands off the surface along z bounds how far it
+    // stands off it at all.
+    let worst = worst_off(&mesh, &|p| (p.z() - p.x() * p.y()).abs());
+    assert!(worst <= deflection, "{worst:e} off the patch");
+}
+
+/// The grid a twisted patch's straight edges are sampled by grows until no
+/// cell strays past half the deflection. Past the divisions it may take, it
+/// is refused: it used to stop at its cap, still straying.
+#[test]
+fn a_twisted_grid_past_its_divisions_is_refused() {
+    let at = |u: f64, v: f64| Point3::new(u, v, u * v);
+    let unit = ((0.0, 1.0), (0.0, 1.0));
+    let (n_u, n_v) = super::nurbs::untwisted_grid(&at, unit, (1, 1), 1e-4, 1024, None).unwrap();
+    assert!(n_u <= 1024 && n_v <= 1024);
+    #[allow(clippy::cast_precision_loss)]
+    let stray = 0.25 / (n_u as f64 * n_v as f64);
+    assert!(stray <= 0.5e-4, "{n_u} x {n_v} strays {stray}");
+    let past = super::nurbs::untwisted_grid(&at, unit, (1, 1), 1e-8, 1024, None);
+    assert!(
+        matches!(past, Err(crate::OperationsError::TooManySamples { .. })),
+        "{past:?}"
+    );
+}
+
+/// The face mesher's tree stopped six levels below its 4 by 4 roots, 256
+/// cells across: a B-spline quarter cylinder meshed to 1e-6 needs some 560
+/// round its arc, and the tree left it 5.2e-6 off the cylinder.
+#[test]
+fn the_face_mesher_meshes_a_spline_face_past_its_former_tree_depth() {
+    let mut topo = Topology::new();
+    let face = nurbs_quarter_cylinder(&mut topo);
+    let deflection = 1e-6;
+    let mesh = tessellate(&topo, face, deflection).unwrap();
+    let worst = worst_off(&mesh, &off_cylinder);
+    assert!(worst <= deflection, "{worst:e} off the cylinder");
+}
+
+/// A whole B-spline torus of radii 3 and 1, closed both ways, goes to the
+/// face mesher's periodic grid, which capped its grid at 65,536 cells:
+/// meshed to 1e-4 it needs 1024 by 512, and the cap left it 3.1e-4 off the
+/// torus.
+#[test]
+fn a_closed_spline_torus_past_65536_cells_meshes_within_its_deflection() {
+    let mut topo = Topology::new();
+    let surface = closed_rational_torus();
+    assert!(surface.is_periodic_u() && surface.is_periodic_v());
+    let face = iso_bounded_face(&mut topo, surface);
+    let deflection = 1e-4;
+    let mesh = tessellate(&topo, face, deflection).unwrap();
+    let worst = worst_off(&mesh, &off_torus);
+    assert!(worst <= deflection, "{worst:e} off the torus");
+}
+
+/// A straight profile x in [0, 1] whose pace crowds to x = 0 under weights
+/// `w`, 1, 1, extruded 1 along z, and a flat sheet crowded so both ways, in
+/// three poses: each iso-line lies on its chord, so every refiner holds the
+/// patch on its first lines at deflections 1e-3, 1e-6 and 1e-9. A conic
+/// profile crowded alike still divides.
+#[test]
+fn flat_patches_with_crowded_weights_hold_on_their_first_lines() {
+    let turn = |angle: f64, axis: Vec3, shift: Vec3| {
+        let k = axis * (1.0 / axis.length());
+        let (sin, cos) = angle.sin_cos();
+        move |p: Point3| {
+            let v = Vec3::new(p.x(), p.y(), p.z());
+            let r = v * cos + k.cross(v) * sin + k * (k.dot(v) * (1.0 - cos));
+            Point3::new(r.x() + shift.x(), r.y() + shift.y(), r.z() + shift.z())
+        }
+    };
+    let poses = [
+        turn(0.0, Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, 0.0)),
+        turn(0.7, Vec3::new(1.0, 2.0, 3.0), Vec3::new(5.0, -3.0, 2.0)),
+        turn(2.1, Vec3::new(-2.0, 1.0, 0.5), Vec3::new(-100.0, 40.0, 7.0)),
+    ];
+    let (q2, q1) = (vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0], vec![0.0, 0.0, 1.0, 1.0]);
+    let unit = ((0.0, 1.0), (0.0, 1.0));
+    let max = super::MAX_DIVISIONS;
+    for w in [1e-3, 1e-6, 2.0_f64.powi(-20)] {
+        for pose in &poses {
+            let extrude = |profile: [(f64, f64); 3], weights: [f64; 3]| {
+                NurbsSurface::new(
+                    2,
+                    1,
+                    q2.clone(),
+                    q1.clone(),
+                    profile
+                        .iter()
+                        .map(|&(x, y)| {
+                            vec![pose(Point3::new(x, y, 0.0)), pose(Point3::new(x, y, 1.0))]
+                        })
+                        .collect(),
+                    weights.iter().map(|&k| vec![k, k]).collect(),
+                )
+                .unwrap()
+            };
+            let straight = extrude([(0.0, 0.0), (0.5, 0.0), (1.0, 0.0)], [w, 1.0, 1.0]);
+            let crowd = [w, 1.0, 1.0];
+            let sheet = NurbsSurface::new(
+                2,
+                2,
+                q2.clone(),
+                q2.clone(),
+                [0.0, 0.5, 1.0]
+                    .iter()
+                    .map(|&x| {
+                        [0.0, 0.5, 1.0]
+                            .iter()
+                            .map(|&y| pose(Point3::new(x, y, 0.0)))
+                            .collect()
+                    })
+                    .collect(),
+                crowd
+                    .iter()
+                    .map(|&a| crowd.iter().map(|&b| a * b).collect())
+                    .collect(),
+            )
+            .unwrap();
+            for surface in [&straight, &sheet] {
+                let at = |u: f64, v: f64| surface.evaluate(u, v);
+                let normal_at = |u: f64, v: f64| surface.normal(u, v).unwrap();
+                for deflection in [1e-3, 1e-6, 1e-9] {
+                    for along_u in [true, false] {
+                        let divisions = super::nurbs::iso_divisions_over(
+                            &at,
+                            &normal_at,
+                            along_u,
+                            unit,
+                            deflection,
+                            0.3,
+                            (4096, max),
+                        );
+                        assert_eq!(divisions.ok(), Some(1), "w {w} at {deflection}");
+                        let knots = if along_u {
+                            surface.knots_u()
+                        } else {
+                            surface.knots_v()
+                        };
+                        let lines = super::nurbs::iso_breaks_over(
+                            &at, &normal_at, along_u, unit, knots, deflection, 0.3, max,
+                        );
+                        assert_eq!(lines.map(|l| l.len()).ok(), Some(2));
+                    }
+                    let tree = tessellate_nurbs(surface, deflection, 0.3).map(|m| m.uvs.len());
+                    assert_eq!(tree.ok(), Some(25), "w {w} at {deflection}");
+                }
+            }
+            let half = std::f64::consts::FRAC_1_SQRT_2;
+            let conic = extrude([(1.0, 0.0), (1.0, 1.0), (0.0, 1.0)], [w, w * half, 1.0]);
+            let at = |u: f64, v: f64| conic.evaluate(u, v);
+            let normal_at = |u: f64, v: f64| conic.normal(u, v).unwrap();
+            let divisions = super::nurbs::iso_divisions_over(
+                &at,
+                &normal_at,
+                true,
+                unit,
+                1e-3,
+                0.3,
+                (4096, max),
+            )
+            .unwrap();
+            assert!(divisions > 1, "the conic's divisions");
+        }
+    }
 }
