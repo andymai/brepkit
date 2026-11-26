@@ -710,6 +710,7 @@ fn face_region_2d(
                         (p2_start, p2_end),
                         oe.is_forward(),
                         frame,
+                        tol,
                     ) =>
                 {
                     grow(Point2::new(
@@ -753,6 +754,20 @@ fn face_region_2d(
                 span: edge.curve().domain_with_endpoints(v_start, v_end),
                 forward: oe.is_forward(),
             });
+            // A spline read as an arc stands for the circle it traces, which
+            // the finder reads: from the end its parameter runs from, as the
+            // frame's counterclockwise way round is the circle's own.
+            let own = match (&shape, edge.curve()) {
+                (Shape2::Arc(arc), EdgeCurve::NurbsCurve(_)) => {
+                    let (from, to) = if arc.sweep > 0.0 {
+                        (p3_start, p3_end)
+                    } else {
+                        (p3_end, p3_start)
+                    };
+                    (EdgeCurve::Circle(arc.circle.clone()), from, to)
+                }
+                _ => (edge.curve().clone(), v_start, v_end),
+            };
             edges.push(BoundaryEdge {
                 eid: oe.edge(),
                 p2_start,
@@ -762,7 +777,7 @@ fn face_region_2d(
                 shape,
                 along,
                 paves: Vec::new(),
-                own: (edge.curve().clone(), v_start, v_end),
+                own,
             });
         }
     }
@@ -827,8 +842,11 @@ fn attach_paves(region: &mut Region2, topo: &Topology, arena: &GfaArena) {
 /// arc exactly when its two control legs are equal and its middle weight,
 /// over the root of the product of its end weights, is the sine of half the
 /// angle at its middle control point (the cosine of half its sweep). Every
-/// span must lie on one circle. `p2_start` and `p2_end` are the edge's ends
-/// in its wire's direction, `forward` that direction against the edge's own.
+/// span must lie on one circle, and is proved within `tol` of it along its
+/// whole length ([`span_off_circle`]). `p2_start` and `p2_end` are the
+/// edge's ends in its wire's direction, `forward` that direction against
+/// the edge's own.
+#[allow(clippy::too_many_arguments)]
 fn nurbs_arc(
     curve: &EdgeCurve,
     nurbs: &brepkit_math::nurbs::curve::NurbsCurve,
@@ -836,6 +854,7 @@ fn nurbs_arc(
     (p2_start, p2_end): (Point2, Point2),
     forward: bool,
     frame: &PlaneFrame2D,
+    tol: f64,
 ) -> Option<Arc2> {
     use std::f64::consts::{PI, TAU};
     if nurbs.degree() != 2 || !nurbs.weights().iter().all(|w| w.is_finite() && *w > 0.0) {
@@ -854,6 +873,7 @@ fn nurbs_arc(
         .collect();
     breaks.dedup();
     let mut circle_2d: Option<(Point2, f64)> = None;
+    let mut spans: Vec<([Point2; 3], [f64; 3], f64)> = Vec::new();
     for w in breaks.windows(2) {
         let poles = brepkit_math::nurbs::decompose::curve_bezier_between(nurbs, w[0], w[1]).ok()?;
         let [first, middle, last] = poles.as_slice() else {
@@ -861,19 +881,21 @@ fn nurbs_arc(
         };
         let mut points = [Point2::new(0.0, 0.0); 3];
         let mut weights = [0.0; 3];
+        let mut lift = 0.0_f64;
         for (k, &[x, y, z, h]) in [first, middle, last].into_iter().enumerate() {
             if h.is_nan() || h <= 0.0 {
                 return None;
             }
             let pole = Point3::new(x / h, y / h, z / h);
-            if (pole - frame.origin).dot(frame.normal).abs()
-                > 1e-9 * (1.0 + (pole - frame.origin).length())
-            {
+            let off = (pole - frame.origin).dot(frame.normal).abs();
+            if off > 1e-9 * (1.0 + (pole - frame.origin).length()) {
                 return None;
             }
+            lift = lift.max(off);
             points[k] = frame.project(pole);
             weights[k] = h;
         }
+        spans.push((points, weights, lift));
         let leg = |a: Point2, b: Point2| (b.x() - a.x()).hypot(b.y() - a.y());
         let (l0, l1) = (leg(points[1], points[0]), leg(points[1], points[2]));
         if l0 <= 0.0 || l1 <= 0.0 || (l0 - l1).abs() > 1e-9 * (l0 + l1) {
@@ -900,6 +922,13 @@ fn nurbs_arc(
         }
     }
     let (center, radius) = circle_2d?;
+    // The span lies in the hull of its poles, so no farther off the plane
+    // than they are.
+    if spans.iter().any(|&(points, weights, lift)| {
+        span_off_circle(points, weights, (center, radius)) + lift > tol
+    }) {
+        return None;
+    }
     let eps = 1e-9 * (1.0 + radius);
     let off = |p: Point2| ((p.x() - center.x()).hypot(p.y() - center.y()) - radius).abs();
     if off(p2_start) > eps || off(p2_end) > eps {
@@ -926,6 +955,41 @@ fn nurbs_arc(
         sweep,
         circle,
     })
+}
+
+/// A bound on how far the rational quadratic with `points` and `weights`
+/// strays from the circle about `center` of `radius`, in the plane. With
+/// `V(t)` the weighted sum of the poles less the centre and `D(t)` that of
+/// the weights, both in the Bernstein basis, `|V|^2 - r^2 D^2` is a quartic
+/// whose Bernstein coefficients bound it; over `D^2`, no less than the least
+/// weight squared, it is the squared distance from the centre less `r^2`,
+/// which is at least `r` times the distance from the circle. Rounding is
+/// added in full. Infinite for a circle of no radius or a weight of none.
+fn span_off_circle(points: [Point2; 3], weights: [f64; 3], (center, radius): (Point2, f64)) -> f64 {
+    let least = weights.iter().copied().fold(f64::INFINITY, f64::min);
+    if !(radius > 0.0 && least > 0.0) {
+        return f64::INFINITY;
+    }
+    let arm = points.map(|p| (p.x() - center.x(), p.y() - center.y()));
+    let r2 = radius * radius;
+    let (mut term, mut size) = ([[0.0; 3]; 3], 0.0_f64);
+    for i in 0..3 {
+        for j in 0..3 {
+            let dot = arm[i].0.madd(arm[j].0, arm[i].1 * arm[j].1);
+            let w = weights[i] * weights[j];
+            term[i][j] = w * (dot - r2);
+            size += w * (arm[i].0.hypot(arm[i].1) * arm[j].0.hypot(arm[j].1) + r2);
+        }
+    }
+    let quartic = [
+        term[0][0],
+        term[0][1],
+        (2.0 * term[0][2] + 4.0 * term[1][1]) / 6.0,
+        term[1][2],
+        term[2][2],
+    ];
+    let most = quartic.iter().fold(0.0_f64, |m, c| m.max(c.abs()));
+    (8.0 * f64::EPSILON).madd(size, most) / (least * least * radius)
 }
 
 /// The centre of the circle through three points, `None` when they are
@@ -1601,6 +1665,13 @@ fn ellipse_meetings(
     };
     let own = half_turns(mine.0, (mine.1, mine.2));
     let theirs = half_turns(&t.own.0, (t.own.1, t.own.2));
+    if own.is_empty() || theirs.is_empty() {
+        return Err(AlgoError::IntersectionFailed(
+            "a boundary edge meets a coplanar face's ellipse edge on a curve the finder \
+             cannot read"
+                .into(),
+        ));
+    }
     let mut met: Vec<Point3> = theirs.iter().map(|&(_, p, _)| p).collect();
     met.extend(
         own.iter()
@@ -3646,5 +3717,129 @@ mod tests {
         );
         let frame = PlaneFrame2D::canonical(Vec3::new(0.0, 0.0, -1.0), 0.0);
         assert!(face_region_2d(&topo, face, &frame, 1e-7).is_err());
+    }
+
+    /// Whether some section of `kind` runs over `p`: its curve passes
+    /// through `p` within 1e-9, at a parameter inside the section's range.
+    fn runs_over(sections: &[(EdgeCurve, Point3, Point3)], p: Point3) -> bool {
+        use std::f64::consts::TAU;
+        sections.iter().any(|(curve, s, e)| {
+            let t = match curve {
+                EdgeCurve::Circle(c) => c.project(p),
+                EdgeCurve::Ellipse(el) => el.project(p),
+                EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => return false,
+            };
+            let (t0, t1) = curve.domain_with_endpoints(*s, *e);
+            let at = t0 + (t - t0).rem_euclid(TAU);
+            at <= t1 && (curve.evaluate_with_endpoints(at, *s, *e) - p).length() < 1e-9
+        })
+    }
+
+    /// A disc of radius 1.5 about (2.5, 0) whose rim is a whole turn stored
+    /// as a rational quadratic, against the face of the ellipse of
+    /// semi-axes 3 and 2 about the origin, in three poses. The rim crosses
+    /// the ellipse twice. Each way round, the sections follow each curve
+    /// over its run inside the other face and no farther: the rim's run
+    /// inside the ellipse, through (1, 0), is kept, and the ellipse's run
+    /// inside the disc, through (3, 0), is kept.
+    #[test]
+    fn a_rational_quadratic_rim_across_an_ellipse_is_cut_where_they_cross() {
+        use std::f64::consts::TAU;
+        let tol = Tolerance::default();
+        for pose in in_plane_poses() {
+            let mut topo = Topology::new();
+            let (oval, ellipse) = ellipse_face_down(&mut topo, &pose, (0.0, 0.0), (3.0, 2.0), 0.0);
+            let centre = pose.mul_point(Point3::new(2.5, 0.0, 0.0));
+            let circle = Circle3D::with_axes(
+                centre,
+                Vec3::new(0.0, 0.0, 1.0),
+                1.5,
+                Vec3::new(1.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            )
+            .unwrap();
+            let seam = topo.add_vertex(Vertex::new(circle.evaluate(0.0), 1e-7));
+            let rim = topo.add_edge(Edge::new(
+                seam,
+                seam,
+                EdgeCurve::NurbsCurve(rational_arc(&circle, 4)),
+            ));
+            let disc = face_down(&mut topo, vec![OrientedEdge::new(rim, false)], vec![]);
+            let sections = coplanar_sections(&mut topo, [disc, oval], tol);
+            let (c, u, v) = (ellipse.center(), ellipse.u_axis(), ellipse.v_axis());
+            let in_oval = |p: Point3| ((p - c).dot(u) / 3.0).hypot((p - c).dot(v) / 2.0);
+            let in_disc = |p: Point3| (p - centre).length() / 1.5;
+            let n = 20_000;
+            for k in 0..n {
+                let t = TAU * f64::from(k) / f64::from(n);
+                for (p, inside, what) in [
+                    (circle.evaluate(t), in_oval(circle.evaluate(t)), "rim"),
+                    (ellipse.evaluate(t), in_disc(ellipse.evaluate(t)), "ellipse"),
+                ] {
+                    if (inside - 1.0).abs() < 1e-6 {
+                        continue;
+                    }
+                    assert_eq!(
+                        runs_over(&sections, p),
+                        inside < 1.0,
+                        "{pose:?}: the {what} at {p:?}, {inside} of the way out"
+                    );
+                }
+            }
+            assert!(runs_over(
+                &sections,
+                pose.mul_point(Point3::new(1.0, 0.0, 0.0))
+            ));
+            assert!(runs_over(
+                &sections,
+                pose.mul_point(Point3::new(3.0, 0.0, 0.0))
+            ));
+        }
+    }
+
+    /// A quarter of the circle of radius 1e5 about the origin as a rational
+    /// quadratic, its corner weight cos 45 degrees, reads as its arc. With
+    /// the weight 9e-10 heavier, within the shape test's slack, the curve
+    /// strays from any circle through its ends and middle by far more than
+    /// the tolerance: it is not read as one.
+    #[test]
+    fn a_rational_quadratic_is_read_as_an_arc_only_within_the_tolerance() {
+        use std::f64::consts::FRAC_1_SQRT_2;
+        let frame = PlaneFrame2D::canonical(Vec3::new(0.0, 0.0, -1.0), 0.0);
+        let r = 1e5;
+        let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        for (corner, arc) in [(FRAC_1_SQRT_2, true), (FRAC_1_SQRT_2 + 9e-10, false)] {
+            let curve = brepkit_math::nurbs::curve::NurbsCurve::new(
+                2,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                vec![p(r, 0.0), p(r, r), p(0.0, r)],
+                vec![1.0, corner, 1.0],
+            )
+            .unwrap();
+            let mut topo = Topology::new();
+            let [east, north, origin] =
+                [p(r, 0.0), p(0.0, r), p(0.0, 0.0)].map(|q| topo.add_vertex(Vertex::new(q, 1e-7)));
+            let rim = topo.add_edge(Edge::new(east, north, EdgeCurve::NurbsCurve(curve)));
+            let down = topo.add_edge(Edge::new(north, origin, EdgeCurve::Line));
+            let back = topo.add_edge(Edge::new(origin, east, EdgeCurve::Line));
+            let face = face_down(
+                &mut topo,
+                vec![
+                    OrientedEdge::new(back, false),
+                    OrientedEdge::new(down, false),
+                    OrientedEdge::new(rim, false),
+                ],
+                vec![],
+            );
+            let region = face_region_2d(&topo, face, &frame, 1e-7).unwrap();
+            let edge = region.edges.iter().find(|e| e.eid == rim).unwrap();
+            assert_eq!(matches!(edge.shape, Shape2::Arc(_)), arc, "corner {corner}");
+            if arc {
+                assert!(
+                    matches!(edge.own.0, EdgeCurve::Circle(_)),
+                    "corner {corner}"
+                );
+            }
+        }
     }
 }
