@@ -14155,12 +14155,9 @@ pub fn section_meetings(
                 .collect(),
         );
     }
-    let reading = edge_splitting::read_section_meetings(&spans, tol).ok()?;
-    if reading
-        .left
-        .iter()
-        .any(|&(_, _, how)| how == edge_splitting::LeftPair::Unread)
-    {
+    let reading =
+        edge_splitting::read_section_meetings(&spans, tol, edge_splitting::OnUnread::Stop).ok()?;
+    if reading.unread.is_some() {
         return None;
     }
     Some(reading.meetings.into_iter().map(|m| m.at).collect())
@@ -19419,15 +19416,13 @@ mod tests {
                     end: Point3::new(2.9, 1.0, h),
                 },
             ];
-            let reading = edge_splitting::read_section_meetings(&spans, 1e-7).unwrap();
+            let reading =
+                edge_splitting::read_section_meetings(&spans, 1e-7, edge_splitting::OnUnread::Stop)
+                    .unwrap();
             if unread {
-                assert_eq!(
-                    reading.left,
-                    vec![(0, 1, edge_splitting::LeftPair::Unread)],
-                    "{h:e}"
-                );
+                assert_eq!(reading.unread, Some((0, 1)), "{h:e}");
             } else {
-                assert!(reading.left.is_empty(), "{h:e}: {reading:?}");
+                assert!(reading.unread.is_none(), "{h:e}: {reading:?}");
                 assert_eq!(reading.meetings.len(), 2, "{h:e}: {reading:?}");
             }
         }
