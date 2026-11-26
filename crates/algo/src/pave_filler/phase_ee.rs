@@ -1599,248 +1599,11 @@ fn touch_point(
             &mut budget,
         )
     };
-    // Where the interval about the seed runs past an edge's end, or holds no
-    // root of the sign, the reading is the least of the squared distance
-    // from the other curve along one curve, kept inside that curve's range.
-    // It is read from the squared distance's own values, which near a touch
-    // part from their rounding as the square of the way from it, where its
-    // derivative parts only as the cube; a value rises or falls only by
-    // more than the rounding of the separation, which grows with the
-    // coordinates. A seed on the other curve to that rounding is a meeting
-    // and stays, so a crossing near an end, or a second meeting beside it,
-    // keeps its own point. Otherwise the reading walks the way the squared
-    // distance falls, in steps that double after a stretch it proves and
-    // halve after one it does not. Each stretch it crosses is proved within
-    // the tolerance of the other curve as the interval about the seed is, so
-    // it never steps over a gap to a contact past it, and its squared
-    // distance proved to keep between the far end's and the least the walk
-    // has read, so it never passes a nearer touch nor climbs a bump. A walk
-    // that falls all the way to the curve's end reads the end only where the
-    // end lies on the other curve to that rounding: no point of the edge
-    // lies nearer it, and a least past the end is no meeting the end can
-    // stand for. A walk that stops short of the end reads the touch where
-    // the tangents turn parallel past the seed, else the last point it
-    // proved. Both curves are read along, and of the ends the walks reach the
-    // one nearer the seed is the reading, else of the other readings the one
-    // nearer the other curve, so the order of the two edges gives the same
-    // reading.
-    let lowest = || -> Option<(f64, f64, Point3)> {
-        // Each way round, the seed's own point where it lies on the other
-        // curve to rounding or at a least, or where a walk stops short of
-        // the end, and the end a walk reaches, each with its gap.
-        let mut stays: Vec<(f64, (f64, f64, Point3))> = Vec::new();
-        let mut ends: Vec<(f64, f64, Point3)> = Vec::new();
-        for along_b in [false, true] {
-            let ((cc, ec), (co, eo), (seed_c, seed_o)) = if along_b {
-                ((cb, eb), (ca, ea), (tb, ta))
-            } else {
-                ((ca, ea), (cb, eb), (ta, tb))
-            };
-            let (turn_c, turn_o) = (whole_turn(cc, ec, tol), whole_turn(co, eo, tol));
-            let at_c = |s: f64| cc.evaluate_with_endpoints(s, ec.start_pos, ec.end_pos);
-            let at_o = |t: f64| co.evaluate_with_endpoints(t, eo.start_pos, eo.end_pos);
-            let (lo_c, hi_c) = (ec.t0.min(ec.t1), ec.t0.max(ec.t1));
-            let (lo_o, hi_o) = (eo.t0.min(eo.t1), eo.t0.max(eo.t1));
-            let span = hi_c - lo_c;
-            let keep_c = |s: f64| if turn_c { s } else { s.clamp(lo_c, hi_c) };
-            let foot_near = |s: f64, t: f64| nearest_on((co, eo), at_c(s), t, turn_o);
-            let foot = |s: f64| foot_near(s, seed_o);
-            let off_end = |t: f64| !turn_o && (t <= lo_o || t >= hi_o);
-            let gap = |s: f64| {
-                let t = foot(s);
-                (!off_end(t)).then(|| (at_c(s) - at_o(t)).length_squared())
-            };
-            let reading = |s: f64| {
-                let t = foot(s);
-                let (pc, po) = (at_c(s), at_o(t));
-                let (on_a, on_b) = if along_b { (t, s) } else { (s, t) };
-                (!off_end(t) && (pc - po).length() <= tol)
-                    .then(|| ((pc - po).length(), (on_a, on_b, pc + (po - pc) * 0.5)))
-            };
-            // The stretch of this curve from `p` to `q` proved within the
-            // tolerance of the other curve, as the interval about the seed is.
-            let held = |p: f64, q: f64| {
-                let (lo, hi) = (p.min(q), p.max(q));
-                let mut budget = PROOF_PIECES;
-                proved_within(
-                    ((cc, ec), (co, eo)),
-                    ((lo, hi), (foot(lo), foot(hi))),
-                    tol,
-                    &foot_near,
-                    &mut budget,
-                )
-            };
-            let Some(g0) = gap(seed_c) else {
-                continue;
-            };
-            // The rounding of a separation read from the curves' points, which
-            // grows with their coordinates, and so of its square.
-            let seed_point = at_c(seed_c);
-            let err = 64.0
-                * f64::EPSILON
-                * seed_point
-                    .x()
-                    .abs()
-                    .max(seed_point.y().abs())
-                    .max(seed_point.z().abs())
-                    .max(1.0);
-            if g0 <= err * err {
-                // The seed lies on the other curve to rounding: a meeting.
-                stays.extend(reading(seed_c));
-                continue;
-            }
-            let noise = |g: f64| (2.0 * g.sqrt()).madd(err, err * err);
-            let first = 1e-9 * span;
-            // The way the squared distance falls, read where it parts from
-            // its rounding.
-            let mut probe = first;
-            let way = loop {
-                let (Some(below), Some(above)) =
-                    (gap(keep_c(seed_c - probe)), gap(keep_c(seed_c + probe)))
-                else {
-                    break None;
-                };
-                if below > g0 + noise(g0) && above > g0 + noise(g0) {
-                    break Some(0.0);
-                }
-                if (below - above).abs() > noise(below.min(above)) {
-                    break Some(if below < above { -1.0 } else { 1.0 });
-                }
-                if probe > span {
-                    break None;
-                }
-                probe *= 2.0;
-            };
-            let Some(way) = way else {
-                continue;
-            };
-            if way == 0.0 {
-                stays.extend(reading(seed_c));
-                continue;
-            }
-            // Each stretch the walk crosses is proved within the tolerance
-            // of the other curve, and its squared distance from it proved
-            // to keep, to rounding, between its value at the stretch's far
-            // end and the least the walk has read ([`distance_within`]): no
-            // point of it is nearer than the far end, and none rises past
-            // the least, so the walk never passes a nearer touch, nor climbs
-            // a bump by steps each within the rounding. A stretch not proved
-            // so is halved, from the last point proved.
-            let falls = |p: f64, (q, gq): (f64, f64), least: f64| {
-                let mut budget = PROOF_PIECES;
-                distance_within(
-                    (cc, ec),
-                    (co, eo),
-                    (p, q),
-                    (gq - noise(gq), least + noise(least)),
-                    &mut budget,
-                )
-            };
-            let mut walked = vec![seed_c];
-            let mut last = (seed_c, g0);
-            let mut least = g0;
-            let mut step = first;
-            let mut at_end = None;
-            for _ in 0..WALK_STEPS {
-                let s = keep_c(last.0 + way * step);
-                let g = ((s - last.0).abs() > 0.0).then(|| gap(s)).flatten();
-                if let Some(g) = g
-                    && g <= least + noise(least)
-                    && held(last.0, s)
-                    && falls(last.0, (s, g), least)
-                {
-                    last = (s, g);
-                    least = least.min(g);
-                    walked.push(s);
-                    if !turn_c && (s <= lo_c || s >= hi_c) {
-                        at_end = Some(s);
-                        break;
-                    }
-                    step *= 2.0;
-                } else {
-                    step *= 0.5;
-                    if step <= 1e-15 * span {
-                        break;
-                    }
-                }
-            }
-            // The end is the meeting where it lies on the other curve to
-            // rounding.
-            if let Some(end) = at_end
-                && let Some((g, read)) = reading(end)
-                && g <= err
-            {
-                ends.push(read);
-                continue;
-            }
-            if at_end.is_some() || walked.len() < 2 {
-                continue;
-            }
-            // Short of the end, the walk stops at a least of the distance
-            // or where the curves lie on each other to rounding: the touch
-            // is where their tangents turn parallel, a sign that stands
-            // clear of the rounding the distance does not, else the last
-            // point the walk proved.
-            let tan_c = |s: f64| cc.tangent_with_endpoints(s, ec.start_pos, ec.end_pos);
-            let tan_o = |t: f64| co.tangent_with_endpoints(t, eo.start_pos, eo.end_pos);
-            let square = |s: f64| {
-                let (x, y) = (tan_c(s), tan_o(foot(s)));
-                let (Ok(x), Ok(y)) = (x.normalize(), y.normalize()) else {
-                    return Vec3::new(0.0, 0.0, 0.0);
-                };
-                x - y * x.dot(y)
-            };
-            let frontier = last.0;
-            let side = square(seed_c);
-            let turned = (side.length() > PARALLEL_ROUNDING)
-                .then(|| {
-                    let sign = |s: f64| square(s).dot(side);
-                    let next = keep_c(frontier + way * step.max(first));
-                    walked
-                        .iter()
-                        .copied()
-                        .chain(std::iter::once(next))
-                        .collect::<Vec<_>>()
-                        .windows(2)
-                        .find(|w| sign(w[0]) > 0.0 && sign(w[1]) <= 0.0)
-                        .map(|w| {
-                            let (mut before, mut after) = (w[0], w[1]);
-                            for _ in 0..200 {
-                                let mid = f64::midpoint(before, after);
-                                if mid <= before.min(after) || mid >= before.max(after) {
-                                    break;
-                                }
-                                if sign(mid) > 0.0 {
-                                    before = mid;
-                                } else {
-                                    after = mid;
-                                }
-                            }
-                            f64::midpoint(before, after)
-                        })
-                })
-                .flatten();
-            stays.extend(turned.and_then(reading).or_else(|| reading(frontier)));
-        }
-        // Read either way round, the same reading: an end a walk proved, the
-        // one nearer the seed, or else the seed's point nearer the other
-        // curve.
-        let seed = at_a(ta) + (at_b(tb) - at_a(ta)) * 0.5;
-        let near = |p: Point3| (p - seed).length();
-        ends.into_iter()
-            .min_by(|x, y| near(x.2).total_cmp(&near(y.2)))
-            .or_else(|| {
-                stays
-                    .into_iter()
-                    .min_by(|x, y| x.0.total_cmp(&y.0))
-                    .map(|(_, read)| read)
-            })
-    };
     let keep_a = |t: f64| if turn_a { t } else { t.clamp(lo_a, hi_a) };
     let first = 1e-6 * (hi_a - lo_a);
     let (mut lo, mut hi) = (keep_a(ta - first), keep_a(ta + first));
     if !proved(lo, hi) {
-        return lowest();
+        return None;
     }
     let (mut below, mut above) = (first, first);
     let (mut open_lo, mut open_hi) = (true, true);
@@ -1922,12 +1685,9 @@ fn touch_point(
     // square to both tangents.
     let side = square(hi, foot(hi, tb)).normalize().ok();
     let along_side = |t: f64, s: f64| side.map_or(0.0, |side| square(t, s).dot(side));
-    let Some((t, s)) = root(&along_side)
+    let (t, s) = root(&along_side)
         .filter(|&(t, s)| square(t, s).length() <= PARALLEL_ROUNDING)
-        .or_else(|| root(&parting))
-    else {
-        return lowest();
-    };
+        .or_else(|| root(&parting))?;
     let (pa, pb) = (at_a(t), at_b(s));
     // A least distance, not a greatest one between two crossings: read a
     // hundredth of the proved interval each way, far enough for the change
@@ -1951,10 +1711,6 @@ fn touch_point(
 /// The sine between two unit tangents below which they run parallel, to
 /// the rounding of their parts square to each other.
 const PARALLEL_ROUNDING: f64 = 1e-9;
-
-/// The most steps a touch polish's walk takes, each doubled after a stretch
-/// it proves and halved after one it does not.
-const WALK_STEPS: usize = 160;
 
 /// The most Bezier pieces one proof in [`proved_within`] reads.
 const PROOF_PIECES: usize = 64;
@@ -2039,239 +1795,6 @@ fn proved_within(
         foot,
         budget,
     )
-}
-
-/// A polynomial in Bernstein form over `[0, 1]`, with a bound on the
-/// rounding of each coefficient.
-struct Bounded {
-    value: Vec<f64>,
-    error: Vec<f64>,
-}
-
-impl Bounded {
-    /// The product, of the summed degree, and the bound on its rounding:
-    /// the Bernstein basis is not negative, so each product of coefficients
-    /// is bounded by the products of their sizes.
-    #[allow(clippy::cast_precision_loss)]
-    fn times(&self, other: &Self) -> Self {
-        let (m, n) = (self.value.len() - 1, other.value.len() - 1);
-        let binom = |n: usize, k: usize| -> f64 {
-            (0..k).fold(1.0, |acc, i| acc * (n - i) as f64 / (i + 1) as f64)
-        };
-        let mut value = vec![0.0; m + n + 1];
-        let mut error = vec![0.0; m + n + 1];
-        for (i, (a, da)) in self.value.iter().zip(&self.error).enumerate() {
-            for (j, (b, db)) in other.value.iter().zip(&other.error).enumerate() {
-                let share = binom(m, i) * binom(n, j) / binom(m + n, i + j);
-                value[i + j] += share * a * b;
-                error[i + j] += share
-                    * (a.abs() * db + da * b.abs() + da * db + 8.0 * f64::EPSILON * (a * b).abs());
-            }
-        }
-        Self { value, error }
-    }
-
-    fn plus(&self, other: &Self, sign: f64) -> Self {
-        let value = self
-            .value
-            .iter()
-            .zip(&other.value)
-            .map(|(a, b)| a + sign * b)
-            .collect();
-        let error = self
-            .error
-            .iter()
-            .zip(&other.error)
-            .zip(self.value.iter().zip(&other.value))
-            .map(|((da, db), (a, b))| da + db + 2.0 * f64::EPSILON * (a.abs() + b.abs()))
-            .collect();
-        Self { value, error }
-    }
-
-    fn scaled(&self, by: f64) -> Self {
-        Self {
-            value: self.value.iter().map(|v| v * by).collect(),
-            error: self
-                .error
-                .iter()
-                .zip(&self.value)
-                .map(|(e, v)| (e + 2.0 * f64::EPSILON * v.abs()) * by.abs())
-                .collect(),
-        }
-    }
-
-    /// Bounds on the polynomial's values over `[0, 1]`, with its rounding:
-    /// they lie among its coefficients.
-    fn range(&self) -> (f64, f64) {
-        let low = self
-            .value
-            .iter()
-            .zip(&self.error)
-            .map(|(v, e)| v - e)
-            .fold(f64::INFINITY, f64::min);
-        let high = self
-            .value
-            .iter()
-            .zip(&self.error)
-            .map(|(v, e)| v + e)
-            .fold(f64::NEG_INFINITY, f64::max);
-        (low, high)
-    }
-}
-
-/// The coefficient arrays of a homogeneous Bezier piece's three
-/// coordinates less `centre` times the weight, and of its weight, each with
-/// the rounding of the piece's coordinates, which grows with the largest of
-/// them and of the centre's, as in [`separation_bound`].
-fn from_centre(piece: &[[f64; 4]], centre: Point3) -> ([Bounded; 3], Bounded) {
-    let c = [centre.x(), centre.y(), centre.z()];
-    let size = piece
-        .iter()
-        .flat_map(|h| (0..3).map(move |k| h[k].abs().max((c[k] * h[3]).abs())))
-        .fold(0.0, f64::max);
-    let rounding = 8.0 * f64::EPSILON * size;
-    let coordinate = |k: usize| Bounded {
-        value: piece.iter().map(|h| h[k] - c[k] * h[3]).collect(),
-        error: vec![rounding; piece.len()],
-    };
-    (
-        [coordinate(0), coordinate(1), coordinate(2)],
-        Bounded {
-            value: piece.iter().map(|h| h[3]).collect(),
-            error: piece
-                .iter()
-                .map(|h| 2.0 * f64::EPSILON * h[3].abs())
-                .collect(),
-        },
-    )
-}
-
-/// The part of the vector form `v` along the unit `axis`, with its rounding.
-fn along(v: &[Bounded; 3], axis: Vec3) -> Bounded {
-    let a = [axis.x(), axis.y(), axis.z()];
-    let count = v[0].value.len();
-    Bounded {
-        value: (0..count)
-            .map(|i| (0..3).map(|k| v[k].value[i] * a[k]).sum())
-            .collect(),
-        error: (0..count)
-            .map(|i| {
-                (0..3)
-                    .map(|k| {
-                        v[k].error[i] * a[k].abs()
-                            + 4.0 * f64::EPSILON * (v[k].value[i] * a[k]).abs()
-                    })
-                    .sum()
-            })
-            .collect(),
-    }
-}
-
-/// The part of the vector form `v` square to the unit `axis`, its
-/// rounding grown by the rounding of the part along `axis`.
-fn square_to(v: &[Bounded; 3], axis: Vec3) -> [Bounded; 3] {
-    let a = [axis.x(), axis.y(), axis.z()];
-    let part = along(v, axis);
-    std::array::from_fn(|k| Bounded {
-        value: (0..part.value.len())
-            .map(|i| v[k].value[i] - part.value[i] * a[k])
-            .collect(),
-        error: (0..part.value.len())
-            .map(|i| {
-                v[k].error[i]
-                    + part.error[i] * a[k].abs()
-                    + 2.0 * f64::EPSILON * (v[k].value[i].abs() + (part.value[i] * a[k]).abs())
-            })
-            .collect(),
-    })
-}
-
-fn dot(a: &[Bounded; 3], b: &[Bounded; 3]) -> Bounded {
-    a[0].times(&b[0])
-        .plus(&a[1].times(&b[1]), 1.0)
-        .plus(&a[2].times(&b[2]), 1.0)
-}
-
-/// Bounds on the squared distance from `o`'s line or circle over a
-/// homogeneous Bezier piece of another curve, from Bernstein bounds. From a
-/// line through `ends.0` toward `ends.1` it is the square of the part
-/// square to the line over the square of the weight. From a circle of
-/// radius `r` about `centre` in the plane square to `n`, it is `h^2 +
-/// (rho - r)^2` for the height `h` off the plane and the radius `rho` in
-/// it, and `rho - r` is `(R - r^2 w^2) / (w (sqrt(R) + r w))` for the
-/// polynomial `R`, the square of the part in the plane, which keeps the
-/// small difference clear of the radius's rounding. `None` for another
-/// curve, which gives no such form.
-fn distance_range(piece: &[[f64; 4]], o: &EdgeCurve, ends: (Point3, Point3)) -> Option<(f64, f64)> {
-    let ratio = |(top_lo, top_hi): (f64, f64), (bottom_lo, bottom_hi): (f64, f64)| {
-        (top_lo.max(0.0) / bottom_hi, top_hi.max(0.0) / bottom_lo)
-    };
-    let range = match o {
-        EdgeCurve::Line => {
-            let e = (ends.1 - ends.0).normalize().ok()?;
-            let (v, w) = from_centre(piece, ends.0);
-            let off = square_to(&v, e);
-            ratio(dot(&off, &off).range(), w.times(&w).range())
-        }
-        EdgeCurve::Circle(circle) => {
-            let r = circle.radius();
-            let n = circle.normal().normalize().ok()?;
-            let (v, w) = from_centre(piece, circle.center());
-            let flat = square_to(&v, n);
-            let height = along(&v, n);
-            let w2 = w.times(&w);
-            let big_r = dot(&flat, &flat);
-            let off = big_r.plus(&w2.scaled(r * r), -1.0);
-            let (w_lo, w_hi) = w.range();
-            let (r_lo, r_hi) = big_r.range();
-            // The square of w (sqrt(R) + r w).
-            let under = |w: f64, big: f64| (w * (big.max(0.0).sqrt() + r * w)).powi(2);
-            let below = (under(w_lo.max(0.0), r_lo), under(w_hi, r_hi));
-            let (h_lo, h_hi) = ratio(height.times(&height).range(), w2.range());
-            let (o_lo, o_hi) = ratio(off.times(&off).range(), below);
-            (h_lo + o_lo, h_hi + o_hi)
-        }
-        EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_) => return None,
-    };
-    (range.0.is_finite() && range.1.is_finite()).then_some(range)
-}
-
-/// Whether the squared distance from `o` along `c` from `from` to `to`
-/// keeps within `[low, high]` the whole way, by [`distance_range`] over its
-/// Bezier pieces, each halved until it is read so or `budget` pieces are
-/// spent. `false` for an `o` that gives no such form.
-fn distance_within(
-    (cc, ec): (&EdgeCurve, &EdgeData),
-    (co, eo): (&EdgeCurve, &EdgeData),
-    (from, to): (f64, f64),
-    (low, high): (f64, f64),
-    budget: &mut usize,
-) -> bool {
-    let mut stack = vec![(from.min(to), from.max(to))];
-    while let Some((lo, hi)) = stack.pop() {
-        let Some(left) = budget.checked_sub(1) else {
-            return false;
-        };
-        *budget = left;
-        // A piece too long for one Bezier form, or not read within, is
-        // halved.
-        let read = match bezier_piece((cc, ec), lo, hi) {
-            Some(piece) => match distance_range(&piece, co, (eo.start_pos, eo.end_pos)) {
-                None => return false,
-                Some((least, most)) => least >= low && most <= high,
-            },
-            None => false,
-        };
-        if !read {
-            let mid = f64::midpoint(lo, hi);
-            if mid <= lo || mid >= hi {
-                return false;
-            }
-            stack.push((lo, mid));
-            stack.push((mid, hi));
-        }
-    }
-    true
 }
 
 /// The Bezier form of an edge's curve from `t0` to `t1`, as homogeneous
@@ -4870,393 +4393,6 @@ mod tests {
         }
     }
 
-    /// The circle of radius 2 about (5, 5), seamed where its own frame puts
-    /// it or at 2 rad, and the quarter of the ellipse of semi-axes 3 and
-    /// `sqrt(5.4)` about (4, 5) from (7, 5) to (4, 5 + sqrt(5.4)) as a
-    /// rational quadratic, read either way. The ellipse lies inside the
-    /// circle near (7, 5) and touches it there, where the quarter ends; past
-    /// (6, 5 + sqrt(3)) it lies outside. The touch is read at the quarter's
-    /// end, to 1e-12 near the origin and to the coordinates' rounding moved
-    /// 1e3 off, and the crossing at its point, once each, either way round,
-    /// in three poses.
-    /// Moved 1e6 off, a touch's point is fixed only to the root of the
-    /// coordinates' rounding over the curves' gap in curvature, about 5e-4.
-    #[test]
-    fn a_touch_where_an_edge_ends_is_read_at_that_end() {
-        use brepkit_math::curves::Circle3D;
-        use brepkit_math::nurbs::curve::NurbsCurve;
-        use std::f64::consts::FRAC_1_SQRT_2;
-        let b = 5.4_f64.sqrt();
-        for (pose, far) in ee_placings().into_iter().filter(|&(_, far)| far < 1e5) {
-            let p = |x: f64, y: f64| pose.mul_point(Point3::new(x, y, 0.0));
-            let within = 1e-12_f64.max(64.0 * f64::EPSILON * (far + 16.0));
-            let along = |x: f64, y: f64| p(x, y) - p(0.0, 0.0);
-            let normal = along(1.0, 0.0).cross(along(0.0, 1.0));
-            let circles = [
-                (
-                    Circle3D::with_axes(p(5.0, 5.0), normal, 2.0, along(1.0, 0.0), along(0.0, 1.0))
-                        .unwrap(),
-                    2.0,
-                ),
-                (Circle3D::new(p(5.0, 5.0), normal, 2.0).unwrap(), 0.0),
-            ];
-            for ((circle, at), forward) in circles
-                .into_iter()
-                .flat_map(|c| [(c.clone(), true), (c, false)])
-            {
-                let mut topo = Topology::new();
-                let seam = circle.evaluate(at);
-                let round = add_edge(&mut topo, seam, seam, EdgeCurve::Circle(circle.clone()));
-                let mut poles = vec![p(7.0, 5.0), p(7.0, 5.0 + b), p(4.0, 5.0 + b)];
-                if !forward {
-                    poles.reverse();
-                }
-                let quarter = NurbsCurve::new(
-                    2,
-                    vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
-                    poles.clone(),
-                    vec![1.0, FRAC_1_SQRT_2, 1.0],
-                )
-                .unwrap();
-                let arc = add_edge(
-                    &mut topo,
-                    poles[0],
-                    poles[2],
-                    EdgeCurve::NurbsCurve(quarter),
-                );
-                let what = format!("seam {at}, forward {forward}, far {far:e}, {pose:?}");
-                for (a, b) in [(round, arc), (arc, round)] {
-                    let found = edge_crossings(&topo, a, b, Tolerance::default()).unwrap();
-                    let near =
-                        |q: Point3| found.iter().filter(|h| (h.2 - q).length() < 1e-3).count();
-                    let touch: Vec<_> = found
-                        .iter()
-                        .filter(|h| (h.2 - p(7.0, 5.0)).length() < 1e-3)
-                        .collect();
-                    assert_eq!(touch.len(), 1, "{what}: {found:?}");
-                    assert!(
-                        (touch[0].2 - p(7.0, 5.0)).length() < within,
-                        "{what}: {touch:?}"
-                    );
-                    assert_eq!(near(p(6.0, 5.0 + 3.0_f64.sqrt())), 1, "{what}: {found:?}");
-                }
-            }
-        }
-    }
-
-    /// Each pose of [`ee_poses`] moved by 0, 1e3 and 1e6 along each axis, with
-    /// the move: the rounding of a coordinate grows with it.
-    fn ee_placings() -> Vec<(Mat4, f64)> {
-        ee_poses()
-            .into_iter()
-            .flat_map(|pose| {
-                [0.0, 1e3, 1e6].map(|far| (Mat4::translation(far, far, far) * pose, far))
-            })
-            .collect()
-    }
-
-    /// The x axis from -10 to 10, and a straight B-spline of slope `k` that
-    /// crosses it at the origin and starts `d` short of it, at 1, 10, 50 and
-    /// 100 tolerances. Its start is no contact: it lies `k d` off the axis,
-    /// and the curves cross inside the B-spline's span. The crossing is read
-    /// once, at the origin, either way round, in three poses moved far off
-    /// too, for a shallow slope and a steep one. Moved far, a coordinate's
-    /// rounding moves a crossing of slope `k` by that rounding over `k`.
-    #[test]
-    fn a_crossing_near_an_edges_end_stays_at_its_point() {
-        use brepkit_math::nurbs::curve::NurbsCurve;
-        let tol = Tolerance::default();
-        for (pose, far) in ee_placings() {
-            let p = |x: f64, y: f64| pose.mul_point(Point3::new(x, y, 0.0));
-            // Moved 1e6 off, the shallow slope's crossing moves by the
-            // rounding over the slope, 1.2e-5, and the B-spline's start, up to
-            // 1e-5 short of it, can lie past it.
-            for k in [1e-5, 1e-2].into_iter().filter(|&k| far < 1e5 || k > 1e-3) {
-                let within = tol.linear.max(8.0 * f64::EPSILON * (far + 16.0) / k);
-                for d in [1e-7, 1e-6, 5e-6, 1e-5] {
-                    let mut topo = Topology::new();
-                    let axis = add_edge(&mut topo, p(-10.0, 0.0), p(10.0, 0.0), EdgeCurve::Line);
-                    let (from, to) = (p(-d, -k * d), p(1.0, k));
-                    let segment = NurbsCurve::new(
-                        1,
-                        vec![0.0, 0.0, 1.0, 1.0],
-                        vec![from, to],
-                        vec![1.0, 1.0],
-                    )
-                    .unwrap();
-                    let spline = add_edge(&mut topo, from, to, EdgeCurve::NurbsCurve(segment));
-                    for (a, b) in [(axis, spline), (spline, axis)] {
-                        let found = edge_crossings(&topo, a, b, tol).unwrap();
-                        let what = format!("k {k:e}, d {d:e}, far {far:e}, {pose:?}: {found:?}");
-                        assert_eq!(found.len(), 1, "{what}");
-                        assert!((found[0].2 - p(0.0, 0.0)).length() <= within, "{what}");
-                    }
-                }
-            }
-        }
-    }
-
-    /// The x axis on [-1, 1] and the quadratic B-spline `(u, 10 u (u - 1e-6))`
-    /// for u in [0, 1]: they meet where the B-spline starts, at the origin,
-    /// and again at `x = 1e-6`, ten tolerances on, between which it dips
-    /// 2.5e-12 below the axis. A touch polish seeded at either meeting keeps
-    /// it where it is, and the crossings the pair gives hold the one at the
-    /// origin, either way round, in three poses, and moved 1e3 off. The
-    /// polish reads the same either way round, but for the second meeting
-    /// moved 1e3 off: there the dip lies within the coordinates' rounding
-    /// (1.4e-11), and read along the B-spline the polish takes the dip's
-    /// bottom, where the tangents run parallel, for a touch. Moved 1e6 off, a
-    /// coordinate's rounding passes the dip, and the two cannot be told apart.
-    #[test]
-    fn two_meetings_a_hair_apart_at_an_edges_end_stay_two() {
-        use brepkit_math::nurbs::curve::NurbsCurve;
-        let tol = Tolerance::default();
-        for (pose, far) in ee_placings().into_iter().filter(|&(_, far)| far < 1e5) {
-            let p = |x: f64, y: f64| pose.mul_point(Point3::new(x, y, 0.0));
-            let mut topo = Topology::new();
-            let axis = add_edge(&mut topo, p(-1.0, 0.0), p(1.0, 0.0), EdgeCurve::Line);
-            let poles = vec![p(0.0, 0.0), p(0.5, -5e-6), p(1.0, 10.0 - 1e-5)];
-            let dip = NurbsCurve::new(
-                2,
-                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
-                poles.clone(),
-                vec![1.0; 3],
-            )
-            .unwrap();
-            let spline = add_edge(&mut topo, poles[0], poles[2], EdgeCurve::NurbsCurve(dip));
-            let what = format!("far {far:e}, {pose:?}");
-            let data = collect_edge_data(&topo, &[axis, spline]).unwrap();
-            let (line, curve) = (
-                topo.edge(axis).unwrap().curve().clone(),
-                topo.edge(spline).unwrap().curve().clone(),
-            );
-            for x in [0.0, 1e-6] {
-                let read = touch_point(
-                    (&line, &data[0]),
-                    (&curve, &data[1]),
-                    (0.5 * (x + 1.0), x),
-                    tol.linear,
-                );
-                assert!(
-                    read.is_none_or(|(_, _, q)| (q - p(x, 0.0)).length() <= tol.linear),
-                    "{what}: seeded at {x}: {read:?}"
-                );
-                let reads = polished_both_ways(&topo, (axis, spline), (0.5 * (x + 1.0), x));
-                assert!(
-                    far > 0.0 && x > 0.0 || same_reading(reads[0], reads[1], far),
-                    "{what}: seeded at {x}: {reads:?}"
-                );
-            }
-            for (a, b) in [(axis, spline), (spline, axis)] {
-                let found = edge_crossings(&topo, a, b, tol).unwrap();
-                assert!(
-                    found
-                        .iter()
-                        .any(|h| (h.2 - p(0.0, 0.0)).length() <= tol.linear),
-                    "{what}: {found:?}"
-                );
-            }
-        }
-    }
-
-    /// Whether two readings, moved `far` off, are one point to the
-    /// coordinates' rounding.
-    fn same_reading(x: Point3, y: Point3, far: f64) -> bool {
-        (x - y).length() <= 64.0 * f64::EPSILON * (far + 16.0)
-    }
-
-    /// A touch polish of `a` and `b` from the seed `(ta, tb)`, both ways round:
-    /// the two readings the caller keeps, each as a point, the seed's own
-    /// where the polish gives none.
-    fn polished_both_ways(
-        topo: &Topology,
-        (a, b): (EdgeId, EdgeId),
-        (ta, tb): (f64, f64),
-    ) -> [Point3; 2] {
-        let tol = Tolerance::default().linear;
-        let data = collect_edge_data(topo, &[a, b]).unwrap();
-        let (ca, cb) = (
-            topo.edge(a).unwrap().curve().clone(),
-            topo.edge(b).unwrap().curve().clone(),
-        );
-        let (pa, pb) = (
-            ca.evaluate_with_endpoints(ta, data[0].start_pos, data[0].end_pos),
-            cb.evaluate_with_endpoints(tb, data[1].start_pos, data[1].end_pos),
-        );
-        [
-            touch_point((&ca, &data[0]), (&cb, &data[1]), (ta, tb), tol)
-                .map_or(pa + (pb - pa) * 0.5, |r| r.2),
-            touch_point((&cb, &data[1]), (&ca, &data[0]), (tb, ta), tol)
-                .map_or(pb + (pa - pb) * 0.5, |r| r.2),
-        ]
-    }
-
-    /// The x axis on [-1, 1] and `y = 1e-6 x` on [0, 1] but for a quartic
-    /// bump 3e-7 high over [1.1e-6, 1.3e-6]: the line starts on the axis, at
-    /// the origin, and keeps within the tolerance of it but over the bump. A
-    /// polish seeded at x = 2e-6 does not reach the start across the bump,
-    /// and reads the same either way round, in three poses, and moved 1e3
-    /// off.
-    #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_wrap,
-        clippy::cast_possible_truncation
-    )]
-    fn a_touch_polish_does_not_cross_a_bump_to_an_edges_end() {
-        let (left, right): (f64, f64) = (1.1e-6, 1.3e-6);
-        let width = right - left;
-        let in_u = [0.0, 0.0, 16.0 * 3e-7, -32.0 * 3e-7, 16.0 * 3e-7];
-        let binom = |n: usize, k: usize| -> f64 {
-            (0..k).fold(1.0, |acc, i| acc * (n - i) as f64 / (i + 1) as f64)
-        };
-        let mut bump = [0.0, 1e-6, 0.0, 0.0, 0.0];
-        for (m, &cm) in in_u.iter().enumerate() {
-            for (j, b) in bump.iter_mut().enumerate().take(m + 1) {
-                *b += cm / width.powi(m as i32) * binom(m, j) * (-left).powi((m - j) as i32);
-            }
-        }
-        let slope = [0.0, 1e-6];
-        for (pose, far) in ee_placings().into_iter().filter(|&(_, far)| far < 1e5) {
-            let mut topo = Topology::new();
-            let line = posed_curve(
-                &mut topo,
-                &[
-                    (&slope, &[0.0], (0.0, left)),
-                    (&bump, &[0.0], (left, right)),
-                    (&slope, &[0.0], (right, 1.0)),
-                ],
-                &pose,
-            );
-            let axis = posed_axis(&mut topo, (-1.0, 1.0), &pose);
-            let seed = 2e-6;
-            let origin = pose.mul_point(Point3::new(0.0, 0.0, 0.0));
-            let [one, other] = polished_both_ways(&topo, (axis, line), (0.5 * (seed + 1.0), seed));
-            let what = format!("far {far:e}, {pose:?}: {one:?} {other:?}");
-            for read in [one, other] {
-                assert!((read - origin).length() > 1e-7, "{what}");
-            }
-            assert!(same_reading(one, other, far), "{what}");
-        }
-    }
-
-    /// The x axis on [-1, 1] and `(u, 25000 u^2 (u - 1e-4)^2)` for u in
-    /// [0, 1], which touches it at the origin, where it starts, and again
-    /// at u = 1e-4, a thousand tolerances on, rising 1.6e-13 between. A
-    /// polish seeded at u = 2e-4 reads the touch at u = 1e-4, either way
-    /// round, in three poses: to the rounding of the curves' tangents over
-    /// their gap in curvature there, 5e-4, which fixes a touch along them.
-    /// Moved 1e3 off, it does not reach the start either: there the seed
-    /// lies 1e-11 off the axis, within the coordinates' rounding (1.4e-11),
-    /// and read along the quartic it stays, as a meeting does.
-    #[test]
-    fn a_touch_polish_stops_at_the_nearer_of_two_touches() {
-        for (pose, far) in ee_placings().into_iter().filter(|&(_, far)| far < 1e5) {
-            let p = |x: f64, y: f64| pose.mul_point(Point3::new(x, y, 0.0));
-            let mut topo = Topology::new();
-            let quartic = [0.0, 0.0, 25000.0 * 1e-8, -25000.0 * 2e-4, 25000.0];
-            let curve = posed_curve(&mut topo, &[(&quartic, &[0.0], (0.0, 1.0))], &pose);
-            let axis = posed_axis(&mut topo, (-1.0, 1.0), &pose);
-            let seed = 2e-4;
-            let reads = polished_both_ways(&topo, (axis, curve), (0.5 * (seed + 1.0), seed));
-            let what = format!("far {far:e}, {pose:?}: {reads:?}");
-            let fixed = 64.0 * f64::EPSILON * (far + 16.0) / 5e-4;
-            for read in reads {
-                assert!((read - p(0.0, 0.0)).length() > 1e-7, "{what}");
-                assert!(
-                    far > 0.0 || (read - p(1e-4, 0.0)).length() <= fixed,
-                    "{what}"
-                );
-            }
-        }
-    }
-
-    /// The x axis on [-1, 1] and `y = 1e-6 x` on [0, 1] but for a quartic
-    /// bump 5e-8 high over [1.1e-6, 1.3e-6], below the tolerance: the line
-    /// starts on the axis, at the origin, and keeps within the tolerance of
-    /// it, over the bump too. A polish seeded at x = 2e-6 does not reach the
-    /// start over the bump, and reads the same either way round, in three
-    /// poses, and moved 1e3 off.
-    #[test]
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_wrap,
-        clippy::cast_possible_truncation
-    )]
-    fn a_touch_polish_does_not_cross_a_bump_below_the_tolerance() {
-        let (left, right): (f64, f64) = (1.1e-6, 1.3e-6);
-        let width = right - left;
-        let in_u = [0.0, 0.0, 16.0 * 5e-8, -32.0 * 5e-8, 16.0 * 5e-8];
-        let binom = |n: usize, k: usize| -> f64 {
-            (0..k).fold(1.0, |acc, i| acc * (n - i) as f64 / (i + 1) as f64)
-        };
-        let mut bump = [0.0, 1e-6, 0.0, 0.0, 0.0];
-        for (m, &cm) in in_u.iter().enumerate() {
-            for (j, b) in bump.iter_mut().enumerate().take(m + 1) {
-                *b += cm / width.powi(m as i32) * binom(m, j) * (-left).powi((m - j) as i32);
-            }
-        }
-        let slope = [0.0, 1e-6];
-        for (pose, far) in ee_placings().into_iter().filter(|&(_, far)| far < 1e5) {
-            let mut topo = Topology::new();
-            let line = posed_curve(
-                &mut topo,
-                &[
-                    (&slope, &[0.0], (0.0, left)),
-                    (&bump, &[0.0], (left, right)),
-                    (&slope, &[0.0], (right, 1.0)),
-                ],
-                &pose,
-            );
-            let axis = posed_axis(&mut topo, (-1.0, 1.0), &pose);
-            let seed = 2e-6;
-            let origin = pose.mul_point(Point3::new(0.0, 0.0, 0.0));
-            let [one, other] = polished_both_ways(&topo, (axis, line), (0.5 * (seed + 1.0), seed));
-            let what = format!("far {far:e}, {pose:?}: {one:?} {other:?}");
-            for read in [one, other] {
-                assert!((read - origin).length() > 1e-7, "{what}");
-            }
-            assert!(same_reading(one, other, far), "{what}");
-        }
-    }
-
-    /// The x axis on [-1, 1] and the parabola `(u, u^2)` for u in [0, 1],
-    /// which starts on the axis and touches it there. A polish seeded at
-    /// x = 1e-6 reads the same either way round, in three poses, and moved
-    /// 1e3 off: near the origin, the touch at the origin, the parabola's
-    /// start. Moved 1e3 off, the seed lies 1e-12 off the axis, within the
-    /// coordinates' rounding (1.4e-11), as a meeting does, and it stays.
-    #[test]
-    fn a_touch_at_an_edges_start_is_read_there_either_way_round() {
-        use brepkit_math::nurbs::curve::NurbsCurve;
-        for (pose, far) in ee_placings().into_iter().filter(|&(_, far)| far < 1e5) {
-            let p = |x: f64, y: f64| pose.mul_point(Point3::new(x, y, 0.0));
-            let mut topo = Topology::new();
-            let axis = add_edge(&mut topo, p(-1.0, 0.0), p(1.0, 0.0), EdgeCurve::Line);
-            let poles = vec![p(0.0, 0.0), p(0.5, 0.0), p(1.0, 1.0)];
-            let parabola = NurbsCurve::new(
-                2,
-                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
-                poles.clone(),
-                vec![1.0; 3],
-            )
-            .unwrap();
-            let arc = add_edge(
-                &mut topo,
-                poles[0],
-                poles[2],
-                EdgeCurve::NurbsCurve(parabola),
-            );
-            let within = 1e-12_f64.max(64.0 * f64::EPSILON * (far + 16.0));
-            let seed = 1e-6;
-            let reads = polished_both_ways(&topo, (axis, arc), (0.5 * (seed + 1.0), seed));
-            let what = format!("far {far:e}, {pose:?}: {reads:?}");
-            assert!(same_reading(reads[0], reads[1], far), "{what}");
-            let at = if far > 0.0 { p(seed, 0.0) } else { p(0.0, 0.0) };
-            assert!((reads[0] - at).length() <= within, "{what}");
-        }
-    }
-
     /// The x axis over `[x0, x1]` as a line edge.
     fn axis_edge(topo: &mut Topology, (x0, x1): (f64, f64)) -> EdgeId {
         add_edge(
@@ -5544,6 +4680,365 @@ mod tests {
                 if !proved {
                     assert!(!runs_along((&ca, ea), (&cb, eb), tol), "{what}");
                     assert!(!runs_along((&cb, eb), (&ca, ea), tol), "{what}");
+                }
+            }
+        }
+    }
+
+    /// What the caller of a touch polish keeps in one case, placing and
+    /// order of the two edges: the touch at `x` along the axis, or the seed's
+    /// own reading.
+    #[derive(Clone, Copy, Debug)]
+    enum Kept {
+        At(f64),
+        Seed,
+    }
+
+    /// Touch polishes near an edge's end, each case read in three poses,
+    /// moved 0 and 1e3 off, with either edge first. The polish reads a touch
+    /// where it proves an interval about the seed and finds the tangents
+    /// turning parallel in it, else the caller keeps the seed's own reading.
+    /// The cases, against the x axis on [-1, 1] unless said:
+    /// - `crossing_near_end`: a straight B-spline of slope 1e-5 or 1e-2
+    ///   crossing the axis on [-10, 10] at the origin, starting 1e-7 to 1e-5
+    ///   short of it. Read once, at the crossing.
+    /// - `double_meeting`: `(u, 10 u (u - 1e-6))`, meeting the axis where it
+    ///   starts and at `x = 1e-6`. Seeded at either meeting, it stays there,
+    ///   but moved 1e3 off and read along the B-spline from the second, at
+    ///   the dip's bottom (x = 5e-7), within the coordinates' rounding there.
+    /// - `parabola_start`: `(u, u^2)`, touching the axis where it starts,
+    ///   seeded at x = 1e-6. The seed stays, but turned near the origin with
+    ///   the parabola first: the interval about the seed reaches the start,
+    ///   where the tangents run parallel, only there.
+    /// - `bump`: `y = 1e-6 x` with a bump over [1.1e-6, 1.3e-6], 3e-7 or
+    ///   5e-8 high, seeded at x = 2e-6. The seed stays: no interval about it
+    ///   holds the tangents turning parallel.
+    /// - `double_touch`: `(u, 25000 u^2 (u - 1e-4)^2)`, touching at its start
+    ///   and at u = 1e-4, seeded at 2e-4. With the axis first, the touch at
+    ///   1e-4; with the quartic first, the seed, but turned moved 1e3 off.
+    /// - `crossing_at_1e-5`: `(u, 0.01 u (u - 1e-5))` on [0, 1e5], crossing
+    ///   the axis at 1e-5 and meeting it where it starts, seeded at 2e-5.
+    ///   With the quartic first, the seed; with the axis first, the bottom
+    ///   of the dip between the two meetings (x = 5e-6), but upright near the
+    ///   origin, the seed.
+    /// - `end_touch`: the circle of radius 2 about (5, 5), seamed at 0 or 2
+    ///   rad, and the quarter of the ellipse of semi-axes 3 and sqrt(5.4)
+    ///   about (4, 5) ending on it at (7, 5), where they touch, read either
+    ///   way. The touch is read once, at the quarter's end, but turned, where
+    ///   a reading of the crossing search, within 1e-5 of the end, stays.
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::cast_precision_loss,
+        clippy::cast_possible_wrap,
+        clippy::cast_possible_truncation
+    )]
+    fn touch_polishes_near_an_edges_end_keep_their_readings() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        use std::f64::consts::FRAC_1_SQRT_2;
+        let tol = Tolerance::default();
+        let placings: Vec<(usize, Mat4, f64)> = ee_poses()
+            .into_iter()
+            .enumerate()
+            .flat_map(|(k, pose)| {
+                [0.0, 1e3].map(|far| (k, Mat4::translation(far, far, far) * pose, far))
+            })
+            .collect();
+        let kept = |topo: &Topology, (a, b): (EdgeId, EdgeId), (ta, tb): (f64, f64)| -> Point3 {
+            let data = collect_edge_data(topo, &[a, b]).unwrap();
+            let (ca, cb) = (
+                topo.edge(a).unwrap().curve().clone(),
+                topo.edge(b).unwrap().curve().clone(),
+            );
+            let pa = ca.evaluate_with_endpoints(ta, data[0].start_pos, data[0].end_pos);
+            let pb = cb.evaluate_with_endpoints(tb, data[1].start_pos, data[1].end_pos);
+            touch_point((&ca, &data[0]), (&cb, &data[1]), (ta, tb), tol.linear)
+                .map_or(pa + (pb - pa) * 0.5, |r| r.2)
+        };
+        let binom = |n: usize, k: usize| -> f64 {
+            (0..k).fold(1.0, |acc, i| acc * (n - i) as f64 / (i + 1) as f64)
+        };
+        let bumped = |height: f64| {
+            let (left, right): (f64, f64) = (1.1e-6, 1.3e-6);
+            let width = right - left;
+            let in_u = [0.0, 0.0, 16.0 * height, -32.0 * height, 16.0 * height];
+            let mut bump = [0.0, 1e-6, 0.0, 0.0, 0.0];
+            for (m, &cm) in in_u.iter().enumerate() {
+                for (j, b) in bump.iter_mut().enumerate().take(m + 1) {
+                    *b += cm / width.powi(m as i32) * binom(m, j) * (-left).powi((m - j) as i32);
+                }
+            }
+            bump
+        };
+        for &(pose_at, pose, far) in &placings {
+            let p = |x: f64, y: f64| pose.mul_point(Point3::new(x, y, 0.0));
+            let back = pose.inverse().unwrap();
+            let rounding = 64.0 * f64::EPSILON * (far + 16.0);
+            let turned = pose_at == 1;
+            let what = |case: &str| format!("{case}, pose {pose_at}, far {far:e}");
+            // A polish seeded at the axis's `x` and the curve's `s`, either
+            // edge first, against what each order keeps.
+            let check = |case: &str,
+                         topo: &Topology,
+                         (axis, curve): (EdgeId, EdgeId),
+                         (x, s): (f64, f64),
+                         expect: [Kept; 2],
+                         fixed: f64| {
+                let reads = [
+                    kept(topo, (axis, curve), (0.5 * (x + 1.0), s)),
+                    kept(topo, (curve, axis), (s, 0.5 * (x + 1.0))),
+                ];
+                for (order, (read, expect)) in reads.into_iter().zip(expect).enumerate() {
+                    let at = back.mul_point(read).x();
+                    let fine = match expect {
+                        Kept::At(touch) => (at - touch).abs() <= fixed,
+                        Kept::Seed => (at - x).abs() <= rounding,
+                    };
+                    assert!(
+                        fine,
+                        "{}, order {order}: {expect:?}, read x = {at:e}",
+                        what(case)
+                    );
+                }
+            };
+            // A shallow crossing near an end, read once at its point.
+            for k in [1e-5, 1e-2] {
+                let within = tol.linear.max(8.0 * f64::EPSILON * (far + 16.0) / k);
+                for d in [1e-7, 1e-6, 5e-6, 1e-5] {
+                    let mut topo = Topology::new();
+                    let axis = add_edge(&mut topo, p(-10.0, 0.0), p(10.0, 0.0), EdgeCurve::Line);
+                    let (from, to) = (p(-d, -k * d), p(1.0, k));
+                    let segment = NurbsCurve::new(
+                        1,
+                        vec![0.0, 0.0, 1.0, 1.0],
+                        vec![from, to],
+                        vec![1.0, 1.0],
+                    )
+                    .unwrap();
+                    let spline = add_edge(&mut topo, from, to, EdgeCurve::NurbsCurve(segment));
+                    for (a, b) in [(axis, spline), (spline, axis)] {
+                        let found = edge_crossings(&topo, a, b, tol).unwrap();
+                        let case = format!("crossing_near_end k {k:e} d {d:e}: {found:?}");
+                        assert_eq!(found.len(), 1, "{}", what(&case));
+                        assert!(
+                            (found[0].2 - p(0.0, 0.0)).length() <= within,
+                            "{}",
+                            what(&case)
+                        );
+                    }
+                }
+            }
+            // Two meetings a hair apart at an edge's end.
+            {
+                let mut topo = Topology::new();
+                let axis = add_edge(&mut topo, p(-1.0, 0.0), p(1.0, 0.0), EdgeCurve::Line);
+                let poles = vec![p(0.0, 0.0), p(0.5, -5e-6), p(1.0, 10.0 - 1e-5)];
+                let dip = NurbsCurve::new(
+                    2,
+                    vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                    poles.clone(),
+                    vec![1.0; 3],
+                )
+                .unwrap();
+                let spline = add_edge(&mut topo, poles[0], poles[2], EdgeCurve::NurbsCurve(dip));
+                let second = if far > 0.0 {
+                    Kept::At(5e-7)
+                } else {
+                    Kept::At(1e-6)
+                };
+                check(
+                    "double_meeting at 0",
+                    &topo,
+                    (axis, spline),
+                    (0.0, 0.0),
+                    [Kept::At(0.0); 2],
+                    1e-9,
+                );
+                check(
+                    "double_meeting at 1e-6",
+                    &topo,
+                    (axis, spline),
+                    (1e-6, 1e-6),
+                    [Kept::At(1e-6), second],
+                    1e-9,
+                );
+                for (a, b) in [(axis, spline), (spline, axis)] {
+                    let found = edge_crossings(&topo, a, b, tol).unwrap();
+                    assert!(
+                        found
+                            .iter()
+                            .any(|h| (h.2 - p(0.0, 0.0)).length() <= tol.linear),
+                        "{}: {found:?}",
+                        what("double_meeting crossings")
+                    );
+                }
+            }
+            // A parabola touching the axis where it starts.
+            {
+                let mut topo = Topology::new();
+                let axis = add_edge(&mut topo, p(-1.0, 0.0), p(1.0, 0.0), EdgeCurve::Line);
+                let poles = vec![p(0.0, 0.0), p(0.5, 0.0), p(1.0, 1.0)];
+                let parabola = NurbsCurve::new(
+                    2,
+                    vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                    poles.clone(),
+                    vec![1.0; 3],
+                )
+                .unwrap();
+                let arc = add_edge(
+                    &mut topo,
+                    poles[0],
+                    poles[2],
+                    EdgeCurve::NurbsCurve(parabola),
+                );
+                let first = if turned && far == 0.0 {
+                    Kept::At(0.0)
+                } else {
+                    Kept::Seed
+                };
+                check(
+                    "parabola_start",
+                    &topo,
+                    (axis, arc),
+                    (1e-6, 1e-6),
+                    [Kept::Seed, first],
+                    1e-12,
+                );
+            }
+            // A bump above the tolerance, and one below it.
+            for height in [3e-7, 5e-8] {
+                let mut topo = Topology::new();
+                let bump = bumped(height);
+                let slope = [0.0, 1e-6];
+                let curve = posed_curve(
+                    &mut topo,
+                    &[
+                        (&slope, &[0.0], (0.0, 1.1e-6)),
+                        (&bump, &[0.0], (1.1e-6, 1.3e-6)),
+                        (&slope, &[0.0], (1.3e-6, 1.0)),
+                    ],
+                    &pose,
+                );
+                let axis = posed_axis(&mut topo, (-1.0, 1.0), &pose);
+                check(
+                    &format!("bump {height:e}"),
+                    &topo,
+                    (axis, curve),
+                    (2e-6, 2e-6),
+                    [Kept::Seed; 2],
+                    0.0,
+                );
+            }
+            // A double touch: at the start, and at u = 1e-4.
+            {
+                let mut topo = Topology::new();
+                let quartic = [0.0, 0.0, 25000.0 * 1e-8, -25000.0 * 2e-4, 25000.0];
+                let curve = posed_curve(&mut topo, &[(&quartic, &[0.0], (0.0, 1.0))], &pose);
+                let axis = posed_axis(&mut topo, (-1.0, 1.0), &pose);
+                let second = if turned && far > 0.0 {
+                    Kept::At(1e-4)
+                } else {
+                    Kept::Seed
+                };
+                // The rounding of the tangents over the gap in curvature, 5e-4.
+                let fixed = 64.0 * f64::EPSILON * (far + 16.0) / 5e-4;
+                check(
+                    "double_touch",
+                    &topo,
+                    (axis, curve),
+                    (2e-4, 2e-4),
+                    [Kept::At(1e-4), second],
+                    fixed,
+                );
+            }
+            // A crossing at 1e-5 between the seed and a meeting at the start.
+            {
+                let mut topo = Topology::new();
+                let quad = [0.0, -1e-7, 0.01];
+                let curve = posed_curve(&mut topo, &[(&quad, &[0.0], (0.0, 1e5))], &pose);
+                let axis = posed_axis(&mut topo, (-1.0, 1.0), &pose);
+                let first = if pose_at == 0 && far == 0.0 {
+                    Kept::Seed
+                } else {
+                    Kept::At(5e-6)
+                };
+                check(
+                    "crossing_at_1e-5",
+                    &topo,
+                    (axis, curve),
+                    (2e-5, 2e-5),
+                    [first, Kept::Seed],
+                    1e-11,
+                );
+            }
+            // The end touch of a quarter ellipse on a circle.
+            {
+                let b = 5.4_f64.sqrt();
+                let along = |x: f64, y: f64| p(x, y) - p(0.0, 0.0);
+                let normal = along(1.0, 0.0).cross(along(0.0, 1.0));
+                let circles = [
+                    (
+                        Circle3D::with_axes(
+                            p(5.0, 5.0),
+                            normal,
+                            2.0,
+                            along(1.0, 0.0),
+                            along(0.0, 1.0),
+                        )
+                        .unwrap(),
+                        2.0,
+                    ),
+                    (Circle3D::new(p(5.0, 5.0), normal, 2.0).unwrap(), 0.0),
+                ];
+                let within = if turned {
+                    1e-5
+                } else {
+                    1e-12_f64.max(rounding)
+                };
+                for (circle, at) in circles {
+                    for forward in [true, false] {
+                        let mut topo = Topology::new();
+                        let seam = circle.evaluate(at);
+                        let round =
+                            add_edge(&mut topo, seam, seam, EdgeCurve::Circle(circle.clone()));
+                        let mut poles = vec![p(7.0, 5.0), p(7.0, 5.0 + b), p(4.0, 5.0 + b)];
+                        if !forward {
+                            poles.reverse();
+                        }
+                        let quarter = NurbsCurve::new(
+                            2,
+                            vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                            poles.clone(),
+                            vec![1.0, FRAC_1_SQRT_2, 1.0],
+                        )
+                        .unwrap();
+                        let arc = add_edge(
+                            &mut topo,
+                            poles[0],
+                            poles[2],
+                            EdgeCurve::NurbsCurve(quarter),
+                        );
+                        for (x, y) in [(round, arc), (arc, round)] {
+                            let found = edge_crossings(&topo, x, y, tol).unwrap();
+                            let touch: Vec<_> = found
+                                .iter()
+                                .filter(|h| (h.2 - p(7.0, 5.0)).length() < 1e-3)
+                                .collect();
+                            let case = format!("end_touch seam {at}, forward {forward}: {found:?}");
+                            assert_eq!(touch.len(), 1, "{}", what(&case));
+                            assert!(
+                                (touch[0].2 - p(7.0, 5.0)).length() <= within,
+                                "{}",
+                                what(&case)
+                            );
+                            let crossing = p(6.0, 5.0 + 3.0_f64.sqrt());
+                            let near = found
+                                .iter()
+                                .filter(|h| (h.2 - crossing).length() < 1e-3)
+                                .count();
+                            assert_eq!(near, 1, "{}", what(&case));
+                        }
+                    }
                 }
             }
         }
