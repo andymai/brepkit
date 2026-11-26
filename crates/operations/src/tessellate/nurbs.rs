@@ -477,13 +477,6 @@ fn cell_refinement_error(
     let p01 = surface.evaluate(u_min, v_max);
     let p_mid = surface.evaluate(u_mid, v_mid);
 
-    let bilinear_mid = Point3::new(
-        0.25 * (p00.x() + p10.x() + p11.x() + p01.x()),
-        0.25 * (p00.y() + p10.y() + p11.y() + p01.y()),
-        0.25 * (p00.z() + p10.z() + p11.z() + p01.z()),
-    );
-    let sag = (p_mid - bilinear_mid).length();
-
     let (u_in_lo, u_in_hi) = inside_creases(u_min, u_max, &creases.u);
     let (v_in_lo, v_in_hi) = inside_creases(v_min, v_max, &creases.v);
     let normals = [
@@ -502,31 +495,26 @@ fn cell_refinement_error(
         }
     }
 
+    // Each side's middle against its chord: where the parameters crowd
+    // along a straight side, its middle lies on the chord all the same.
     let edge_mids = [
         surface.evaluate(u_mid, v_min),
         surface.evaluate(u_mid, v_max),
         surface.evaluate(u_min, v_mid),
         surface.evaluate(u_max, v_mid),
     ];
-
-    let edge_linear_mids = [
-        lerp_point(p00, p10),
-        lerp_point(p01, p11),
-        lerp_point(p00, p01),
-        lerp_point(p10, p11),
-    ];
-
-    let mut max_edge_sag = 0.0_f64;
-    for i in 0..4 {
-        let edge_sag = (edge_mids[i] - edge_linear_mids[i]).length();
-        max_edge_sag = max_edge_sag.max(edge_sag);
-    }
+    let chords = [(p00, p10), (p01, p11), (p00, p01), (p10, p11)];
+    let edge_sags = edge_mids
+        .into_iter()
+        .zip(chords)
+        .map(|(mid, (a, b))| point_segment_distance(mid, a, b));
 
     let diag = (p11 - p00).length().max((p10 - p01).length());
     let normal_sag = max_normal_dev * diag * 0.5;
 
-    // A twisted cell's middle is its corners' average, so `sag` misses its
-    // twist; read the cell against the triangles it splits into instead.
+    // The middle and quarter points against the triangles the cell splits
+    // into: the distance from the mesh, not from the corners' average, which
+    // misses a twist and counts the crowding of the parameters as sag.
     let probes = PROBES.map(|(a, b)| {
         if (a, b) == (0.5, 0.5) {
             p_mid
@@ -537,28 +525,26 @@ fn cell_refinement_error(
             )
         }
     });
-    let twist = split_stray([p00, p10, p01, p11], &probes);
+    let read = [p00, p10, p11, p01]
+        .iter()
+        .chain(&edge_mids)
+        .chain(&probes)
+        .all(|p| p.x().is_finite() && p.y().is_finite() && p.z().is_finite());
+    let twist = if read {
+        split_stray([p00, p10, p01, p11], &probes)
+    } else {
+        f64::NAN
+    };
 
     // A point that is not a number would drop out of a plain maximum, and
     // the cell would pass.
-    [sag, max_edge_sag, normal_sag, twist]
-        .into_iter()
-        .fold(0.0_f64, |m, e| {
-            if m.is_nan() || e.is_nan() {
-                f64::NAN
-            } else {
-                m.max(e)
-            }
-        })
-}
-
-/// Linear interpolation (midpoint) of two points.
-fn lerp_point(a: Point3, b: Point3) -> Point3 {
-    Point3::new(
-        0.5 * (a.x() + b.x()),
-        0.5 * (a.y() + b.y()),
-        0.5 * (a.z() + b.z()),
-    )
+    edge_sags.chain([normal_sag, twist]).fold(0.0_f64, |m, e| {
+        if m.is_nan() || e.is_nan() {
+            f64::NAN
+        } else {
+            m.max(e)
+        }
+    })
 }
 
 /// The root cells' lines, laid out in `cells` by `u` span then `v` span.
@@ -2098,12 +2084,13 @@ mod crease_tests {
         assert!(worst <= deflection, "a triangle {worst} off the surface");
     }
 
-    /// A patch 1e300 across each way, linear in its parameters but for a
-    /// spike of height 1 at one corner, over a span 1e-300 wide each way:
-    /// each cell holding the corner reads the spike's fall, down to cells
-    /// near 1e-300 wide, some 2,000 halvings down one corner.
+    /// A patch 1e100 across each way, linear in its parameters but for a
+    /// spike of height 1 at one corner, over a span 1e-100 wide each way:
+    /// the triangles from the spike's top stand off the patch by most of its
+    /// height until the cells at the corner are near the deflection across,
+    /// some 340 halvings down.
     fn corner_spike() -> NurbsSurface {
-        let (t, d) = (1e-300, 1e300);
+        let (t, d) = (1e-100, 1e100);
         let knots = vec![0.0, 0.0, 0.0, t, 2.0 * t, d, d, d];
         // Each control point over its Greville abscissa keeps the patch
         // linear in its parameters.
@@ -2117,7 +2104,7 @@ mod crease_tests {
                     .enumerate()
                     .map(|(j, &gv)| {
                         let z = if i == 0 && j == 0 { 1.0 } else { 0.0 };
-                        Point3::new(3.0 * gu / d, 3.0 * gv / d, z)
+                        Point3::new(gu, gv, z)
                     })
                     .collect()
             })
@@ -2136,7 +2123,11 @@ mod crease_tests {
             .join()
             .unwrap();
         assert!(
-            matches!(found, Err(crate::OperationsError::TooManySamples { .. })),
+            matches!(
+                &found,
+                Err(crate::OperationsError::TooManySamples { what, .. })
+                    if what == "a B-spline face's cell"
+            ),
             "{found:?}"
         );
     }
@@ -2167,12 +2158,11 @@ mod crease_tests {
         assert!(started.elapsed().as_secs() < 1, "{:?}", started.elapsed());
     }
 
-    /// A rational square patch with a weight of 1e-80 at one corner crowds
-    /// its parameters there: the tree divides down that corner past its
-    /// depth bound, far short of the sample limit, and is refused, with no
-    /// depth counted past its type.
+    /// A flat square patch with a weight of 1e-80 at one corner crowds its
+    /// parameters there, but its sides and iso-lines stay straight and its
+    /// cells flat, so the roots hold it.
     #[test]
-    fn a_corner_crowded_by_its_weight_is_refused_at_the_depth_bound() {
+    fn a_corner_crowded_by_its_weight_meshes_on_its_roots() {
         let points = vec![
             vec![Point3::new(0.0, 0.0, 0.0), Point3::new(0.0, 1.0, 0.0)],
             vec![Point3::new(1.0, 0.0, 0.0), Point3::new(1.0, 1.0, 0.0)],
@@ -2186,11 +2176,8 @@ mod crease_tests {
             vec![vec![1e-80, 1.0], vec![1.0, 1.0]],
         )
         .unwrap();
-        let found = super::tessellate_nurbs(&surface, 0.1, 0.0).map(|m| m.uvs.len());
-        assert!(
-            matches!(found, Err(crate::OperationsError::TooManySamples { .. })),
-            "{found:?}"
-        );
+        let mesh = super::tessellate_nurbs(&surface, 0.1, 0.0).unwrap();
+        assert_eq!(mesh.mesh.indices.len() / 6, 16, "the leaves");
     }
 
     /// A tree past the sample limit is refused before it takes the cells,
@@ -2330,6 +2317,39 @@ mod crease_tests {
             Point3::new(2.0, 0.0, 0.0),
         );
         assert!((line - 1.0).abs() < 1e-15, "{line}");
+    }
+
+    /// Flat patches whose parameters crowd toward one side: a square whose
+    /// weights at `u = 0` are 2^-20, and a tilted cubic sheet whose control
+    /// points bunch there. Their sides are straight and their cells flat, so
+    /// a cell's middles lie on its chords and triangles however its
+    /// parameters crowd, and the roots hold them.
+    #[test]
+    fn a_flat_patch_with_crowded_parameters_meshes_on_its_roots() {
+        let p = |x: f64, y: f64| Point3::new(x, y, 0.0);
+        let tiny = 2.0_f64.powi(-20);
+        let square = flat_patch(
+            [[p(0.0, 0.0), p(0.0, 1.0)], [p(1.0, 0.0), p(1.0, 1.0)]],
+            [[tiny, tiny], [1.0, 1.0]],
+        );
+        let mesh = super::tessellate_nurbs(&square, 0.1, 0.0).unwrap();
+        assert_eq!(mesh.mesh.indices.len() / 6, 16, "the square's leaves");
+        let tilt = |x: f64, y: f64| Point3::new(0.6 * x, y, 0.8 * x);
+        let rows = [0.0, 0.001, 0.002, 1.0]
+            .iter()
+            .map(|&x| vec![tilt(x, 0.0), tilt(x, 1.0)])
+            .collect();
+        let sheet = NurbsSurface::new(
+            3,
+            1,
+            vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+            vec![0.0, 0.0, 1.0, 1.0],
+            rows,
+            vec![vec![1.0; 2]; 4],
+        )
+        .unwrap();
+        let mesh = super::tessellate_nurbs(&sheet, 1e-6, 0.0).unwrap();
+        assert_eq!(mesh.mesh.indices.len() / 6, 16, "the sheet's leaves");
     }
 
     #[test]
