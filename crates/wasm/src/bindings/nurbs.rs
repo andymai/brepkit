@@ -455,7 +455,7 @@ impl BrepKernel {
     }
 
     /// The checked body of `approximateCurve`. With fewer control points
-    /// than points it solves a dense least-squares system; with as many, it
+    /// than points it solves a banded least-squares system; with as many, it
     /// interpolates.
     pub(crate) fn approximate_curve_impl(
         &mut self,
