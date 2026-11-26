@@ -149,7 +149,9 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
     // free-form trace (a helical strut's groove edge on a band's wall, or on
     // the strut wall beside it) expands like a circle: the slot box that cuts
     // the band ends its sections on that trace's EF junctions. A closed rim
-    // stays whole, as the closed-rim machinery expects.
+    // stays whole, as the closed-rim machinery expects. On a torus, a round's
+    // mitre with the next round expands the same way: a plane cutting the
+    // rounds ends its section on the mitre's EF junction.
     let nurbs_is_circular = |eid: brepkit_topology::edge::EdgeId| -> bool {
         let Ok(edge) = topo.edge(eid) else {
             return false;
@@ -233,7 +235,9 @@ pub(super) fn boundary_edges_to_pcurve_with_images<S: std::hash::BuildHasher>(
                         || (is_nurbs
                             && ((matches!(
                                 surface,
-                                FaceSurface::Cylinder(_) | FaceSurface::Nurbs(_)
+                                FaceSurface::Cylinder(_)
+                                    | FaceSurface::Nurbs(_)
+                                    | FaceSurface::Torus(_)
                             ) && topo
                                 .edge(oe.edge())
                                 .is_ok_and(|e| e.start() != e.end()))
