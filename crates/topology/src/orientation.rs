@@ -226,14 +226,24 @@ fn nurbs_uv_winding(
         .fold((0.0_f64, 0.0_f64), |(mu, mv), &(su, sv)| {
             (mu.max(su), mv.max(sv))
         });
-    if scale_u <= 0.0
-        || scale_v <= 0.0
-        || speeds
-            .iter()
-            .any(|&(su, sv)| su <= 1e-6 * scale_u || sv <= 1e-6 * scale_v)
-    {
+    if scale_u <= 0.0 || scale_v <= 0.0 {
         return None;
     }
+    // A sample where a partial vanishes has no parameters of its own (a
+    // walked band's end section can stand still along the spine). A few such
+    // samples are read past, the loop drawn between their neighbours; a run
+    // of them (a side collapsed to a pole) leaves the loop unread.
+    let singular = |&(su, sv): &(f64, f64)| su <= 1e-6 * scale_u || sv <= 1e-6 * scale_v;
+    let dropped = speeds.iter().filter(|s| singular(s)).count();
+    if dropped * 8 > speeds.len() || speeds.len() - dropped < 3 {
+        return None;
+    }
+    let raw: Vec<(f64, f64)> = raw
+        .iter()
+        .zip(&speeds)
+        .filter(|(_, s)| !singular(s))
+        .map(|(&uv, _)| uv)
+        .collect();
     let mut loop_uv: Vec<(f64, f64)> = Vec::with_capacity(raw.len());
     // A loop that runs along a seam both ways wraps one direction. Sampled
     // densely along its edges, it steps across half of a direction only where

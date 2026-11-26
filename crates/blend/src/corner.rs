@@ -1104,7 +1104,7 @@ pub fn tangent_junction_spokes(
     topo: &Topology,
     plan: &FilletPlan,
     stripes: &[&Stripe],
-) -> Result<Vec<(Point3, Point3)>, BlendError> {
+) -> Result<JunctionSpokes, BlendError> {
     const SAME: f64 = 1e-6;
     let stripe_of = |contour: usize| {
         let edges = plan.contours.get(contour)?.spine.edges();
@@ -1114,6 +1114,7 @@ pub fn tangent_junction_spokes(
             .find(|stripe| stripe.spine_edges() == edges)
     };
     let mut spokes = Vec::new();
+    let mut curved: Vec<CurvedSpoke> = Vec::new();
     for junction in &plan.junctions {
         if junction.classification != CornerClassification::Junction
             || junction.incident_contours.len() != 2
@@ -1153,7 +1154,7 @@ pub fn tangent_junction_spokes(
                 for oriented in topo.wire(wire_id)?.edges() {
                     let edge = topo.edge(oriented.edge())?;
                     if own.contains(&oriented.edge())
-                        || !matches!(edge.curve(), EdgeCurve::Line)
+                        || edge.start() == edge.end()
                         || (edge.start() != junction.vertex && edge.end() != junction.vertex)
                     {
                         continue;
@@ -1162,14 +1163,38 @@ pub fn tangent_junction_spokes(
                         topo.vertex(edge.start())?.point(),
                         topo.vertex(edge.end())?.point(),
                     );
-                    if !spokes.contains(&spoke) {
-                        spokes.push(spoke);
+                    if matches!(edge.curve(), EdgeCurve::Line) {
+                        if !spokes.contains(&spoke) {
+                            spokes.push(spoke);
+                        }
+                    } else if let EdgeCurve::NurbsCurve(curve) = edge.curve()
+                        && !curved.iter().any(|c| c.ends == spoke)
+                    {
+                        // A B-spline wall split along a curve (a part fused
+                        // from two halves) has its seam curved.
+                        curved.push(CurvedSpoke {
+                            curve: curve.clone(),
+                            ends: spoke,
+                        });
                     }
                 }
             }
         }
     }
-    Ok(spokes)
+    Ok((spokes, curved))
+}
+
+/// A junction's straight spokes by their ends, and its curved ones.
+pub type JunctionSpokes = (Vec<(Point3, Point3)>, Vec<CurvedSpoke>);
+
+/// A curved edge a trim splits where a contact ends on it (see
+/// [`crate::trimmer::BoundarySplitPolicy`]): its curve, and its two ends.
+#[derive(Debug, Clone)]
+pub struct CurvedSpoke {
+    /// The edge's carrier.
+    pub curve: NurbsCurve,
+    /// The edge's two ends.
+    pub ends: (Point3, Point3),
 }
 
 /// Outward normals of a three-face planar fan, `None` when any face is not
@@ -1668,6 +1693,8 @@ pub fn set_back_convex_trihedral_stripes(
         .collect();
     let mut trim_ranges = vec![(0.0_f64, 1.0_f64); original_stripes.len()];
     let mut setback_edges = std::collections::HashSet::new();
+    // Each walked round's cuts: the ball's centre, and whether from its start.
+    let mut walked_cuts: Vec<(usize, Point3, bool)> = Vec::new();
 
     for junction in plan.junctions.iter().filter(|junction| {
         junction.classification == CornerClassification::Junction
@@ -1690,6 +1717,31 @@ pub fn set_back_convex_trihedral_stripes(
             })
             .collect::<Result<_, _>>()?;
 
+        // Walked rounds (between curved faces) are set back to the ball
+        // solved on the faces, after the analytic ones.
+        if indices
+            .iter()
+            .all(|&index| matches!(original_stripes[index].surface, FaceSurface::Nurbs(_)))
+        {
+            if let Some(centre) = walked_corner(
+                topo,
+                junction.vertex,
+                &indices,
+                &original_stripes,
+                solid_faces,
+            )? {
+                let vertex = topo.vertex(junction.vertex)?.point();
+                for &index in &indices {
+                    let stripe = &original_stripes[index];
+                    let spine_start = stripe.spine.evaluate(topo, 0.0)?;
+                    let spine_end = stripe.spine.evaluate(topo, stripe.spine.length())?;
+                    let from_start =
+                        (spine_start - vertex).length() <= (spine_end - vertex).length();
+                    walked_cuts.push((index, centre, from_start));
+                }
+            }
+            continue;
+        }
         let Some(fractions) = convex_trihedral_setback(
             topo,
             junction.vertex,
@@ -1768,8 +1820,56 @@ pub fn set_back_convex_trihedral_stripes(
         }
         setback_edges.extend(original_stripes[index].spine_edges().iter().copied());
     }
+    for (index, centre, from_start) in walked_cuts {
+        let cut = crate::walked_setback::cut_back(
+            topo,
+            &stripe_results[index].stripe,
+            centre,
+            from_start,
+        )?;
+        stripe_results[index].stripe = cut;
+        setback_edges.extend(original_stripes[index].spine_edges().iter().copied());
+    }
 
     Ok(setback_edges)
+}
+
+/// The ball of a convex corner where three walked rounds of one radius meet
+/// on three faces (see [`crate::walked_setback`]), or `None`.
+fn walked_corner(
+    topo: &Topology,
+    vertex: VertexId,
+    indices: &[usize],
+    stripes: &[Stripe],
+    solid_faces: &[FaceId],
+) -> Result<Option<Point3>, BlendError> {
+    if indices.len() != 3 || incident_face_count(topo, vertex, solid_faces) != 3 {
+        return Ok(None);
+    }
+    let radius = stripes[indices[0]].sections[0].radius;
+    let mut faces: Vec<FaceId> = Vec::with_capacity(3);
+    for &index in indices {
+        let stripe = &stripes[index];
+        // The ends' radii: a walk's sections between may stray from the
+        // radius where it pivots, away from the corner.
+        if stripe.sections.len() < 2
+            || [stripe.sections.first(), stripe.sections.last()]
+                .into_iter()
+                .flatten()
+                .any(|section| (section.radius - radius).abs() > TOL)
+        {
+            return Ok(None);
+        }
+        for face in [stripe.face1, stripe.face2] {
+            if !faces.iter().any(|f| f.index() == face.index()) {
+                faces.push(face);
+            }
+        }
+    }
+    let Ok(faces) = <[FaceId; 3]>::try_from(faces) else {
+        return Ok(None);
+    };
+    crate::walked_setback::walked_ball(topo, indices, stripes, &faces, radius)
 }
 
 /// Count the faces of `scope` (the solid this build actually operates on)
@@ -1929,7 +2029,7 @@ fn miter_trace_face(topo: &Topology, face_id: FaceId, label: &str) {
     }
 }
 
-fn inverse_3x3(matrix: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
+pub fn inverse_3x3(matrix: [[f64; 3]; 3]) -> Option<[[f64; 3]; 3]> {
     let [[a, b, c], [d, e, f], [g, h, i]] = matrix;
     let determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
     if determinant.abs() < 1e-12 {
