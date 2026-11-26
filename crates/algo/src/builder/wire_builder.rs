@@ -72,7 +72,25 @@ pub fn build_wire_loops_with_winding(
     v_periodic: bool,
     cw_boundary: bool,
 ) -> Vec<Vec<OrientedPCurveEdge>> {
-    trace_loops(edges, tol, (u_periodic, v_periodic), cw_boundary, false)
+    trace_loops(
+        edges,
+        tol,
+        (u_periodic, v_periodic),
+        (cw_boundary, false),
+        false,
+    )
+}
+
+/// [`build_wire_loops_with_winding`] on a plane face, which no period wraps.
+/// There a line edge's straight pcurve is its exact image, and an edge drawn
+/// on the same straight segment between the same two points is that
+/// segment to the walk.
+pub fn build_wire_loops_flat(
+    edges: &[OrientedPCurveEdge],
+    tol: f64,
+    cw_boundary: bool,
+) -> Vec<Vec<OrientedPCurveEdge>> {
+    trace_loops(edges, tol, (false, false), (cw_boundary, false), true)
 }
 
 /// [`build_wire_loops`] on a ball face round a pole of its chart. The
@@ -84,15 +102,15 @@ pub fn build_wire_loops_round_a_pole(
     edges: &[OrientedPCurveEdge],
     tol: f64,
 ) -> Vec<Vec<OrientedPCurveEdge>> {
-    trace_loops(edges, tol, (true, false), false, true)
+    trace_loops(edges, tol, (true, false), (false, true), false)
 }
 
 fn trace_loops(
     edges: &[OrientedPCurveEdge],
     tol: f64,
     (u_periodic, v_periodic): (bool, bool),
-    cw_boundary: bool,
-    close_a_turn: bool,
+    (cw_boundary, close_a_turn): (bool, bool),
+    flat: bool,
 ) -> Vec<Vec<OrientedPCurveEdge>> {
     if edges.is_empty() {
         return Vec::new();
@@ -231,27 +249,38 @@ fn trace_loops(
                 {
                     // Check if this is truly the reverse edge (same curve,
                     // opposite direction): a section's own twin, or another
-                    // edge leaving close by. Two lines, circles or ellipses
-                    // that leave the vertex close together but apart are two
-                    // curves unless proved one (a circle and an ellipse
-                    // through the same ends). Edges that leave along one
-                    // direction to rounding cannot be told apart here, and a
-                    // B-spline is read by angle alone.
+                    // edge leaving close by and proved one curve with it. Two
+                    // edges that leave the vertex close together, even along
+                    // one heading, are two curves unless proved one (a circle
+                    // and an ellipse through the same ends, two B-splines
+                    // that part between their ends). On a plane face, an edge
+                    // drawn on a line edge's straight pcurve, its exact image,
+                    // is that segment to the walk, which reads the face's
+                    // parameters: an arc along the face's own rim drawn as
+                    // its chord, and the chord itself.
                     let angle_diff = (entry.angle - incoming_angle).abs();
                     let close = angle_diff < 0.1 || (angle_diff - TAU).abs() < 0.1;
-                    let along = angle_diff < 1e-9 || (angle_diff - TAU).abs() < 1e-9;
                     let twin = current_edge.source_edge_idx.is_some()
                         && current_edge.source_edge_idx == candidate.source_edge_idx
                         && current_edge.forward != candidate.forward;
+                    let one_segment =
+                        flat && matches!(
+                            (&current_edge.pcurve, &candidate.pcurve),
+                            (
+                                brepkit_math::curves2d::Curve2D::Line(_),
+                                brepkit_math::curves2d::Curve2D::Line(_)
+                            )
+                        ) && [&current_edge.curve_3d, &candidate.curve_3d]
+                            .iter()
+                            .any(|c| matches!(c, brepkit_topology::edge::EdgeCurve::Line));
                     let is_reverse = twin
                         || close
-                            && (along
+                            && (one_segment
                                 || super::face_splitter::edges_one_curve(
                                     current_edge,
                                     candidate,
                                     10.0 * tol,
-                                )
-                                .unwrap_or(true));
+                                ));
                     if is_reverse {
                         continue;
                     }
@@ -1405,6 +1434,175 @@ mod tests {
             2,
             "dividing section must survive"
         );
+    }
+
+    /// A frame of the plane: its name, where it takes a point, and whether
+    /// it turns the plane over.
+    type Frame = (&'static str, Box<dyn Fn(f64, f64) -> Point2>, bool);
+
+    /// A face above a quadratic B-spline from (3, 5) to (7, 5) over four
+    /// spans, its middle control point at (5, 5.3), up to y = 8, and a
+    /// section in both directions along a second one that differs from it in
+    /// that point alone, at (5, 5.6): the two share their end spans, so they
+    /// leave both ends along one heading, and part between. Arriving along
+    /// the lower spline, the walk turns back along the section, round the
+    /// lens between them, not up the face's side, and each of the two loops
+    /// takes the section once. Upright, turned and mirrored in the plane.
+    #[test]
+    fn two_b_splines_along_one_heading_close_the_lens_between_them() {
+        use brepkit_math::curves2d::NurbsCurve2D;
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let (sin, cos) = 0.7f64.sin_cos();
+        let frames: [Frame; 3] = [
+            ("upright", Box::new(Point2::new), false),
+            (
+                "turned",
+                Box::new(move |x, y| {
+                    Point2::new(3.0 + x * cos - y * sin, -2.0 + x * sin + y * cos)
+                }),
+                false,
+            ),
+            ("mirrored", Box::new(|x, y| Point2::new(-x, y)), true),
+        ];
+        for (name, at, mirrored) in &frames {
+            let knots = vec![0.0, 0.0, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.0, 1.0];
+            let point = |p: Point2| brepkit_math::vec::Point3::new(p.x(), p.y(), 0.0);
+            let spline = |middle: f64| {
+                let uv: Vec<Point2> = [
+                    (3.0, 5.0),
+                    (3.5, 5.1),
+                    (4.0, 5.2),
+                    (5.0, middle),
+                    (6.0, 5.2),
+                    (6.5, 5.1),
+                    (7.0, 5.0),
+                ]
+                .iter()
+                .map(|&(x, y)| at(x, y))
+                .collect();
+                let space = uv.iter().map(|&p| point(p)).collect();
+                (
+                    Curve2D::Nurbs(NurbsCurve2D::new(2, knots.clone(), uv, vec![1.0; 7]).unwrap()),
+                    EdgeCurve::NurbsCurve(
+                        NurbsCurve::new(2, knots.clone(), space, vec![1.0; 7]).unwrap(),
+                    ),
+                )
+            };
+            let (s, e) = (at(3.0, 5.0), at(7.0, 5.0));
+            let edge = |(pcurve, curve_3d): (Curve2D, EdgeCurve), forward, src| {
+                let (from, to) = if forward { (s, e) } else { (e, s) };
+                OrientedPCurveEdge {
+                    curve_3d,
+                    pcurve,
+                    start_uv: from,
+                    end_uv: to,
+                    start_3d: point(from),
+                    end_3d: point(to),
+                    forward,
+                    source_edge_idx: src,
+                    pave_block_id: None,
+                }
+            };
+            let mut edges = vec![edge(spline(5.3), true, None)];
+            for (from, to) in [
+                ((7.0, 5.0), (7.0, 8.0)),
+                ((7.0, 8.0), (3.0, 8.0)),
+                ((3.0, 8.0), (3.0, 5.0)),
+            ] {
+                let mut side = make_line_edge(at(from.0, from.1), at(to.0, to.1));
+                side.start_3d = point(side.start_uv);
+                side.end_3d = point(side.end_uv);
+                edges.push(side);
+            }
+            let upper = spline(5.6);
+            edges.push(edge(upper.clone(), true, Some(9)));
+            edges.push(edge(upper, false, Some(9)));
+            let loops = build_wire_loops_with_winding(&edges, 1e-7, false, false, *mirrored);
+            assert_eq!(loops.len(), 2, "{name}: the loops");
+            for lp in &loops {
+                let taken = lp.iter().filter(|e| e.source_edge_idx == Some(9)).count();
+                assert_eq!(taken, 1, "{name}: a loop takes the section {taken} times");
+            }
+        }
+    }
+
+    /// The face above a B-spline and the section along a second one of the
+    /// test before, on a face that is no plane, each spline drawn as its
+    /// chord in the face's parameters: the two straight pcurves are one
+    /// segment there, but the splines part in space, so the walk still turns
+    /// back along the section round the lens, and each loop takes it once.
+    /// Upright, turned and mirrored in the plane.
+    #[test]
+    fn two_b_splines_drawn_as_one_chord_off_a_plane_close_their_lens() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let (sin, cos) = 0.7f64.sin_cos();
+        let frames: [Frame; 3] = [
+            ("upright", Box::new(Point2::new), false),
+            (
+                "turned",
+                Box::new(move |x, y| {
+                    Point2::new(3.0 + x * cos - y * sin, -2.0 + x * sin + y * cos)
+                }),
+                false,
+            ),
+            ("mirrored", Box::new(|x, y| Point2::new(-x, y)), true),
+        ];
+        for (name, at, mirrored) in &frames {
+            let knots = vec![0.0, 0.0, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.0, 1.0];
+            let point = |p: Point2| brepkit_math::vec::Point3::new(p.x(), p.y(), 0.0);
+            let (s, e) = (at(3.0, 5.0), at(7.0, 5.0));
+            let spline = |middle: f64| {
+                let space = [
+                    (3.0, 5.0),
+                    (3.5, 5.1),
+                    (4.0, 5.2),
+                    (5.0, middle),
+                    (6.0, 5.2),
+                    (6.5, 5.1),
+                    (7.0, 5.0),
+                ]
+                .iter()
+                .map(|&(x, y)| point(at(x, y)))
+                .collect();
+                EdgeCurve::NurbsCurve(
+                    NurbsCurve::new(2, knots.clone(), space, vec![1.0; 7]).unwrap(),
+                )
+            };
+            let edge = |curve_3d: EdgeCurve, forward: bool, src| {
+                let (from, to) = if forward { (s, e) } else { (e, s) };
+                let dir = Vec2::new(e.x() - s.x(), e.y() - s.y());
+                OrientedPCurveEdge {
+                    curve_3d,
+                    pcurve: Curve2D::Line(Line2D::new(s, dir).unwrap()),
+                    start_uv: from,
+                    end_uv: to,
+                    start_3d: point(from),
+                    end_3d: point(to),
+                    forward,
+                    source_edge_idx: src,
+                    pave_block_id: None,
+                }
+            };
+            let mut edges = vec![edge(spline(5.3), true, None)];
+            for (from, to) in [
+                ((7.0, 5.0), (7.0, 8.0)),
+                ((7.0, 8.0), (3.0, 8.0)),
+                ((3.0, 8.0), (3.0, 5.0)),
+            ] {
+                let mut side = make_line_edge(at(from.0, from.1), at(to.0, to.1));
+                side.start_3d = point(side.start_uv);
+                side.end_3d = point(side.end_uv);
+                edges.push(side);
+            }
+            edges.push(edge(spline(5.6), true, Some(9)));
+            edges.push(edge(spline(5.6), false, Some(9)));
+            let loops = build_wire_loops_with_winding(&edges, 1e-7, false, false, *mirrored);
+            assert_eq!(loops.len(), 2, "{name}: the loops");
+            for lp in &loops {
+                let taken = lp.iter().filter(|e| e.source_edge_idx == Some(9)).count();
+                assert_eq!(taken, 1, "{name}: a loop takes the section {taken} times");
+            }
+        }
     }
 
     #[test]

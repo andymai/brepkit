@@ -47,6 +47,55 @@ fn load(topo: &mut Topology, name: &str) -> SolidId {
     deserialize_solid(&std::fs::read(path).unwrap(), topo).unwrap()
 }
 
+/// The largest distance from a face's surface that 31 points inside a
+/// B-spline edge of `solid` read, against the edge's tolerance, for each
+/// face that uses it: `(sampled, tolerance)` for each such edge that the
+/// tolerance does not cover.
+fn edges_off_their_faces(topo: &Topology, solid: SolidId) -> Vec<(f64, Option<f64>)> {
+    use brepkit_topology::edge::EdgeCurve;
+    use brepkit_topology::face::FaceSurface;
+    let mut uncovered = Vec::new();
+    for f in brepkit_topology::explorer::solid_faces(topo, solid).unwrap() {
+        let face = topo.face(f).unwrap();
+        let surface = face.surface();
+        for w in std::iter::once(face.outer_wire()).chain(face.inner_wires().iter().copied()) {
+            for oe in topo.wire(w).unwrap().edges() {
+                let edge = topo.edge(oe.edge()).unwrap();
+                let EdgeCurve::NurbsCurve(curve) = edge.curve() else {
+                    continue;
+                };
+                let (sp, ep) = (
+                    topo.vertex(edge.start()).unwrap().point(),
+                    topo.vertex(edge.end()).unwrap().point(),
+                );
+                let (t0, t1) = edge.curve().domain_with_endpoints(sp, ep);
+                let far = (1..32)
+                    .filter_map(|k| {
+                        let q = curve.evaluate(t0 + (t1 - t0) * f64::from(k) / 32.0);
+                        match surface {
+                            FaceSurface::Nurbs(n) => {
+                                brepkit_math::nurbs::projection::project_point_to_surface(
+                                    n, q, 1e-12,
+                                )
+                                .ok()
+                                .map(|found| found.distance)
+                            }
+                            other => other
+                                .project_point(q)
+                                .and_then(|(u, v)| other.evaluate(u, v))
+                                .map(|on| (on - q).length()),
+                        }
+                    })
+                    .fold(0.0_f64, f64::max);
+                if far > edge.tolerance().unwrap_or(1e-7) + 1e-9 {
+                    uncovered.push((far, edge.tolerance()));
+                }
+            }
+        }
+    }
+    uncovered
+}
+
 fn exact(topo: &mut Topology, op: BooleanOp, a: SolidId, b: SolidId) -> SolidId {
     let fallbacks = boolean::mesh_fallback_count();
     let result = boolean::boolean(topo, op, a, b).unwrap();
@@ -171,6 +220,19 @@ fn the_fillet_material_and_the_clipped_scoop_meet_exactly() {
     let common_swapped = exact(&mut topo, BooleanOp::Intersect, scoop, material);
     let fused = exact(&mut topo, BooleanOp::Fuse, material, scoop);
     let scoop_only = exact(&mut topo, BooleanOp::Cut, scoop, material);
+
+    // The scoop's trim and its section with the corner cylinder are fits up
+    // to 4e-4 off their faces: each edge of each result holds its own
+    // distance from its faces as its tolerance.
+    for (label, solid) in [
+        ("intersect", common),
+        ("swapped intersect", common_swapped),
+        ("fuse", fused),
+        ("scoop cut", scoop_only),
+    ] {
+        let uncovered = edges_off_their_faces(&topo, solid);
+        assert!(uncovered.is_empty(), "{label}: {uncovered:?}");
+    }
 
     // At deflection 0.001 the fuse and the scoop cut both read 0.37 below
     // these sums, the scoop's own volume reading that much high; the

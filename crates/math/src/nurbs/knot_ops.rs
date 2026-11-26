@@ -32,6 +32,7 @@ pub fn curve_knot_insert(curve: &NurbsCurve, u: f64, r: usize) -> Result<NurbsCu
     let knots = curve.knots();
     let cps = curve.control_points();
     let ws = curve.weights();
+    let u = at_knot(knots, u);
 
     // Count existing multiplicity of u.
     let s = knots
@@ -471,6 +472,16 @@ pub fn curve_knot_refine(
     Ok(result)
 }
 
+/// The knot of `knots` that `u` reads as, within [`KNOT_EPS`], else `u`. A
+/// knot inserted there takes that knot's value, so the knots never run back.
+fn at_knot(knots: &[f64], u: f64) -> f64 {
+    knots
+        .iter()
+        .copied()
+        .find(|&kv| (kv - u).abs() < KNOT_EPS)
+        .unwrap_or(u)
+}
+
 /// Split a curve at parameter `u` into two curves.
 ///
 /// Inserts the knot to full multiplicity (degree + 1) at `u`, then
@@ -481,6 +492,7 @@ pub fn curve_knot_refine(
 /// Returns an error if the resulting curves cannot be constructed.
 pub fn curve_split(curve: &NurbsCurve, u: f64) -> Result<(NurbsCurve, NurbsCurve), MathError> {
     let p = curve.degree();
+    let u = at_knot(curve.knots(), u);
 
     // Insert knot to multiplicity p (C^0 continuity = interpolatory).
     let refined = curve_knot_insert(curve, u, p)?;
@@ -562,6 +574,69 @@ mod tests {
         )
         .unwrap();
         assert!(curve_split(&curve, 2e-16).is_err());
+    }
+
+    /// A cubic with a knot at 0.24999999999999992, split at 0.25, which the
+    /// split reads as that knot: both halves keep their knots in order and
+    /// meet at the curve's point there. Upright, turned and mirrored.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn a_split_beside_a_knot_keeps_the_knots_in_order() {
+        use crate::vec::Vec3;
+        type Pose = (&'static str, Box<dyn Fn(Vec3) -> Vec3>);
+        let axis = Vec3::new(1.0, 2.0, 3.0).normalize().unwrap();
+        let (sin, cos) = 0.7f64.sin_cos();
+        let turn =
+            move |e: Vec3| e * cos + axis.cross(e) * sin + axis * (axis.dot(e) * (1.0 - cos));
+        let poses: [Pose; 3] = [
+            ("upright", Box::new(|e| e)),
+            ("turned", Box::new(turn)),
+            (
+                "mirrored",
+                Box::new(move |e| {
+                    let t = turn(e);
+                    Vec3::new(-t.x(), t.y(), t.z())
+                }),
+            ),
+        ];
+        for (name, pose) in &poses {
+            let at = |x: f64, y: f64| {
+                let e = pose(Vec3::new(x, y, 0.5 * x));
+                Point3::new(3.0 + e.x(), -2.0 + e.y(), 5.0 + e.z())
+            };
+            let knot = 0.249_999_999_999_999_92;
+            let curve = NurbsCurve::new(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, knot, 0.5, 1.0, 1.0, 1.0, 1.0],
+                vec![
+                    at(0.0, 0.0),
+                    at(1.0, 2.0),
+                    at(2.0, -1.0),
+                    at(3.0, 3.0),
+                    at(4.0, 0.5),
+                    at(5.0, 0.0),
+                ],
+                vec![1.0; 6],
+            )
+            .unwrap();
+            let (left, right) = curve_split(&curve, 0.25).unwrap();
+            for (half, piece) in [("left", &left), ("right", &right)] {
+                assert!(
+                    piece.knots().windows(2).all(|k| k[0] <= k[1]),
+                    "{name}: the {half} half's knots {:?}",
+                    piece.knots()
+                );
+            }
+            let meet = left.evaluate(left.domain().1);
+            assert!(
+                (meet - right.evaluate(right.domain().0)).length() < 1e-12,
+                "{name}: the halves part"
+            );
+            assert!(
+                (meet - curve.evaluate(0.25)).length() < 1e-12,
+                "{name}: the halves meet off the curve"
+            );
+        }
     }
 
     fn cubic_bezier() -> NurbsCurve {

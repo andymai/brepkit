@@ -356,7 +356,9 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             continue;
         }
 
-        let sections = build_section_edges(
+        // A face whose sections cannot be told apart from its own boundary
+        // refuses its split, and with it the build.
+        let Some(sections) = build_section_edges(
             topo,
             arena,
             face_id,
@@ -365,7 +367,10 @@ pub fn fill_images_faces<S: BuildHasher, S2: BuildHasher>(
             &adjacency,
             &face_loops,
             tol,
-        );
+        ) else {
+            unsplit.push(face_id);
+            continue;
+        };
 
         // Only the planar arrangement welds a section duplicating a boundary
         // edge end to end (the exemption in `section_on_existing_boundary`).
@@ -2675,6 +2680,8 @@ const DEGENERATE_ARC_SPAN: f64 = 1e-6;
 ///
 /// For intersection curves, uses the complete curve geometry (not individual
 /// PaveBlock fragments). For IN edges, uses the individual PaveBlock edge.
+/// `None` where a curve's pieces on the face's boundary cannot be read apart
+/// from the rest (see [`section_runs`]).
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn build_section_edges(
     topo: &Topology,
@@ -2685,18 +2692,18 @@ fn build_section_edges(
     adjacency: &InputAdjacency<'_>,
     face_loops: &FaceLoopsCache,
     op_tol: Tolerance,
-) -> Vec<SectionEdge> {
+) -> Option<Vec<SectionEdge>> {
     use brepkit_math::vec::Point3;
     let tol = op_tol.linear;
 
     let sources = match section_map.get(&face_id) {
         Some(s) => s,
-        None => return Vec::new(),
+        None => return Some(Vec::new()),
     };
 
     let face = match topo.face(face_id) {
         Ok(f) => f,
-        Err(_) => return Vec::new(),
+        Err(_) => return Some(Vec::new()),
     };
 
     // Pre-compute wire points for PCurve (needed for plane frame).
@@ -2717,6 +2724,10 @@ fn build_section_edges(
         .unwrap_or_default();
 
     let mut sections = Vec::new();
+    // The common blocks this face takes from its curve sections: a block two
+    // sections share is one edge, taken once.
+    let mut taken: std::collections::HashSet<crate::ds::CommonBlockId> =
+        std::collections::HashSet::new();
 
     for source in sources {
         match source {
@@ -2759,12 +2770,50 @@ fn build_section_edges(
                     continue;
                 }
 
-                // A section in pieces, each sharing its edge with one of this
-                // face's own boundary edges, lies on the boundary: the face
-                // already has those edges, which the whole curve would trace
-                // again beside them.
-                if section_pieces_on_face_boundary(topo, arena, curve_ds, face_id) {
-                    continue;
+                // A section in pieces that share their edge with this face's
+                // own boundary edges, or with a block the face took from
+                // another section, lies on that edge: the face takes only
+                // its other pieces, and none where every piece is such.
+                let blocks = curve_blocks(arena, curve_ds);
+                match section_runs(topo, arena, curve_ds, face_id, &taken, tol) {
+                    SectionRuns::Unread => return None,
+                    SectionRuns::Nothing => continue,
+                    SectionRuns::Whole => taken.extend(blocks),
+                    SectionRuns::Pieces(runs) => {
+                        taken.extend(blocks);
+                        for (curve_3d, start, end) in runs {
+                            let pcurve = super::pcurve_compute::compute_pcurve_on_surface(
+                                &curve_3d,
+                                start,
+                                end,
+                                face.surface(),
+                                &wire_pts,
+                                None,
+                            );
+                            let is_closed = (start - end).length() < tol * 100.0;
+                            let (start_uv_pt, end_uv_pt) = section_end_uv_hints(
+                                &curve_3d,
+                                start,
+                                is_closed,
+                                face.surface(),
+                                &pcurve,
+                            );
+                            sections.push(SectionEdge {
+                                curve_3d,
+                                pcurve_a: pcurve.clone(),
+                                pcurve_b: pcurve,
+                                start,
+                                end,
+                                start_uv_a: start_uv_pt,
+                                end_uv_a: end_uv_pt,
+                                start_uv_b: start_uv_pt,
+                                end_uv_b: end_uv_pt,
+                                target_face: None,
+                                pave_block_id: None,
+                            });
+                        }
+                        continue;
+                    }
                 }
 
                 // Find start/end 3D points by evaluating the curve at its
@@ -2872,12 +2921,19 @@ fn build_section_edges(
                             None => (curve_ds.curve.clone(), start, end),
                         }]
                     }
-                    None => vec![(
-                        window_curve(&curve_ds.curve, curve_ds.t_range, (start, end))
-                            .unwrap_or_else(|| curve_ds.curve.clone()),
-                        start,
-                        end,
-                    )],
+                    None => {
+                        let curve_3d = match window_curve(
+                            &curve_ds.curve,
+                            curve_ds.t_range,
+                            (start, end),
+                            tol,
+                        ) {
+                            SectionWindow::Whole => curve_ds.curve.clone(),
+                            SectionWindow::Cut(window) => window,
+                            SectionWindow::Unread => return None,
+                        };
+                        vec![(curve_3d, start, end)]
+                    }
                 };
 
                 for (curve_3d, start, end) in spans {
@@ -3226,7 +3282,7 @@ fn build_section_edges(
     // region only. Keeping both creates degenerate face splits.
     dedup_collinear_sections(&mut sections, tol);
 
-    sections
+    Some(sections)
 }
 
 /// The end UVs a section hands the face splitter, or none for the splitter
@@ -3775,17 +3831,48 @@ fn closed_curve_coincides_with_boundary(
     false
 }
 
-/// Whether a section curve is split into two or more pieces that each share
-/// their edge with an edge of `face_id`'s own boundary (a rim shared by two
-/// coincident walls, which the pave filler split at a vertex of one).
-fn section_pieces_on_face_boundary(
+/// The common blocks the pieces of `curve_ds` lie in.
+fn curve_blocks(
+    arena: &GfaArena,
+    curve_ds: &crate::ds::IntersectionCurveDS,
+) -> Vec<crate::ds::CommonBlockId> {
+    arena
+        .collect_leaf_pave_blocks(&curve_ds.pave_blocks)
+        .iter()
+        .filter_map(|pb| arena.pb_to_cb.get(pb).copied())
+        .collect()
+}
+
+/// What of a curve section a face takes.
+enum SectionRuns {
+    /// The whole curve.
+    Whole,
+    /// None of it.
+    Nothing,
+    /// Each run of pieces as its curve and its two ends.
+    Pieces(Vec<(EdgeCurve, Point3, Point3)>),
+    /// Some pieces lie on the face's boundary or on a block it took, and the
+    /// rest cannot be read apart from them.
+    Unread,
+}
+
+/// What of `curve_ds` the face `face_id` takes: the runs of its pieces that
+/// lie in no common block with one of the face's own boundary edges and in
+/// none of `taken`, each as the curve's window over the run between its end
+/// vertices. Nothing where no piece is left, and the whole curve where every
+/// piece is left. Where only some pieces are left, a closed piece, a missing
+/// face, block or vertex, or a run with no window gives `Unread`.
+fn section_runs(
     topo: &Topology,
     arena: &GfaArena,
     curve_ds: &crate::ds::IntersectionCurveDS,
     face_id: FaceId,
-) -> bool {
+    taken: &std::collections::HashSet<crate::ds::CommonBlockId>,
+    tol: f64,
+) -> SectionRuns {
+    use brepkit_topology::vertex::VertexId;
     let Ok(face) = topo.face(face_id) else {
-        return false;
+        return SectionRuns::Unread;
     };
     let own: Vec<EdgeId> = std::iter::once(face.outer_wire())
         .chain(face.inner_wires().iter().copied())
@@ -3797,14 +3884,14 @@ fn section_pieces_on_face_boundary(
                 .collect::<Vec<_>>()
         })
         .collect();
-    let leaves = arena.collect_leaf_pave_blocks(&curve_ds.pave_blocks);
-    leaves.len() >= 2
-        && leaves.iter().all(|pb| {
-            arena
-                .pb_to_cb
-                .get(pb)
-                .and_then(|&cb| arena.common_blocks.get(cb))
-                .is_some_and(|cb| {
+    let mut pieces: Vec<(f64, f64, VertexId, VertexId, bool)> = Vec::new();
+    for leaf in arena.collect_leaf_pave_blocks(&curve_ds.pave_blocks) {
+        let Some(pb) = arena.pave_blocks.get(leaf) else {
+            return SectionRuns::Unread;
+        };
+        let on = arena.pb_to_cb.get(&leaf).is_some_and(|&cb| {
+            taken.contains(&cb)
+                || arena.common_blocks.get(cb).is_some_and(|cb| {
                     cb.pave_blocks.iter().any(|&other| {
                         arena
                             .pave_blocks
@@ -3812,7 +3899,169 @@ fn section_pieces_on_face_boundary(
                             .is_some_and(|o| own.contains(&o.original_edge))
                     })
                 })
-        })
+        });
+        let (a, b) = (
+            arena.resolve_vertex(pb.start.vertex),
+            arena.resolve_vertex(pb.end.vertex),
+        );
+        pieces.push(if pb.start.parameter <= pb.end.parameter {
+            (pb.start.parameter, pb.end.parameter, a, b, on)
+        } else {
+            (pb.end.parameter, pb.start.parameter, b, a, on)
+        });
+    }
+    if pieces.iter().all(|p| !p.4) {
+        return SectionRuns::Whole;
+    }
+    if pieces.iter().all(|p| p.4) {
+        return SectionRuns::Nothing;
+    }
+    if pieces.iter().any(|p| p.2 == p.3) {
+        return SectionRuns::Unread;
+    }
+    pieces.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let point = |v: VertexId| {
+        topo.vertex(v)
+            .ok()
+            .map(brepkit_topology::vertex::Vertex::point)
+    };
+    let mut runs = Vec::new();
+    let mut k = 0;
+    while k < pieces.len() {
+        if pieces[k].4 {
+            k += 1;
+            continue;
+        }
+        let first = k;
+        while k + 1 < pieces.len() && !pieces[k + 1].4 {
+            k += 1;
+        }
+        let (lo, from) = (pieces[first].0, pieces[first].2);
+        let (hi, to) = (pieces[k].1, pieces[k].3);
+        let (Some(a), Some(b)) = (point(from), point(to)) else {
+            return SectionRuns::Unread;
+        };
+        let Some(window) = run_window(&curve_ds.curve, (lo, hi), from != to, tol) else {
+            return SectionRuns::Unread;
+        };
+        runs.push((window, a, b));
+        k += 1;
+    }
+    SectionRuns::Pieces(runs)
+}
+
+/// The curve of a run of a section's pieces over `(t0, t1)`, to go with the
+/// run's two end vertices. A line, circle or ellipse reads its span from those
+/// ends, along its own way round, so it stands as it is where they are two
+/// vertices. A NURBS curve is cut at the run's own parameters: read from its
+/// ends it takes the whole window where one lies off it, and a window past
+/// the run would give back the pieces beside it. It keeps a domain end only
+/// where it is proved within `tol` of that end over the rest of the domain
+/// there. `None` for a run of no length or past the curve's domain, for one
+/// over the whole domain (it then holds every piece), and where a cut fails.
+fn run_window(
+    curve: &EdgeCurve,
+    (t0, t1): (f64, f64),
+    two_ends: bool,
+    tol: f64,
+) -> Option<EdgeCurve> {
+    let EdgeCurve::NurbsCurve(n) = curve else {
+        return two_ends.then(|| curve.clone());
+    };
+    let (d0, d1) = n.domain();
+    if t1 <= t0 || t0 < d0 || t1 > d1 {
+        return None;
+    }
+    let cut_start = t0 > d0 && !stays_within(n, (d0, t0), tol);
+    let cut_end = t1 < d1 && !stays_within(n, (t1, d1), tol);
+    if !cut_start && !cut_end {
+        return None;
+    }
+    cut_window(n, (t0, t1), (cut_start, cut_end), tol).map(EdgeCurve::NurbsCurve)
+}
+
+/// The curve `n` cut at `t0` where `cut.0` and at `t1` where `cut.1`.
+/// `None` where a cut fails, and where the cut curve is not the window: its
+/// knots run back, or an end stands off the curve's point at that end of
+/// the window by more than `tol`.
+fn cut_window(
+    n: &brepkit_math::nurbs::curve::NurbsCurve,
+    (t0, t1): (f64, f64),
+    (cut_start, cut_end): (bool, bool),
+    tol: f64,
+) -> Option<brepkit_math::nurbs::curve::NurbsCurve> {
+    let tail = if cut_start {
+        brepkit_math::nurbs::knot_ops::curve_split(n, t0).ok()?.1
+    } else {
+        n.clone()
+    };
+    let window = if cut_end {
+        brepkit_math::nurbs::knot_ops::curve_split(&tail, t1)
+            .ok()?
+            .0
+    } else {
+        tail
+    };
+    let (d0, d1) = n.domain();
+    let ends = (
+        if cut_start { t0 } else { d0 },
+        if cut_end { t1 } else { d1 },
+    );
+    window_holds(n, &window, ends, tol).then_some(window)
+}
+
+/// Whether `window` is the part of `n` between the parameters `ends`: its
+/// knots never run back, and its two ends lie within `tol` of the points of
+/// `n` at `ends`.
+fn window_holds(
+    n: &brepkit_math::nurbs::curve::NurbsCurve,
+    window: &brepkit_math::nurbs::curve::NurbsCurve,
+    (from, to): (f64, f64),
+    tol: f64,
+) -> bool {
+    let (w0, w1) = window.domain();
+    window.knots().windows(2).all(|k| k[0] <= k[1])
+        && (window.evaluate(w0) - n.evaluate(from)).length() <= tol
+        && (window.evaluate(w1) - n.evaluate(to)).length() <= tol
+}
+
+/// Whether the non-rational curve `n` stays within `tol` of its point at
+/// `t0` over `(t0, t1)`: it moves no faster than the largest of its first
+/// derivative's control points, so no farther than that speed times the
+/// span. A knot of full multiplicity can break the curve there, past any
+/// speed: one in the span holds the curve only where the two control points
+/// it parts meet within rounding. A rational curve is never held so.
+fn stays_within(
+    n: &brepkit_math::nurbs::curve::NurbsCurve,
+    (t0, t1): (f64, f64),
+    tol: f64,
+) -> bool {
+    let Ok(p) = u32::try_from(n.degree()) else {
+        return false;
+    };
+    if n.is_rational() || p == 0 {
+        return false;
+    }
+    let (knots, points) = (n.knots(), n.control_points());
+    let mut speed = 0.0_f64;
+    for (i, pair) in points.windows(2).enumerate() {
+        let (Some(&lo), Some(&hi)) = (knots.get(i + 1), knots.get(i + 1 + p as usize)) else {
+            return false;
+        };
+        let step = (pair[1] - pair[0]).length();
+        if hi > lo {
+            speed = speed.max(step * f64::from(p) / (hi - lo));
+        } else if lo >= t0 && lo <= t1 {
+            let size = [pair[0], pair[1]]
+                .iter()
+                .map(|q| q.x().abs().max(q.y().abs()).max(q.z().abs()))
+                .fold(0.0_f64, f64::max);
+            if step > 8.0 * f64::EPSILON * size {
+                return false;
+            }
+        }
+    }
+    speed * (t1 - t0) * (1.0 + 1e-9) <= tol
 }
 
 /// Whether a section sampled as `section_pts` (3D points along its interior)
@@ -4222,42 +4471,53 @@ fn curve_endpoints(
 /// A window of a closed curve is cut out too. Its two ends split the loop
 /// into two arcs, and the edge run from end to start cannot tell which one
 /// it is: past half the loop it read the whole loop, through its own ends.
+///
+/// The cut is at the range's own parameters. A domain end stays only where
+/// the curve is proved within `tol` of it over the rest of the domain there
+/// ([`stays_within`]).
 fn window_curve(
     curve: &EdgeCurve,
     (t0, t1): (f64, f64),
     (start, end): (brepkit_math::vec::Point3, brepkit_math::vec::Point3),
-) -> Option<EdgeCurve> {
+    tol: f64,
+) -> SectionWindow {
     // The span reading's own on-curve band.
     const ON_CURVE: f64 = 1e-5;
     let EdgeCurve::NurbsCurve(n) = curve else {
-        return None;
+        return SectionWindow::Whole;
     };
     let (d0, d1) = n.domain();
-    let eps = 1e-9 * (d1 - d0);
-    if t1 - t0 <= eps || (t0 - d0 <= eps && d1 - t1 <= eps) || t0 < d0 - eps || t1 > d1 + eps {
-        return None;
-    }
     let off = |p: brepkit_math::vec::Point3| {
         brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-9)
             .map_or(true, |c| c.distance >= ON_CURVE)
     };
     let closed = (n.evaluate(d0) - n.evaluate(d1)).length() < ON_CURVE;
     if !closed && !off(start) && !off(end) {
-        return None;
+        return SectionWindow::Whole;
     }
-    let tail = if t0 - d0 > eps {
-        brepkit_math::nurbs::knot_ops::curve_split(n, t0).ok()?.1
-    } else {
-        n.clone()
-    };
-    let window = if d1 - t1 > eps {
-        brepkit_math::nurbs::knot_ops::curve_split(&tail, t1)
-            .ok()?
-            .0
-    } else {
-        tail
-    };
-    Some(EdgeCurve::NurbsCurve(window))
+    if t1 <= t0 || t0 < d0 || t1 > d1 {
+        return SectionWindow::Unread;
+    }
+    let cut_start = t0 > d0 && !stays_within(n, (d0, t0), tol);
+    let cut_end = t1 < d1 && !stays_within(n, (t1, d1), tol);
+    if !cut_start && !cut_end {
+        return SectionWindow::Whole;
+    }
+    cut_window(n, (t0, t1), (cut_start, cut_end), tol).map_or(SectionWindow::Unread, |w| {
+        SectionWindow::Cut(EdgeCurve::NurbsCurve(w))
+    })
+}
+
+/// What a section's edge takes of its curve over the section's range.
+enum SectionWindow {
+    /// The whole curve: its ends lie on an open curve, which reads the range
+    /// from them, or the range is the curve's whole domain within `tol`.
+    Whole,
+    /// The curve cut to the range.
+    Cut(EdgeCurve),
+    /// A range the curve is not cut to where it must be: past the domain, of
+    /// no length, or a cut that fails.
+    Unread,
 }
 
 /// Sub-intervals of the straight section `start..end` NOT covered by any
@@ -8951,11 +9211,15 @@ mod tests {
         let (t0, t1) = (0.25_f64.madd(d1 - d0, d0), 0.6_f64.madd(d1 - d0, d0));
         let (a, b) = (n.evaluate(t0), n.evaluate(t1));
         let curve = EdgeCurve::NurbsCurve(n);
-        assert!(window_curve(&curve, (t0, t1), (a, b)).is_none());
+        assert!(matches!(
+            window_curve(&curve, (t0, t1), (a, b), 1e-7),
+            SectionWindow::Whole
+        ));
 
         let off = b + brepkit_math::vec::Vec3::new(0.0, 0.0, 6e-5);
-        let trimmed = window_curve(&curve, (t0, t1), (a, off)).expect("the window was cut");
-        let EdgeCurve::NurbsCurve(w) = trimmed else {
+        let SectionWindow::Cut(EdgeCurve::NurbsCurve(w)) =
+            window_curve(&curve, (t0, t1), (a, off), 1e-7)
+        else {
             unreachable!()
         };
         let (w0, w1) = w.domain();
@@ -8987,7 +9251,9 @@ mod tests {
             "the loop's own reversed reading is the whole loop: ({r0}, {r1})"
         );
 
-        let windowed = window_curve(&curve, (t0, t1), (a, b)).expect("the window was cut");
+        let SectionWindow::Cut(windowed) = window_curve(&curve, (t0, t1), (a, b), 1e-7) else {
+            unreachable!()
+        };
         let (w0, w1) = windowed.domain_with_endpoints(b, a);
         assert!(
             (w0 - t1).abs() < 1e-9 && (w1 - t0).abs() < 1e-9,
@@ -8995,6 +9261,173 @@ mod tests {
         );
         let mid = windowed.evaluate_with_endpoints(f64::midpoint(w0, w1), b, a);
         assert!((mid - middle).length() < 1e-9, "{mid:?} against {middle:?}");
+    }
+
+    /// A section's range over 5e-10 to 0.5 of a degree-1 spline whose first
+    /// knot span is 5e-10 long and 1 across, its start vertex 2e-5 off the
+    /// curve: the section's curve is cut at the range's own start, so it
+    /// starts where the range does and its first span stays out. A straight
+    /// cubic whose range starts 1e-12 past its domain's start keeps that
+    /// start, proved within the tolerance of it; a rational quarter circle
+    /// never does. Upright, turned and mirrored.
+    #[test]
+    fn a_section_window_is_cut_at_its_own_parameters() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        for (name, origin, [u, v, w]) in run_poses() {
+            let at = |a: f64, b: f64| origin + u * a + v * b;
+            let steep = NurbsCurve::new(
+                1,
+                vec![0.0, 0.0, 5e-10, 1.0, 1.0],
+                vec![at(0.0, 0.0), at(1.0, 0.0), at(2.0, 0.0)],
+                vec![1.0; 3],
+            )
+            .unwrap();
+            let straight = NurbsCurve::new(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                vec![at(0.0, 0.0), at(1.0, 0.0), at(2.0, 0.0), at(3.0, 0.0)],
+                vec![1.0; 4],
+            )
+            .unwrap();
+            let quarter = NurbsCurve::new(
+                2,
+                vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                vec![at(1.0, 0.0), at(1.0, 1.0), at(0.0, 1.0)],
+                vec![1.0, std::f64::consts::FRAC_1_SQRT_2, 1.0],
+            )
+            .unwrap();
+            for (what, spline, t0, keeps_start) in [
+                ("steep", &steep, 5e-10, false),
+                ("straight", &straight, 1e-12, true),
+                ("rational", &quarter, 1e-12, false),
+            ] {
+                let t1 = 0.5;
+                let start = spline.evaluate(t0) + w * 2e-5;
+                let end = spline.evaluate(t1);
+                let curve = EdgeCurve::NurbsCurve(spline.clone());
+                let SectionWindow::Cut(EdgeCurve::NurbsCurve(window)) =
+                    window_curve(&curve, (t0, t1), (start, end), 1e-7)
+                else {
+                    unreachable!("{name}, {what}: the window is not cut")
+                };
+                let (w0, w1) = window.domain();
+                let want = if keeps_start { 0.0 } else { t0 };
+                assert!(
+                    (w0 - want).abs() <= f64::EPSILON && (w1 - t1).abs() <= f64::EPSILON,
+                    "{name}, {what}: the window runs over ({w0:e}, {w1})"
+                );
+                assert!(
+                    (window.evaluate(w0) - spline.evaluate(want)).length() < 1e-9,
+                    "{name}, {what}: the window starts {:e} off the range's start",
+                    (window.evaluate(w0) - spline.evaluate(want)).length()
+                );
+            }
+        }
+    }
+
+    /// A degree-1 spline with a knot of full multiplicity at 1e-12, where it
+    /// jumps from 0 to 100 along its line: a range from 2e-12 is cut there,
+    /// as a section's window and as a run of its pieces, and never keeps the
+    /// domain's start across the jump. The same spline with no jump, its two
+    /// control points at the knot one point, keeps that start. Upright,
+    /// turned and mirrored.
+    #[test]
+    fn a_window_keeps_no_domain_end_across_a_break() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        for (name, origin, [u, _, w]) in run_poses() {
+            let at = |a: f64| origin + u * a;
+            for (what, jump, keeps_start) in [("broken", 100.0, false), ("whole", 0.0, true)] {
+                let spline = NurbsCurve::new(
+                    1,
+                    vec![0.0, 0.0, 1e-12, 1e-12, 1.0, 1.0],
+                    vec![at(0.0), at(0.0), at(jump), at(jump + 1.0)],
+                    vec![1.0; 4],
+                )
+                .unwrap();
+                let (t0, t1) = (2e-12, 0.5);
+                let want = if keeps_start { 0.0 } else { t0 };
+                let curve = EdgeCurve::NurbsCurve(spline.clone());
+                let start = spline.evaluate(t0) + w * 2e-5;
+                let SectionWindow::Cut(EdgeCurve::NurbsCurve(window)) =
+                    window_curve(&curve, (t0, t1), (start, spline.evaluate(t1)), 1e-7)
+                else {
+                    unreachable!("{name}, {what}: the window is not cut")
+                };
+                let Some(EdgeCurve::NurbsCurve(run)) = run_window(&curve, (t0, t1), true, 1e-7)
+                else {
+                    unreachable!("{name}, {what}: the run has no window")
+                };
+                for (kind, cut) in [("window", &window), ("run", &run)] {
+                    let (c0, _) = cut.domain();
+                    assert!(
+                        (c0 - want).abs() <= f64::EPSILON,
+                        "{name}, {what}: the {kind} starts at {c0:e}"
+                    );
+                    assert!(
+                        (cut.evaluate(c0) - spline.evaluate(want)).length() < 1e-9,
+                        "{name}, {what}: the {kind} starts {:e} off the range's start",
+                        (cut.evaluate(c0) - spline.evaluate(want)).length()
+                    );
+                }
+            }
+        }
+    }
+
+    /// A cubic B-spline with a double knot, its coordinates up to 1e3, cut to
+    /// windows of it: a window cut from it is held as its part; one cut from
+    /// a copy 1e-6 away, or read against the wrong end, is not, and a window
+    /// a few ulps wide is refused. Upright, turned and mirrored.
+    #[test]
+    fn a_window_that_is_not_its_curves_part_is_refused() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        for (name, origin, [u, v, w]) in run_poses() {
+            let at = |a: f64, b: f64, c: f64| {
+                origin + u * (a * 140.0) + v * (b * 140.0) + w * (c * 140.0)
+            };
+            let spline = |shift: f64| {
+                NurbsCurve::new(
+                    3,
+                    vec![0.0, 0.0, 0.0, 0.0, 0.2, 0.45, 0.45, 0.7, 1.0, 1.0, 1.0, 1.0],
+                    vec![
+                        at(0.0, 0.0, 0.0),
+                        at(1.0, 2.0, 0.5),
+                        at(2.0, -1.0, 0.2),
+                        at(3.0, 3.0, -0.4),
+                        at(4.0, 0.5, 0.1),
+                        at(5.0, 2.5, 0.0),
+                        at(6.0, 0.0, 0.3),
+                        at(7.0, 1.0, 0.0),
+                    ]
+                    .into_iter()
+                    .map(|p| p + w * shift)
+                    .collect(),
+                    vec![1.0; 8],
+                )
+                .unwrap()
+            };
+            let (n, copy) = (spline(0.0), spline(1e-6));
+            let window = cut_window(&n, (0.3, 0.6), (true, true), 1e-7);
+            assert!(
+                window
+                    .as_ref()
+                    .is_some_and(|c| window_holds(&n, c, (0.3, 0.6), 1e-7)),
+                "{name}: a window cut from the curve"
+            );
+            let other = cut_window(&copy, (0.3, 0.6), (true, true), 1e-7).unwrap();
+            assert!(
+                !window_holds(&n, &other, (0.3, 0.6), 1e-7),
+                "{name}: a window cut from a copy 1e-6 away"
+            );
+            assert!(
+                !window_holds(&n, window.as_ref().unwrap(), (0.3, 0.61), 1e-7),
+                "{name}: a window read against the wrong end"
+            );
+            let narrow = f64::from_bits(0.3_f64.to_bits() + 3);
+            assert!(
+                cut_window(&n, (0.3, narrow), (true, true), 1e-7).is_none(),
+                "{name}: a window a few ulps wide"
+            );
+        }
     }
 
     /// The pool's grid must hand the weld every entry within its reach, in
@@ -9207,6 +9640,388 @@ mod tests {
                 idx += 1;
                 keep
             });
+        }
+    }
+
+    /// Three poses of a frame: upright, turned about a slant axis off the
+    /// origin, and that turn mirrored.
+    fn run_poses() -> [(&'static str, Point3, [Vec3; 3]); 3] {
+        let axis = Vec3::new(1.0, 2.0, 3.0).normalize().unwrap();
+        let (sin, cos) = 0.7f64.sin_cos();
+        let turn = |e: Vec3| e * cos + axis.cross(e) * sin + axis * (axis.dot(e) * (1.0 - cos));
+        let mirror = |e: Vec3| Vec3::new(-e.x(), e.y(), e.z());
+        let o = Point3::new(3.0, -2.0, 5.0);
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        [
+            ("upright", Point3::new(0.0, 0.0, 0.0), [x, y, z]),
+            ("turned", o, [turn(x), turn(y), turn(z)]),
+            (
+                "mirrored",
+                Point3::new(-o.x(), o.y(), o.z()),
+                [mirror(turn(x)), mirror(turn(y)), mirror(turn(z))],
+            ),
+        ]
+    }
+
+    /// A section of a plane face in three pieces over `params`, from vertex 0
+    /// to 1, 1 to 2 and `last` to 3, the middle piece in one common block with
+    /// a block of an edge from vertex 1 to 2. That edge bounds the face where
+    /// `own`; else the face is bounded by another edge. Gives the topology,
+    /// the arena, the face and the middle piece's block.
+    fn three_pieces(
+        curve: &EdgeCurve,
+        params: [f64; 4],
+        points: [Point3; 4],
+        normal: Vec3,
+        own: bool,
+        last: usize,
+    ) -> (Topology, GfaArena, FaceId, crate::ds::CommonBlockId) {
+        use crate::ds::{IntersectionCurveDS, Pave, PaveBlock};
+        let mut topo = Topology::default();
+        let v = points.map(|p| topo.add_vertex(Vertex::new(p, 1e-7)));
+        let section = topo.add_edge(Edge::new(v[0], v[3], curve.clone()));
+        let rim = topo.add_edge(Edge::new(v[1], v[2], EdgeCurve::Line));
+        let other = topo.add_edge(Edge::new(v[0], v[3], EdgeCurve::Line));
+        let wire = topo.add_wire(
+            Wire::new(
+                vec![OrientedEdge::new(if own { rim } else { other }, true)],
+                false,
+            )
+            .unwrap(),
+        );
+        let p = points[0];
+        let face = topo.add_face(Face::new(
+            wire,
+            vec![],
+            FaceSurface::Plane {
+                normal,
+                d: normal.dot(Vec3::new(p.x(), p.y(), p.z())),
+            },
+        ));
+        let mut arena = GfaArena::new();
+        let root = arena.init_edge_pave_block(section, v[0], params[0], v[3], params[3]);
+        let pieces: Vec<_> = [(0, 1), (1, 2), (last, 3)]
+            .iter()
+            .map(|&(s, e)| {
+                arena.pave_blocks.alloc(PaveBlock::new(
+                    section,
+                    Pave::new(v[s], params[s]),
+                    Pave::new(v[e], params[e]),
+                ))
+            })
+            .collect();
+        arena
+            .pave_blocks
+            .get_mut(root)
+            .unwrap()
+            .children
+            .clone_from(&pieces);
+        let rim_block = arena.init_edge_pave_block(rim, v[1], 0.0, v[2], 1.0);
+        let cb = arena.create_common_block(vec![pieces[1], rim_block], 1e-7);
+        arena.curves.push(IntersectionCurveDS {
+            curve: curve.clone(),
+            face_a: face,
+            face_b: face,
+            bbox: brepkit_math::aabb::Aabb3::from_points(points),
+            pave_blocks: vec![root],
+            t_range: (params[0], params[3]),
+        });
+        (topo, arena, face, cb)
+    }
+
+    /// A degree-1 spline whose first knot span is 5e-10 long and 1 across, in
+    /// three pieces over 0, 5e-10, 0.5 and 1, its first and last pieces on the
+    /// face's own boundary and its second vertex 2e-5 off the curve. The face
+    /// takes the middle piece alone: the run's curve starts where that piece
+    /// starts and ends where it ends, so its first piece, read from the run's
+    /// ends, stays out. A straight cubic whose run starts 1e-12 past its
+    /// domain's start keeps that start: the curve is proved within the
+    /// tolerance of it there. Upright, turned and mirrored.
+    #[test]
+    fn a_spline_run_is_cut_at_its_own_parameters() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        for (name, origin, [u, v, w]) in run_poses() {
+            let at = |a: f64, b: f64, c: f64| origin + u * a + v * b + w * c;
+            let steep = NurbsCurve::new(
+                1,
+                vec![0.0, 0.0, 5e-10, 1.0, 1.0],
+                vec![at(0.0, 0.0, 0.0), at(1.0, 0.0, 0.0), at(2.0, 0.0, 0.0)],
+                vec![1.0; 3],
+            )
+            .unwrap();
+            let straight = NurbsCurve::new(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                vec![
+                    at(0.0, 0.0, 0.0),
+                    at(1.0, 0.0, 0.0),
+                    at(2.0, 0.0, 0.0),
+                    at(3.0, 0.0, 0.0),
+                ],
+                vec![1.0; 4],
+            )
+            .unwrap();
+            for (what, spline, params, off) in [
+                ("steep", &steep, [0.0, 5e-10, 0.5, 1.0], 2e-5),
+                ("straight", &straight, [0.0, 1e-12, 0.5, 1.0], 0.0),
+            ] {
+                let mut points = params.map(|t| spline.evaluate(t));
+                points[1] = points[1] + v * off;
+                let curve = EdgeCurve::NurbsCurve(spline.clone());
+                let (topo, mut arena, face, cb) = three_pieces(&curve, params, points, w, true, 2);
+                let leaves = arena.collect_leaf_pave_blocks(&arena.curves[0].pave_blocks);
+                let rim_block = arena.common_blocks.get(cb).unwrap().pave_blocks[1];
+                let rim = arena.pave_blocks.get(rim_block).unwrap().original_edge;
+                arena.common_blocks.get_mut(cb).unwrap().pave_blocks = vec![leaves[0], rim_block];
+                arena.pb_to_cb.remove(&leaves[1]);
+                arena.pb_to_cb.insert(leaves[0], cb);
+                let (r0, r1) = (
+                    arena.pave_blocks.get(rim_block).unwrap().start.vertex,
+                    arena.pave_blocks.get(rim_block).unwrap().end.vertex,
+                );
+                let second = arena.init_edge_pave_block(rim, r0, 0.0, r1, 1.0);
+                arena.create_common_block(vec![leaves[2], second], 1e-7);
+
+                let taken = std::collections::HashSet::new();
+                let runs = match section_runs(&topo, &arena, &arena.curves[0], face, &taken, 1e-7) {
+                    SectionRuns::Pieces(runs) => runs,
+                    _ => Vec::new(),
+                };
+                assert_eq!(runs.len(), 1, "{name}, {what}: the runs the face takes");
+                let windows: Vec<_> = runs
+                    .iter()
+                    .filter_map(|(c, ..)| match c {
+                        EdgeCurve::NurbsCurve(n) => Some(n),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    windows.len(),
+                    1,
+                    "{name}, {what}: the run's curve is a spline"
+                );
+                let window = windows[0];
+                let (d0, d1) = window.domain();
+                let first = if what == "steep" {
+                    spline.evaluate(params[1])
+                } else {
+                    spline.evaluate(0.0)
+                };
+                assert!(
+                    (window.evaluate(d0) - first).length() < 1e-9,
+                    "{name}, {what}: the run's curve starts {:e} off its first piece",
+                    (window.evaluate(d0) - first).length()
+                );
+                assert!(
+                    (window.evaluate(d1) - spline.evaluate(params[2])).length() < 1e-9,
+                    "{name}, {what}: the run's curve ends off its piece"
+                );
+            }
+        }
+    }
+
+    /// A kind of section curve: its name, the curve, its pieces' parameters
+    /// and the curve's point at a parameter.
+    type RunCase<'a> = (&'a str, EdgeCurve, [f64; 4], &'a dyn Fn(f64) -> Point3);
+
+    /// A line, an arc of a circle and a cubic, each in three pieces with its
+    /// middle piece on the face's own boundary edge or on a block the face
+    /// took: the face takes the first and last pieces, each as a curve that
+    /// reads its own piece between its two ends. Upright, turned and
+    /// mirrored.
+    #[test]
+    fn a_face_takes_only_the_pieces_of_a_section_off_its_boundary() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        for (name, origin, [u, v, w]) in run_poses() {
+            let at = |a: f64, b: f64, c: f64| origin + u * a + v * b + w * c;
+            let circle = Circle3D::new(origin, w, 2.0).unwrap();
+            let cubic = NurbsCurve::new(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                vec![
+                    at(0.0, 0.0, 0.0),
+                    at(3.0, 1.0, 0.0),
+                    at(7.0, -1.0, 0.0),
+                    at(10.0, 0.0, 0.0),
+                ],
+                vec![1.0; 4],
+            )
+            .unwrap();
+            let line_at = |t: f64| at(t, 0.0, 0.0);
+            let circle_at = |t: f64| circle.evaluate(t);
+            let cubic_at = |t: f64| cubic.evaluate(t);
+            let cases: [RunCase<'_>; 3] = [
+                ("line", EdgeCurve::Line, [0.0, 1.0, 2.0, 3.0], &line_at),
+                (
+                    "arc",
+                    EdgeCurve::Circle(circle.clone()),
+                    [0.3, 1.1, 2.0, 2.9],
+                    &circle_at,
+                ),
+                (
+                    "cubic",
+                    EdgeCurve::NurbsCurve(cubic.clone()),
+                    [0.0, 0.3, 0.6, 1.0],
+                    &cubic_at,
+                ),
+            ];
+            for (kind, curve, params, point) in &cases {
+                let points = params.map(point);
+                for own in [true, false] {
+                    let (topo, arena, face, cb) = three_pieces(curve, *params, points, w, own, 2);
+                    let taken: std::collections::HashSet<_> =
+                        if own { [].into() } else { [cb].into() };
+                    let what = format!("{name}, {kind}, own {own}");
+                    let runs =
+                        match section_runs(&topo, &arena, &arena.curves[0], face, &taken, 1e-7) {
+                            SectionRuns::Pieces(runs) => runs,
+                            _ => Vec::new(),
+                        };
+                    assert_eq!(runs.len(), 2, "{what}: the runs the face takes");
+                    for ((run, a, b), (i, j)) in runs.iter().zip([(0, 1), (2, 3)]) {
+                        assert!(*a == points[i] && *b == points[j], "{what}: a run's ends");
+                        let (s0, s1) = run.domain_with_endpoints(*a, *b);
+                        let mid = run.evaluate_with_endpoints(0.5 * (s0 + s1), *a, *b);
+                        let want = if matches!(curve, EdgeCurve::Line) {
+                            Point3::new(
+                                f64::midpoint(a.x(), b.x()),
+                                f64::midpoint(a.y(), b.y()),
+                                f64::midpoint(a.z(), b.z()),
+                            )
+                        } else {
+                            point(0.5 * (params[i] + params[j]))
+                        };
+                        assert!(
+                            (mid - want).length() < 1e-9,
+                            "{what}: a run reads {:e} off its piece",
+                            (mid - want).length()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Sections whose pieces off the face's boundary cannot be read apart
+    /// from the piece on it: a piece that closes on its own vertex, a run of
+    /// an arc from a vertex back to it, a cubic's run of no length or past
+    /// its domain, and a face or a vertex the topology does not hold. The face
+    /// takes none of them whole. Upright, turned and mirrored.
+    #[test]
+    fn a_face_refuses_a_section_it_cannot_read_apart_from_its_boundary() {
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        for (name, origin, [u, v, w]) in run_poses() {
+            let at = |a: f64, b: f64, c: f64| origin + u * a + v * b + w * c;
+            let circle = Circle3D::new(origin, w, 2.0).unwrap();
+            let cubic = NurbsCurve::new(
+                3,
+                vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0],
+                vec![
+                    at(0.0, 0.0, 0.0),
+                    at(3.0, 1.0, 0.0),
+                    at(7.0, -1.0, 0.0),
+                    at(10.0, 0.0, 0.0),
+                ],
+                vec![1.0; 4],
+            )
+            .unwrap();
+            let arc = EdgeCurve::Circle(circle.clone());
+            let spline = EdgeCurve::NurbsCurve(cubic.clone());
+            let arc_points = [0.3, 1.1, 2.0, 2.9].map(|t| circle.evaluate(t));
+            let cubic_points = [0.0, 0.3, 0.6, 1.0].map(|t| cubic.evaluate(t));
+            let unread =
+                |what: &str, fixture: (Topology, GfaArena, FaceId, _), face: Option<FaceId>| {
+                    let (topo, arena, own_face, _) = fixture;
+                    let taken = std::collections::HashSet::new();
+                    let runs = section_runs(
+                        &topo,
+                        &arena,
+                        &arena.curves[0],
+                        face.unwrap_or(own_face),
+                        &taken,
+                        1e-7,
+                    );
+                    assert!(
+                        matches!(runs, SectionRuns::Unread),
+                        "{name}, {what}: the face takes a piece of its own boundary"
+                    );
+                };
+            // The last piece runs from vertex 3 to 3.
+            unread(
+                "a closed piece",
+                three_pieces(&spline, [0.0, 0.3, 0.6, 1.0], cubic_points, w, true, 3),
+                None,
+            );
+            // The middle piece on the boundary first: the run of the other
+            // two goes from vertex 1 round to vertex 1.
+            let (topo, mut arena, face, cb) =
+                three_pieces(&arc, [0.3, 1.1, 2.0, 2.9], arc_points, w, true, 2);
+            {
+                use crate::ds::{Pave, PaveBlock};
+                let leaves = arena.collect_leaf_pave_blocks(&arena.curves[0].pave_blocks);
+                let section = arena.pave_blocks.get(leaves[0]).unwrap().original_edge;
+                let vertex = |k: usize| arena.pave_blocks.get(leaves[k]).unwrap().start.vertex;
+                let (v1, v2) = (vertex(1), vertex(2));
+                let rewired = [(v2, 0.3, v1, 1.1), (v1, 1.1, v2, 2.0), (v2, 2.0, v1, 2.9)];
+                for (&leaf, &(s, ts, e, te)) in leaves.iter().zip(&rewired) {
+                    *arena.pave_blocks.get_mut(leaf).unwrap() =
+                        PaveBlock::new(section, Pave::new(s, ts), Pave::new(e, te));
+                }
+                let cb_members = arena.common_blocks.get(cb).unwrap().pave_blocks.clone();
+                arena.pb_to_cb.clear();
+                arena.common_blocks.get_mut(cb).unwrap().pave_blocks =
+                    vec![leaves[0], cb_members[1]];
+                arena.pb_to_cb.insert(leaves[0], cb);
+                arena.pb_to_cb.insert(cb_members[1], cb);
+            }
+            unread(
+                "an arc's run round to its start",
+                (topo, arena, face, cb),
+                None,
+            );
+            unread(
+                "a cubic's run of no length",
+                three_pieces(&spline, [0.0, 0.0, 0.6, 1.0], cubic_points, w, true, 2),
+                None,
+            );
+            unread(
+                "a cubic's run past its domain",
+                three_pieces(&spline, [0.0, 0.3, 0.6, 1.5], cubic_points, w, true, 2),
+                None,
+            );
+            let mut elsewhere = Topology::default();
+            let far_face = (0..4)
+                .map(|_| {
+                    let a = elsewhere.add_vertex(Vertex::new(origin, 1e-7));
+                    let e = elsewhere.add_edge(Edge::new(a, a, EdgeCurve::Line));
+                    let wire = elsewhere
+                        .add_wire(Wire::new(vec![OrientedEdge::new(e, true)], false).unwrap());
+                    elsewhere.add_face(Face::new(
+                        wire,
+                        vec![],
+                        FaceSurface::Plane { normal: w, d: 0.0 },
+                    ))
+                })
+                .last()
+                .unwrap();
+            unread(
+                "a face it does not hold",
+                three_pieces(&arc, [0.3, 1.1, 2.0, 2.9], arc_points, w, true, 2),
+                Some(far_face),
+            );
+            let far_vertex = (0..8)
+                .map(|_| elsewhere.add_vertex(Vertex::new(origin, 1e-7)))
+                .last()
+                .unwrap();
+            let (topo, mut arena, face, cb) =
+                three_pieces(&arc, [0.3, 1.1, 2.0, 2.9], arc_points, w, true, 2);
+            let leaves = arena.collect_leaf_pave_blocks(&arena.curves[0].pave_blocks);
+            arena.pave_blocks.get_mut(leaves[0]).unwrap().start.vertex = far_vertex;
+            unread("a vertex it does not hold", (topo, arena, face, cb), None);
         }
     }
 }

@@ -3935,9 +3935,10 @@ struct ArrInput {
 /// Split co-endpoint SECTION arc pairs in an arrangement's input list at
 /// their geometric midpoints (see the call site in
 /// [`split_plane_face_by_arrangement`]). Only section arcs with a colliding
-/// unordered chord-endpoint pair AND distinct midpoints are split; boundary
-/// edges and identical duplicates are left untouched. A line between the
-/// same two ends collides with an arc too: its chord is the arc's chord.
+/// unordered chord-endpoint pair are split: one whose inputs are not all
+/// proved one curve ([`edges_one_curve`]); boundary edges and duplicates
+/// proved one curve are left untouched. A line between the same two ends
+/// collides with an arc too: its chord is the arc's chord.
 fn split_coendpoint_section_arc_inputs(inputs: &mut Vec<ArrInput>, frame: &PlaneFrame, tol: f64) {
     use std::collections::HashMap;
     type Q2 = (i64, i64);
@@ -3948,44 +3949,44 @@ fn split_coendpoint_section_arc_inputs(inputs: &mut Vec<ArrInput>, frame: &Plane
             (p.y() * qscale).round() as i64,
         )
     };
+    // The middle of a circle or ellipse arc, read counter-clockwise from its
+    // stored start.
     let arc_mid = |e: &OrientedPCurveEdge| -> Option<Point3> {
-        let EdgeCurve::Circle(ref c) = e.curve_3d else {
-            return None;
-        };
         let (ns, ne) = if e.forward {
             (e.start_3d, e.end_3d)
         } else {
             (e.end_3d, e.start_3d)
         };
-        let s_ang = c.project(ns);
-        let span = (c.project(ne) - s_ang).rem_euclid(std::f64::consts::TAU);
-        if span < 1e-9 {
-            return None;
-        }
-        Some(c.evaluate(s_ang + 0.5 * span))
-    };
-    let mut pair_mids: HashMap<(Q2, Q2), Vec<Q2>> = HashMap::new();
-    for inp in inputs.iter() {
-        let mid_uv = if matches!(inp.edge.curve_3d, EdgeCurve::Line) {
-            Point2::new(
-                f64::midpoint(inp.a.x(), inp.b.x()),
-                f64::midpoint(inp.a.y(), inp.b.y()),
-            )
-        } else if inp.is_section
-            && inp.is_arc
-            && let Some(mid) = arc_mid(&inp.edge)
-        {
-            frame.project(mid)
-        } else {
-            continue;
+        let middle = |s_ang: f64, e_ang: f64| {
+            let span = (e_ang - s_ang).rem_euclid(std::f64::consts::TAU);
+            (span >= 1e-9).then_some(s_ang + 0.5 * span)
         };
+        match &e.curve_3d {
+            EdgeCurve::Circle(c) => middle(c.project(ns), c.project(ne)).map(|t| c.evaluate(t)),
+            EdgeCurve::Ellipse(el) => {
+                middle(el.project(ns), el.project(ne)).map(|t| el.evaluate(t))
+            }
+            EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+        }
+    };
+    let mut pairs: HashMap<(Q2, Q2), Vec<usize>> = HashMap::new();
+    for (i, inp) in inputs.iter().enumerate() {
+        if !(matches!(inp.edge.curve_3d, EdgeCurve::Line) || inp.is_section && inp.is_arc) {
+            continue;
+        }
         let (a, b) = (q2(inp.a), q2(inp.b));
         let key = if a <= b { (a, b) } else { (b, a) };
-        pair_mids.entry(key).or_default().push(q2(mid_uv));
+        pairs.entry(key).or_default().push(i);
     }
-    let colliding: std::collections::HashSet<(Q2, Q2)> = pair_mids
+    let colliding: std::collections::HashSet<(Q2, Q2)> = pairs
         .into_iter()
-        .filter(|(_, mids)| mids.iter().any(|m| *m != mids[0]))
+        .filter(|(_, members)| {
+            members.iter().enumerate().any(|(k, &i)| {
+                members[k + 1..]
+                    .iter()
+                    .any(|&j| !edges_one_curve(&inputs[i].edge, &inputs[j].edge, 10.0 * tol))
+            })
+        })
         .map(|(k, _)| k)
         .collect();
     // A line through both ends of an arc is cut at them, and its piece
@@ -5011,7 +5012,35 @@ fn arrangement_regions_from_inputs(
 
     // Deduplicate undirected sub-edges (the same physical edge can arise from
     // two overlapping input chords). Keep one record per vertex pair, preferring
-    // a whole-arc source so the true arc geometry is emitted.
+    // a whole-arc source so the true arc geometry is emitted. Two records on
+    // one pair are one edge only where they are proved one curve: two pieces
+    // of lines, or two whole inputs [`edges_one_curve`] holds together; any
+    // other pair leaves the face to the curved paths.
+    let one_curve = |l: &(UvKey, UvKey, usize, bool), r: &(UvKey, UvKey, usize, bool)| {
+        let (a, b) = (&inputs[l.2].edge, &inputs[r.2].edge);
+        l.2 == r.2
+            || matches!(a.curve_3d, EdgeCurve::Line) && matches!(b.curve_3d, EdgeCurve::Line)
+            || l.3 && r.3 && edges_one_curve(a, b, 10.0 * tol)
+    };
+    {
+        let key =
+            |e: &(UvKey, UvKey, usize, bool)| if e.0 <= e.1 { (e.0, e.1) } else { (e.1, e.0) };
+        let mut by_pair: std::collections::HashMap<(UvKey, UvKey), Vec<usize>> =
+            std::collections::HashMap::new();
+        for (k, e) in sub_edges.iter().enumerate() {
+            by_pair.entry(key(e)).or_default().push(k);
+        }
+        for members in by_pair.values() {
+            for (n, &k) in members.iter().enumerate() {
+                if members[n + 1..]
+                    .iter()
+                    .any(|&m| !one_curve(&sub_edges[k], &sub_edges[m]))
+                {
+                    return None;
+                }
+            }
+        }
+    }
     sub_edges.sort_by(|l, r| {
         let lk = if l.0 <= l.1 { (l.0, l.1) } else { (l.1, l.0) };
         let rk = if r.0 <= r.1 { (r.0, r.1) } else { (r.1, r.0) };
@@ -11494,8 +11523,11 @@ fn split_face_2d_impl(
         })
     });
     // Build wire loops via angular-sorting traversal.
+    let flat = is_plane && !u_periodic && !v_periodic;
     let mut loops = if round_a_pole {
         super::wire_builder::build_wire_loops_round_a_pole(&all_edges, tol.linear)
+    } else if flat {
+        super::wire_builder::build_wire_loops_flat(&all_edges, tol.linear, false)
     } else {
         build_wire_loops(&all_edges, tol.linear, u_periodic && !strip, v_periodic)
     };
@@ -11606,9 +11638,13 @@ fn split_face_2d_impl(
         if signed_area_2d(&boundary_pts) < 0.0 {
             cw_loops = true;
             if loops.len() <= 1 {
-                let retry = build_wire_loops_with_winding(
-                    &all_edges, tol.linear, u_periodic, v_periodic, true,
-                );
+                let retry = if flat {
+                    super::wire_builder::build_wire_loops_flat(&all_edges, tol.linear, true)
+                } else {
+                    build_wire_loops_with_winding(
+                        &all_edges, tol.linear, u_periodic, v_periodic, true,
+                    )
+                };
                 if retry.len() > loops.len() {
                     loops = retry;
                 }
@@ -12052,8 +12088,11 @@ fn split_face_2d_impl(
             // The mirrored turn rule as a legacy fallback: adopt the retry only
             // when it is strictly healthier — more loops and none of the broken
             // signatures.
-            let retry =
-                build_wire_loops_with_winding(&all_edges, tol.linear, u_periodic, v_periodic, true);
+            let retry = if flat {
+                super::wire_builder::build_wire_loops_flat(&all_edges, tol.linear, true)
+            } else {
+                build_wire_loops_with_winding(&all_edges, tol.linear, u_periodic, v_periodic, true)
+            };
             // Adoption bar: zero degenerate areas, NO NEW broken flags relative to
             // the greedy result, and a strict improvement — either the greedy had
             // degenerate loops (which the retry cleared) or the retry partitions
@@ -14003,15 +14042,10 @@ fn plane_internal_line_loops(
     Some(deduped)
 }
 
-/// Whether `a` and `b`, edges of one face that share their two ends, are one
-/// curve within `tol`: `Some` where both are lines, circles or ellipses, read
-/// by [`same_section_curve`] each from its stored start, and `None` where
-/// either is a B-spline.
-pub fn edges_one_curve(a: &OrientedPCurveEdge, b: &OrientedPCurveEdge, tol: f64) -> Option<bool> {
-    let analytic = |e: &OrientedPCurveEdge| !matches!(e.curve_3d, EdgeCurve::NurbsCurve(_));
-    if !(analytic(a) && analytic(b)) {
-        return None;
-    }
+/// Whether `a` and `b`, edges of one face that share their two ends, are
+/// proved one curve within `tol` by [`same_section_curve`], each read from
+/// its stored start.
+pub fn edges_one_curve(a: &OrientedPCurveEdge, b: &OrientedPCurveEdge, tol: f64) -> bool {
     let section = |e: &OrientedPCurveEdge| {
         let (start, end) = if e.forward {
             (e.start_3d, e.end_3d)
@@ -14032,7 +14066,7 @@ pub fn edges_one_curve(a: &OrientedPCurveEdge, b: &OrientedPCurveEdge, tol: f64)
             pave_block_id: None,
         }
     };
-    Some(same_section_curve(&section(a), &section(b), tol))
+    same_section_curve(&section(a), &section(b), tol)
 }
 
 /// Where a section along `a` meets one along `b`, each given as its curve
@@ -19232,7 +19266,32 @@ mod tests {
                         let ab = el.semi_major() * el.semi_minor();
                         el.normal().dot(normal).signum() * 0.5 * ab * (phi - phi.sin())
                     }
-                    other @ EdgeCurve::NurbsCurve(_) => unreachable!("a wire edge on {other:?}"),
+                    // Half of `x dy - y dx` along the curve, by five-point
+                    // Gauss-Legendre on 64 even steps of its span: exact
+                    // for a polynomial piece of low degree.
+                    EdgeCurve::NurbsCurve(n) => {
+                        let (t0, t1) = e.curve_3d.domain_with_endpoints(s3, e3);
+                        let nodes = [
+                            (0.0, 128.0 / 225.0),
+                            (0.538_469_310_105_683, 0.478_628_670_499_366_5),
+                            (-0.538_469_310_105_683, 0.478_628_670_499_366_5),
+                            (0.906_179_845_938_664, 0.236_926_885_056_189_1),
+                            (-0.906_179_845_938_664, 0.236_926_885_056_189_1),
+                        ];
+                        let h = (t1 - t0) / 64.0;
+                        let mut along = 0.0;
+                        for k in 0..64 {
+                            let mid = t0 + h * (f64::from(k) + 0.5);
+                            for (x, w) in nodes {
+                                let t = mid + 0.5 * h * x;
+                                let d = n.derivatives(t, 1);
+                                let (p, dp) = (local(Point3::new(0.0, 0.0, 0.0) + d[0]), d[1]);
+                                let (dx, dy) = (dp.dot(u), dp.dot(v));
+                                along += w * 0.5 * h * 0.5 * (p.0 * dy - p.1 * dx);
+                            }
+                        }
+                        along - chord
+                    }
                 };
                 if e.forward {
                     chord + segment
@@ -20526,6 +20585,95 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    /// Two quadratic B-splines from the plate's (3, 5) to (7, 5), one through
+    /// the control point (5, 5.3) and one through (5, 5.2), which leave their
+    /// ends 0.05 radians apart, and their chord: the plate splits into the
+    /// lower one's segment, the lens between them and the rest, in each
+    /// frame. A parabolic segment's area is two thirds of its control
+    /// triangle's.
+    #[test]
+    fn two_b_splines_leaving_their_ends_close_together_bound_a_lens() {
+        use brepkit_math::nurbs::NurbsCurve;
+        let lower = 2.0 / 3.0 * (0.5 * 4.0 * 0.2);
+        let upper = 2.0 / 3.0 * (0.5 * 4.0 * 0.3);
+        let sections = |o: Point3, u: Vec3, v: Vec3| {
+            let at = |x: f64, y: f64| o + u * x + v * y;
+            let spline = |rise: f64| {
+                EdgeCurve::NurbsCurve(
+                    NurbsCurve::new(
+                        2,
+                        vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+                        vec![at(3.0, 5.0), at(5.0, 5.0 + rise), at(7.0, 5.0)],
+                        vec![1.0, 1.0, 1.0],
+                    )
+                    .unwrap(),
+                )
+            };
+            vec![
+                curve_section(spline(0.3), at(3.0, 5.0), at(7.0, 5.0)),
+                curve_section(spline(0.2), at(3.0, 5.0), at(7.0, 5.0)),
+                line_section(at(7.0, 5.0), at(3.0, 5.0)),
+            ]
+        };
+        plate_regions_match(&sections, &[lower, upper - lower], 1e-9);
+    }
+
+    /// Two halves of ellipses about the plate's (5, 5) from (8, 5) to (2, 5),
+    /// of semi-axes 3 along x and 1 and 2, their chord, and lines from the
+    /// chord at x = 4 and 6 down to the plate's edge, which end on the
+    /// chord so the face takes the cells of its arrangement: the plate splits
+    /// into the inner half, the band between the halves, the strip between
+    /// the lines and the rest, though the halves share both ends. In each
+    /// frame.
+    #[test]
+    fn two_half_ellipses_with_one_pair_of_ends_are_two_cells() {
+        use brepkit_math::curves::Ellipse3D;
+        use std::f64::consts::PI;
+        let half = |b: f64| 0.5 * PI * 3.0 * b;
+        let mut want = vec![
+            half(1.0),
+            half(2.0) - half(1.0),
+            10.0,
+            100.0 - half(2.0) - 10.0,
+        ];
+        want.sort_by(f64::total_cmp);
+        for (pose, o, u, v) in plate_frames() {
+            let n = u.cross(v);
+            let at = |x: f64, y: f64| o + u * x + v * y;
+            let (p, q) = (at(8.0, 5.0), at(2.0, 5.0));
+            let mut sections: Vec<SectionEdge> = [1.0, 2.0]
+                .iter()
+                .map(|&b| {
+                    let ellipse = Ellipse3D::with_axes(at(5.0, 5.0), n, 3.0, b, u, v).unwrap();
+                    curve_section(EdgeCurve::Ellipse(ellipse), p, q)
+                })
+                .collect();
+            sections.push(line_section(q, p));
+            for x in [4.0, 6.0] {
+                sections.push(line_section(at(x, 5.0), at(x, 0.0)));
+            }
+            let (topo, face_id) = plate_in_frame(o, u, v);
+            let cells = split_plane_into_cells(&topo, face_id, &sections, Rank::B, 1e-7)
+                .unwrap_or_else(|| unreachable!("{pose}: no cells"));
+            let mut areas: Vec<f64> = cells
+                .iter()
+                .map(|s| {
+                    exact_wire_area(&s.outer_wire, o, u, v)
+                        + s.inner_wires
+                            .iter()
+                            .map(|w| exact_wire_area(w, o, u, v))
+                            .sum::<f64>()
+                })
+                .collect();
+            areas.sort_by(f64::total_cmp);
+            assert!(
+                areas.len() == want.len()
+                    && areas.iter().zip(&want).all(|(a, w)| (a - w).abs() < 1e-9),
+                "{pose}: cells of areas {areas:?}, want {want:?}"
+            );
         }
     }
 

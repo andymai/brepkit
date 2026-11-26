@@ -5052,6 +5052,7 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
     // needs_flip is true when the duplicate's vertex order is reversed vs canonical,
     // requiring the OrientedEdge's forward flag to be flipped during wire rebuilding.
     let mut replacements: HashMap<EdgeId, (EdgeId, bool)> = HashMap::new();
+    let mut carried: Vec<(EdgeId, f64)> = Vec::new();
     for edge_ids in groups.values() {
         // Deduplicate edge IDs (same edge may appear multiple times from different faces)
         let mut unique: Vec<EdgeId> = edge_ids.clone();
@@ -5165,6 +5166,14 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
         let mut canonicals: Vec<(EdgeId, EdgeMiddle, usize)> = Vec::new();
         let mut joins: Vec<(EdgeId, EdgeId)> = Vec::new();
         for (head, mid, members, n) in sets {
+            let most = members
+                .iter()
+                .filter_map(|&m| {
+                    topo.edge(m)
+                        .ok()
+                        .and_then(brepkit_topology::edge::Edge::tolerance)
+                })
+                .reduce(f64::max);
             let into = if chords_of_arc {
                 canonicals.first_mut()
             } else if n % 2 == 1 {
@@ -5181,6 +5190,11 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
                 canonicals.push((head, mid, n));
                 head
             };
+            // The edge kept stands for each member on its faces, a copy or a
+            // set joined to it: it holds the largest of their tolerances.
+            if let Some(t) = most {
+                carried.push((canonical, t));
+            }
             joins.extend(
                 members
                     .into_iter()
@@ -5219,6 +5233,13 @@ fn merge_duplicate_edges(topo: &mut Topology, face_ids: &mut [FaceId]) -> Result
                 dup_qs == canon_qe && dup_qe == canon_qs
             };
             replacements.insert(dup, (canonical, needs_flip));
+        }
+    }
+
+    for (edge, t) in carried {
+        let e = topo.edge_mut(edge)?;
+        if t > e.tolerance().unwrap_or(0.0) {
+            e.set_tolerance(Some(t));
         }
     }
 
@@ -7634,6 +7655,133 @@ mod tests {
                 let uses = &senses[&oe.edge()];
                 assert_eq!(uses.len(), 2);
                 assert_ne!(uses[0], uses[1], "edge {:?} runs one way twice", oe.edge());
+            }
+        }
+    }
+
+    /// Two edges between the same two points, each used by one face of a
+    /// plane: a line, and an arc 0.01 off it at its middle with a tolerance of
+    /// 5e-4 (a set short of a partner joined to the one alongside it). Then a
+    /// chord on a sphere face, with that tolerance, and the arc it stands for.
+    /// The edge kept for both faces holds at least 5e-4. Upright, turned and
+    /// mirrored.
+    #[test]
+    fn an_edge_that_a_joined_set_merges_into_holds_its_tolerance() {
+        use brepkit_math::curves::Circle3D;
+        use brepkit_math::surfaces::SphericalSurface;
+        use brepkit_topology::edge::{Edge, EdgeCurve};
+        use brepkit_topology::face::{Face, FaceSurface};
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::Wire;
+
+        let axis = Vec3::new(1.0, 2.0, 3.0).normalize().unwrap();
+        let (sin, cos) = 0.7f64.sin_cos();
+        let turn = |e: Vec3| e * cos + axis.cross(e) * sin + axis * (axis.dot(e) * (1.0 - cos));
+        let mirror = |e: Vec3| Vec3::new(-e.x(), e.y(), e.z());
+        let o = Point3::new(3.0, -2.0, 5.0);
+        let (x, y, z) = (
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+        );
+        let poses: [(&str, Point3, [Vec3; 3]); 3] = [
+            ("upright", Point3::new(0.0, 0.0, 0.0), [x, y, z]),
+            ("turned", o, [turn(x), turn(y), turn(z)]),
+            (
+                "mirrored",
+                Point3::new(-o.x(), o.y(), o.z()),
+                [mirror(turn(x)), mirror(turn(y)), mirror(turn(z))],
+            ),
+        ];
+        for (name, origin, [u, v, w]) in poses {
+            let at = |a: f64, b: f64| origin + u * a + v * b;
+            let sag = 0.01;
+            let radius = (1.0 + sag * sag) / (2.0 * sag);
+            let circle = Circle3D::new(at(1.0, sag - radius), w, radius).unwrap();
+            let plane = FaceSurface::Plane {
+                normal: w,
+                d: w.dot(Vec3::new(origin.x(), origin.y(), origin.z())),
+            };
+            let ball = FaceSurface::Sphere(SphericalSurface::new(at(1.0, 0.0), 1.0).unwrap());
+            for (what, kept_is_line, first_surface) in [
+                ("joined alongside", true, plane.clone()),
+                ("chord", false, ball),
+            ] {
+                let mut topo = Topology::new();
+                let mut vertex = |p: Point3| topo.add_vertex(Vertex::new(p, 1e-7));
+                let (a, b, c, d) = (
+                    vertex(at(0.0, 0.0)),
+                    vertex(at(2.0, 0.0)),
+                    vertex(at(1.0, -1.0)),
+                    vertex(at(1.0, 1.5)),
+                );
+                let line = topo.add_edge(Edge::new(a, b, EdgeCurve::Line));
+                // The arc runs its short way round the axis: from b to a where
+                // the frame turns the axis's way, else from a to b.
+                let forward = u.cross(v).dot(w) > 0.0;
+                let (from, to) = if forward { (b, a) } else { (a, b) };
+                let arc = topo.add_edge(Edge::new(from, to, EdgeCurve::Circle(circle.clone())));
+                let (held, bare) = if kept_is_line {
+                    (arc, line)
+                } else {
+                    (line, arc)
+                };
+                topo.edge_mut(held).unwrap().set_tolerance(Some(5e-4));
+                let face = |topo: &mut Topology, oes: Vec<OrientedEdge>, surface| {
+                    let wire = topo.add_wire(Wire::new(oes, true).unwrap());
+                    topo.add_face(Face::new(wire, vec![], surface))
+                };
+                let (bc, ca) = (
+                    topo.add_edge(Edge::new(b, c, EdgeCurve::Line)),
+                    topo.add_edge(Edge::new(c, a, EdgeCurve::Line)),
+                );
+                let (ad, db) = (
+                    topo.add_edge(Edge::new(a, d, EdgeCurve::Line)),
+                    topo.add_edge(Edge::new(d, b, EdgeCurve::Line)),
+                );
+                let first = face(
+                    &mut topo,
+                    vec![
+                        OrientedEdge::new(line, true),
+                        OrientedEdge::new(bc, true),
+                        OrientedEdge::new(ca, true),
+                    ],
+                    first_surface,
+                );
+                let second = face(
+                    &mut topo,
+                    vec![
+                        OrientedEdge::new(arc, forward),
+                        OrientedEdge::new(ad, true),
+                        OrientedEdge::new(db, true),
+                    ],
+                    plane.clone(),
+                );
+                let mut face_ids = vec![first, second];
+                merge_duplicate_edges(&mut topo, &mut face_ids).unwrap();
+
+                let between = |face: FaceId| {
+                    let f = topo.face(face).unwrap();
+                    topo.wire(f.outer_wire())
+                        .unwrap()
+                        .edges()
+                        .iter()
+                        .map(OrientedEdge::edge)
+                        .find(|&e| {
+                            let edge = topo.edge(e).unwrap();
+                            [edge.start(), edge.end()].contains(&a)
+                                && [edge.start(), edge.end()].contains(&b)
+                        })
+                        .unwrap()
+                };
+                let kept = between(face_ids[0]);
+                assert_eq!(kept, between(face_ids[1]), "{name}, {what}: one edge kept");
+                assert_eq!(kept, bare, "{name}, {what}: the edge kept");
+                let tolerance = topo.edge(kept).unwrap().tolerance();
+                assert!(
+                    tolerance.is_some_and(|t| t >= 5e-4),
+                    "{name}, {what}: the edge kept holds {tolerance:?}"
+                );
             }
         }
     }

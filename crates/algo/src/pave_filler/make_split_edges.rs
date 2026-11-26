@@ -70,6 +70,25 @@ pub fn perform(topo: &mut Topology, arena: &mut GfaArena) -> Result<(), AlgoErro
                 .map(|cb| cb.pave_blocks.clone())
                 .unwrap_or_default();
 
+            // The one edge stands for every block of the group: it holds the
+            // largest of their edges' tolerances, and where any has one, the
+            // tolerance the group was proved one curve within.
+            let mut held: Option<f64> = None;
+            for &member in &all_pbs {
+                if let Some(pb) = arena.pave_blocks.get(member)
+                    && let Some(t) = topo.edge(pb.original_edge)?.tolerance()
+                {
+                    held = Some(held.map_or(t, |h| h.max(t)));
+                }
+            }
+            if let Some(t) = held {
+                let proved = arena
+                    .common_blocks
+                    .get(cb_id)
+                    .map_or(0.0, |cb| cb.tolerance);
+                topo.edge_mut(edge_id)?.set_tolerance(Some(t.max(proved)));
+            }
+
             if let Some(cb) = arena.common_blocks.get_mut(cb_id) {
                 cb.split_edge = Some(edge_id);
             }
@@ -146,7 +165,14 @@ fn create_split_edge(
         (pb.original_edge, start_v, end_v)
     };
 
-    let curve = topo.edge(original_edge_id)?.curve().clone();
-    let new_edge = Edge::new(start_vertex, end_vertex, curve);
+    // A piece of an edge holds no less than the edge: its tolerance bounds
+    // the edge's distance from its faces over its whole span.
+    let original = topo.edge(original_edge_id)?;
+    let new_edge = Edge::with_tolerance(
+        start_vertex,
+        end_vertex,
+        original.curve().clone(),
+        original.tolerance(),
+    );
     Ok(topo.add_edge(new_edge))
 }

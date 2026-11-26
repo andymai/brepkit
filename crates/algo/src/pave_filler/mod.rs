@@ -23,6 +23,7 @@ pub mod phase_ff_coplanar;
 pub mod phase_ve;
 pub mod phase_vf;
 pub mod phase_vv;
+pub mod section_tolerance;
 mod tool_edges;
 
 #[cfg(test)]
@@ -1466,6 +1467,10 @@ pub fn run_pave_filler(
         "force_interf_ee",
         force_interf_ee::perform(topo, tol, arena)
     )?;
+    gfa_time!(
+        "section_tolerance",
+        section_tolerance::perform(topo, tol, arena)
+    )?;
     gfa_time!("link_existing", link_existing::perform(topo, tol, arena))?;
     gfa_time!("make_split_edges", make_split_edges::perform(topo, arena))?;
     gfa_time!("make_pcurves", make_pcurves::perform(topo, arena))?;
@@ -1614,6 +1619,7 @@ fn run_pave_filler_over(
     make_blocks::perform(topo, arena)?;
     tool_edges::perform(topo, body, tool_edges, tol, arena)?;
     force_interf_ee::perform(topo, tol, arena)?;
+    section_tolerance::perform(topo, tol, arena)?;
     link_existing::perform(topo, tol, arena)?;
     make_split_edges::perform(topo, arena)?;
     make_pcurves::perform(topo, arena)?;
