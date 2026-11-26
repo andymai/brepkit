@@ -231,26 +231,23 @@ fn trace_loops(
                 {
                     // Check if this is truly the reverse edge (same curve,
                     // opposite direction): a section's own twin, or another
-                    // edge leaving close by. Two edges that leave the vertex
-                    // close together but apart are two curves unless proved
-                    // one (a circle and an ellipse through the same ends, two
-                    // B-splines that part between their ends). Edges that
-                    // leave along one direction to rounding cannot be told
-                    // apart here.
+                    // edge leaving close by and proved one curve with it. Two
+                    // edges that leave the vertex close together, even along
+                    // one heading, are two curves unless proved one (a circle
+                    // and an ellipse through the same ends, two B-splines
+                    // that part between their ends).
                     let angle_diff = (entry.angle - incoming_angle).abs();
                     let close = angle_diff < 0.1 || (angle_diff - TAU).abs() < 0.1;
-                    let along = angle_diff < 1e-9 || (angle_diff - TAU).abs() < 1e-9;
                     let twin = current_edge.source_edge_idx.is_some()
                         && current_edge.source_edge_idx == candidate.source_edge_idx
                         && current_edge.forward != candidate.forward;
                     let is_reverse = twin
                         || close
-                            && (along
-                                || super::face_splitter::edges_one_curve(
-                                    current_edge,
-                                    candidate,
-                                    10.0 * tol,
-                                ));
+                            && super::face_splitter::edges_one_curve(
+                                current_edge,
+                                candidate,
+                                10.0 * tol,
+                            );
                     if is_reverse {
                         continue;
                     }
@@ -1404,6 +1401,96 @@ mod tests {
             2,
             "dividing section must survive"
         );
+    }
+
+    /// A frame of the plane: its name, where it takes a point, and whether
+    /// it turns the plane over.
+    type Frame = (&'static str, Box<dyn Fn(f64, f64) -> Point2>, bool);
+
+    /// A face above a quadratic B-spline from (3, 5) to (7, 5) over four
+    /// spans, its middle control point at (5, 5.3), up to y = 8, and a
+    /// section in both directions along a second one that differs from it in
+    /// that point alone, at (5, 5.6): the two share their end spans, so they
+    /// leave both ends along one heading, and part between. Arriving along
+    /// the lower spline, the walk turns back along the section, round the
+    /// lens between them, not up the face's side, and each of the two loops
+    /// takes the section once. Upright, turned and mirrored in the plane.
+    #[test]
+    fn two_b_splines_along_one_heading_close_the_lens_between_them() {
+        use brepkit_math::curves2d::NurbsCurve2D;
+        use brepkit_math::nurbs::curve::NurbsCurve;
+        let (sin, cos) = 0.7f64.sin_cos();
+        let frames: [Frame; 3] = [
+            ("upright", Box::new(Point2::new), false),
+            (
+                "turned",
+                Box::new(move |x, y| {
+                    Point2::new(3.0 + x * cos - y * sin, -2.0 + x * sin + y * cos)
+                }),
+                false,
+            ),
+            ("mirrored", Box::new(|x, y| Point2::new(-x, y)), true),
+        ];
+        for (name, at, mirrored) in &frames {
+            let knots = vec![0.0, 0.0, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.0, 1.0];
+            let point = |p: Point2| brepkit_math::vec::Point3::new(p.x(), p.y(), 0.0);
+            let spline = |middle: f64| {
+                let uv: Vec<Point2> = [
+                    (3.0, 5.0),
+                    (3.5, 5.1),
+                    (4.0, 5.2),
+                    (5.0, middle),
+                    (6.0, 5.2),
+                    (6.5, 5.1),
+                    (7.0, 5.0),
+                ]
+                .iter()
+                .map(|&(x, y)| at(x, y))
+                .collect();
+                let space = uv.iter().map(|&p| point(p)).collect();
+                (
+                    Curve2D::Nurbs(NurbsCurve2D::new(2, knots.clone(), uv, vec![1.0; 7]).unwrap()),
+                    EdgeCurve::NurbsCurve(
+                        NurbsCurve::new(2, knots.clone(), space, vec![1.0; 7]).unwrap(),
+                    ),
+                )
+            };
+            let (s, e) = (at(3.0, 5.0), at(7.0, 5.0));
+            let edge = |(pcurve, curve_3d): (Curve2D, EdgeCurve), forward, src| {
+                let (from, to) = if forward { (s, e) } else { (e, s) };
+                OrientedPCurveEdge {
+                    curve_3d,
+                    pcurve,
+                    start_uv: from,
+                    end_uv: to,
+                    start_3d: point(from),
+                    end_3d: point(to),
+                    forward,
+                    source_edge_idx: src,
+                    pave_block_id: None,
+                }
+            };
+            let mut edges = vec![edge(spline(5.3), true, None)];
+            for (from, to) in [
+                ((7.0, 5.0), (7.0, 8.0)),
+                ((7.0, 8.0), (3.0, 8.0)),
+                ((3.0, 8.0), (3.0, 5.0)),
+            ] {
+                let mut side = make_line_edge(at(from.0, from.1), at(to.0, to.1));
+                side.start_3d = point(side.start_uv);
+                side.end_3d = point(side.end_uv);
+                edges.push(side);
+            }
+            let upper = spline(5.6);
+            edges.push(edge(upper.clone(), true, Some(9)));
+            edges.push(edge(upper, false, Some(9)));
+            let loops = build_wire_loops_with_winding(&edges, 1e-7, false, false, *mirrored);
+            assert_eq!(loops.len(), 2, "{name}: the loops");
+            for lp in &loops {
+                let taken = lp.iter().filter(|e| e.source_edge_idx == Some(9)).count();
+                assert_eq!(taken, 1, "{name}: a loop takes the section {taken} times");
+            }
+        }
     }
 
     #[test]
