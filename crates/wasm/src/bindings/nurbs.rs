@@ -431,6 +431,17 @@ fn with_points(count: usize, fit: Option<usize>) -> Option<usize> {
     count.checked_mul(3)?.checked_add(fit?)
 }
 
+/// `degree` for an interpolation, which refuses degree 0: its knots would
+/// average no parameters.
+fn interpolation_degree(degree: usize, name: &str) -> Result<usize, WasmError> {
+    if degree == 0 {
+        return Err(WasmError::InvalidInput {
+            reason: format!("{name} of an interpolation must be at least 1, got 0"),
+        });
+    }
+    Ok(degree)
+}
+
 impl BrepKernel {
     /// The checked body of `interpolatePoints`.
     pub(crate) fn interpolate_points_impl(
@@ -438,7 +449,8 @@ impl BrepKernel {
         coords: &[f64],
         degree: u32,
     ) -> Result<u32, WasmError> {
-        let degree = validate_count(degree, "degree", MAX_FIT_DEGREE)?;
+        let degree =
+            interpolation_degree(validate_count(degree, "degree", MAX_FIT_DEGREE)?, "degree")?;
         let count = fit_count(coords)?;
         let degree = degree.min(count - 1);
         let cells = with_points(count, fitting::interpolation_cells(count, degree));
@@ -461,6 +473,9 @@ impl BrepKernel {
         let count = fit_count(coords)?;
         let degree = degree.min(count - 1);
         let controls = validate_count(num_control_points, "num_control_points", MAX_COUNT)?;
+        if controls >= count {
+            interpolation_degree(degree, "degree")?;
+        }
         let cells = with_points(count, fitting::least_squares_cells(count, controls, degree));
         validate_fit_total(cells, "approximateCurve")?;
         let points = parse_points(coords)?;
@@ -504,8 +519,14 @@ impl BrepKernel {
         [rows, cols]: [u32; 2],
         [degree_u, degree_v]: [u32; 2],
     ) -> Result<u32, WasmError> {
-        let degree_u = validate_count(degree_u, "degree_u", MAX_FIT_DEGREE)?;
-        let degree_v = validate_count(degree_v, "degree_v", MAX_FIT_DEGREE)?;
+        let degree_u = interpolation_degree(
+            validate_count(degree_u, "degree_u", MAX_FIT_DEGREE)?,
+            "degree_u",
+        )?;
+        let degree_v = interpolation_degree(
+            validate_count(degree_v, "degree_v", MAX_FIT_DEGREE)?,
+            "degree_v",
+        )?;
         let (rows, cols) = (rows as usize, cols as usize);
         // The fit's count holds the grid; a grid it cannot fit, which the
         // count gives no cells, is still read before it is refused.
@@ -1277,6 +1298,9 @@ mod tests {
                 &|n| with_points(n, fitting::lspia_cells(n, 10, degree)),
             ];
             for (fit, count) in counts.iter().enumerate() {
+                if degree == 0 && fit == 0 {
+                    continue;
+                }
                 let within = |n: usize| count(n).is_some_and(|c| c <= crate::error::MAX_FIT_CELLS);
                 let (mut low, mut high) = (2, crate::error::MAX_FIT_CELLS);
                 while high - low > 1 {
@@ -1366,6 +1390,38 @@ mod tests {
             message.contains(&format!("{} cells", cells(rows + 1))),
             "{message}"
         );
+    }
+
+    /// An interpolation at degree 0 averages no parameters into its knots.
+    /// Each binding that interpolates refuses degree 0 before it counts or
+    /// reads the points: a curve, a least-squares fit by as many control
+    /// points as points, and a surface in either direction. A least-squares
+    /// fit by fewer control points takes degree 0 as steps.
+    #[test]
+    fn an_interpolation_at_degree_zero_is_refused() {
+        let mut k = BrepKernel::new();
+        let grid: Vec<f64> = (0..5)
+            .flat_map(|i| (0..6).flat_map(move |j| [f64::from(i), f64::from(j), 0.0]))
+            .collect();
+        for (found, name) in [
+            (k.interpolate_points_impl(&wave(40), 0), "degree"),
+            (k.approximate_curve_impl(&wave(40), 0, 40), "degree"),
+            (
+                k.interpolate_surface_impl(&grid, [5, 6], [0, 3]),
+                "degree_u",
+            ),
+            (
+                k.interpolate_surface_impl(&grid, [5, 6], [3, 0]),
+                "degree_v",
+            ),
+        ] {
+            let message = found.unwrap_err().to_string();
+            assert!(
+                message.contains(&format!("{name} of an interpolation must be at least 1")),
+                "{message}"
+            );
+        }
+        assert!(k.approximate_curve_impl(&wave(40), 0, 10).is_ok());
     }
 
     /// A cubic interpolation of a grid of 440 by 440 points holds 3,902,372

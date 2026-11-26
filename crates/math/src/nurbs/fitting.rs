@@ -197,13 +197,22 @@ pub(crate) fn note_held(cells: usize) {
 ///
 /// # Errors
 ///
-/// Returns an error if fewer than 2 points are provided or the degree
-/// is too high for the number of points, and [`MathError::TooMuchWork`] if
-/// the fit would take more than [`MAX_FIT_WORK`] multiply-adds.
+/// Returns an error if fewer than 2 points are provided or the degree is
+/// 0, and [`MathError::TooMuchWork`] if the fit would take more than
+/// [`MAX_FIT_WORK`] multiply-adds. A degree past the points' is lowered to
+/// the most they allow.
 pub fn interpolate(points: &[Point3], degree: usize) -> Result<NurbsCurve, MathError> {
     let n = points.len();
     if n < 2 {
         return Err(MathError::EmptyInput);
+    }
+    // Degree 0 averages no parameters into a knot (0 / 0).
+    if degree == 0 {
+        return Err(MathError::ParameterOutOfRange {
+            value: 0.0,
+            min: 1.0,
+            max: (n - 1) as f64,
+        });
     }
 
     let p = degree.min(n - 1);
@@ -294,7 +303,8 @@ pub fn interpolate_at(
 ///
 /// # Errors
 ///
-/// Returns an error if parameters are invalid, and
+/// Returns an error if parameters are invalid, as [`interpolate`] does
+/// where the control points are as many as the points, and
 /// [`MathError::TooMuchWork`] if the fit would take more than
 /// [`MAX_FIT_WORK`] multiply-adds.
 pub fn approximate(
@@ -1292,6 +1302,47 @@ mod tests {
         assert!(interpolate_at(&points, &params, 3).is_err());
         assert!(interpolate_at(&points, &params, 1).is_ok());
         assert!(interpolate_at(&points, &params, 2).is_ok());
+    }
+
+    /// Degree 0 averages no parameters into an interpolation's knot (0 /
+    /// 0): through 2 points the interpolation gave a curve that was not a
+    /// number, and through 7 a singular system, each after its work. It
+    /// now refuses degree 0 before it holds a cell, with the error
+    /// `interpolate_at` gives, and so does a least-squares fit by as many
+    /// control points as points, which interpolates. A least-squares fit
+    /// by fewer control points and an LSPIA fit take degree 0 as steps,
+    /// each finite.
+    #[test]
+    fn an_interpolation_at_degree_zero_is_refused_at_once() {
+        let finite = |curve: &NurbsCurve| {
+            curve
+                .control_points()
+                .iter()
+                .all(|p| p.x().is_finite() && p.y().is_finite() && p.z().is_finite())
+                && curve.knots().iter().all(|k| k.is_finite())
+        };
+        for n in [2_usize, 7] {
+            let points: Vec<Point3> = (0..n)
+                .map(|i| {
+                    let x = i as f64;
+                    Point3::new(x, (0.7 * x).sin(), 0.0)
+                })
+                .collect();
+            let params: Vec<f64> = (0..n).map(|i| i as f64 / (n - 1) as f64).collect();
+            let expected = interpolate_at(&points, &params, 0).unwrap_err().to_string();
+            for fit in [
+                &(|| interpolate(&points, 0)) as &dyn Fn() -> Result<NurbsCurve, MathError>,
+                &|| approximate(&points, 0, n),
+            ] {
+                HELD_CELLS.with(|most| most.set(0));
+                let found = fit().map(|_| ()).unwrap_err().to_string();
+                assert_eq!(found, expected, "{n} points");
+                assert_eq!(HELD_CELLS.with(std::cell::Cell::get), 0, "{n} points");
+            }
+            let steps = approximate(&points, 0, n - 1).unwrap();
+            let lspia = approximate_lspia(&points, 0, n - 1, 1e-6, 5).unwrap();
+            assert!(finite(&steps) && finite(&lspia), "{n} points");
+        }
     }
 
     #[test]

@@ -41,9 +41,9 @@ use crate::vec::Point3;
 ///
 /// # Errors
 ///
-/// Returns an error if the grid is too small or rows have inconsistent
-/// lengths, and [`MathError::TooMuchWork`] if the fits would take more than
-/// [`fitting::MAX_FIT_WORK`] multiply-adds.
+/// Returns an error if the grid is too small, rows have inconsistent
+/// lengths, or a degree is 0, and [`MathError::TooMuchWork`] if the fits
+/// would take more than [`fitting::MAX_FIT_WORK`] multiply-adds.
 pub fn interpolate_surface(
     points: &[Vec<Point3>],
     degree_u: usize,
@@ -64,6 +64,16 @@ pub fn interpolate_surface(
             return Err(MathError::InvalidControlPointGrid {
                 expected_rows: num_rows,
                 expected_cols: num_cols,
+            });
+        }
+    }
+    // Degree 0 averages no parameters into a knot (0 / 0).
+    for (degree, count) in [(degree_u, num_rows), (degree_v, num_cols)] {
+        if degree == 0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: 0.0,
+                min: 1.0,
+                max: (count - 1) as f64,
             });
         }
     }
@@ -842,6 +852,36 @@ mod tests {
             if rows == 440 {
                 assert_eq!(count, 3_902_372);
             }
+        }
+    }
+    /// A surface interpolation at degree 0 in either direction is refused
+    /// before it holds a cell, with the error a curve's interpolation at
+    /// degree 0 gives for that direction's points. It ran the rows' or the
+    /// columns' fits, which refused a singular system.
+    #[test]
+    fn a_surface_interpolation_at_degree_zero_is_refused_at_once() {
+        let grid: Vec<Vec<Point3>> = (0..5)
+            .map(|i| {
+                (0..6)
+                    .map(|j| {
+                        let (u, v) = (i as f64, j as f64);
+                        Point3::new(u, v, (0.3 * u * v).sin())
+                    })
+                    .collect()
+            })
+            .collect();
+        let curve = |n: usize| {
+            let points: Vec<Point3> = (0..n).map(|i| Point3::new(i as f64, 0.0, 0.0)).collect();
+            fitting::interpolate(&points, 0).unwrap_err().to_string()
+        };
+        for ((degree_u, degree_v), along) in [((0, 3), 5), ((3, 0), 6), ((0, 0), 5)] {
+            fitting::HELD_CELLS.with(|most| most.set(0));
+            let found = interpolate_surface(&grid, degree_u, degree_v)
+                .map(|_| ())
+                .unwrap_err()
+                .to_string();
+            assert_eq!(found, curve(along), "{degree_u}, {degree_v}");
+            assert_eq!(fitting::HELD_CELLS.with(std::cell::Cell::get), 0);
         }
     }
     /// A grid of 3 rows of 5 points, interpolated at degree 3 each way, in
