@@ -1074,11 +1074,12 @@ mod tests {
         }
     }
 
-    /// The fuse of all three is exact upright and mirrored. Turned, it is
-    /// exact or refused (#2878), and so are the plate less the rod and then
-    /// the prism in every pose: never a wrong solid.
+    /// The fuse of all three, and the plate less the rod and then the prism,
+    /// are exact in every pose. The second cut meets the rod's hole in the
+    /// plate's faces: the prism's sections there cross its rim and touch it
+    /// at (7, 5), and the arcs inside the hole are air.
     #[test]
-    fn the_three_way_fuse_and_the_two_cuts_are_exact_or_refused() {
+    fn the_three_way_fuse_and_the_two_cuts_are_exact() {
         let u = union_area();
         for (seams, seam) in SEAMS {
             for (name, pose) in poses() {
@@ -1087,51 +1088,44 @@ mod tests {
                 let [plate, rod, prism] = parts(&mut topo, seam, &pose);
                 let compound = topo.add_compound(Compound::new(vec![plate, rod, prism]));
                 let fused = fuse_all(&mut topo, compound);
-                assert!(
-                    fused.is_ok() || name == "turned",
-                    "fuse, {what}: {:?}",
-                    fused.as_ref().err()
+                assert!(fused.is_ok(), "fuse, {what}: {:?}", fused.as_ref().err());
+                assert_exact(
+                    &topo,
+                    fused.unwrap(),
+                    200.0 + 2.0 * u,
+                    (
+                        &[
+                            Point3::new(6.72, 6.0, 2.5),
+                            BY_TOUCH,
+                            Point3::new(9.0, 9.0, 1.0),
+                        ],
+                        &[Point3::new(6.74, 6.0, 2.5)],
+                    ),
+                    &pose,
+                    &format!("fuse, {what}"),
                 );
-                if let Ok(fused) = fused {
-                    assert_exact(
-                        &topo,
-                        fused,
-                        200.0 + 2.0 * u,
-                        (
-                            &[
-                                Point3::new(6.72, 6.0, 2.5),
-                                BY_TOUCH,
-                                Point3::new(9.0, 9.0, 1.0),
-                            ],
-                            &[Point3::new(6.74, 6.0, 2.5)],
-                        ),
-                        &pose,
-                        &format!("fuse, {what}"),
-                    );
-                }
                 let mut topo = Topology::new();
                 let [plate, rod, prism] = parts(&mut topo, seam, &pose);
                 let cut = boolean_with_options(&mut topo, BooleanOp::Cut, plate, rod, exact())
                     .and_then(|c| {
                         boolean_with_options(&mut topo, BooleanOp::Cut, c, prism, exact())
                     });
-                if let Ok(cut) = cut {
-                    assert_exact(
-                        &topo,
-                        cut,
-                        200.0 - 2.0 * u,
-                        (&[PAST_LENS], &[LENS, BY_TOUCH]),
-                        &pose,
-                        &format!("cuts, {what}"),
-                    );
-                }
+                assert!(cut.is_ok(), "cuts, {what}: {:?}", cut.as_ref().err());
+                assert_exact(
+                    &topo,
+                    cut.unwrap(),
+                    200.0 - 2.0 * u,
+                    (&[PAST_LENS, Point3::new(9.0, 9.0, 1.0)], &[LENS, BY_TOUCH]),
+                    &pose,
+                    &format!("cuts, {what}"),
+                );
             }
         }
     }
 
     /// The GFA's own fuse of all three, with no layer above it to check its
     /// result: the exact solid upright and mirrored, and turned the exact
-    /// solid or an error (#2878), never an invalid solid.
+    /// solid or an error, never an invalid solid.
     #[test]
     fn the_gfa_fuse_of_all_three_is_exact_or_an_error() {
         let u = union_area();

@@ -1231,9 +1231,13 @@ fn split_sections_at_rim_vertices(
 /// face there, and the boundary edge is split at the same vertex. The window
 /// such a section is trimmed to cannot see every boundary: a whole cylinder
 /// band notched by an earlier boolean keeps its `v` window, and the section
-/// runs on past the notch's edge without a vertex where it crosses it. A
-/// section on a plane face stays whole: the face's outline clips it later,
-/// and a piece wholly off the face slips past that clip.
+/// runs on past the notch's edge without a vertex where it crosses it.
+///
+/// A section on a plane face is cut only where an edge of one of the face's
+/// holes crosses the other face: the piece inside the hole is air, which
+/// the face's split drops by its middle, and the face's outline clips the
+/// rest later. A B-spline section is cut there too, where a projection
+/// proves the crossing within the tolerance of the curve.
 ///
 /// # Errors
 ///
@@ -1253,6 +1257,9 @@ fn split_sections_at_boundary_crossings(
 
     /// A crossing this near a section's end is that end.
     const WELD: f64 = 1e-5;
+    /// A crossing's vertex, its rank, and whether its edge bounds a hole of
+    /// a plane face it belongs to.
+    type Crossing = (VertexId, usize, bool);
 
     let pair = |a: FaceId, b: FaceId| (a.index().min(b.index()), a.index().max(b.index()));
     let linear = tol.linear;
@@ -1267,7 +1274,16 @@ fn split_sections_at_boundary_crossings(
     // MakeBlocks splits it: of the paves that coincide on a block it keeps
     // one, and the section must end at that same vertex. The rank is the
     // one that vertex has on its edge: a block's own end, or a pave.
-    let mut crossings: HashMap<(usize, usize), Vec<(VertexId, usize)>> = HashMap::new();
+    let mut crossings: HashMap<(usize, usize), Vec<Crossing>> = HashMap::new();
+    let hole_of_plane = |topo: &Topology, edge: brepkit_topology::edge::EdgeId, owner: FaceId| {
+        topo.face(owner).is_ok_and(|f| {
+            matches!(f.surface(), FaceSurface::Plane { .. })
+                && f.inner_wires().iter().any(|&w| {
+                    topo.wire(w)
+                        .is_ok_and(|w| w.edges().iter().any(|oe| oe.edge() == edge))
+                })
+        })
+    };
     for interf in &arena.interference.ef {
         let Interference::EF {
             edge,
@@ -1296,9 +1312,10 @@ fn split_sections_at_boundary_crossings(
             .unwrap_or((vertex, 1));
         for owner in topo.faces_of_edge(*edge) {
             if owner != *face {
+                let entry = (kept.0, kept.1, hole_of_plane(topo, *edge, owner));
                 let list = crossings.entry(pair(owner, *face)).or_default();
-                if !list.contains(&kept) {
-                    list.push(kept);
+                if !list.contains(&entry) {
+                    list.push(entry);
                 }
             }
         }
@@ -1325,9 +1342,7 @@ fn split_sections_at_boundary_crossings(
             topo.face(face)
                 .map(|f| matches!(f.surface(), FaceSurface::Plane { .. }))
         };
-        if planar(original.face_a)? || planar(original.face_b)? {
-            continue;
-        }
+        let on_plane = planar(original.face_a)? || planar(original.face_b)?;
         let (start, end) = (pb.start, pb.end);
         let (p0, p1) = (start.parameter, end.parameter);
         let (lo, hi) = (p0.min(p1), p0.max(p1));
@@ -1344,7 +1359,10 @@ fn split_sections_at_boundary_crossings(
         // earliest rank and then the lowest index keeps, as the rim pass
         // does: no piece is shorter than the linear tolerance.
         let mut cuts: Vec<(f64, VertexId, usize)> = Vec::new();
-        for &(vertex, rank) in list {
+        for &(vertex, rank, hole) in list {
+            if on_plane && !hole {
+                continue;
+            }
             let p = topo.vertex(vertex)?.point();
             if (p - a).length() <= WELD || (p - b).length() <= WELD {
                 continue;
@@ -1368,6 +1386,17 @@ fn split_sections_at_boundary_crossings(
                         lo + (t - lo).rem_euclid(std::f64::consts::TAU),
                         e.evaluate(t),
                     )
+                }
+                // A B-spline's paves read its own parameter.
+                EdgeCurve::NurbsCurve(nurbs) if on_plane => {
+                    let Ok(found) = brepkit_math::nurbs::projection::project_point_to_curve(
+                        nurbs,
+                        p,
+                        1e-3 * tol.linear,
+                    ) else {
+                        continue;
+                    };
+                    (found.parameter, found.point)
                 }
                 EdgeCurve::NurbsCurve(_) => continue,
             };
