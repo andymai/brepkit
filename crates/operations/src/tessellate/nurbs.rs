@@ -2033,19 +2033,20 @@ mod crease_tests {
         NurbsSurface::new(2, 2, knots(), knots(), rows, vec![vec![1.0; count]; count]).unwrap()
     }
 
-    /// The creased sheet's tree takes the crease grid's 81 roots and refines
-    /// each leaf to the deflection. It used to stop at 200,000 cells and start
-    /// again on the even grid, whose leaves stood up to 0.015 off the surface
-    /// at a deflection of 1e-6. At 1e-3 each triangle lies within the
-    /// deflection.
+    /// The creased sheet's tree takes the crease grid's 100 roots and refines
+    /// each leaf to the deflection. At 4e-4 it takes about 290,000 leaves, and
+    /// each triangle lies within the deflection. A tree held to 200,000 cells
+    /// and meshed again on the even grid lies 38 times the deflection off.
     #[test]
     fn a_creased_sheet_meshes_within_its_deflection() {
         let surface = creased_bumps();
         let found = creases(&surface);
         assert_eq!((found.u.len(), found.v.len()), (8, 8), "the creases");
-        let deflection = 1e-3;
+        let deflection = 4e-4;
         let meshed = super::tessellate_nurbs(&surface, deflection, 0.0).unwrap();
         let (mesh, uvs) = (&meshed.mesh, &meshed.uvs);
+        let leaves = mesh.indices.len() / 6;
+        assert!(leaves > 200_000, "{leaves} leaves");
         let mut worst = 0.0_f64;
         for t in mesh.indices.chunks_exact(3) {
             let at = |i: u32| mesh.positions[i as usize];
