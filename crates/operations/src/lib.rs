@@ -149,6 +149,7 @@ pub mod mesh_boolean;
 
 pub mod blend_ops;
 pub mod chamfer;
+pub mod chamfer_arcs;
 pub mod chamfer_chain;
 pub mod fillet;
 

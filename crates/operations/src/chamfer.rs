@@ -68,8 +68,19 @@ pub fn chamfer(
     // (a pocket's rim) goes there too.
     let faces = brepkit_topology::explorer::solid_faces(topo, solid)?;
     if has_curved_edge(topo, &faces)? || on_a_hole(topo, &faces, edges)? {
-        let result = crate::blend_ops::chamfer_v2_walking(topo, solid, edges, distance, distance)?;
-        return crate::blend_ops::all_blended(result);
+        let blended = crate::blend_ops::chamfer_v2_walking(topo, solid, edges, distance, distance)
+            .and_then(crate::blend_ops::all_blended);
+        return match blended {
+            Ok(result) => Ok(result),
+            // A cylinder's rim in arcs, convex beside a block standing on
+            // its top and concave under the block's overhang, is cut as its
+            // convex arcs' bevel rings.
+            Err(error) => {
+                let picks: Vec<_> = edges.iter().map(|&e| (e, None)).collect();
+                crate::chamfer_arcs::chamfer_rim_arcs(topo, solid, &picks, distance, distance)?
+                    .ok_or(error)
+            }
+        };
     }
     chamfer_planar(topo, solid, edges, ChamferDistances::Symmetric(distance))
 }
