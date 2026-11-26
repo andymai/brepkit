@@ -165,29 +165,31 @@ pub const MAX_FIT_DEGREE: u32 = 25;
 
 /// The most `f64` cells a fit's working arrays hold: 2^22 cells, 32 MB.
 ///
-/// A least-squares fit holds a cell for each pair of a point and a control
-/// point, and for each pair of control points. An interpolation holds a row
-/// of at most `4 * degree + 2` cells for each point. The largest fit in the
-/// tests, through 1,500 points at degree 3, holds 21,000 cells.
+/// Each fit's count is the most it holds at once, the points read from the
+/// coordinates included, as `brepkit_math::nurbs::fitting` counts it for a
+/// curve (`interpolation_cells`, `least_squares_cells`, `lspia_cells`) and
+/// `brepkit_math::nurbs::surface_fitting` for a surface
+/// (`interpolate_surface_cells`, `lspia_surface_cells`). Each count is read
+/// before the coordinates are. The largest fit in the tests, through 1,500
+/// points at degree 3, holds 39,004 cells.
 pub const MAX_FIT_CELLS: usize = 1 << 22;
 
-/// Check that a fit's working arrays, `rows` rows of `cells` cells, hold at
-/// most [`MAX_FIT_CELLS`] cells, before the fit allocates them.
+/// Check that a fit's working arrays, `cells` cells in all, hold at most
+/// [`MAX_FIT_CELLS`] cells, before the fit allocates them. `None` stands for
+/// a count past `usize`.
 ///
 /// # Errors
 ///
 /// Returns [`WasmError::InvalidInput`] if they would hold more.
-pub fn validate_fit_cells(rows: usize, cells: usize, what: &str) -> Result<(), WasmError> {
-    if rows
-        .checked_mul(cells)
-        .is_some_and(|total| total <= MAX_FIT_CELLS)
-    {
+pub fn validate_fit_total(cells: Option<usize>, what: &str) -> Result<(), WasmError> {
+    if cells.is_some_and(|total| total <= MAX_FIT_CELLS) {
         return Ok(());
     }
+    let count = cells.map_or_else(|| "more than usize".to_string(), |total| total.to_string());
     Err(WasmError::InvalidInput {
         reason: format!(
-            "{what} needs {rows} rows of {cells} cells for its fit, and the cells must be at \
-             most {MAX_FIT_CELLS}"
+            "{what} needs {count} cells for its fit, and the cells must be at most \
+             {MAX_FIT_CELLS}"
         ),
     })
 }

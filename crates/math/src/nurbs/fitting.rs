@@ -22,10 +22,9 @@ use crate::vec::Point3;
 /// The most multiply-adds a fit takes, counted from its sizes before it
 /// allocates or starts.
 ///
-/// The slowest fits per multiply-add counted, a least-squares sum and a
-/// cubic interpolation through many points, take about 2.4 ns for each
-/// natively and 3.4 ns in wasm, so a fit at this limit runs for about 3 s
-/// in wasm. The largest fit the other tests make counts 2.4e6.
+/// The slowest fit per multiply-add counted, a cubic interpolation through
+/// many points, takes about 2.4 ns for each natively and 3.4 ns in wasm, so
+/// a fit at this limit runs for about 3 s in wasm. The largest fit the other tests make counts 2.4e6.
 pub const MAX_FIT_WORK: f64 = 1e9;
 
 /// Refuses `what`, which would take `work` multiply-adds, past
@@ -90,24 +89,93 @@ pub(crate) fn check_finite(params: &[f64]) -> Result<(), MathError> {
 }
 
 /// The multiply-adds of a least-squares fit of `n` points by `m` control
-/// points at degree `p`: each point's basis, the normal matrix summed over
-/// every point for each pair of control points, and its solve, which scans
-/// each column whole and eliminates in a band `p` wide below and `2p`
-/// above.
+/// points at degree `p`: each point's basis and its terms of the normal
+/// matrix and the right-hand side, and the banded solve, `p` cells below the
+/// diagonal and `p` above before its row swaps.
 pub(crate) fn least_squares_work(n: usize, m: usize, p: usize) -> f64 {
-    let (n, m, p) = (n as f64, m as f64, p as f64);
-    n * (p + 1.0).powi(2) + m * m * n + 3.0 * m * n + m * m + m * p * (2.0 * p + 10.0)
+    let (n, p1) = (n as f64, (p + 1) as f64);
+    n * (2.0 * p1 * p1 + 3.0 * p1) + band_work(m, 0, p, p)
 }
 
 /// The multiply-adds of an LSPIA fit of `n` points by `m` control points at
-/// degree `p` over `iterations` passes: the start, which reads every point
-/// for each control point, the basis and the step size, then on each pass
-/// the curve at every point and the corrections it spreads.
+/// degree `p` over `iterations` passes: the start, which searches the
+/// sorted parameters twice for each control point's nearest, at most `log2
+/// n + 2` steps each, and reads the basis and the step size, then on each
+/// pass the curve at every point from its basis, and the corrections it
+/// spreads.
 pub(crate) fn lspia_work(n: usize, m: usize, p: usize, iterations: usize) -> f64 {
-    let (n, m, p, iterations) = (n as f64, m as f64, p as f64, iterations as f64);
-    let start = m * n + n * (p + 1.0).powi(2) + 42.0 * n * (p + 1.0);
-    let pass = n * ((p + 1.0).powi(2) + 7.0 * (p + 1.0)) + 5.0 * m;
+    let (n, m, p1, iterations) = (n as f64, m as f64, (p + 1) as f64, iterations as f64);
+    let start = m * 2.0f64.madd(n.log2(), 4.0) + n * p1 * p1 + 42.0 * n * p1;
+    let pass = n * (7.0 * p1 + 4.0) + 5.0 * m;
     iterations.madd(pass, start)
+}
+
+/// The most cells of eight bytes an interpolation of `n` points at
+/// `degree` holds at once; `None` past `usize`.
+///
+/// They are its parameters and knots, each row's first column and basis
+/// values, its band of at most `3 p + 1` cells a row, and its right-hand
+/// sides and solved points, three cells each.
+#[must_use]
+pub fn interpolation_cells(n: usize, degree: usize) -> Option<usize> {
+    let p = degree.min(n.saturating_sub(1));
+    n.checked_mul(p.checked_mul(4)?.checked_add(11)?)?
+        .checked_add(p.checked_add(1)?)
+}
+
+/// The most cells of eight bytes a least-squares fit of `n` points by `m`
+/// control points at `degree` holds at once ([`approximate`]); `None` past
+/// `usize`.
+///
+/// They are its parameters and knots, the band of its normal matrix,
+/// `3 p + 1` cells a control point, its right-hand sides and solved
+/// points, three cells each, and one point's basis values; an
+/// interpolation's where `m` is not below `n`.
+#[must_use]
+pub fn least_squares_cells(n: usize, m: usize, degree: usize) -> Option<usize> {
+    if m >= n {
+        return interpolation_cells(n, degree);
+    }
+    let p = degree.min(m.saturating_sub(1));
+    n.checked_add(m.checked_mul(p.checked_mul(3)?.checked_add(8)?)?)?
+        .checked_add(p.checked_mul(2)?.checked_add(2)?)
+}
+
+/// The most cells of eight bytes an LSPIA fit of `n` points by `m` control
+/// points at `degree` holds at once ([`approximate_lspia`]); `None` past
+/// `usize`.
+///
+/// They are its parameters and knots, its control points and weights, each
+/// point's span and basis values with a header of four, and the largest of
+/// the step size's power iteration (two vectors a control point and one a
+/// point), the curve it checks once (its knots, points and weights again)
+/// and each pass's corrections.
+#[must_use]
+pub fn lspia_cells(n: usize, m: usize, degree: usize) -> Option<usize> {
+    let p = degree.min(n.saturating_sub(1));
+    let m = m.min(n).max(p + 1);
+    let held = n
+        .checked_mul(p.checked_add(6)?)?
+        .checked_add(m.checked_mul(5)?)?
+        .checked_add(p.checked_add(1)?)?;
+    let most = m
+        .checked_mul(2)?
+        .checked_add(n)?
+        .max(m.checked_mul(5)?.checked_add(p.checked_add(1)?)?);
+    held.checked_add(most)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The most cells a fit held at once on this thread, read from its
+    /// buffers' capacities.
+    pub(crate) static HELD_CELLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Notes that a fit holds `cells` at once.
+#[cfg(test)]
+pub(crate) fn note_held(cells: usize) {
+    HELD_CELLS.with(|most| most.set(most.get().max(cells)));
 }
 
 /// Interpolate a NURBS curve through a set of data points.
@@ -129,13 +197,22 @@ pub(crate) fn lspia_work(n: usize, m: usize, p: usize, iterations: usize) -> f64
 ///
 /// # Errors
 ///
-/// Returns an error if fewer than 2 points are provided or the degree
-/// is too high for the number of points, and [`MathError::TooMuchWork`] if
-/// the fit would take more than [`MAX_FIT_WORK`] multiply-adds.
+/// Returns an error if fewer than 2 points are provided or the degree is
+/// 0, and [`MathError::TooMuchWork`] if the fit would take more than
+/// [`MAX_FIT_WORK`] multiply-adds. A degree past the points' is lowered to
+/// the most they allow.
 pub fn interpolate(points: &[Point3], degree: usize) -> Result<NurbsCurve, MathError> {
     let n = points.len();
     if n < 2 {
         return Err(MathError::EmptyInput);
+    }
+    // Degree 0 averages no parameters into a knot (0 / 0).
+    if degree == 0 {
+        return Err(MathError::ParameterOutOfRange {
+            value: 0.0,
+            min: 1.0,
+            max: (n - 1) as f64,
+        });
     }
 
     let p = degree.min(n - 1);
@@ -226,7 +303,8 @@ pub fn interpolate_at(
 ///
 /// # Errors
 ///
-/// Returns an error if parameters are invalid, and
+/// Returns an error if parameters are invalid, as [`interpolate`] does
+/// where the control points are as many as the points, and
 /// [`MathError::TooMuchWork`] if the fit would take more than
 /// [`MAX_FIT_WORK`] multiply-adds.
 pub fn approximate(
@@ -278,26 +356,40 @@ pub fn approximate(
 /// Returns parameters in [0, 1] where each parameter is proportional
 /// to the accumulated chord length.
 pub(crate) fn chord_length_params(points: &[Point3]) -> Vec<f64> {
-    let n = points.len();
+    chord_length_params_by(points.len(), |i| points[i])
+}
+
+/// [`chord_length_params`] for the `n` points `point(0)` to `point(n - 1)`,
+/// read where they lie, in one buffer of `n` parameters.
+pub(crate) fn chord_length_params_by(n: usize, point: impl Fn(usize) -> Point3) -> Vec<f64> {
     if n <= 1 {
         return vec![0.0; n];
     }
 
     let mut dists = Vec::with_capacity(n);
     dists.push(0.0);
+    let mut last = point(0);
     for i in 1..n {
-        let d = (points[i] - points[i - 1]).length();
+        let next = point(i);
+        let d = (next - last).length();
         dists.push(dists[i - 1] + d);
+        last = next;
     }
 
     let total = dists[n - 1];
     if total < 1e-15 {
         // All points are coincident — uniform params.
         #[allow(clippy::cast_precision_loss)]
-        return (0..n).map(|i| (i as f64) / ((n - 1) as f64)).collect();
+        for (i, d) in dists.iter_mut().enumerate() {
+            *d = (i as f64) / ((n - 1) as f64);
+        }
+        return dists;
     }
 
-    dists.iter().map(|d| d / total).collect()
+    for d in &mut dists {
+        *d /= total;
+    }
+    dists
 }
 
 // ── Knot vector construction ───────────────────────────────────────
@@ -417,8 +509,34 @@ fn solve_interpolation(
             }
         }
     }
-    let mut rhs: Vec<[f64; 3]> = points.iter().map(|p| [p.x(), p.y(), p.z()]).collect();
+    let rhs: Vec<[f64; 3]> = points.iter().map(|p| [p.x(), p.y(), p.z()]).collect();
+    // The solved points join these at the end of the solve.
+    #[cfg(test)]
+    note_held(
+        params.len()
+            + knots.len()
+            + firsts.capacity()
+            + basis.capacity()
+            + band.capacity()
+            + 3 * rhs.capacity()
+            + 3 * n,
+    );
+    solve_band(band, (kl, ku), rhs)
+}
 
+/// Solve a banded system for three right-hand sides by Gaussian elimination
+/// with partial pivoting: `band` keeps row `i`'s column `j` at `i * (2 kl +
+/// ku + 1) + j + kl - i`, `kl` cells below the diagonal and `ku` above, with
+/// room for the row swaps to widen the upper band to `kl + ku`. Its pivots
+/// and arithmetic are those of eliminating the whole matrix.
+fn solve_band(
+    mut band: Vec<f64>,
+    (kl, ku): (usize, usize),
+    mut rhs: Vec<[f64; 3]>,
+) -> Result<Vec<Point3>, MathError> {
+    let n = rhs.len();
+    let width = 2 * kl + ku + 1;
+    let at = |i: usize, j: usize| i * width + j + kl - i;
     for k in 0..n {
         let below = (k + kl).min(n - 1);
         let mut pivot_row = k;
@@ -468,6 +586,11 @@ fn solve_interpolation(
 }
 
 /// Solve least-squares approximation for control points.
+///
+/// Each point has `degree + 1` basis values that are not zero, so its terms
+/// of the normal matrix `NᵀN` lie in a band `degree` wide each side of the
+/// diagonal, and are summed point by point in the order of the points: the
+/// same sums as over the whole matrix, without its zero terms.
 #[allow(
     clippy::cast_precision_loss,
     clippy::many_single_char_names,
@@ -481,59 +604,56 @@ fn solve_approximation(
     m: usize,
 ) -> Result<Vec<Point3>, MathError> {
     let n = points.len();
-
-    let mut mat_n = vec![vec![0.0; m]; n];
-    for (i, &t) in params.iter().enumerate() {
+    let (kl, ku) = (degree, degree);
+    let width = 2 * kl + ku + 1;
+    let at = |i: usize, j: usize| i * width + j + kl - i;
+    let mut band = vec![0.0; m * width];
+    let mut rhs = vec![[0.0; 3]; m];
+    let mut basis = vec![0.0; degree + 1];
+    for (k, &t) in params.iter().enumerate() {
         let span = find_span(t, degree, knots, m);
-        let basis = basis_funs(span, t, degree, knots);
-        for (k, &b) in basis.iter().enumerate() {
-            let col = span - degree + k;
-            if col < m {
-                mat_n[i][col] = b;
+        basis_funs_into(span, t, degree, knots, &mut basis);
+        let first = span - degree;
+        for (a, &ba) in basis.iter().enumerate() {
+            let i = first + a;
+            if i >= m {
+                continue;
             }
-        }
-    }
-
-    // N^T * N (m×m) and N^T * Q (m×3).
-    let mut ntn = vec![vec![0.0; m]; m];
-    let mut ntq_x = vec![0.0; m];
-    let mut ntq_y = vec![0.0; m];
-    let mut ntq_z = vec![0.0; m];
-
-    for i in 0..m {
-        for j in 0..m {
-            for k in 0..n {
-                ntn[i][j] += mat_n[k][i] * mat_n[k][j];
+            for (b, &bb) in basis.iter().enumerate() {
+                let j = first + b;
+                if j < m {
+                    band[at(i, j)] += ba * bb;
+                }
             }
-        }
-        for k in 0..n {
-            ntq_x[i] += mat_n[k][i] * points[k].x();
-            ntq_y[i] += mat_n[k][i] * points[k].y();
-            ntq_z[i] += mat_n[k][i] * points[k].z();
+            rhs[i][0] += ba * points[k].x();
+            rhs[i][1] += ba * points[k].y();
+            rhs[i][2] += ba * points[k].z();
         }
     }
 
     // Fix first and last control points: zero the first/last rows and cols,
     // set diagonal to 1 so the endpoints are interpolated exactly.
-    for j in 0..m {
-        ntn[0][j] = 0.0;
-        ntn[m - 1][j] = 0.0;
-        ntn[j][0] = 0.0;
-        ntn[j][m - 1] = 0.0;
+    for j in 0..=degree.min(m - 1) {
+        band[at(0, j)] = 0.0;
+        band[at(j, 0)] = 0.0;
+        band[at(m - 1, m - 1 - j)] = 0.0;
+        band[at(m - 1 - j, m - 1)] = 0.0;
     }
-    ntn[0][0] = 1.0;
-    ntn[m - 1][m - 1] = 1.0;
-    ntq_x[0] = points[0].x();
-    ntq_y[0] = points[0].y();
-    ntq_z[0] = points[0].z();
-    ntq_x[m - 1] = points[n - 1].x();
-    ntq_y[m - 1] = points[n - 1].y();
-    ntq_z[m - 1] = points[n - 1].z();
-
-    let mut rhs: Vec<[f64; 3]> = (0..m).map(|i| [ntq_x[i], ntq_y[i], ntq_z[i]]).collect();
-    gauss_solve(&mut ntn, &mut rhs)?;
-
-    Ok(rhs.iter().map(|&[x, y, z]| Point3::new(x, y, z)).collect())
+    band[at(0, 0)] = 1.0;
+    band[at(m - 1, m - 1)] = 1.0;
+    rhs[0] = [points[0].x(), points[0].y(), points[0].z()];
+    rhs[m - 1] = [points[n - 1].x(), points[n - 1].y(), points[n - 1].z()];
+    // The solved points join these at the end of the solve.
+    #[cfg(test)]
+    note_held(
+        params.len()
+            + knots.len()
+            + band.capacity()
+            + 3 * rhs.capacity()
+            + basis.capacity()
+            + 3 * m,
+    );
+    solve_band(band, (kl, ku), rhs)
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -561,75 +681,6 @@ pub(crate) fn find_span(t: f64, degree: usize, knots: &[f64], n: usize) -> usize
     }
 
     mid
-}
-
-/// Solve `A X = B` for three right-hand sides using Gaussian elimination
-/// with partial pivoting.
-///
-/// Fitting matrices are banded. Elimination skips rows already zero in the
-/// pivot column and stops each row update at the pivot row's last nonzero,
-/// so a band of width `w` costs O(n·w²) arithmetic instead of O(n³). Marched
-/// intersection curves reach a thousand points.
-#[allow(clippy::needless_range_loop)]
-fn gauss_solve(a: &mut [Vec<f64>], b: &mut [[f64; 3]]) -> Result<(), MathError> {
-    let n = b.len();
-    let mut row_end: Vec<usize> = a
-        .iter()
-        .map(|row| row.iter().rposition(|&v| v != 0.0).map_or(0, |j| j + 1))
-        .collect();
-
-    // Forward elimination.
-    for k in 0..n {
-        let mut max_val = a[k][k].abs();
-        let mut max_row = k;
-        for i in (k + 1)..n {
-            if a[i][k].abs() > max_val {
-                max_val = a[i][k].abs();
-                max_row = i;
-            }
-        }
-
-        if max_val.is_nan() || max_val < 1e-15 {
-            return Err(MathError::SingularMatrix);
-        }
-
-        if max_row != k {
-            a.swap(k, max_row);
-            b.swap(k, max_row);
-            row_end.swap(k, max_row);
-        }
-
-        let end = row_end[k];
-        for i in (k + 1)..n {
-            let factor = a[i][k] / a[k][k];
-            if factor == 0.0 {
-                continue;
-            }
-            for j in (k + 1)..end {
-                a[i][j] -= factor * a[k][j];
-            }
-            a[i][k] = 0.0;
-            row_end[i] = row_end[i].max(end);
-            for c in 0..3 {
-                b[i][c] -= factor * b[k][c];
-            }
-        }
-    }
-
-    // Back substitution.
-    for i in (0..n).rev() {
-        let mut sum = b[i];
-        for j in (i + 1)..row_end[i] {
-            for c in 0..3 {
-                sum[c] -= a[i][j] * b[j][c];
-            }
-        }
-        for c in 0..3 {
-            b[i][c] = sum[c] / a[i][i];
-        }
-    }
-
-    Ok(())
 }
 
 // ── LSPIA step-size computation ───────────────────────────────────────
@@ -787,6 +838,67 @@ fn compute_lspia_step_size_weighted(
     }
 }
 
+/// The index of the parameter nearest `t` in the sorted `params`, the first
+/// of those as near: the one a scan of every parameter in turn finds.
+///
+/// Each distance `|param - t|` falls as the parameters rise to `t` and grows
+/// past it, with rounding at most leaving ties, so the nearest is one of the
+/// two either side of `t`, and those as near lie just below it: a second
+/// search of the parameters below finds the first of them, however many
+/// repeat.
+fn nearest_param(params: &[f64], t: f64) -> usize {
+    let above = params.partition_point(|&param| {
+        nearest_step();
+        param < t
+    });
+    let distance = |j: usize| (params[j] - t).abs();
+    let best = match (
+        above.checked_sub(1),
+        (above < params.len()).then_some(above),
+    ) {
+        (Some(below), Some(above)) if distance(above) < distance(below) => return above,
+        (Some(below), _) => below,
+        (None, Some(above)) => above,
+        (None, None) => return 0,
+    };
+    let near = distance(best);
+    params[..best].partition_point(|&param| {
+        nearest_step();
+        (param - t).abs() > near
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The parameters [`nearest_param`] compared, on this thread.
+    static NEAREST_STEPS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts one comparison of [`nearest_param`]'s searches.
+#[inline]
+fn nearest_step() {
+    #[cfg(test)]
+    NEAREST_STEPS.with(|steps| steps.set(steps.get() + 1));
+}
+
+/// The curve of equal weights on `control_points` at the parameter whose
+/// span and basis are `basis`, summed as [`NurbsCurve::evaluate`] sums it.
+fn basis_point((span, values): &(usize, Vec<f64>), p: usize, control_points: &[Point3]) -> Point3 {
+    let (mut wx, mut wy, mut wz, mut ww) = (0.0, 0.0, 0.0, 0.0);
+    for (j, &value) in values.iter().enumerate().take(p + 1) {
+        let point = control_points[span - p + j];
+        wx += value * point.x();
+        wy += value * point.y();
+        wz += value * point.z();
+        ww += value;
+    }
+    if ww == 0.0 {
+        Point3::new(wx, wy, wz)
+    } else {
+        Point3::new(wx / ww, wy / ww, wz / ww)
+    }
+}
+
 // ── LSPIA (Locally Supported Progressive-Iterative Approximation) ─────
 
 /// Approximate a NURBS curve through data points using Progressive-Iterative Approximation.
@@ -842,24 +954,16 @@ pub fn approximate_lspia(
     let knots = build_approximation_knots(&params, p, m, n);
 
     // Initialize control points by sampling closest data points.
-    let mut control_points = Vec::with_capacity(m);
-    for i in 0..m {
-        let t = if m > 1 {
-            i as f64 / (m - 1) as f64
-        } else {
-            0.0
-        };
-        let mut best_idx = 0;
-        let mut best_dist = f64::INFINITY;
-        for (j, &param) in params.iter().enumerate() {
-            let d = (param - t).abs();
-            if d < best_dist {
-                best_dist = d;
-                best_idx = j;
-            }
-        }
-        control_points.push(points[best_idx]);
-    }
+    let mut control_points: Vec<Point3> = (0..m)
+        .map(|i| {
+            let t = if m > 1 {
+                i as f64 / (m - 1) as f64
+            } else {
+                0.0
+            };
+            points[nearest_param(&params, t)]
+        })
+        .collect();
 
     let weights = vec![1.0; m];
 
@@ -872,16 +976,32 @@ pub fn approximate_lspia(
 
     // mu = 2 / (lambda_min + lambda_max) where lambda are eigenvalues of N^T N.
     // We approximate lambda_max via the power method and use a conservative mu.
+    #[cfg(test)]
+    let held = params.capacity()
+        + knots.capacity()
+        + 3 * control_points.capacity()
+        + weights.capacity()
+        + 4 * basis_data.capacity()
+        + basis_data
+            .iter()
+            .map(|(_, values)| values.capacity())
+            .sum::<usize>();
+    // The step's power iteration holds two vectors a control point and one
+    // a point, and the check copies the curve's knots, points and weights.
+    #[cfg(test)]
+    note_held(held + (2 * m + n).max(knots.len() + 4 * m));
     let mu = compute_lspia_step_size(&basis_data, p, m);
+    // The curve is checked once: each pass reads it from the basis.
+    NurbsCurve::new(p, knots.clone(), control_points.clone(), weights.clone())?;
 
     for iter in 0..max_iterations {
-        let curve = NurbsCurve::new(p, knots.clone(), control_points.clone(), weights.clone())?;
-
         let mut max_err = 0.0f64;
         let mut deltas = vec![(0.0f64, 0.0f64, 0.0f64); m];
+        #[cfg(test)]
+        note_held(held + 3 * deltas.capacity());
 
-        for (i, &u) in params.iter().enumerate() {
-            let q = curve.evaluate(u);
+        for i in 0..n {
+            let q = basis_point(&basis_data[i], p, &control_points);
             let err_x = points[i].x() - q.x();
             let err_y = points[i].y() - q.y();
             let err_z = points[i].z() - q.z();
@@ -972,24 +1092,16 @@ pub(crate) fn approximate_lspia_weighted(
     let knots = build_approximation_knots(&params, p, m, n);
 
     // Initialize control points by sampling closest data points.
-    let mut control_points = Vec::with_capacity(m);
-    for i in 0..m {
-        let t = if m > 1 {
-            i as f64 / (m - 1) as f64
-        } else {
-            0.0
-        };
-        let mut best_idx = 0;
-        let mut best_dist = f64::INFINITY;
-        for (j, &param) in params.iter().enumerate() {
-            let d = (param - t).abs();
-            if d < best_dist {
-                best_dist = d;
-                best_idx = j;
-            }
-        }
-        control_points.push(points[best_idx]);
-    }
+    let mut control_points: Vec<Point3> = (0..m)
+        .map(|i| {
+            let t = if m > 1 {
+                i as f64 / (m - 1) as f64
+            } else {
+                0.0
+            };
+            points[nearest_param(&params, t)]
+        })
+        .collect();
 
     let weights = vec![1.0; m];
 
@@ -1001,15 +1113,14 @@ pub(crate) fn approximate_lspia_weighted(
     }
 
     let mu = compute_lspia_step_size_weighted(&basis_data, point_weights, p, m);
+    NurbsCurve::new(p, knots.clone(), control_points.clone(), weights.clone())?;
 
     for iter in 0..max_iterations {
-        let curve = NurbsCurve::new(p, knots.clone(), control_points.clone(), weights.clone())?;
-
         let mut max_err = 0.0f64;
         let mut deltas = vec![(0.0f64, 0.0f64, 0.0f64); m];
 
-        for (i, &u) in params.iter().enumerate() {
-            let q = curve.evaluate(u);
+        for i in 0..n {
+            let q = basis_point(&basis_data[i], p, &control_points);
             let pw = point_weights[i];
             let err_x = points[i].x() - q.x();
             let err_y = points[i].y() - q.y();
@@ -1191,6 +1302,47 @@ mod tests {
         assert!(interpolate_at(&points, &params, 3).is_err());
         assert!(interpolate_at(&points, &params, 1).is_ok());
         assert!(interpolate_at(&points, &params, 2).is_ok());
+    }
+
+    /// Degree 0 averages no parameters into an interpolation's knot (0 /
+    /// 0): through 2 points the interpolation gave a curve that was not a
+    /// number, and through 7 a singular system, each after its work. It
+    /// now refuses degree 0 before it holds a cell, with the error
+    /// `interpolate_at` gives, and so does a least-squares fit by as many
+    /// control points as points, which interpolates. A least-squares fit
+    /// by fewer control points and an LSPIA fit take degree 0 as steps,
+    /// each finite.
+    #[test]
+    fn an_interpolation_at_degree_zero_is_refused_at_once() {
+        let finite = |curve: &NurbsCurve| {
+            curve
+                .control_points()
+                .iter()
+                .all(|p| p.x().is_finite() && p.y().is_finite() && p.z().is_finite())
+                && curve.knots().iter().all(|k| k.is_finite())
+        };
+        for n in [2_usize, 7] {
+            let points: Vec<Point3> = (0..n)
+                .map(|i| {
+                    let x = i as f64;
+                    Point3::new(x, (0.7 * x).sin(), 0.0)
+                })
+                .collect();
+            let params: Vec<f64> = (0..n).map(|i| i as f64 / (n - 1) as f64).collect();
+            let expected = interpolate_at(&points, &params, 0).unwrap_err().to_string();
+            for fit in [
+                &(|| interpolate(&points, 0)) as &dyn Fn() -> Result<NurbsCurve, MathError>,
+                &|| approximate(&points, 0, n),
+            ] {
+                HELD_CELLS.with(|most| most.set(0));
+                let found = fit().map(|_| ()).unwrap_err().to_string();
+                assert_eq!(found, expected, "{n} points");
+                assert_eq!(HELD_CELLS.with(std::cell::Cell::get), 0, "{n} points");
+            }
+            let steps = approximate(&points, 0, n - 1).unwrap();
+            let lspia = approximate_lspia(&points, 0, n - 1, 1e-6, 5).unwrap();
+            assert!(finite(&steps) && finite(&lspia), "{n} points");
+        }
     }
 
     #[test]
@@ -1396,19 +1548,22 @@ mod tests {
 
     /// The largest fit of each kind within the memory limits: an
     /// interpolation keeps `4p + 2` cells a point, so 41,120 points at
-    /// degree 25, whose work is bounded. A least-squares fit keeps `(n + m) m`
-    /// cells, most work at 1,183 control points for 2,362 points, 3.3e9
-    /// multiply-adds. LSPIA keeps `p + 1` cells a point, so 161,319 points
-    /// at degree 25 by 2^16 control points over 10,000 iterations. Those two
-    /// are refused before they start.
+    /// degree 25, and a least-squares fit `3p + 4` cells for each point and
+    /// control point, so 53,092 of them, and the work of both is bounded.
+    /// The fit of 2,362 points by 1,183 control points at degree 25, which
+    /// summed its normal matrix whole for 3.3e9 multiply-adds, runs at
+    /// once. LSPIA keeps `p + 1` cells a point, so 161,319 points at degree
+    /// 25 by 2^16 control points over 10,000 iterations, and is refused
+    /// before it starts.
     #[test]
     fn the_largest_curve_fits_within_the_memory_limits_are_refused_or_bounded() {
         let n = CELLS / (4 * DEGREE + 2);
         assert!(interpolation_work(n, DEGREE) <= MAX_FIT_WORK);
-        let (n, m) = (2362, 1183);
-        assert!((n + m) * m <= CELLS);
+        let most = CELLS / (3 * DEGREE + 4);
+        assert!(least_squares_work(most, most, DEGREE) <= MAX_FIT_WORK);
         let started = std::time::Instant::now();
-        assert!(too_much(&approximate(&wave(n), DEGREE, m)));
+        let found = approximate(&wave(2362), DEGREE, 1183);
+        assert!(!too_much(&found), "{found:?}");
         let n = CELLS / (DEGREE + 1);
         let found = approximate_lspia(&wave(n), DEGREE, CONTROLS, 1e-6, ITERATIONS);
         assert!(too_much(&found), "{found:?}");
@@ -1468,5 +1623,356 @@ mod tests {
             assert!(refused(&found), "{found:?}");
         }
         assert!(started.elapsed().as_secs() < 1, "{:?}", started.elapsed());
+    }
+
+    /// Points along a wavering curve, from a fixed seed, some of them
+    /// repeated.
+    fn scattered(n: usize, seed: u64) -> Vec<Point3> {
+        let mut state = seed;
+        let mut next = || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state >> 11) as f64 / (1_u64 << 53) as f64
+        };
+        let mut x = 0.0;
+        let mut last = Point3::new(0.0, 0.0, 0.0);
+        (0..n)
+            .map(|i| {
+                if i % 17 != 5 {
+                    x += 0.1 + next();
+                    last = Point3::new(x, next() * 3.0 - 1.5, (x * 0.7).sin() + next() * 0.2);
+                }
+                last
+            })
+            .collect()
+    }
+
+    /// The least-squares fit summed over the whole of its normal matrix and
+    /// solved by dense elimination with partial pivoting, the terms in the
+    /// same order as the band takes them.
+    fn dense_least_squares(
+        points: &[Point3],
+        degree: usize,
+        m: usize,
+    ) -> Result<Vec<Point3>, MathError> {
+        let n = points.len();
+        let p = degree.min(m - 1);
+        let params = chord_length_params(points);
+        let knots = build_approximation_knots(&params, p, m, n);
+        let mut basis = vec![vec![0.0; m]; n];
+        for (i, &t) in params.iter().enumerate() {
+            let span = find_span(t, p, &knots, m);
+            for (k, &b) in basis_funs(span, t, p, &knots).iter().enumerate() {
+                if span - p + k < m {
+                    basis[i][span - p + k] = b;
+                }
+            }
+        }
+        let mut a = vec![vec![0.0; m]; m];
+        let mut rhs = vec![[0.0; 3]; m];
+        for i in 0..m {
+            for j in 0..m {
+                for k in 0..n {
+                    a[i][j] += basis[k][i] * basis[k][j];
+                }
+            }
+            for k in 0..n {
+                rhs[i][0] += basis[k][i] * points[k].x();
+                rhs[i][1] += basis[k][i] * points[k].y();
+                rhs[i][2] += basis[k][i] * points[k].z();
+            }
+        }
+        for j in 0..m {
+            (a[0][j], a[m - 1][j], a[j][0], a[j][m - 1]) = (0.0, 0.0, 0.0, 0.0);
+        }
+        (a[0][0], a[m - 1][m - 1]) = (1.0, 1.0);
+        rhs[0] = [points[0].x(), points[0].y(), points[0].z()];
+        rhs[m - 1] = [points[n - 1].x(), points[n - 1].y(), points[n - 1].z()];
+        for k in 0..m {
+            let mut row = k;
+            for i in (k + 1)..m {
+                if a[i][k].abs() > a[row][k].abs() {
+                    row = i;
+                }
+            }
+            let pivot = a[row][k].abs();
+            if pivot.is_nan() || pivot < 1e-15 {
+                return Err(MathError::SingularMatrix);
+            }
+            a.swap(k, row);
+            rhs.swap(k, row);
+            for i in (k + 1)..m {
+                let factor = a[i][k] / a[k][k];
+                if factor == 0.0 {
+                    continue;
+                }
+                for j in (k + 1)..m {
+                    a[i][j] -= factor * a[k][j];
+                }
+                a[i][k] = 0.0;
+                for c in 0..3 {
+                    rhs[i][c] -= factor * rhs[k][c];
+                }
+            }
+        }
+        for i in (0..m).rev() {
+            let mut sum = rhs[i];
+            for j in (i + 1)..m {
+                for c in 0..3 {
+                    sum[c] -= a[i][j] * rhs[j][c];
+                }
+            }
+            for c in 0..3 {
+                rhs[i][c] = sum[c] / a[i][i];
+            }
+        }
+        Ok(rhs.iter().map(|&[x, y, z]| Point3::new(x, y, z)).collect())
+    }
+
+    /// LSPIA as it ran with a scan of every parameter for each control
+    /// point and the curve rebuilt on each pass.
+    fn scanned_lspia(
+        points: &[Point3],
+        degree: usize,
+        num_control_points: usize,
+        tolerance: f64,
+        max_iterations: usize,
+    ) -> Vec<Point3> {
+        let n = points.len();
+        let p = degree.min(n - 1);
+        let m = num_control_points.min(n).max(p + 1);
+        let params = chord_length_params(points);
+        let knots = build_approximation_knots(&params, p, m, n);
+        let mut control_points: Vec<Point3> = (0..m)
+            .map(|i| {
+                let t = if m > 1 {
+                    i as f64 / (m - 1) as f64
+                } else {
+                    0.0
+                };
+                let mut best = (0, f64::INFINITY);
+                for (j, &param) in params.iter().enumerate() {
+                    if (param - t).abs() < best.1 {
+                        best = (j, (param - t).abs());
+                    }
+                }
+                points[best.0]
+            })
+            .collect();
+        let weights = vec![1.0; m];
+        let basis: Vec<(usize, Vec<f64>)> = params
+            .iter()
+            .map(|&u| {
+                let span = find_span(u, p, &knots, m);
+                (span, basis_funs(span, u, p, &knots))
+            })
+            .collect();
+        let mu = compute_lspia_step_size(&basis, p, m);
+        for _ in 0..max_iterations {
+            let curve =
+                NurbsCurve::new(p, knots.clone(), control_points.clone(), weights.clone()).unwrap();
+            let mut max_err = 0.0_f64;
+            let mut deltas = vec![(0.0, 0.0, 0.0); m];
+            for (i, &u) in params.iter().enumerate() {
+                let q = curve.evaluate(u);
+                let e = (
+                    points[i].x() - q.x(),
+                    points[i].y() - q.y(),
+                    points[i].z() - q.z(),
+                );
+                max_err = max_err.max((e.0 * e.0 + e.1 * e.1 + e.2 * e.2).sqrt());
+                let (span, values) = &basis[i];
+                for (k, &v) in values.iter().enumerate() {
+                    let j = span - p + k;
+                    if j < m {
+                        deltas[j].0 += v * e.0;
+                        deltas[j].1 += v * e.1;
+                        deltas[j].2 += v * e.2;
+                    }
+                }
+            }
+            if max_err < tolerance {
+                break;
+            }
+            for j in 0..m {
+                control_points[j] = Point3::new(
+                    mu.madd(deltas[j].0, control_points[j].x()),
+                    mu.madd(deltas[j].1, control_points[j].y()),
+                    mu.madd(deltas[j].2, control_points[j].z()),
+                );
+            }
+        }
+        control_points
+    }
+
+    fn same_points(a: &[Point3], b: &[Point3]) -> bool {
+        let bits = |p: &Point3| [p.x().to_bits(), p.y().to_bits(), p.z().to_bits()];
+        a.len() == b.len() && a.iter().zip(b).all(|(x, y)| bits(x) == bits(y))
+    }
+
+    /// The banded least-squares fit takes the same terms, pivots and
+    /// arithmetic as the dense sum and elimination, so its control points
+    /// are the same bit for bit, on the fits of the tests above and on
+    /// scattered points at degrees 1 to 5 and 25.
+    #[test]
+    fn the_banded_least_squares_fit_matches_the_dense_one() {
+        let mut cases: Vec<(Vec<Point3>, usize, usize)> = vec![
+            (
+                (0..20)
+                    .map(|i| Point3::new(f64::from(i), (f64::from(i) * 0.3).sin(), 0.0))
+                    .collect(),
+                3,
+                4,
+            ),
+            (
+                (0..20)
+                    .map(|i| Point3::new(f64::from(i), (f64::from(i) * 0.3).sin(), 0.0))
+                    .collect(),
+                2,
+                3,
+            ),
+        ];
+        for (seed, n) in [(1_u64, 40), (7, 120), (99, 300)] {
+            for (degree, m) in [(1, 9), (2, 17), (3, 25), (4, 33), (5, 40), (25, 39)] {
+                cases.push((scattered(n, seed), degree, m.min(n - 1)));
+            }
+        }
+        let mut solved = 0;
+        for (points, degree, m) in &cases {
+            let banded = approximate(points, *degree, *m).map(|c| c.control_points().to_vec());
+            let dense = dense_least_squares(points, *degree, *m);
+            let agree = match (&banded, &dense) {
+                (Ok(a), Ok(b)) => {
+                    solved += 1;
+                    same_points(a, b)
+                }
+                (Err(MathError::SingularMatrix), Err(MathError::SingularMatrix)) => true,
+                _ => false,
+            };
+            assert!(
+                agree,
+                "{} points at {degree} by {m}: {banded:?} {dense:?}",
+                points.len()
+            );
+        }
+        assert!(solved >= 15, "{solved} of {} solved", cases.len());
+    }
+
+    /// LSPIA's start picks each control point's nearest parameter by a
+    /// search of the sorted parameters, the first of those as near, as a
+    /// scan of every parameter did, and each pass reads the curve from the
+    /// basis as its evaluation sums it: the control points are the same bit
+    /// for bit, repeated points and all.
+    #[test]
+    fn lspia_matches_its_scan_and_rebuilt_curve() {
+        for (seed, n) in [(3_u64, 60), (11, 200), (5, 500)] {
+            let points = scattered(n, seed);
+            for (degree, m, passes) in [(2, 12, 40), (3, 30, 25), (3, n / 3, 10), (5, n / 2, 5)] {
+                let fitted = approximate_lspia(&points, degree, m, 1e-9, passes).unwrap();
+                let scanned = scanned_lspia(&points, degree, m, 1e-9, passes);
+                assert!(
+                    same_points(fitted.control_points(), &scanned),
+                    "{n} at {degree} by {m}"
+                );
+            }
+        }
+    }
+
+    /// The first parameter a scan of every parameter in turn finds nearest
+    /// `t`.
+    fn scanned_nearest(params: &[f64], t: f64) -> usize {
+        let mut best = (0, f64::INFINITY);
+        for (j, &param) in params.iter().enumerate() {
+            if (param - t).abs() < best.1 {
+                best = (j, (param - t).abs());
+            }
+        }
+        best.0
+    }
+
+    /// A long prefix of parameters closer together than a parameter near
+    /// the middle rounds to, or all alike, before one at 1: each control
+    /// point below the middle is as near the whole prefix, and the scan
+    /// takes its first. A walk back from the prefix's last took 3.5e5 steps
+    /// for 500 control points by 5,001 clustered parameters, past a count of
+    /// 1.4e4, and 2.0e7 for 2,000 by 20,001 alike ones: about `m n / 2`, or
+    /// 5.3e9 for 2^16 by 161,319. The two searches take at most `2 log2 n +
+    /// 4` steps for each control point, as the work counts them, and find
+    /// the parameter the scan finds.
+    #[test]
+    fn a_clustered_prefix_finds_each_nearest_within_its_count() {
+        let count = |n: usize, m: usize| m as f64 * 2.0f64.madd((n as f64).log2(), 4.0);
+        let spread = |m: usize| (0..m).map(move |i| i as f64 / (m - 1) as f64);
+        let steps = || NEAREST_STEPS.with(std::cell::Cell::get) as f64;
+        let n = 5_001;
+        let mut params: Vec<f64> = (0..n - 1).map(|k| k as f64 * 1e-20).collect();
+        params.push(1.0);
+        NEAREST_STEPS.with(|steps| steps.set(0));
+        for t in spread(500) {
+            assert_eq!(
+                nearest_param(&params, t),
+                scanned_nearest(&params, t),
+                "{t}"
+            );
+        }
+        assert!(
+            steps() <= count(n, 500),
+            "{} past {}",
+            steps(),
+            count(n, 500)
+        );
+        let n = CELLS / (DEGREE + 1);
+        let mut params = vec![0.0; n - 1];
+        params.push(1.0);
+        NEAREST_STEPS.with(|steps| steps.set(0));
+        for t in spread(CONTROLS) {
+            let scanned = if (1.0 - t).abs() < t.abs() { n - 1 } else { 0 };
+            assert_eq!(nearest_param(&params, t), scanned, "{t}");
+        }
+        assert!(
+            steps() <= count(n, CONTROLS),
+            "{} past {}",
+            steps(),
+            count(n, CONTROLS)
+        );
+    }
+
+    /// Each curve fit of 2,000 points, by 300 control points where it
+    /// approximates, at degrees 0, 1, 3 and 25: the most it holds at once,
+    /// read from its buffers' capacities, is its count. The interpolation at
+    /// degree 0, whose knots average no parameters, is refused for its work
+    /// before its solve holds its band.
+    #[test]
+    fn each_curve_fit_holds_at_most_its_count() {
+        let points = wave(2000);
+        let held = |fit: &dyn Fn() -> Result<NurbsCurve, MathError>| {
+            HELD_CELLS.with(|most| most.set(0));
+            drop(fit());
+            HELD_CELLS.with(std::cell::Cell::get)
+        };
+        for degree in [0, 1, 3, 25] {
+            let cases = [
+                (
+                    held(&|| interpolate(&points, degree)),
+                    interpolation_cells(2000, degree).unwrap(),
+                ),
+                (
+                    held(&|| approximate(&points, degree, 300)),
+                    least_squares_cells(2000, 300, degree).unwrap(),
+                ),
+                (
+                    held(&|| approximate_lspia(&points, degree, 300, 1e-9, 2)),
+                    lspia_cells(2000, 300, degree).unwrap(),
+                ),
+            ];
+            for (k, &(held, count)) in cases.iter().enumerate() {
+                let refused = degree == 0 && k == 0 && held == 0;
+                assert!(
+                    held == count || refused,
+                    "degree {degree}, fit {k}: {held} against {count}"
+                );
+            }
+        }
     }
 }

@@ -41,9 +41,9 @@ use crate::vec::Point3;
 ///
 /// # Errors
 ///
-/// Returns an error if the grid is too small or rows have inconsistent
-/// lengths, and [`MathError::TooMuchWork`] if the fits would take more than
-/// [`fitting::MAX_FIT_WORK`] multiply-adds.
+/// Returns an error if the grid is too small, rows have inconsistent
+/// lengths, or a degree is 0, and [`MathError::TooMuchWork`] if the fits
+/// would take more than [`fitting::MAX_FIT_WORK`] multiply-adds.
 pub fn interpolate_surface(
     points: &[Vec<Point3>],
     degree_u: usize,
@@ -64,6 +64,16 @@ pub fn interpolate_surface(
             return Err(MathError::InvalidControlPointGrid {
                 expected_rows: num_rows,
                 expected_cols: num_cols,
+            });
+        }
+    }
+    // Degree 0 averages no parameters into a knot (0 / 0).
+    for (degree, count) in [(degree_u, num_rows), (degree_v, num_cols)] {
+        if degree == 0 {
+            return Err(MathError::ParameterOutOfRange {
+                value: 0.0,
+                min: 1.0,
+                max: (count - 1) as f64,
             });
         }
     }
@@ -124,15 +134,33 @@ pub fn interpolate_surface(
         .iter()
         .map(|row| vec![1.0; row.len()])
         .collect();
+    #[cfg(test)]
+    {
+        let curves = |curves: &[crate::nurbs::curve::NurbsCurve]| {
+            cells::<crate::nurbs::curve::NurbsCurve>(curves.len())
+                + curves
+                    .iter()
+                    .map(|c| c.knots().len() + 3 * c.control_points().len() + c.weights().len())
+                    .sum::<usize>()
+        };
+        // The most one curve's interpolation held, noted by it.
+        let inner = fitting::HELD_CELLS.with(std::cell::Cell::get);
+        fitting::note_held(
+            inner
+                + rows_cells(points)
+                + curves(&row_curves)
+                + rows_cells(&col_points)
+                + curves(&col_curves)
+                + rows_cells(&control_points)
+                + rows_cells(&weights)
+                + knots_u.len()
+                + knots_v.len(),
+        );
+    }
 
-    NurbsSurface::new(
-        degree_u,
-        degree_v,
-        knots_u,
-        knots_v,
-        control_points,
-        weights,
-    )
+    // Each curve takes its degree at most one under its points, so the
+    // surface takes the degrees its curves took.
+    NurbsSurface::new(pu, pv, knots_u, knots_v, control_points, weights)
 }
 
 /// Approximate a NURBS surface through a grid of data points using LSPIA.
@@ -255,6 +283,21 @@ pub fn approximate_surface_lspia(
 
         let mut max_err = 0.0f64;
         let mut deltas = vec![vec![(0.0f64, 0.0f64, 0.0f64); mv]; mu];
+        #[cfg(test)]
+        HELD_CELLS.with(|most| {
+            let held = rows_cells(points)
+                + cells::<f64>(params_u.capacity() + params_v.capacity())
+                + cells::<f64>(knots_u.capacity() + knots_v.capacity())
+                + rows_cells(&cps)
+                + rows_cells(&weights)
+                + basis_cells(&basis_u_data)
+                + basis_cells(&basis_v_data)
+                + cells::<f64>(surface.knots_u().len() + surface.knots_v().len())
+                + rows_cells(surface.control_points())
+                + rows_cells(surface.weights())
+                + rows_cells(&deltas);
+            most.set(most.get().max(held));
+        });
 
         for (i, (su, nu)) in basis_u_data.iter().enumerate() {
             for (j, (sv, nv)) in basis_v_data.iter().enumerate() {
@@ -320,13 +363,117 @@ fn lspia_surface_work(
     (iterations as f64).madd(pass, start)
 }
 
+/// The most cells of eight bytes an interpolation of a grid of `rows` by
+/// `cols` points holds at once ([`interpolate_surface`]), the grid
+/// included; `None` past `usize`.
+///
+/// They are the grid, three cells a point and three for each row's header;
+/// each row's curve and each column's, with their knots, points and
+/// weights; the columns of the row curves' points; the net and its
+/// weights; and the most one curve's interpolation holds
+/// ([`fitting::interpolation_cells`]).
+#[must_use]
+pub fn interpolate_surface_cells(
+    [rows, cols]: [usize; 2],
+    [degree_u, degree_v]: [usize; 2],
+) -> Option<usize> {
+    if rows < 2 || cols < 2 {
+        return Some(0);
+    }
+    let (pu, pv) = (degree_u.min(rows - 1), degree_v.min(cols - 1));
+    let curve = std::mem::size_of::<crate::nurbs::curve::NurbsCurve>().div_ceil(8);
+    let points = rows.checked_mul(cols)?;
+    // Each curve's points and weights hold four cells a point.
+    let row_curves = rows.checked_mul(cols.checked_mul(5)?.checked_add(pv + 1 + curve)?)?;
+    let col_curves = cols.checked_mul(rows.checked_mul(5)?.checked_add(pu + 1 + curve)?)?;
+    let inner =
+        fitting::interpolation_cells(cols, pv)?.max(fitting::interpolation_cells(rows, pu)?);
+    points
+        .checked_mul(10)?
+        .checked_add(rows.checked_mul(9)?)?
+        .checked_add(cols.checked_mul(3)?)?
+        .checked_add(row_curves)?
+        .checked_add(col_curves)?
+        .checked_add(rows + pu + 1 + cols + pv + 1)?
+        .checked_add(inner)
+}
+
+/// The most cells of eight bytes an LSPIA fit of a grid of `rows` by `cols`
+/// points ([`approximate_surface_lspia`]) holds at once, the grid included,
+/// counted from its sizes; `None` past `usize`.
+///
+/// The grid holds three cells a point and three for each row's header. The
+/// parameters, read first, hold each direction's count and one line's
+/// chords at a time, at most `2 rows + 2 cols`. The passes then hold more:
+/// the parameters, each one's span and basis values with a header of four,
+/// the knots, the control net and its weights with their rows' headers, a
+/// copy of those for the surface each pass reads, the corrections, and the
+/// basis each point's evaluation reads, with three cells for each of their
+/// headers. With the outer headers and the surface's caches, that is at
+/// most:
+///
+/// `rows (pu + 6) + cols (pv + 6) + 11 mu mv + 17 mu + 2 mv + 3 (pu + pv) + 72`.
+#[must_use]
+pub fn lspia_surface_cells(
+    [rows, cols]: [usize; 2],
+    [degree_u, degree_v]: [usize; 2],
+    [num_cps_u, num_cps_v]: [usize; 2],
+) -> Option<usize> {
+    if rows == 0 || cols == 0 {
+        return Some(0);
+    }
+    let (pu, pv) = (degree_u.min(rows - 1), degree_v.min(cols - 1));
+    let mu = num_cps_u.min(rows).max(pu + 1);
+    let mv = num_cps_v.min(cols).max(pv + 1);
+    let grid = cols.checked_mul(3)?.checked_add(3)?.checked_mul(rows)?;
+    rows.checked_mul(pu.checked_add(6)?)?
+        .checked_add(cols.checked_mul(pv.checked_add(6)?)?)?
+        .checked_add(mu.checked_mul(mv)?.checked_mul(11)?)?
+        .checked_add(mu.checked_mul(17)?)?
+        .checked_add(mv.checked_mul(2)?)?
+        .checked_add(pu.checked_add(pv)?.checked_mul(3)?.checked_add(72)?)?
+        .checked_add(grid)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The most cells an LSPIA surface fit held at once on this thread, read
+    /// from its buffers' capacities.
+    static HELD_CELLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The cells of eight bytes `count` items of `T` take.
+#[cfg(test)]
+const fn cells<T>(count: usize) -> usize {
+    (count * std::mem::size_of::<T>()).div_ceil(8)
+}
+
+/// The cells a grid of rows takes, its rows' headers included.
+#[cfg(test)]
+fn rows_cells<T>(rows: &[Vec<T>]) -> usize {
+    cells::<Vec<T>>(rows.len())
+        + rows
+            .iter()
+            .map(|row| cells::<T>(row.capacity()))
+            .sum::<usize>()
+}
+
+/// The cells each parameter's span and basis values take.
+#[cfg(test)]
+fn basis_cells(data: &[(usize, Vec<f64>)]) -> usize {
+    cells::<(usize, Vec<f64>)>(data.len())
+        + data
+            .iter()
+            .map(|(_, values)| cells::<f64>(values.capacity()))
+            .sum::<usize>()
+}
+
 /// Compute average chord-length parameters in the u direction (across rows).
 #[allow(clippy::cast_precision_loss)]
 fn compute_grid_params_u(points: &[Vec<Point3>], rows: usize, cols: usize) -> Vec<f64> {
     let mut params = vec![0.0f64; rows];
     for j in 0..cols {
-        let col: Vec<Point3> = (0..rows).map(|i| points[i][j]).collect();
-        let col_params = fitting::chord_length_params(&col);
+        let col_params = fitting::chord_length_params_by(rows, |i| points[i][j]);
         for (i, &p) in col_params.iter().enumerate() {
             params[i] += p;
         }
@@ -630,5 +777,163 @@ mod tests {
             matches!(found, Err(MathError::ParameterOutOfRange { .. })),
             "{found:?}"
         );
+    }
+
+    /// A grid two points wide and one 100 wide, each with as many rows as
+    /// its count holds within 2^22 cells at degree 3 by 8 by 8 control
+    /// points: the fit's buffers at their most, read from their
+    /// capacities, stay within the count, and the count within 128 cells of
+    /// them. The count the binding charged, three cells a point, each
+    /// side's basis values and eleven cells a control point, held the grid
+    /// two points wide to 10 cells a row against the 18 it holds.
+    #[test]
+    fn an_lspia_surface_fit_holds_at_most_its_count() {
+        let limit = 1_usize << 22;
+        for cols in [2, 100] {
+            let count = |rows: usize| lspia_surface_cells([rows, cols], [3, 3], [8, 8]).unwrap();
+            let (mut low, mut high) = (1, limit);
+            while high - low > 1 {
+                let mid = low.midpoint(high);
+                if count(mid) <= limit {
+                    low = mid;
+                } else {
+                    high = mid;
+                }
+            }
+            let rows = low;
+            let grid: Vec<Vec<Point3>> = (0..rows)
+                .map(|i| {
+                    (0..cols)
+                        .map(|j| {
+                            let z = ((i * 7 + j * 3) % 11) as f64 * 0.1;
+                            Point3::new(i as f64, j as f64, z)
+                        })
+                        .collect()
+                })
+                .collect();
+            HELD_CELLS.with(|held| held.set(0));
+            approximate_surface_lspia(&grid, 3, 3, 8, 8, 1e-12, 1).unwrap();
+            let held = HELD_CELLS.with(std::cell::Cell::get);
+            let counted = count(rows);
+            assert!(
+                held <= counted && counted <= limit && counted - held <= 128,
+                "{rows} by {cols}: held {held}, counted {counted}"
+            );
+        }
+    }
+    /// Surface interpolations of grids of 40 by 30 and 3 by 200 points at
+    /// degrees 1, 3 and 25 by 3, and of 440 by 440 points at degree 3: the
+    /// most each holds at once, read from its buffers' capacities and with
+    /// the most one curve's interpolation held, is its count. The grid of
+    /// 440 by 440 holds 3,902,372 cells.
+    #[test]
+    fn a_surface_interpolation_holds_at_most_its_count() {
+        let degrees = [(1, 1), (3, 3), (25, 3)];
+        let cases = [(40, 30), (3, 200)]
+            .into_iter()
+            .flat_map(|size| degrees.map(|d| (size, d)))
+            .chain([((440, 440), (3, 3))]);
+        for ((rows, cols), (degree_u, degree_v)) in cases {
+            let grid: Vec<Vec<Point3>> = (0..rows)
+                .map(|i| {
+                    (0..cols)
+                        .map(|j| {
+                            let z = ((i * 7 + j * 3) % 11) as f64 * 0.1;
+                            Point3::new(i as f64, j as f64, z)
+                        })
+                        .collect()
+                })
+                .collect();
+            fitting::HELD_CELLS.with(|most| most.set(0));
+            drop(interpolate_surface(&grid, degree_u, degree_v));
+            let held = fitting::HELD_CELLS.with(std::cell::Cell::get);
+            let count = interpolate_surface_cells([rows, cols], [degree_u, degree_v]).unwrap();
+            assert_eq!(held, count, "{rows} by {cols} at {degree_u}, {degree_v}");
+            if rows == 440 {
+                assert_eq!(count, 3_902_372);
+            }
+        }
+    }
+    /// A surface interpolation at degree 0 in either direction is refused
+    /// before it holds a cell, with the error a curve's interpolation at
+    /// degree 0 gives for that direction's points. It ran the rows' or the
+    /// columns' fits, which refused a singular system.
+    #[test]
+    fn a_surface_interpolation_at_degree_zero_is_refused_at_once() {
+        let grid: Vec<Vec<Point3>> = (0..5)
+            .map(|i| {
+                (0..6)
+                    .map(|j| {
+                        let (u, v) = (i as f64, j as f64);
+                        Point3::new(u, v, (0.3 * u * v).sin())
+                    })
+                    .collect()
+            })
+            .collect();
+        let curve = |n: usize| {
+            let points: Vec<Point3> = (0..n).map(|i| Point3::new(i as f64, 0.0, 0.0)).collect();
+            fitting::interpolate(&points, 0).unwrap_err().to_string()
+        };
+        for ((degree_u, degree_v), along) in [((0, 3), 5), ((3, 0), 6), ((0, 0), 5)] {
+            fitting::HELD_CELLS.with(|most| most.set(0));
+            let found = interpolate_surface(&grid, degree_u, degree_v)
+                .map(|_| ())
+                .unwrap_err()
+                .to_string();
+            assert_eq!(found, curve(along), "{degree_u}, {degree_v}");
+            assert_eq!(fitting::HELD_CELLS.with(std::cell::Cell::get), 0);
+        }
+    }
+    /// A grid of 3 rows of 5 points, interpolated at degree 3 each way, in
+    /// three poses. The columns of 3 points take degree 2, the most 3
+    /// points allow, as their interpolation does, and the surface was given
+    /// degree 3 against their knots, which it refused. It now takes degrees
+    /// 2 and 3, its net is the columns' fits of the rows' fits bit for bit,
+    /// and its corners are the grid's.
+    #[test]
+    fn a_grid_with_fewer_rows_than_its_degree_takes_the_degree_its_columns_allow() {
+        let poses: [&dyn Fn(Point3) -> Point3; 3] = [
+            &|p| p,
+            &|p| Point3::new(-p.y() + 3.0, p.x() - 2.0, p.z() + 1.0),
+            &|p| Point3::new(p.x() + 1e3, p.z() - 5.0, -p.y()),
+        ];
+        for pose in poses {
+            let grid: Vec<Vec<Point3>> = (0..3)
+                .map(|i| {
+                    (0..5)
+                        .map(|j| {
+                            let (u, v) = (f64::from(i), f64::from(j));
+                            pose(Point3::new(u, v, (u * 0.7).sin() * (v * 0.5).cos()))
+                        })
+                        .collect()
+                })
+                .collect();
+            let surface = interpolate_surface(&grid, 3, 3).unwrap();
+            assert_eq!((surface.degree_u(), surface.degree_v()), (2, 3));
+            let rows: Vec<crate::nurbs::curve::NurbsCurve> = grid
+                .iter()
+                .map(|row| interpolate(row, 3).unwrap())
+                .collect();
+            let bits = |p: Point3| [p.x().to_bits(), p.y().to_bits(), p.z().to_bits()];
+            for j in 0..5 {
+                let column: Vec<Point3> = rows.iter().map(|c| c.control_points()[j]).collect();
+                let fitted = interpolate(&column, 3).unwrap();
+                assert_eq!(fitted.degree(), 2);
+                for i in 0..3 {
+                    assert_eq!(
+                        bits(surface.control_points()[i][j]),
+                        bits(fitted.control_points()[i])
+                    );
+                }
+            }
+            for (u, v, i, j) in [
+                (0.0, 0.0, 0, 0),
+                (1.0, 0.0, 2, 0),
+                (0.0, 1.0, 0, 4),
+                (1.0, 1.0, 2, 4),
+            ] {
+                assert!((surface.evaluate(u, v) - grid[i][j]).length() < 1e-9);
+            }
+        }
     }
 }
