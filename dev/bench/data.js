@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795704932962,
+  "lastUpdate": 1795705535533,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -79703,6 +79703,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 22702083,
             "range": "± 40087",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d8874ad623c350a3f9292abe6499ad1975b721eb",
+          "message": "fix(algo): cut plane sections at a hole's rim, and read a touch at a section's end there (#2925)\n\n## Summary\n\n#2868 reported booleans of three solids. They are a 10 × 10 × 2 plate, a\nrod of radius 2 about (5, 5), and an elliptic prism about (4, 5). The\nprism's semi-axes are 3 and √5.4. The walls of the rod and the prism\ntouch along the line x = 7. On main, plate − rod − prism with the mesh\nfallback off is refused in all 3 poses and both seam placements. The\nturned `fuse_all` of the three is refused too.\n\nWith this change, both are valid, watertight and within 1e-9 of the\nclosed-form volumes in every pose and seam placement. `fuse_n` of the\nthree is still refused in the turned pose, with a named reason. The pose\nsweep, the truth audit and random sweep seeds 1 to 3 give the same\noutput as main.\n\nRefs #2868 and #2878.\n\n## The change\n\n- **Hole crossings on plane faces.**\n`split_sections_at_boundary_crossings` now cuts a section on a plane\nface where a hole's edge crosses the other face. It cuts a B-spline\nsection only where a projection proves the vertex lies within the\ntolerance of the curve. The piece inside the hole is then dropped. Each\npiece's edge and intersection curve take their own span of the B-spline,\ncut with their parameters kept, and a failed cut refuses the section.\nBefore, the prism's B-spline sections ran on into the rod's hole, and\nthe plate face split into nothing.\n- **A touch at a section's end.** In phase EE, a foot clamped at an\nedge's end tells no side. A step held at an edge's end counts as clear\nonly past the coordinates' rounding. So a touch at an edge's end is\npolished in either edge order. This is the root that #2878 describes.\n- **The prism's quarter.** It ends where it touches the circle. On main,\nthat touch is read 9.4e-6 off the end. Now it is read at the end in two\nof 3 poses, and 2.5e-6 off the end turned.\n- **No proved interval.** Where no interval about the seed is proved, a\ntouch keeps the seed's own reading, as on main. A crossing that a sign\nchange proves stays where it is.\n\n## Tests\n\n- `the_three_way_fuse_and_the_two_cuts_are_exact` requires `fuse_all`\nand plate − rod − prism to be exact in 3 poses and 2 seam placements. On\nmain, the cuts are refused in all 6 cases, and the turned `fuse_all` is\nrefused.\n- `a_bspline_section_cut_near_its_start_keeps_each_piece_to_its_span`\nand `a_shallow_crossing_beside_a_touch_stays_at_its_point` fail without\ntheir fixes.\n- `touch_polishes_near_an_edges_end_keep_their_readings` is one table of\ntouch and crossing cases near an edge's end, in 3 poses, moved 0 and\n1e3, in both edge orders. No case reads farther from its true point than\non main, and the prism's end touch reads closer.\n- brepkit-algo (838), the boolean lib tests (235) and the 26 coplanar\nand tangent files (101) pass. So do all brepkit-operations and\nbrepkit-io tests (3391).\n\n## Still open\n\n- `fuse_n` of the three, turned, is refused with an open growth shell\n(#2868). The circle section's own seam lands on the lens arc between the\ntouch (7, 5) and the crossing (6, 6.732). The plate face's split then\nturns back at that vertex.\n- Far from the origin, a touch is read only to the rounding of the\nsquared distance (#2935).\n- Two curves that stay within the tolerance over a long stretch get one\nreading for it, as on main. Where that stretch holds a crossing and a\ntouch 1e-4 apart, the crossing search keeps the touch.\n- Where no interval about the seed is proved, some touches near an\nedge's end keep the seed's reading, as on main (#2878).",
+          "timestamp": "2026-11-26T15:00:50Z",
+          "tree_id": "809c378244af16186e4f6379cf128c58e8805ff7",
+          "url": "https://github.com/andymai/brepkit/commit/d8874ad623c350a3f9292abe6499ad1975b721eb"
+        },
+        "date": 1795705524939,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1286175,
+            "range": "± 2892",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1371336,
+            "range": "± 15241",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 15564,
+            "range": "± 325",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 807604,
+            "range": "± 13509",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 28993797,
+            "range": "± 91810",
             "unit": "ns/iter"
           }
         ]
