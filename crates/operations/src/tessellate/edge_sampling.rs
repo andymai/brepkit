@@ -551,16 +551,25 @@ pub(super) fn twisted_straight_edge_samples(
     if !(du > 1e-15 && dv > 1e-15) {
         return Ok(Vec::new());
     }
-    let at = |u: f64, v: f64| nurbs.evaluate(u, v);
     // The grid only counts samples along straight edges: a line has no sag
-    // or turn along it for a chord test to read.
-    let (n_u, n_v) = super::nurbs::untwisted_grid(
+    // or turn along it for a chord test to read. It is even at the weights'
+    // pace, and each of its cells is read by its twist's bound.
+    let (pace_u, pace_v) = super::nurbs::weight_paces(nurbs, (u_lo, u_hi), (v_lo, v_hi));
+    let at = |s: f64, t: f64| nurbs.evaluate(pace_u.at(s), pace_v.at(t));
+    let bound = |(s0, s1): (f64, f64), (t0, t1): (f64, f64)| {
+        super::nurbs::bilinear_cell_stray(
+            nurbs,
+            (pace_u.at(s0), pace_u.at(s1)),
+            (pace_v.at(t0), pace_v.at(t1)),
+        )
+    };
+    let (n_u, n_v) = super::nurbs::untwisted_grid_bounded(
         &at,
-        ((u_lo, u_hi), (v_lo, v_hi)),
+        &bound,
+        ((0.0, 1.0), (0.0, 1.0)),
         (1, 1),
         deflection,
         super::MAX_DIVISIONS,
-        None,
     )?;
     if n_u.max(n_v) <= 1 {
         return Ok(Vec::new());
@@ -573,7 +582,8 @@ pub(super) fn twisted_straight_edge_samples(
     let samples = lines
         .into_iter()
         .map(|(idx, (a, b), (ua, va), (ub, vb))| {
-            let cells = ((ub - ua).abs() / du * n_u as f64).max((vb - va).abs() / dv * n_v as f64);
+            let cells = ((pace_u.fraction(ub) - pace_u.fraction(ua)).abs() * n_u as f64)
+                .max((pace_v.fraction(vb) - pace_v.fraction(va)).abs() * n_v as f64);
             // A whole number of cells, read past its rounding.
             let pieces = ((cells * (1.0 - 1e-9)).ceil() as usize).max(1);
             let points = (0..=pieces)

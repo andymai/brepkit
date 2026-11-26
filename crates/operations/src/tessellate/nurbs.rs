@@ -1414,7 +1414,8 @@ pub(super) fn iso_breaks_over(
 /// direction's chords within half the deflection, so a cell curved both ways
 /// already lies within the whole of it; what is left is a twisted cell, whose
 /// sides are straight and whose middle stands off its triangles. A cell that
-/// strays has its two spans halved, and no other cell's.
+/// strays has its two spans halved, and no other cell's. A cell `bound`
+/// gives a stray for is read by it, and any other at its [`PROBES`].
 ///
 /// # Errors
 ///
@@ -1426,6 +1427,7 @@ pub(super) fn untwist_lines(
     us: &mut Vec<f64>,
     vs: &mut Vec<f64>,
     deflection: f64,
+    bound: Option<CellBound>,
 ) -> Result<(), crate::OperationsError> {
     // A span is read again only after a cut made it: a cell between two
     // spans that both held stays as it was read.
@@ -1450,9 +1452,15 @@ pub(super) fn untwist_lines(
                 ];
                 let (u0, v0) = (us[i], vs[j]);
                 let (du, dv) = (us[i + 1] - u0, vs[j + 1] - v0);
-                let strays = PROBES.iter().any(|&(a, b)| {
-                    split_stray(cell, &[at(du.madd(a, u0), dv.madd(b, v0))]) > deflection
-                });
+                let read = bound.and_then(|bound| bound((u0, us[i + 1]), (v0, vs[j + 1])));
+                let strays = read.map_or_else(
+                    || {
+                        PROBES.iter().any(|&(a, b)| {
+                            split_stray(cell, &[at(du.madd(a, u0), dv.madd(b, v0))]) > deflection
+                        })
+                    },
+                    |stray| stray > deflection,
+                );
                 if strays {
                     cut_u[i] = true;
                     cut_v[j] = true;
@@ -1486,6 +1494,67 @@ pub(super) fn untwist_lines(
     }
 }
 
+/// [`untwisted_grid_keeping`] with room for [`MAX_WITNESSES`] witnesses and
+/// no bound, each cell read at its probes.
+///
+/// # Errors
+///
+/// As [`untwisted_grid_keeping`].
+#[cfg(test)]
+pub(super) fn untwisted_grid(
+    at: &dyn Fn(f64, f64) -> Point3,
+    spans: ((f64, f64), (f64, f64)),
+    start: (usize, usize),
+    deflection: f64,
+    max_divisions: usize,
+    chords: Option<&dyn Fn(bool, usize) -> bool>,
+) -> Result<(usize, usize), crate::OperationsError> {
+    let mut held = 0;
+    untwisted_grid_keeping(
+        at,
+        spans,
+        start,
+        deflection,
+        max_divisions,
+        (chords, None),
+        (MAX_WITNESSES, &mut held),
+    )
+}
+
+/// [`untwisted_grid_keeping`] with room for [`MAX_WITNESSES`] witnesses,
+/// reading each cell `bound` gives a stray for by it, and any other at its
+/// [`PROBES`].
+///
+/// # Errors
+///
+/// As [`untwisted_grid_keeping`].
+pub(super) fn untwisted_grid_bounded(
+    at: &dyn Fn(f64, f64) -> Point3,
+    bound: CellBound,
+    spans: ((f64, f64), (f64, f64)),
+    start: (usize, usize),
+    deflection: f64,
+    max_divisions: usize,
+) -> Result<(usize, usize), crate::OperationsError> {
+    let mut held = 0;
+    untwisted_grid_keeping(
+        at,
+        spans,
+        start,
+        deflection,
+        max_divisions,
+        (None, Some(bound)),
+        (MAX_WITNESSES, &mut held),
+    )
+}
+
+/// The most probes the grid search ([`untwisted_grid_keeping`]) keeps as
+/// witnesses. A pass whose
+/// strays pass the room left keeps the farthest of them, and the search
+/// then takes only whole multiples of its grids, which need no witnesses:
+/// each keeps every probe of the one before on its vertices or probes.
+const MAX_WITNESSES: usize = 1 << 20;
+
 /// Refine an `(n_u, n_v)` grid over `u_span` by `v_span` until each checked
 /// cell strays within half the deflection of the triangles it splits into
 /// along either diagonal ([`probe_strays`]). A twisted cell (a bilinear patch
@@ -1511,44 +1580,16 @@ pub(super) fn untwist_lines(
 /// goes up through the multiples of the starting count to the first it
 /// holds.
 ///
+/// A cell `bound` gives a stray for is read by it, and any other at its
+/// [`PROBES`]. The search keeps at most `room` probes as witnesses, and
+/// sets `held` to the most probes it held at once: while it scans a grid,
+/// up to twice the room it has left, and one more.
+///
 /// # Errors
 ///
 /// Returns [`crate::OperationsError::TooManySamples`] if a direction needs
 /// more than `max_divisions` divisions, or the grid more cells than the
 /// sample limit.
-pub(super) fn untwisted_grid(
-    at: &dyn Fn(f64, f64) -> Point3,
-    spans: ((f64, f64), (f64, f64)),
-    start: (usize, usize),
-    deflection: f64,
-    max_divisions: usize,
-    chords: Option<&dyn Fn(bool, usize) -> bool>,
-) -> Result<(usize, usize), crate::OperationsError> {
-    let mut held = 0;
-    untwisted_grid_keeping(
-        at,
-        spans,
-        start,
-        deflection,
-        max_divisions,
-        chords,
-        (MAX_WITNESSES, &mut held),
-    )
-}
-
-/// The most probes [`untwisted_grid`] keeps as witnesses. A pass whose
-/// strays pass the room left keeps the farthest of them, and the search
-/// then takes only whole multiples of its grids, which need no witnesses:
-/// each keeps every probe of the one before on its vertices or probes.
-const MAX_WITNESSES: usize = 1 << 20;
-
-/// [`untwisted_grid`], keeping at most `room` probes as witnesses, and
-/// setting `held` to the most probes it held at once: while it scans a
-/// grid, up to twice the room it has left, and one more.
-///
-/// # Errors
-///
-/// As [`untwisted_grid`].
 #[allow(clippy::too_many_lines)]
 pub(super) fn untwisted_grid_keeping(
     at: &dyn Fn(f64, f64) -> Point3,
@@ -1556,7 +1597,7 @@ pub(super) fn untwisted_grid_keeping(
     (mut n_u, mut n_v): (usize, usize),
     deflection: f64,
     max_divisions: usize,
-    chords: Option<&dyn Fn(bool, usize) -> bool>,
+    (chords, bound): (Option<ChordTest>, Option<CellBound>),
     (room, held): (usize, &mut usize),
 ) -> Result<(usize, usize), crate::OperationsError> {
     let (start_u, start_v) = (n_u.max(1), n_v.max(1));
@@ -1586,6 +1627,12 @@ pub(super) fn untwisted_grid_keeping(
             for j in 0..n_v {
                 #[allow(clippy::cast_precision_loss)]
                 let corner = (du.madd(i as f64, u_lo), dv.madd(j as f64, v_lo));
+                // A bound reads the whole cell, so it leaves no witness.
+                let cell = ((corner.0, corner.0 + du), (corner.1, corner.1 + dv));
+                if let Some(stray) = bound.and_then(|bound| bound(cell.0, cell.1)) {
+                    worst = worst.max(stray);
+                    continue;
+                }
                 for (stray, uv) in probe_strays(at, corner, (du, dv)) {
                     worst = worst.max(stray);
                     if stray > half {
@@ -1803,6 +1850,260 @@ fn probe_strays(
         corner(1.0, 1.0),
     ];
     PROBES.map(|(a, b)| (split_stray(corners, &[corner(a, b)]), uv(a, b)))
+}
+
+/// A bound on how far the cell from `(u0, u1)` by `(v0, v1)` strays from
+/// the two triangles it splits into along either diagonal, where the patch
+/// gives one: a cell with none is read at its [`PROBES`].
+pub(super) type CellBound<'a> = &'a dyn Fn((f64, f64), (f64, f64)) -> Option<f64>;
+
+/// Whether a count of divisions along `u` (`true`) or `v` keeps the chords
+/// a grid search's starting grid was sized by ([`untwisted_grid_keeping`]).
+pub(super) type ChordTest<'a> = &'a dyn Fn(bool, usize) -> bool;
+
+/// One direction of a degree-1 B-spline patch's parameter box, read at the
+/// pace of its weights: [`Pace::at`] gives the parameter at a fraction of
+/// the box at that pace.
+///
+/// One span whose weights are one direction's factor times the other's,
+/// `w_ij = a_i b_j`, is the patch of equal weights on its control points
+/// with each direction's fraction `t` of the span moved to `a1 t / (a0 (1 -
+/// t) + a1 t)`. Its pace undoes that move: an even grid in it is an even
+/// grid of the patch of equal weights, whose cells halve their twist as
+/// they halve, however the weights crowd. Other weights are read at the
+/// pace of the geometric means of each direction's two edges.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Pace {
+    knots: (f64, f64),
+    weights: (f64, f64),
+    from: f64,
+    to: f64,
+}
+
+impl Pace {
+    /// The pace over `lo` to `hi` of a span from `knots.0` to `knots.1`
+    /// whose ends weigh `weights`.
+    fn new(knots: (f64, f64), weights: (f64, f64), (lo, hi): (f64, f64)) -> Self {
+        let mut pace = Self {
+            knots,
+            weights,
+            from: 0.0,
+            to: 1.0,
+        };
+        (pace.from, pace.to) = (pace.moved(lo), pace.moved(hi));
+        pace
+    }
+
+    /// An even pace over `lo` to `hi`.
+    pub(super) fn even(lo: f64, hi: f64) -> Self {
+        Self::new((lo, hi), (1.0, 1.0), (lo, hi))
+    }
+
+    /// The span's moved fraction at `u`.
+    fn moved(&self, u: f64) -> f64 {
+        let ((k0, k1), (w0, w1)) = (self.knots, self.weights);
+        let t = (u - k0) / (k1 - k0);
+        w1 * t / w0.madd(1.0 - t, w1 * t)
+    }
+
+    /// The parameter at the fraction `s` of the box at this pace.
+    pub(super) fn at(&self, s: f64) -> f64 {
+        let ((k0, k1), (w0, w1)) = (self.knots, self.weights);
+        let g = (self.to - self.from).madd(s, self.from);
+        (k1 - k0).madd(w0 * g / w1.madd(1.0 - g, w0 * g), k0)
+    }
+
+    /// The fraction of the box at this pace at the parameter `u`.
+    pub(super) fn fraction(&self, u: f64) -> f64 {
+        (self.moved(u) - self.from) / (self.to - self.from)
+    }
+}
+
+/// The paces of a degree-1 patch of one span over the box `u` by `v`
+/// ([`Pace`]), and even paces for any other patch.
+pub(super) fn weight_paces(
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    u: (f64, f64),
+    v: (f64, f64),
+) -> (Pace, Pace) {
+    let even = (Pace::even(u.0, u.1), Pace::even(v.0, v.1));
+    let (ku, kv, w) = (surface.knots_u(), surface.knots_v(), surface.weights());
+    let one_span = surface.degree_u() == 1
+        && surface.degree_v() == 1
+        && ku.len() == 4
+        && kv.len() == 4
+        && w.len() == 2
+        && w.iter()
+            .all(|row| row.len() == 2 && row.iter().all(|&x| x > 0.0));
+    if !one_span {
+        return even;
+    }
+    let mean = |a: f64, b: f64| (a * b).sqrt();
+    (
+        Pace::new(
+            (ku[1], ku[2]),
+            (mean(w[0][0], w[0][1]), mean(w[1][0], w[1][1])),
+            u,
+        ),
+        Pace::new(
+            (kv[1], kv[2]),
+            (mean(w[0][0], w[1][0]), mean(w[0][1], w[1][1])),
+            v,
+        ),
+    )
+}
+
+/// [`untwist_lines`] for a B-spline face, read by its cells' twist bounds
+/// ([`bilinear_cell_stray`]) at its weights' pace ([`weight_paces`]): the
+/// lines it adds halve each span at its pace, and the lines it was given
+/// keep their parameters.
+///
+/// # Errors
+///
+/// As [`untwist_lines`].
+pub(super) fn untwist_paced_lines(
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    at: &dyn Fn(f64, f64) -> Point3,
+    us: &mut Vec<f64>,
+    vs: &mut Vec<f64>,
+    deflection: f64,
+) -> Result<(), crate::OperationsError> {
+    let (Some(&u_lo), Some(&u_hi), Some(&v_lo), Some(&v_hi)) =
+        (us.first(), us.last(), vs.first(), vs.last())
+    else {
+        return Ok(());
+    };
+    let (pace_u, pace_v) = weight_paces(surface, (u_lo, u_hi), (v_lo, v_hi));
+    // A given line keeps its own parameter, not one read back from the pace.
+    let given = |lines: &[f64], pace: &Pace| -> DetHashMap<u64, f64> {
+        lines
+            .iter()
+            .map(|&x| (pace.fraction(x).to_bits(), x))
+            .collect()
+    };
+    let (given_u, given_v) = (given(us, &pace_u), given(vs, &pace_v));
+    let to_u = |s: f64| {
+        given_u
+            .get(&s.to_bits())
+            .copied()
+            .unwrap_or_else(|| pace_u.at(s))
+    };
+    let to_v = |t: f64| {
+        given_v
+            .get(&t.to_bits())
+            .copied()
+            .unwrap_or_else(|| pace_v.at(t))
+    };
+    let paced = |s: f64, t: f64| at(to_u(s), to_v(t));
+    let bound = |(s0, s1): (f64, f64), (t0, t1): (f64, f64)| {
+        bilinear_cell_stray(surface, (to_u(s0), to_u(s1)), (to_v(t0), to_v(t1)))
+    };
+    let mut ss: Vec<f64> = us.iter().map(|&u| pace_u.fraction(u)).collect();
+    let mut ts: Vec<f64> = vs.iter().map(|&v| pace_v.fraction(v)).collect();
+    untwist_lines(&paced, &mut ss, &mut ts, deflection, Some(&bound))?;
+    *us = ss.into_iter().map(to_u).collect();
+    *vs = ts.into_iter().map(to_v).collect();
+    Ok(())
+}
+
+/// A bound on how far a cell of a degree-1 B-spline patch strays from the
+/// two triangles it splits into along either diagonal. `None` for another
+/// patch, for a cell across a knot, and where a weight is not positive.
+///
+/// In one span the cell is a rational bilinear patch on its corners `P`,
+/// with weights `h`, the surface's denominators there: each of its points
+/// is `Σ λ P`, with `λ_ij = h_ij b_i b_j / Σ h b b`. Such a point stands off
+/// the triangles of the diagonal `P00 P11` by at most `min(λ10, λ01) |T|`,
+/// with `T = P00 + P11 - P10 - P01`, and off those of `P10 P01` by at most
+/// `min(λ00, λ11) |T|`. Each pair's product is at most a quarter of `h10 h01
+/// / (√(h00 h11) + √(h10 h01))²`, so the cell strays at most `|T| max(1, ρ)
+/// / (2 (1 + ρ))`, with `ρ = √(h00 h11 / (h10 h01))`. That is a quarter of
+/// the twist where each weight is one direction's factor times the other's,
+/// however their pace crowds, and less than half of it for any weights.
+///
+/// A twist in the plane of `P00`, `P10` and `P01` moves no point off it, so
+/// a second bound reads only the twist's part `γ` along that plane's
+/// normal. Each point lies in the tetrahedron on the four corners. Where
+/// the corners seen along the normal make a convex quad, the tetrahedron
+/// lies between the two splits, so a point stands off either at most the
+/// splits' gap, which is widest where the diagonals cross: `|γ|` times the
+/// fraction of `P00 P11` there. A flat cell strays nowhere.
+pub(super) fn bilinear_cell_stray(
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    (u0, u1): (f64, f64),
+    (v0, v1): (f64, f64),
+) -> Option<f64> {
+    if surface.degree_u() != 1 || surface.degree_v() != 1 {
+        return None;
+    }
+    // The span of `knots` that holds `lo` to `hi`, and its ends.
+    let span = |knots: &[f64], lo: f64, hi: f64| {
+        let s = knots.partition_point(|&k| k <= lo).checked_sub(1)?;
+        let (a, b) = (*knots.get(s)?, *knots.get(s + 1)?);
+        (a <= lo && hi <= b && a < b).then_some((s, a, b))
+    };
+    let (su, ua, ub) = span(surface.knots_u(), u0, u1)?;
+    let (sv, va, vb) = span(surface.knots_v(), v0, v1)?;
+    let weights = surface.weights();
+    let block = [
+        [
+            *weights.get(su - 1)?.get(sv - 1)?,
+            *weights.get(su - 1)?.get(sv)?,
+        ],
+        [*weights.get(su)?.get(sv - 1)?, *weights.get(su)?.get(sv)?],
+    ];
+    if !block.iter().flatten().all(|&w| w > 0.0) {
+        return None;
+    }
+    let denominator = |u: f64, v: f64| {
+        let (a, b) = ((u - ua) / (ub - ua), (v - va) / (vb - va));
+        let near = (1.0 - b).madd(block[0][0], b * block[0][1]);
+        let far = (1.0 - b).madd(block[1][0], b * block[1][1]);
+        (1.0 - a).madd(near, a * far)
+    };
+    let (h00, h10, h01, h11) = (
+        denominator(u0, v0),
+        denominator(u1, v0),
+        denominator(u0, v1),
+        denominator(u1, v1),
+    );
+    let (p00, p10, p01, p11) = (
+        surface.evaluate(u0, v0),
+        surface.evaluate(u1, v0),
+        surface.evaluate(u0, v1),
+        surface.evaluate(u1, v1),
+    );
+    let twist = (p00 - p10) + (p11 - p01);
+    let rho = ((h00 * h11) / (h10 * h01)).sqrt();
+    let by_weights = twist.length() * rho.max(1.0) / (2.0 * (1.0 + rho));
+    let bound =
+        splits_gap(p10 - p00, p01 - p00, twist).map_or(by_weights, |gap| gap.min(by_weights));
+    bound.is_finite().then_some(bound)
+}
+
+/// The widest gap between the two splits of a cell from a corner along the
+/// sides `e1` and `e2`, with twist `twist`, measured along the normal of
+/// the sides' plane, where the corners seen along that normal make a convex
+/// quad: `None` otherwise.
+fn splits_gap(e1: Vec3, e2: Vec3, twist: Vec3) -> Option<f64> {
+    let across = e1.cross(e2);
+    let area2 = across.length();
+    if !(area2 > 0.0 && area2.is_finite()) {
+        return None;
+    }
+    let normal = across * (1.0 / area2);
+    let lift = twist.dot(normal);
+    // The twist's part in the plane, `α e1 + β e2`.
+    let flat = twist - normal * lift;
+    let (g11, g12, g22) = (e1.dot(e1), e1.dot(e2), e2.dot(e2));
+    let det = g11.madd(g22, -(g12 * g12));
+    let (r1, r2) = (flat.dot(e1), flat.dot(e2));
+    let alpha = g22.madd(r1, -(g12 * r2)) / det;
+    let beta = g11.madd(r2, -(g12 * r1)) / det;
+    // The diagonals cross inside both when the quad is convex, `P00 P11` at
+    // the fraction `1 / (2 + α + β)`.
+    let convex = alpha > -1.0 && beta > -1.0 && alpha + beta > -1.0;
+    convex.then(|| lift.abs() / (2.0 + alpha + beta))
 }
 
 /// Where in a cell [`probe_strays`] reads it: its middle and quarter points.

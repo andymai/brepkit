@@ -5905,7 +5905,12 @@ fn untwist_grid_lines(
     deflection: f64,
 ) -> Result<(), crate::OperationsError> {
     let at = |u: f64, v: f64| eval_surface_point(surface, u, v);
-    super::nurbs::untwist_lines(&at, us, vs, deflection)
+    match surface {
+        FaceSurface::Nurbs(nurbs) => {
+            super::nurbs::untwist_paced_lines(nurbs, &at, us, vs, deflection)
+        }
+        _ => super::nurbs::untwist_lines(&at, us, vs, deflection, None),
+    }
 }
 
 fn nurbs_speeds(
