@@ -14037,12 +14037,14 @@ pub fn edges_one_curve(a: &OrientedPCurveEdge, b: &OrientedPCurveEdge, tol: f64)
 
 /// Where a section along `a` meets one along `b`, each given as its curve
 /// and its two ends: a line, or a circle or an ellipse arc of at most a half
-/// turn. Each point is proved where the two come within `tol` of each other
-/// inside both (see `edge_splitting::section_meeting_points`), but not at
-/// an end of either, which stands for itself. `None` where the meetings are
+/// turn, the two in one plane. Each point is proved where the two come
+/// within `tol` of each other inside both, but not at an end of either,
+/// which stands for itself: two lines by their segments' nearest points
+/// (`edge_splitting::segments_meet`), any other pair by
+/// `edge_splitting::section_meeting_points`. `None` where the meetings are
 /// not settled, and for a pair the finder would pass over unread: a
-/// B-spline, an arc of more than a half turn or of none, or a conic no form
-/// on unit axes reads.
+/// B-spline, an arc of more than a half turn or of none, a conic no form on
+/// unit axes reads, or two curves not in one plane.
 pub fn section_meetings(
     (curve_a, start_a, end_a): (&EdgeCurve, Point3, Point3),
     (curve_b, start_b, end_b): (&EdgeCurve, Point3, Point3),
@@ -14063,6 +14065,26 @@ pub fn section_meetings(
     if !(read(curve_a, start_a, end_a) && read(curve_b, start_b, end_b)) {
         return None;
     }
+    // A conic's plane, as its centre and unit normal.
+    let plane = |curve: &EdgeCurve| match curve {
+        EdgeCurve::Circle(c) => c.normal().normalize().ok().map(|n| (c.center(), n)),
+        EdgeCurve::Ellipse(e) => e.normal().normalize().ok().map(|n| (e.center(), n)),
+        EdgeCurve::Line | EdgeCurve::NurbsCurve(_) => None,
+    };
+    let in_plane = |(c, n): (Point3, Vec3), p: Point3, q: Point3| {
+        (p - c).dot(n).abs() <= tol && (q - c).dot(n).abs() <= tol
+    };
+    let one_plane = match (plane(curve_a), plane(curve_b)) {
+        (Some((ca, na)), Some((_, nb))) => {
+            na.cross(nb).length() <= 1e-9 && in_plane((ca, na), start_b, end_b)
+        }
+        (Some(pa), None) => in_plane(pa, start_b, end_b),
+        (None, Some(pb)) => in_plane(pb, start_a, end_a),
+        (None, None) => true,
+    };
+    if !one_plane {
+        return None;
+    }
     let spans = [
         edge_splitting::SectionSpan {
             curve: curve_a,
@@ -14075,6 +14097,29 @@ pub fn section_meetings(
             end: end_b,
         },
     ];
+    if matches!((curve_a, curve_b), (EdgeCurve::Line, EdgeCurve::Line)) {
+        // The finder reads two lines as meeting only at their ends, as two
+        // sections of one face do: their segments are read here.
+        let off = |p: Point3, (a, b): (Point3, Point3)| {
+            let d = b - a;
+            let len2 = d.dot(d);
+            let along = if len2 > 0.0 {
+                ((p - a).dot(d) / len2).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            (p - (a + d * along)).length()
+        };
+        let both = |p: Point3| off(p, (start_a, end_a)) <= tol && off(p, (start_b, end_b)) <= tol;
+        let met = edge_splitting::segments_meet((&spans[0], 0.0), (&spans[1], 0.0), tol).ok()?;
+        let ends = [start_a, end_a, start_b, end_b];
+        return Some(
+            met.filter(|m| both(m.at) && !ends.iter().any(|&k| both(k)))
+                .map(|m| m.at)
+                .into_iter()
+                .collect(),
+        );
+    }
     edge_splitting::section_meeting_points(&spans, tol)
         .ok()
         .map(|found| found.into_iter().map(|m| m.at).collect())

@@ -2569,4 +2569,36 @@ mod tests {
             ));
         }
     }
+
+    /// Two segments crossing inside both meet once, at the crossing; two
+    /// meeting only at an end, or lying apart, meet nowhere the finder must
+    /// report: in three poses.
+    #[test]
+    fn two_segments_crossing_inside_both_meet_at_the_crossing() {
+        let tol = 1e-7;
+        let line = EdgeCurve::Line;
+        for pose in test_poses() {
+            let p = |x: f64, y: f64| pose.mul_point(Point3::new(x, y, 0.0));
+            let met = crate::builder::face_splitter::section_meetings(
+                (&line, p(-1.0, 0.0), p(1.0, 0.0)),
+                (&line, p(0.0, -1.0), p(0.0, 1.0)),
+                tol,
+            )
+            .unwrap();
+            assert_eq!(met.len(), 1, "{pose:?}");
+            assert!((met[0] - p(0.0, 0.0)).length() < 1e-9, "{met:?}");
+            for (a, b) in [
+                ((p(0.0, 0.0), p(1.0, 0.0)), (p(0.0, 0.0), p(0.0, 1.0))),
+                ((p(0.0, 0.0), p(1.0, 0.0)), (p(0.0, 1.0), p(1.0, 1.0))),
+            ] {
+                let met = crate::builder::face_splitter::section_meetings(
+                    (&line, a.0, a.1),
+                    (&line, b.0, b.1),
+                    tol,
+                )
+                .unwrap();
+                assert!(met.is_empty(), "{met:?}");
+            }
+        }
+    }
 }
