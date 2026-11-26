@@ -562,7 +562,7 @@ const SETTLE_DEPTH: usize = 16;
 /// over `[t0, t1]`, or `None`.
 ///
 /// Each knot span the range covers is read as its cubic Bezier piece and
-/// bounded by the surface's implicit form ([`Carrier::bound`]). A piece is
+/// bounded by the surface's implicit form (`Carrier::bound`). A piece is
 /// halved while its bound exceeds `aim` and its halves tighten it by a
 /// quarter or more: past that the bound reads the curve's own distance from
 /// the surface, which no halving lowers. The bound adds the rounding of the
@@ -623,7 +623,7 @@ pub fn spline_off_surface(
 /// An upper bound of the distance of `p` from `surface`.
 ///
 /// The bound is the distance the surface's closed form reads
-/// ([`Carrier::distance`], exact for a point beside the surface), with its
+/// (`Carrier::distance`, exact for a point beside the surface), with its
 /// rounding. `None` where the form has no gradient at `p` (on an axis or at
 /// a centre).
 #[must_use]
