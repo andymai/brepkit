@@ -525,6 +525,23 @@ struct Region2 {
     edges: Vec<BoundaryEdge>,
     lo: Point2,
     hi: Point2,
+    /// The face's region read on its own curves, holes included: lines,
+    /// circles and ellipses as they are, a B-spline by its bounded Bezier
+    /// pieces. `None` where it cannot be built.
+    exact: Option<brepkit_topology::planar::PlanarRegion>,
+}
+
+impl Region2 {
+    /// Whether `p` lies inside the region and farther than `tol` from its
+    /// boundary: read on the region's own curves where they are known, an
+    /// answer they cannot settle counting as not inside, and else on the
+    /// sampled boundary.
+    fn holds(&self, p: Point2, tol: f64) -> bool {
+        match &self.exact {
+            Some(region) => region.side(p, tol) == Some(true),
+            None => !on_boundary(p, &self.edges, tol) && inside_region(p, self, tol),
+        }
+    }
 }
 
 /// A clipped piece of a boundary edge inside the partner face; `target` is
@@ -729,7 +746,22 @@ fn face_region_2d(
             });
         }
     }
-    Ok(Region2 { edges, lo, hi })
+    let exact = brepkit_topology::planar::face_region_2d(
+        topo,
+        face_id,
+        frame.origin,
+        frame.u_axis,
+        frame.v_axis,
+        brepkit_math::tolerance::Tolerance::default().linear,
+    )
+    .ok()
+    .flatten();
+    Ok(Region2 {
+        edges,
+        lo,
+        hi,
+        exact,
+    })
 }
 
 /// Give each ellipse edge of `region` its paves from the earlier phases:
@@ -1249,7 +1281,7 @@ fn clip_to_region(
                     continue;
                 }
                 let mid2 = arc_point(arc, 0.5 * (sa + sb));
-                if on_boundary(mid2, &target.edges, tol) || !inside_region(mid2, target, tol) {
+                if !target.holds(mid2, tol) {
                     continue;
                 }
                 let on_circle = |p2: Point2| -> Point3 {
@@ -1295,7 +1327,7 @@ fn clip_to_region(
                 }
                 let tm = 0.5 * (ta + tb);
                 let mid = Point2::new(d.x().madd(tm, a.x()), d.y().madd(tm, a.y()));
-                if on_boundary(mid, &target.edges, tol) || !inside_region(mid, target, tol) {
+                if !target.holds(mid, tol) {
                     continue;
                 }
                 out.push(SectionPiece::Line {
@@ -1350,7 +1382,7 @@ fn clip_to_region(
                         continue;
                     }
                     let mid = at(0.5 * (sa + sb));
-                    if on_boundary(mid, &target.edges, tol) || !inside_region(mid, target, tol) {
+                    if !target.holds(mid, tol) {
                         continue;
                     }
                     let start = if sa <= 0.0 {
@@ -1479,7 +1511,7 @@ fn clip_to_region(
                 }
                 let mid3 = along.point(f64::midpoint(ta, tb));
                 let mid = frame.project(mid3);
-                if on_boundary(mid, &target.edges, tol) || !inside_region(mid, target, tol) {
+                if !target.holds(mid, tol) {
                     continue;
                 }
                 let (span, start, end) = if ta <= tb {
@@ -2611,6 +2643,55 @@ mod tests {
                 assert!(met.is_empty(), "{met:?}");
             }
         }
+    }
+
+    /// A face bounded by one closed ellipse of semi-axes 3 and 2, and an
+    /// arc of the concentric ellipse of semi-axes 2.997 and 1.998 over its
+    /// parameters 0 to pi / 3: the arc lies inside the face, though its
+    /// middle lies outside the 16 chords the face's rim was once read as.
+    /// It is a piece to split the face along.
+    #[test]
+    fn an_ellipse_arc_just_inside_an_ellipse_face_is_a_piece() {
+        use brepkit_math::curves::Ellipse3D;
+        let tol = Tolerance::default();
+        let frame = PlaneFrame2D::canonical(Vec3::new(0.0, 0.0, -1.0), 0.0);
+        let up = Vec3::new(0.0, 0.0, 1.0);
+        let (x, y) = (Vec3::new(1.0, 0.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
+        let origin = Point3::new(0.0, 0.0, 0.0);
+        let mut topo = Topology::new();
+        let outer = Ellipse3D::with_axes(origin, up, 3.0, 2.0, x, y).unwrap();
+        let seam = topo.add_vertex(Vertex::new(outer.evaluate(2.0), 1e-7));
+        let rim = topo.add_edge(Edge::new(seam, seam, EdgeCurve::Ellipse(outer)));
+        let target = face_down(&mut topo, vec![OrientedEdge::new(rim, false)], vec![]);
+        let inner = Ellipse3D::with_axes(origin, up, 2.997, 1.998, x, y).unwrap();
+        let third = std::f64::consts::FRAC_PI_3;
+        let (a, b, c) = (
+            topo.add_vertex(Vertex::new(inner.evaluate(0.0), 1e-7)),
+            topo.add_vertex(Vertex::new(inner.evaluate(third), 1e-7)),
+            topo.add_vertex(Vertex::new(Point3::new(1.0, 0.5, 0.0), 1e-7)),
+        );
+        let arc = topo.add_edge(Edge::new(a, b, EdgeCurve::Ellipse(inner)));
+        let back = topo.add_edge(Edge::new(b, c, EdgeCurve::Line));
+        let close = topo.add_edge(Edge::new(c, a, EdgeCurve::Line));
+        let piece_face = face_down(
+            &mut topo,
+            vec![
+                OrientedEdge::new(arc, true),
+                OrientedEdge::new(back, true),
+                OrientedEdge::new(close, true),
+            ],
+            vec![],
+        );
+        let arena = GfaArena::new();
+        let mut target_region = face_region_2d(&topo, target, &frame).unwrap();
+        attach_paves(&mut target_region, &topo, &arena);
+        let mut piece_region = face_region_2d(&topo, piece_face, &frame).unwrap();
+        attach_paves(&mut piece_region, &topo, &arena);
+        let edge = piece_region.edges.iter().find(|e| e.eid == arc).unwrap();
+        let mut out = Vec::new();
+        clip_to_region(edge, (target, &target_region), &frame, tol.linear, &mut out).unwrap();
+        assert_eq!(out.len(), 1, "{}", out.len());
+        assert!(matches!(out[0], SectionPiece::Curve { .. }));
     }
 
     /// A closed ellipse edge, one edge with no paves, wholly inside a face
