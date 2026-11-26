@@ -142,22 +142,21 @@ pub fn parse_point_grid(
             ),
         });
     }
-    coords
-        .chunks_exact(3 * cols)
-        .enumerate()
-        .map(|(i, row)| {
-            row.chunks_exact(3)
-                .enumerate()
-                .map(|(j, c)| {
-                    let point = Point3::new(c[0], c[1], c[2]);
-                    if crate::error::validate_point(point, "").is_err() {
-                        crate::error::validate_point(point, &format!("point {}", i * cols + j))?;
-                    }
-                    Ok(point)
-                })
-                .collect()
-        })
-        .collect()
+    // A collect that can fail keeps no size hint and grows its vector past
+    // the count, so each level is sized from the checked dimensions.
+    let mut grid = Vec::with_capacity(rows);
+    for (i, coords_row) in coords.chunks_exact(3 * cols).enumerate() {
+        let mut row = Vec::with_capacity(cols);
+        for (j, c) in coords_row.chunks_exact(3).enumerate() {
+            let point = Point3::new(c[0], c[1], c[2]);
+            if crate::error::validate_point(point, "").is_err() {
+                crate::error::validate_point(point, &format!("point {}", i * cols + j))?;
+            }
+            row.push(point);
+        }
+        grid.push(row);
+    }
+    Ok(grid)
 }
 
 /// Parse a flat 16-element array into a `Mat4` (row-major).
@@ -2589,5 +2588,30 @@ mod tests {
             solid_from_closed_shell(&mut topo, open),
             Err(WasmError::InvalidInput { .. })
         ));
+    }
+
+    /// The grids two points and 100 points wide at the most rows an LSPIA
+    /// surface fit's cells allow: the parser's own grid holds exactly the
+    /// rows and points it reads, the cells that fit counts for its grid. A
+    /// collect that could fail grew the rows to 262,144 and each row of two
+    /// to four points, 3.6e6 cells against the 2.1e6 counted. The points of
+    /// a curve fit are read by a collect that cannot fail, which keeps its
+    /// size.
+    #[test]
+    fn a_parsed_grid_holds_exactly_its_rows_and_points() {
+        let line: Vec<f64> = (0..300_000).map(f64::from).collect();
+        let points = parse_points(&line).unwrap();
+        assert_eq!(points.capacity(), 100_000);
+        for (rows, cols) in [(232_993, 2), (13_437, 100)] {
+            let coords: Vec<f64> = (0..rows * cols)
+                .flat_map(|k| [(k / cols) as f64, (k % cols) as f64, 0.5])
+                .collect();
+            let grid = parse_point_grid(&coords, rows, cols).unwrap();
+            let wide = grid.iter().map(Vec::capacity).max().unwrap();
+            assert_eq!((grid.capacity(), wide), (rows, cols), "{rows} by {cols}");
+            let held =
+                grid.capacity() * 3 + grid.iter().map(|row| 3 * row.capacity()).sum::<usize>();
+            assert_eq!(held, rows * (3 * cols + 3), "{rows} by {cols}");
+        }
     }
 }
