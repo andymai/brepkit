@@ -42,7 +42,8 @@ use crate::vec::Point3;
 /// # Errors
 ///
 /// Returns an error if the grid is too small or rows have inconsistent
-/// lengths.
+/// lengths, and [`MathError::TooMuchWork`] if the fits would take more than
+/// [`fitting::MAX_FIT_WORK`] multiply-adds.
 pub fn interpolate_surface(
     points: &[Vec<Point3>],
     degree_u: usize,
@@ -66,6 +67,14 @@ pub fn interpolate_surface(
             });
         }
     }
+    let (pu, pv) = (degree_u.min(num_rows - 1), degree_v.min(num_cols - 1));
+    fitting::check_fit_work(
+        "a surface interpolation",
+        (num_rows as f64).madd(
+            fitting::interpolation_work(num_cols, pv),
+            num_cols as f64 * fitting::interpolation_work(num_rows, pu),
+        ),
+    )?;
 
     // Step 1: Fit curves through each row (u-direction).
     let mut row_curves = Vec::with_capacity(num_rows);
@@ -137,6 +146,8 @@ pub fn interpolate_surface(
 ///
 /// Returns [`MathError::EmptyInput`] if the grid is empty.
 /// Returns [`MathError::InvalidControlPointGrid`] if rows have inconsistent lengths.
+/// Returns [`MathError::TooMuchWork`] if `max_iterations` passes would take
+/// more than [`fitting::MAX_FIT_WORK`] multiply-adds.
 #[allow(
     clippy::too_many_arguments,
     clippy::too_many_lines,
@@ -170,6 +181,10 @@ pub fn approximate_surface_lspia(
     let pv = degree_v.min(cols - 1);
     let mu = num_cps_u.min(rows).max(pu + 1);
     let mv = num_cps_v.min(cols).max(pv + 1);
+    fitting::check_fit_work(
+        "an LSPIA surface fit",
+        lspia_surface_work([rows, cols], [mu, mv], [pu, pv], max_iterations),
+    )?;
 
     let params_u = compute_grid_params_u(points, rows, cols);
     let params_v = compute_grid_params_v(points, rows, cols);
@@ -277,6 +292,23 @@ pub fn approximate_surface_lspia(
     }
 
     NurbsSurface::new(pu, pv, knots_u, knots_v, cps, weights)
+}
+
+/// The multiply-adds of an LSPIA fit of a grid of `rows` by `cols` points
+/// by `mu` by `mv` control points at degrees `pu` and `pv` over `iterations`
+/// passes: the start, which reads the grid for its parameters, then on each
+/// pass the surface at every point and the corrections it spreads.
+fn lspia_surface_work(
+    [rows, cols]: [usize; 2],
+    [mu, mv]: [usize; 2],
+    [pu, pv]: [usize; 2],
+    iterations: usize,
+) -> f64 {
+    let (rows, cols, mu, mv) = (rows as f64, cols as f64, mu as f64, mv as f64);
+    let (bu, bv) = ((pu + 1) as f64, (pv + 1) as f64);
+    let start = 2.0 * rows * cols + rows * bu * bu + cols * bv * bv + mu * mv;
+    let pass = (rows * cols).madd(bu * bu + bv * bv + 7.0 * bu * bv, 5.0 * mu * mv);
+    (iterations as f64).madd(pass, start)
 }
 
 /// Compute average chord-length parameters in the u direction (across rows).
@@ -490,5 +522,40 @@ mod tests {
             "paraboloid z at center: expected ~0.5, got {}",
             p.z()
         );
+    }
+
+    fn swell(rows: usize, cols: usize) -> Vec<Vec<Point3>> {
+        (0..rows)
+            .map(|i| {
+                (0..cols)
+                    .map(|j| {
+                        let (u, v) = (i as f64 / (rows - 1) as f64, j as f64 / (cols - 1) as f64);
+                        Point3::new(u * 10.0, v * 10.0, (u * 5.0).sin() * (v * 4.0).cos())
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// The largest surface fits within the wasm bindings' memory limits
+    /// (2^22 cells, degree 25, 256 control points a side, 10,000
+    /// iterations) are refused before they start: an interpolation of
+    /// 41,120 by 41,120 points at degree 25 counts 7.3e12 multiply-adds, one
+    /// of 600 by 600 points 1.5e9, and an LSPIA fit at degree 25 of even 26
+    /// by 26 points over 10,000 iterations 4e10.
+    #[test]
+    fn the_largest_surface_fits_within_the_memory_limits_are_refused() {
+        let side = (1 << 22) / (4 * 25 + 2);
+        let largest = 2.0 * side as f64 * fitting::interpolation_work(side, 25);
+        assert!(largest > fitting::MAX_FIT_WORK, "{largest:e}");
+        let refused = |found: &Result<NurbsSurface, MathError>| {
+            matches!(found, Err(MathError::TooMuchWork { .. }))
+        };
+        let started = std::time::Instant::now();
+        let found = interpolate_surface(&swell(600, 600), 25, 25);
+        assert!(refused(&found), "{found:?}");
+        let found = approximate_surface_lspia(&swell(26, 26), 25, 25, 256, 256, 1e-6, 10_000);
+        assert!(refused(&found), "{found:?}");
+        assert!(started.elapsed().as_secs() < 1, "{:?}", started.elapsed());
     }
 }
