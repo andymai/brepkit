@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795700566422,
+  "lastUpdate": 1795703378982,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -79595,6 +79595,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 17707833,
             "range": "± 187249",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "898902ed8d0e12835c268eb3d9c6370b752a480d",
+          "message": "perf(math,wasm): sum curve fits over their sparse bases, and bound the LSPIA surface grid (#2931)\n\n## Summary\n\n#2922 reported that the least-squares and LSPIA curve fits sum dense\nterms where their bases are sparse. On main:\n\n- `approximate` sums its normal matrix over every point for each pair of\ncontrol points, at m²·n. The largest least-squares fit within the wasm\nlimits (2,362 points, 1,183 control points, degree 25) counts 3.3e9\nmultiply-adds, so #2923 refuses it.\n- The LSPIA start scans every parameter for each control point. On\n161,319 points and 2^16 control points, it takes 5.8 s.\n\nWith this change, both fits give the same control points as main, bit\nfor bit:\n\n| Case | Main (native / wasm) | This change (native / wasm) |\n|---|---|---|\n| Largest least-squares fit within the wasm limits | 8.0 s native before\n#2923, refused since | 3.6 ms / 8.7 ms, `SingularMatrix` as on main |\n| The same fit at degree 3 | not measured | 0.2 ms / 0.3 ms |\n| LSPIA start, 161,319 points by 2^16 | 5.8 s native | 1.6 ms native |\n| LSPIA, 100,000 points by 1,000, 150 passes | 0.59 s / 1.16 s | 0.18 s\n/ 0.36 s |\n\n#2928 reported that the wasm `approximateSurfaceLspia` binding does not\nbound its point grid. It now refuses a grid past the fit cell limit\nbefore it reads the grid. #2934 reported that the curve fits and\n`interpolateSurface` count only part of their peak memory. Each fit\nbinding now counts its true peak.\n\nThe pose sweep and the truth audit give the same output as main.\n\nFixes #2922. Fixes #2928. Fixes #2934.\n\n## The change\n\n- **Banded least squares.** `approximate` sums each point's (p+1)² terms\ninto a band p wide on each side, in the order of the points. It solves\nthe band with the shared `solve_band`. It uses the same terms, pivots\nand arithmetic as the dense sum and elimination, so its control points\nare identical. `gauss_solve`, which nothing else used, is removed.\n- **LSPIA start.** `approximate_lspia` finds each control point's\nnearest parameter by a binary search of the sorted parameters. A second\nsearch finds the first parameter as near. It picks the same index as\nmain's scan, in two searches whatever the ties.\n- **LSPIA passes.** Each pass reads the curve from the basis it already\nholds, summed as `NurbsCurve::evaluate` sums it. The curve is built and\nchecked once, not on every pass.\n- **Work counts.** The least-squares count is n(2(p+1)² + 3(p+1)), plus\nthe band solve. The LSPIA start counts m(log₂ n + 2), and a pass counts\nn(7(p+1) + 4) + 5m.\n- **Wasm memory checks.**\n- `approximateCurve` counts its band, 3·degree + 4 cells per point and\ncontrol point, in place of the dense (n + m)·m.\n- `approximateSurfaceLspia` counts its peak cells, grid included, with\n`lspia_surface_cells`, and refuses past `MAX_FIT_CELLS` through\n`validate_fit_total`.\n- `interpolation_cells`, `least_squares_cells`, `lspia_cells` and\n`interpolate_surface_cells` count each fit's peak, and each binding adds\nthe points it parses. A test-only tally of the real buffers equals each\ncount at degrees 0, 1, 3 and 25.\n  - Each fit binding checks its coordinate count before it parses.\n- **Degree 0.** `interpolate` and `interpolate_surface` refuse degree 0\nbefore they count or hold a cell, with the error `interpolate_at` gives.\nAt degree 0, their interior knots average no parameters, and main\nreturns a curve with NaN through 2 points. `parse_point_grid` reads\nstraight into rows sized from the checked dimensions, so the grid is\nheld once and at its exact size.\n\n## Tests\n\n- `the_banded_least_squares_fit_matches_the_dense_one` compares with a\ndense reference of main's algorithm, bit for bit. The largest difference\nis 0 on the existing tests' fits and on 18 inputs with repeated points,\nat degrees 1 to 5 and 25.\n- `lspia_matches_its_scan_and_rebuilt_curve` compares with main's scan\nand per-pass curve, bit for bit.\n-\n`the_largest_curve_fits_within_the_memory_limits_are_refused_or_bounded`\nnow runs the largest least-squares fit.\n- `a_clustered_prefix_finds_each_nearest_within_its_count` counts the\nstart's steps on clustered and repeated parameters. Before, 20,001 alike\nparameters by 2,000 controls took 2.0e7 steps.\n- `an_lspia_surface_fit_holds_at_most_its_count` reads the real buffers\nat the peak, and\n`coordinates_past_their_count_are_refused_before_they_are_read` refuses\na 1 × 1 grid with a million coordinates.\n- `a_parsed_grid_holds_exactly_its_rows_and_points` reads the parser's\nown capacities on a 232,993 × 2 grid and a 13,437 × 100 grid.\n- `a_curve_fit_at_its_cell_limit_runs_and_one_point_more_is_refused`\nruns at degrees 0 and 3.\n-\n`a_surface_interpolation_at_its_cell_limit_runs_and_one_row_more_is_refused`\nruns a cubic 440 × 440 grid and refuses 473 rows, at the fit's own\ncount.\n-\n`a_grid_with_fewer_rows_than_its_degree_takes_the_degree_its_columns_allow`\nfits 3 rows at degree 3, which `interpolate_surface` refused with\n`InvalidKnotVector`. The surface now takes the degrees its row and\ncolumn fits take.\n- `an_interpolation_at_degree_zero_is_refused_at_once`,\n`a_surface_interpolation_at_degree_zero_is_refused_at_once` and the wasm\n`an_interpolation_at_degree_zero_is_refused` cover each fit and binding.\n- `a_surface_lspia_grid_past_the_cells_is_refused_before_it_is_read`\nrefuses a 2,000 × 1,000 grid with no coordinates passed, and runs a\n1,000 × 1,000 grid.\n- brepkit-math and the lib tests of algo, blend, heal, offset and wasm\npass (2307, 4 skipped). So do all brepkit-operations and brepkit-io\ntests (3386, 28 skipped). At the head, brepkit-math (817) and\nbrepkit-wasm (336, 4 skipped) pass.\n\n## Still open\n\n- The least-squares fit pins its end control points without moving their\nterms to the right-hand side (#2927). This change keeps that, so its\nresults match main.",
+          "timestamp": "2026-11-26T14:25:45Z",
+          "tree_id": "882fdf55e3b11eaf0ce3ca832e71455316a19077",
+          "url": "https://github.com/andymai/brepkit/commit/898902ed8d0e12835c268eb3d9c6370b752a480d"
+        },
+        "date": 1795703367132,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1000004,
+            "range": "± 34297",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1065313,
+            "range": "± 18459",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12138,
+            "range": "± 55",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 620816,
+            "range": "± 1500",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 22628789,
+            "range": "± 141378",
             "unit": "ns/iter"
           }
         ]
