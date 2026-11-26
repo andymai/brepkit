@@ -4455,6 +4455,57 @@ fn a_twisted_grid_keeps_a_narrow_peak_it_has_found() {
     );
 }
 
+/// The narrow peak above with no room for witnesses: the search takes only
+/// whole multiples of its grids, each with the probes of the one before on
+/// its vertices or probes, and the grid taken still holds the peak.
+#[test]
+fn a_twisted_grid_with_no_room_for_witnesses_keeps_a_narrow_peak() {
+    let h = |t: f64| (1.0 - (t - 0.125).abs() / 0.003).max(0.0);
+    let at = |u: f64, v: f64| Point3::new(u, v, 0.7 * u * v + 0.217 * h(u) * h(v));
+    let deflection = 0.2;
+    let mut held = 0;
+    let grid = super::nurbs::untwisted_grid_keeping(
+        &at,
+        ((0.0, 1.0), (0.0, 1.0)),
+        (1, 1),
+        deflection,
+        1024,
+        None,
+        (0, &mut held),
+    )
+    .unwrap();
+    let stray = stray_in_grid(&at, grid, (0.125, 0.125));
+    assert!(
+        stray <= 0.5 * deflection,
+        "{grid:?}: the peak stands {stray} off"
+    );
+    assert_eq!(held, 1, "the probes held at once");
+}
+
+/// The saddle S(u, v) = (u, v, uv) at deflection 1e-6 needs some 700
+/// divisions each way, past a limit of 128. Every probe of every grid up to
+/// 128 by 128 strays, some 110,000 in all; with room for 1,000 witnesses
+/// the search holds at most twice that at once, and is refused.
+#[test]
+fn a_twisted_grid_past_its_limit_holds_its_witnesses_to_their_room() {
+    let at = |u: f64, v: f64| Point3::new(u, v, u * v);
+    let mut held = 0;
+    let found = super::nurbs::untwisted_grid_keeping(
+        &at,
+        ((0.0, 1.0), (0.0, 1.0)),
+        (1, 1),
+        1e-6,
+        128,
+        None,
+        (1000, &mut held),
+    );
+    assert!(
+        matches!(found, Err(crate::OperationsError::TooManySamples { .. })),
+        "{found:?}"
+    );
+    assert!(held <= 2001, "{held} probes held at once");
+}
+
 /// The stray of the grid's cell holding `(u, v)` there, from either split.
 fn stray_in_grid(
     at: &dyn Fn(f64, f64) -> Point3,

@@ -1520,23 +1520,70 @@ pub(super) fn untwist_lines(
 /// sample limit.
 pub(super) fn untwisted_grid(
     at: &dyn Fn(f64, f64) -> Point3,
+    spans: ((f64, f64), (f64, f64)),
+    start: (usize, usize),
+    deflection: f64,
+    max_divisions: usize,
+    chords: Option<&dyn Fn(bool, usize) -> bool>,
+) -> Result<(usize, usize), crate::OperationsError> {
+    let mut held = 0;
+    untwisted_grid_keeping(
+        at,
+        spans,
+        start,
+        deflection,
+        max_divisions,
+        chords,
+        (MAX_WITNESSES, &mut held),
+    )
+}
+
+/// The most probes [`untwisted_grid`] keeps as witnesses. A pass whose
+/// strays pass the room left keeps the farthest of them, and the search
+/// then takes only whole multiples of its grids, which need no witnesses:
+/// each keeps every probe of the one before on its vertices or probes.
+const MAX_WITNESSES: usize = 1 << 20;
+
+/// [`untwisted_grid`], keeping at most `room` probes as witnesses, and
+/// setting `held` to the most probes it held at once: while it scans a
+/// grid, up to twice the room it has left, and one more.
+///
+/// # Errors
+///
+/// As [`untwisted_grid`].
+#[allow(clippy::too_many_lines)]
+pub(super) fn untwisted_grid_keeping(
+    at: &dyn Fn(f64, f64) -> Point3,
     ((u_lo, u_hi), (v_lo, v_hi)): ((f64, f64), (f64, f64)),
     (mut n_u, mut n_v): (usize, usize),
     deflection: f64,
     max_divisions: usize,
     chords: Option<&dyn Fn(bool, usize) -> bool>,
+    (room, held): (usize, &mut usize),
 ) -> Result<(usize, usize), crate::OperationsError> {
     let (start_u, start_v) = (n_u.max(1), n_v.max(1));
     // Every cell is read: a patch's worst cell can sit anywhere, at a
     // taper's narrow end or wherever a saddle flattens, and a spread of cells
     // can step over it.
     let half = 0.5 * deflection;
-    // The worst cell's stray over the grid, and where its probes strayed
-    // past half the deflection.
-    let worst = |n_u: usize, n_v: usize, past: &mut Vec<(f64, (f64, f64))>| {
+    // The farthest `keep` of `past`, by how far each strayed.
+    let farthest = |past: &mut Vec<(f64, (f64, f64))>, keep: usize| {
+        if past.len() > keep {
+            if keep > 0 {
+                past.select_nth_unstable_by(keep - 1, |x, y| y.0.total_cmp(&x.0));
+            }
+            past.truncate(keep);
+        }
+    };
+    // The worst cell's stray over the grid, with the farthest `keep` of the
+    // probes that strayed past half the deflection, whether more did, and
+    // the most it held at once.
+    let worst = |n_u: usize, n_v: usize, past: &mut Vec<(f64, (f64, f64))>, keep: usize| {
         #[allow(clippy::cast_precision_loss)]
         let (du, dv) = ((u_hi - u_lo) / n_u as f64, (v_hi - v_lo) / n_v as f64);
         let mut worst = 0.0_f64;
+        let mut more = false;
+        let mut most = 0;
         for i in 0..n_u {
             for j in 0..n_v {
                 #[allow(clippy::cast_precision_loss)]
@@ -1545,11 +1592,20 @@ pub(super) fn untwisted_grid(
                     worst = worst.max(stray);
                     if stray > half {
                         past.push((stray, uv));
+                        most = most.max(past.len());
+                        if past.len() > keep.saturating_mul(2) {
+                            farthest(past, keep);
+                            more = true;
+                        }
                     }
                 }
             }
         }
-        worst
+        if past.len() > keep {
+            farthest(past, keep);
+            more = true;
+        }
+        (worst, more, most)
     };
     // How far the grid's cell holding `(u, v)` strays from its triangles there.
     let stray_at = |(n_u, n_v): (usize, usize), (u, v): (f64, f64)| {
@@ -1614,30 +1670,42 @@ pub(super) fn untwisted_grid(
     // whose lines move off a narrow peak a probe found can leave it between
     // its own probes.
     let mut chain = (n_u, n_v);
-    // Each chain grid holds at least four times the cells of the one before,
-    // and a grid tried between two no more than the later one, so at five
-    // probes a cell the witnesses number at most some 13 times the last chain
-    // grid's cells.
     // A whole multiple keeps a probe where one was, and one still straying
     // there is the same witness.
     let mut witnesses: Vec<(f64, f64)> = Vec::new();
     let mut witnessed: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
+    // Whether the witnesses hold every probe that strayed: a grid between
+    // two whole multiples is tried only while they do.
+    let mut whole = true;
+    // A grid past the division or sample limit.
+    let past_limits = |(a, b): (usize, usize)| -> Result<(), crate::OperationsError> {
+        if a.max(b) > max_divisions {
+            return Err(refused(a.max(b)));
+        }
+        super::check_grid(a + 1, b + 1, deflection)
+    };
     loop {
         let mut past = Vec::new();
+        let keep = if whole { room - witnesses.len() } else { 0 };
+        let (scanned, more, most) = worst(n_u, n_v, &mut past, keep);
+        *held = (*held).max(witnesses.len() + most);
         let stray = witnesses
             .iter()
             .map(|&uv| stray_at((n_u, n_v), uv))
-            .fold(worst(n_u, n_v, &mut past), f64::max);
+            .fold(scanned, f64::max);
         let (held_u, held_v) = (holds(true, n_u), holds(false, n_v));
         if stray <= half && held_u && held_v {
             break;
         }
-        for &(_, (u, v)) in &past {
-            if witnessed.insert((u.to_bits(), v.to_bits())) {
-                witnesses.push((u, v));
-            }
-        }
-        let next = if (n_u, n_v) == chain {
+        // The next grid is the chain's next multiple, or one tried between;
+        // when both are past the limits, the search is refused before it
+        // keeps this pass's witnesses.
+        let doubled = if (n_u, n_v) == chain {
+            nested(n_u, true).and_then(|a| Ok((a, nested(n_v, false)?)))
+        } else {
+            nested(chain.0, true).and_then(|a| Ok((a, nested(chain.1, false)?)))
+        };
+        let tried = if whole && !more && (n_u, n_v) == chain {
             let grow = (1.1 * (stray / half).sqrt()).min(2.0);
             #[allow(
                 clippy::cast_precision_loss,
@@ -1651,24 +1719,42 @@ pub(super) fn untwisted_grid(
                     (((n as f64) * grow).ceil() as usize).max(n + 1)
                 }
             };
-            let tried = (
+            Some((
                 sized(step(n_u, held_u), start_u, true)?,
                 sized(step(n_v, held_v), start_v, false)?,
-            );
-            if tried == chain || witnesses.iter().any(|&uv| stray_at(tried, uv) > half) {
-                chain = (nested(n_u, true)?, nested(n_v, false)?);
-                chain
-            } else {
-                tried
-            }
+            ))
         } else {
-            chain = (nested(chain.0, true)?, nested(chain.1, false)?);
-            chain
+            None
         };
-        if next.0.max(next.1) > max_divisions {
-            return Err(refused(next.0.max(next.1)));
+        let fits = |grid: &Result<(usize, usize), crate::OperationsError>| {
+            grid.as_ref().is_ok_and(|&g| past_limits(g).is_ok())
+        };
+        if !fits(&doubled) {
+            match tried {
+                Some(t) => past_limits(t)?,
+                None => return doubled.and_then(|d| past_limits(d).map(|()| d)),
+            }
         }
-        super::check_grid(next.0 + 1, next.1 + 1, deflection)?;
+        for &(_, (u, v)) in &past {
+            if witnessed.insert((u.to_bits(), v.to_bits())) {
+                witnesses.push((u, v));
+            }
+        }
+        whole &= !more;
+        let next = match tried {
+            Some(t)
+                if t != chain
+                    && past_limits(t).is_ok()
+                    && !witnesses.iter().any(|&uv| stray_at(t, uv) > half) =>
+            {
+                t
+            }
+            _ => {
+                chain = doubled?;
+                chain
+            }
+        };
+        past_limits(next)?;
         (n_u, n_v) = next;
     }
     Ok((n_u, n_v))
