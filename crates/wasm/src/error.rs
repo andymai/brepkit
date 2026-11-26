@@ -165,9 +165,9 @@ pub const MAX_FIT_DEGREE: u32 = 25;
 
 /// The most `f64` cells a fit's working arrays hold: 2^22 cells, 32 MB.
 ///
-/// A least-squares fit holds a cell for each pair of a point and a control
-/// point, and for each pair of control points. An interpolation holds a row
-/// of at most `4 * degree + 2` cells for each point. The largest fit in the
+/// A least-squares fit holds a row of at most `3 * degree + 4` cells for
+/// each point and control point, and an interpolation a row of at most `4 *
+/// degree + 2` cells for each point. The largest fit in the
 /// tests, through 1,500 points at degree 3, holds 21,000 cells.
 pub const MAX_FIT_CELLS: usize = 1 << 22;
 

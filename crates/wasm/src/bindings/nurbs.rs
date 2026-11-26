@@ -421,6 +421,14 @@ const fn interpolation_row(degree: usize) -> usize {
     4 * degree + 2
 }
 
+/// The cells a least-squares fit of `degree` holds for each point and each
+/// control point, at most: a control point's row of the band of the normal
+/// matrix, `degree` cells below the diagonal and `2 * degree` above, and its
+/// right-hand side.
+const fn least_squares_row(degree: usize) -> usize {
+    3 * degree + 4
+}
+
 impl BrepKernel {
     /// The checked body of `interpolatePoints`.
     pub(crate) fn interpolate_points_impl(
@@ -450,7 +458,11 @@ impl BrepKernel {
         let degree = degree.min(points.len() - 1);
         let controls = validate_count(num_control_points, "num_control_points", MAX_COUNT)?;
         if controls < points.len() {
-            validate_fit_cells(points.len() + controls, controls, "approximateCurve")?;
+            validate_fit_cells(
+                points.len() + controls,
+                least_squares_row(degree),
+                "approximateCurve",
+            )?;
         } else {
             validate_fit_cells(points.len(), interpolation_row(degree), "approximateCurve")?;
         }
@@ -1203,15 +1215,16 @@ mod tests {
     }
 
     /// Each fit is refused before it allocates arrays past the fit limits.
-    /// Unchecked, the least-squares fit of 30,000 points with 20,000 control
-    /// points asks for a matrix of 4.8 GB, and the interpolation through
-    /// 25,000 points (or a surface with a side of 25,000) at degree 24,999
-    /// asks for a basis of 5 GB: each traps a 32-bit instance, from an input
-    /// of 1.2 MB at most.
+    /// Unchecked, the interpolation through 25,000 points (or a surface with
+    /// a side of 25,000) at degree 24,999 asks for a basis of 5 GB, which
+    /// traps a 32-bit instance, from an input of 1.2 MB. A least-squares fit
+    /// holds 13 cells at degree 3 for each of its points and control points,
+    /// so 300,000 points by 60,000 control points need 4.7 million cells.
     #[test]
     fn a_fit_past_its_degree_or_its_cells_is_refused_before_it_allocates() {
         let mut k = BrepKernel::new();
-        refused(k.approximate_curve_impl(&wave(30_000), 3, 20_000));
+        let message = refused(k.approximate_curve_impl(&wave(300_000), 3, 60_000));
+        assert!(message.contains("360000 rows of 13 cells"), "{message}");
         refused(k.interpolate_points_impl(&wave(25_000), 24_999));
         refused(k.interpolate_points_impl(&wave(40), 26));
         refused(k.approximate_curve_lspia_impl(&wave(40), 26, 10, 1e-3, 10));
