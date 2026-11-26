@@ -1927,7 +1927,9 @@ pub(super) fn power_of_two_near(x: f64) -> Option<f64> {
 /// and the touch polish reads it. So too where a step reaches one of `a`'s
 /// ends and the separation there lies within the coordinates' rounding:
 /// past it `a` gives no side, and the reading is the same whichever edge is
-/// `a`. A reading at that end itself is a meeting at a vertex, and stays.
+/// `a`. A reading at that end itself is a meeting at a vertex, and stays,
+/// and so does a crossing an earlier step proved by its sign change, read
+/// on opposite sides each clear of the rounding.
 fn crosses_at(
     (ca, ea): (&EdgeCurve, &EdgeData),
     (cb, eb): (&EdgeCurve, &EdgeData),
@@ -1956,18 +1958,23 @@ fn crosses_at(
     let held_lo = |step: f64| !turn_a && ta - step <= lo_a;
     let held_hi = |step: f64| !turn_a && ta + step >= hi_a;
     let clear = |v: Vec3, held: bool| v.length() > if held { rounding } else { 1e-3 * tol };
+    // Whether a step read the separation on opposite sides, each clear of
+    // the rounding: a crossing proved by its sign change.
+    let mut crossed = false;
     for _ in 0..24 {
         let (Some(before), Some(after)) = (apart(keep_a(ta - step)), apart(keep_a(ta + step)))
         else {
-            return false;
+            return crossed;
         };
         let (lo_held, hi_held) = (held_lo(step), held_hi(step));
         if clear(before, lo_held) && clear(after, hi_held) {
             return before.dot(after) < 0.0;
         }
+        crossed |=
+            before.length() > rounding && after.length() > rounding && before.dot(after) < 0.0;
         if lo_held && !clear(before, true) || hi_held && !clear(after, true) {
             // At `a`'s end itself, the reading is a meeting at a vertex.
-            return !turn_a && (ta <= lo_a || ta >= hi_a);
+            return crossed || !turn_a && (ta <= lo_a || ta >= hi_a);
         }
         step *= 2.0;
     }
@@ -4725,7 +4732,8 @@ mod tests {
     ///   rad, and the quarter of the ellipse of semi-axes 3 and sqrt(5.4)
     ///   about (4, 5) ending on it at (7, 5), where they touch, read either
     ///   way. The touch is read once, at the quarter's end, but turned, where
-    ///   a reading of the crossing search, within 1e-5 of the end, stays.
+    ///   a reading of the crossing search stays, 2.5e-6 from the end near the
+    ///   origin and 9.1e-6 moved 1e3 off.
     #[test]
     #[allow(
         clippy::too_many_lines,
@@ -4990,10 +4998,12 @@ mod tests {
                     ),
                     (Circle3D::new(p(5.0, 5.0), normal, 2.0).unwrap(), 0.0),
                 ];
-                let within = if turned {
-                    1e-5
-                } else {
-                    1e-12_f64.max(rounding)
+                // Turned, a reading of the crossing search stays, as
+                // measured: 2.5e-6 off near the origin, 9.1e-6 moved 1e3 off.
+                let within = match (turned, far > 0.0) {
+                    (true, false) => 3e-6,
+                    (true, true) => 1e-5,
+                    (false, _) => 1e-12_f64.max(rounding),
                 };
                 for (circle, at) in circles {
                     for forward in [true, false] {
@@ -5039,6 +5049,55 @@ mod tests {
                             assert_eq!(near, 1, "{}", what(&case));
                         }
                     }
+                }
+            }
+        }
+    }
+
+    /// The x axis on [-1, 1] and the cubic `y = 500 x (x - 1e-4)^2` on
+    /// [-1e-5, 1], which crosses the axis at the origin at a slope of 5e-6
+    /// and touches it at x = 1e-4. A reading of the crossing refined from a
+    /// seed there stays there, either edge first, in three poses, moved 0
+    /// and 1e3: its sign change proves the crossing, and a step whose foot
+    /// reaches the cubic's start does not send it to the touch polish, which
+    /// would read the touch. Moved far, a coordinate's rounding moves a
+    /// crossing of slope `k` by that rounding over `k`.
+    #[test]
+    fn a_shallow_crossing_beside_a_touch_stays_at_its_point() {
+        let tol = Tolerance::default();
+        for pose in ee_poses() {
+            for far in [0.0, 1e3] {
+                let pose = Mat4::translation(far, far, far) * pose;
+                let p = |x: f64, y: f64| pose.mul_point(Point3::new(x, y, 0.0));
+                let mut topo = Topology::new();
+                let cubic = [0.0, 5e-6, -0.1, 500.0];
+                let curve = posed_curve(&mut topo, &[(&cubic, &[0.0], (-1e-5, 1.0))], &pose);
+                let axis = posed_axis(&mut topo, (-1.0, 1.0), &pose);
+                let data = collect_edge_data(&topo, &[axis, curve]).unwrap();
+                let (on_axis, on_cubic) = (
+                    topo.edge(axis).unwrap().curve().clone(),
+                    topo.edge(curve).unwrap().curve().clone(),
+                );
+                let within = tol.linear.max(8.0 * f64::EPSILON * (far + 16.0) / 5e-6);
+                let reads = [
+                    refine_on_curves(
+                        (&on_axis, &data[0]),
+                        (&on_cubic, &data[1]),
+                        (0.5, 0.0),
+                        (tol.linear, &|| false),
+                    ),
+                    refine_on_curves(
+                        (&on_cubic, &data[1]),
+                        (&on_axis, &data[0]),
+                        (0.0, 0.5),
+                        (tol.linear, &|| false),
+                    ),
+                ];
+                for read in reads {
+                    assert!(
+                        read.is_some_and(|(_, _, q)| (q - p(0.0, 0.0)).length() <= within),
+                        "far {far:e}, {pose:?}: {read:?}"
+                    );
                 }
             }
         }
