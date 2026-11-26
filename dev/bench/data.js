@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1795658532557,
+  "lastUpdate": 1795669647785,
   "repoUrl": "https://github.com/andymai/brepkit",
   "entries": {
     "Boolean perf": [
@@ -79271,6 +79271,60 @@ window.BENCHMARK_DATA = {
             "name": "boolean/perforated_cut_36",
             "value": 28037246,
             "range": "± 96521",
+            "unit": "ns/iter"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "hi@andymai.com",
+            "name": "Andy Aragon",
+            "username": "andymai"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "d5a32518502a891a032d6295b70cd91cbc563b54",
+          "message": "fix(algo): cut a coplanar cap along its partner's ellipse rim at proved crossings (#2913)\n\n## Summary\n\n#2880 reported a rod of radius 2 about (5, 5) and an elliptic prism with\nsemi-axes 3 and √3 about (4, 5). Both run from z = −1 to 3, so their\ncaps lie flush. On main their fuse is refused in all 3 poses. The GFA\nresult has free edges: 14 with the walls' seams on the touch, and 4 with\nthem away.\n\nThe cause is in the coplanar phase, which splits each cap by the other's\nboundary. It read an ellipse edge as 16 samples and split the partner\ncap along chords between them. So the prism's rim inside the rod's cap\nbecame a straight chord. Its crossing with the rod's rim was read at\n(3.997, 6.730), where the true point is (4, 6.7321). The cap's pieces\nthen met no prism edge there.\n\nWith this change, the fuse, the cut and the intersect are exact in 3\nposes, with the seams on the touch and away. The pose sweep, the truth\naudit and random sweep seeds 1 to 3 give the same output as main.\n\nFixes #2880.\n\n## The change\n\n- **Pieces on the ellipse.** In the coplanar phase, the pieces of an\nellipse edge are ellipse sections on the edge's own curve, not chords.\n- **Proved cuts.** An ellipse edge is cut where `section_meetings`\nproves it meets a line, circle or ellipse of the partner face's\nboundary. The function is a new public wrapper over the meeting finder\nfrom #2853. A closed circle or ellipse is cut into half turns from its\nown seam. A meeting the finder cannot settle, or a piece it would skip,\nrefuses the boolean.\n- **Paves.** The edge is also cut at its own paves, its crossings and\ntouches with other edges. Without that, a section through the touch at\n(7, 5) left a cap face pinched at a point with no vertex.\n- **Containment.** A piece's containment and on-boundary checks read the\npartner's exact region from `face_region_2d`, holes included. An answer\nthe region test cannot settle counts as not inside.\n- **Closed edges.** A closed edge is also cut at its half turns' own\nends. So a closed ellipse wholly inside its partner still makes a\nsection.\n- **Two lines.** `section_meetings` reads two segments by their\ncrossing, and refuses two skew segments.\n- **Pairs the finder leaves out.** `section_meetings` stops at the first\npair the finder cannot read, and refuses it. The face splitter's main\npath stores no skipped pairs. Its plane test uses the finder's own\nallowance, so a pair it accepts is one the finder reads. Two arcs proved\none conic keep their ends as their meetings.\n- **One tolerance.** Every test on the ellipse path reads the caller's\n`tol.linear`, with constants only as rounding floors. Two conics are in\none plane only where each lies within the tolerance of the other's\nplane. A cut dedup or suppression at 10 tolerances had run a section\nacross a slot 5 tolerances wide.\n- **Line and circle edges against an ellipse.** The meeting finder clips\na line or circle edge against the partner's ellipse rim. It no longer\nreads the rim's 16 chords. A window's middle reads the exact region. A\nface with an ellipse edge and no exact region is refused.\n- **B-splines read as circles.** A rational B-spline edge is read as a\ncircle only where each span is proved within the tolerance of it. The\nfinder then reads it as that circle, in both directions.\n- **Boxes.** The coplanar face box and an ellipse section's box grow by\nthe most a circle or ellipse strays from its chords.\n- A piece is not made again only where `curves_one_curve` proves an\nexisting section one curve with it along its whole length.\n\n## Tests\n\n- `a_rod_and_a_prism_with_flush_caps_fuse_cut_and_intersect_exactly`\nchecks the fuse, the cut and the intersect in 3 poses and 2 seam\nplacements. Each is valid, within 1e-9 of the closed-form volume, and\nmeshes closed.\n- `a_thin_rod_crossing_a_flush_prism_rim_twice_between_samples_is_exact`\ncrosses an ellipse rim twice within one of the old sample intervals. A\nsecond test seams the rod's rim at π.\n- A unit test cuts a closed circle seamed at π into half turns from its\nseam. Another keeps an ellipse piece beside a circle section through its\nends and middle.\n- Further tests cover:\n  - two crossing segments;\n- a closed ellipse wholly inside a face, and a prism wholly inside a rod\nwith flush caps;\n  - an ellipse arc just inside an ellipse face;\n- open ellipse arcs of 3π/2, π + 0.05 and 2π − 0.05, seamed at 0 and at\nπ, on a flush cap;\n- an ellipse crossing a slot 5 tolerances wide, and an ellipse grazing a\ndisc's rim 0.5 tolerances inside and 2 outside;\n- a line half a tolerance off an ellipse arc's plane, refused, and an\neighth of a tolerance off, met;\n- sections across an elliptic hole, which stop at its true rim and not\nat a chord (on main, a section started 0.06 inside the hole);\n- a rational quadratic rim across an ellipse face, cut where they cross\n(before, the whole rim was kept).\n- brepkit-algo (835) and the boolean lib tests (235) pass, and so do all\nbrepkit-operations and brepkit-io tests (3391, 28 skipped).\n\n## Cost\n\n`section_meeting_points` on 2,000 B-spline sections takes 0.10 to 0.11\nms, against 1.89 to 2.05 ms on main. Its peak memory growth is 256 to\n448 KB, against 256 to 320 KB on main. On 2,000 line sections it takes\n2.96 to 3.03 ms, against 3.01 to 3.17 ms on main.\n\n## Still open\n\n- B-spline edges of coplanar faces still split their partner along\nchords (#2896).\n- The box of a circle section and of a B-spline boundary edge is read at\nsamples (#2918).\n- The tessellator cannot mesh a face pinched at a point that is not a\nvertex (#2909).",
+          "timestamp": "2026-11-26T05:03:42Z",
+          "tree_id": "f2ffcd1afe923d331924cc50cfdae76a8a20a4ef",
+          "url": "https://github.com/andymai/brepkit/commit/d5a32518502a891a032d6295b70cd91cbc563b54"
+        },
+        "date": 1795669633187,
+        "tool": "cargo",
+        "benches": [
+          {
+            "name": "boolean/cut_box_box",
+            "value": 1001359,
+            "range": "± 20666",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/fuse_box_box",
+            "value": 1056540,
+            "range": "± 4185",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/intersect_box_box",
+            "value": 12109,
+            "range": "± 36",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/cut_cylinder_through_box",
+            "value": 612833,
+            "range": "± 2259",
+            "unit": "ns/iter"
+          },
+          {
+            "name": "boolean/perforated_cut_36",
+            "value": 23015886,
+            "range": "± 301487",
             "unit": "ns/iter"
           }
         ]
