@@ -214,3 +214,194 @@ fn a_half_ellipse_closed_along_its_axis_is_flat() {
         "{measured} against {volume}"
     );
 }
+
+/// The ellipse about the origin of radius 10 along x and 20 along z, in the
+/// xz plane, as the rational quarter spans a reference kernel writes, from
+/// -90 to +90 degrees, or from 0 to +90 for a dome.
+fn meridian(half: bool) -> NurbsCurve {
+    let w = FRAC_1_SQRT_2;
+    if half {
+        NurbsCurve::new(
+            2,
+            vec![
+                -FRAC_PI_2, -FRAC_PI_2, -FRAC_PI_2, 0.0, 0.0, FRAC_PI_2, FRAC_PI_2, FRAC_PI_2,
+            ],
+            vec![
+                Point3::new(0.0, 0.0, -20.0),
+                Point3::new(10.0, 0.0, -20.0),
+                Point3::new(10.0, 0.0, 0.0),
+                Point3::new(10.0, 0.0, 20.0),
+                Point3::new(0.0, 0.0, 20.0),
+            ],
+            vec![1.0, w, 1.0, w, 1.0],
+        )
+        .unwrap()
+    } else {
+        NurbsCurve::new(
+            2,
+            vec![0.0, 0.0, 0.0, FRAC_PI_2, FRAC_PI_2, FRAC_PI_2],
+            vec![
+                Point3::new(10.0, 0.0, 0.0),
+                Point3::new(10.0, 0.0, 20.0),
+                Point3::new(0.0, 0.0, 20.0),
+            ],
+            vec![1.0, w, 1.0],
+        )
+        .unwrap()
+    }
+}
+
+/// A full turn's checks: valid, watertight, `faces` faces, the volume, and
+/// points inside and out.
+fn check_turn(topo: &Topology, solid: brepkit_topology::solid::SolidId, faces: usize, volume: f64) {
+    let report = validate_solid(topo, solid).unwrap();
+    assert!(report.is_valid(), "{:?}", report.issues);
+    assert!(is_watertight(&tessellate_solid(topo, solid, 0.01).unwrap()));
+    assert_eq!(solid_faces(topo, solid).unwrap().len(), faces);
+    let measured = solid_volume(topo, solid, 0.001).unwrap();
+    assert!(
+        (measured - volume).abs() < 1e-5 * volume,
+        "{measured} against {volume}"
+    );
+    let oriented = oriented_solid_volume(topo, solid, 0.001).unwrap();
+    assert!(
+        (oriented - volume).abs() < 1e-3 * volume,
+        "oriented {oriented} against {volume}"
+    );
+    for (point, inside) in [
+        (Point3::new(-3.0, 4.0, 5.0), true),
+        (Point3::new(0.0, -9.0, 2.0), true),
+        (Point3::new(0.0, 9.5, 18.0), false),
+        (Point3::new(-11.0, 0.0, 5.0), false),
+    ] {
+        let got = classify_point(topo, solid, point, 0.01, 1e-7).unwrap();
+        let expected = if inside {
+            PointClassification::Inside
+        } else {
+            PointClassification::Outside
+        };
+        assert_eq!(got, expected, "{point:?}");
+    }
+}
+
+/// A full turn of a half ellipse closed along its axis sweeps one wall, pole
+/// to pole, as a reference kernel's does.
+#[test]
+fn a_full_turn_of_a_half_ellipse_on_its_axis_sweeps_one_face() {
+    let mut topo = Topology::new();
+    let face = profile(
+        &mut topo,
+        &[Point3::new(0.0, 0.0, -20.0), Point3::new(0.0, 0.0, 20.0)],
+        &[(0, meridian(true))],
+    );
+    let solid = revolve(&mut topo, face, Point3::new(0.0, 0.0, 0.0), Z, TAU).unwrap();
+    check_turn(&topo, solid, 1, 4.0 / 3.0 * PI * 10.0 * 10.0 * 20.0);
+}
+
+/// A full turn of a quarter ellipse from a base on to its axis sweeps a dome:
+/// one wall closing to a point on the axis, and the base's disc.
+#[test]
+fn a_full_turn_of_a_quarter_ellipse_to_its_axis_sweeps_a_dome_and_a_disc() {
+    let mut topo = Topology::new();
+    let face = profile(
+        &mut topo,
+        &[
+            Point3::new(10.0, 0.0, 0.0),
+            Point3::new(0.0, 0.0, 20.0),
+            Point3::new(0.0, 0.0, 0.0),
+        ],
+        &[(0, meridian(false))],
+    );
+    let solid = revolve(&mut topo, face, Point3::new(0.0, 0.0, 0.0), Z, TAU).unwrap();
+    check_turn(&topo, solid, 2, 2.0 / 3.0 * PI * 10.0 * 10.0 * 20.0);
+}
+
+/// A part turn's checks: valid, watertight, `faces` faces, one of them the
+/// ellipse's wall, its share of the whole turn's `volume`, and points inside
+/// and out half way round.
+fn check_part(
+    topo: &Topology,
+    solid: brepkit_topology::solid::SolidId,
+    angle: f64,
+    faces: usize,
+    volume: f64,
+) {
+    let label = format!("{angle}");
+    let report = validate_solid(topo, solid).unwrap();
+    assert!(report.is_valid(), "{label}: {:?}", report.issues);
+    assert!(
+        is_watertight(&tessellate_solid(topo, solid, 0.01).unwrap()),
+        "{label}"
+    );
+    let all = solid_faces(topo, solid).unwrap();
+    assert_eq!(all.len(), faces, "{label}");
+    let walls = all
+        .iter()
+        .filter(|&&f| matches!(topo.face(f).unwrap().surface(), FaceSurface::Nurbs(_)))
+        .count();
+    assert_eq!(walls, 1, "{label}: the ellipse's wall");
+    let volume = volume * angle / TAU;
+    let measured = solid_volume(topo, solid, 0.001).unwrap();
+    assert!(
+        (measured - volume).abs() < 1e-5 * volume,
+        "{label}: {measured} against {volume}"
+    );
+    let oriented = oriented_solid_volume(topo, solid, 0.001).unwrap();
+    assert!(
+        (oriented - volume).abs() < 1e-3 * volume,
+        "{label}: oriented {oriented} against {volume}"
+    );
+    let (sin, cos) = (0.5 * angle).sin_cos();
+    for (r, z, inside) in [
+        (4.0, 5.0, true),
+        (9.0, 2.0, true),
+        (9.5, 18.0, false),
+        (11.0, 5.0, false),
+    ] {
+        let point = Point3::new(r * cos, r * sin, z);
+        let got = classify_point(topo, solid, point, 0.01, 1e-7).unwrap();
+        let expected = if inside {
+            PointClassification::Inside
+        } else {
+            PointClassification::Outside
+        };
+        assert_eq!(got, expected, "{label}: {point:?}");
+    }
+}
+
+/// A part turn of a dome's meridian sweeps one wall closing to its point on
+/// the axis, one floor, and the two ends, however many quarter turns it
+/// takes.
+#[test]
+fn a_part_turn_of_a_quarter_ellipse_to_its_axis_sweeps_one_wall_and_one_floor() {
+    for angle in [FRAC_PI_2, 0.7 * PI, PI, 1.5 * PI, 1.9 * PI] {
+        let mut topo = Topology::new();
+        let face = profile(
+            &mut topo,
+            &[
+                Point3::new(10.0, 0.0, 0.0),
+                Point3::new(0.0, 0.0, 20.0),
+                Point3::new(0.0, 0.0, 0.0),
+            ],
+            &[(0, meridian(false))],
+        );
+        let solid = revolve(&mut topo, face, Point3::new(0.0, 0.0, 0.0), Z, angle).unwrap();
+        check_part(&topo, solid, angle, 4, 2.0 / 3.0 * PI * 10.0 * 10.0 * 20.0);
+    }
+}
+
+/// A part turn of an egg's meridian sweeps one wall, a lune pole to pole,
+/// and the two ends.
+#[test]
+fn a_part_turn_of_a_half_ellipse_on_its_axis_sweeps_one_lune() {
+    for angle in [FRAC_PI_2, 0.7 * PI, PI, 1.5 * PI, 1.9 * PI] {
+        let mut topo = Topology::new();
+        let face = profile(
+            &mut topo,
+            &[Point3::new(0.0, 0.0, -20.0), Point3::new(0.0, 0.0, 20.0)],
+            &[(0, meridian(true))],
+        );
+        let solid = revolve(&mut topo, face, Point3::new(0.0, 0.0, 0.0), Z, angle).unwrap();
+        check_part(&topo, solid, angle, 3, 4.0 / 3.0 * PI * 10.0 * 10.0 * 20.0);
+    }
+}

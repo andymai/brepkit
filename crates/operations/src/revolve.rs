@@ -1068,11 +1068,12 @@ fn try_analytic_full_revolution(
             Some(class) => class,
             // An ellipse or spline arc clear of the axis sweeps one wall of
             // its own; the lines and arcs beside it keep their exact faces.
+            // So does one with an end on the axis, its wall closing to a
+            // point there (a dome), or both (an egg), so long as it meets the
+            // axis nowhere else.
             None if matches!(curve, EdgeCurve::Ellipse(_) | EdgeCurve::NurbsCurve(_))
                 && edge.start() != edge.end()
-                && radial_axial(sp, axis_origin, axis).0 > lin
-                && radial_axial(ep, axis_origin, axis).0 > lin
-                && !curved_edge_reaches_axis(topo, oe.edge(), axis_origin, axis)? =>
+                && !curved_edge_reaches_axis_between_ends(topo, oe.edge(), axis_origin, axis)? =>
             {
                 RevEdge::Spline
             }
@@ -1320,6 +1321,14 @@ fn build_analytic_revolution(
                             OrientedEdge::new(rim_e, !rim_fwd),
                             OrientedEdge::new(pe.edge, !pe.forward),
                             OrientedEdge::new(pe.edge, pe.forward),
+                        ],
+                        true,
+                    ),
+                    // An egg's wall, pole to pole: the seam both ways.
+                    (None, None) if matches!(pe.class, RevEdge::Spline) => Wire::new(
+                        vec![
+                            OrientedEdge::new(pe.edge, pe.forward),
+                            OrientedEdge::new(pe.edge, !pe.forward),
                         ],
                         true,
                     ),
@@ -2321,24 +2330,19 @@ pub fn revolve(
                 // A spline or ellipse edge sweeps one wall however many quarter
                 // turns a part turn takes, one rational span a quarter, as its
                 // line and circle neighbours' bands merge into one face below.
-                // The wall is built whole with the first quarter; an edge
-                // with an end on the axis keeps its wedges.
+                // The wall is built whole with the first quarter. An end on
+                // the axis sweeps no arc, so the wall closes there (a dome),
+                // at both ends a lune (an egg); an edge meeting the axis
+                // between its ends keeps its wedges.
                 let whole_wall = !is_full
                     && num_segs > 1
-                    && !matches!(profile_curve, EdgeCurve::Line)
-                    && profile_arc_center_radius(
-                        &profile_curve,
-                        p0_start,
-                        p1_start,
+                    && sweeps_whole_wall(
+                        topo,
+                        wire_data.input_oriented[i].edge(),
+                        (p0_start, p1_start),
                         axis_origin,
                         axis,
-                    )
-                    .is_none()
-                    && wire_data
-                        .arc_edges
-                        .iter()
-                        .take(num_segs)
-                        .all(|arcs| arcs[i].is_some() && arcs[next_i].is_some());
+                    )?;
                 if whole_wall {
                     if seg > 0 {
                         continue;
@@ -2513,11 +2517,32 @@ pub fn revolve(
                     - radial_axial(p, axis_origin, axis).1)
                     .abs()
                     <= tol.linear;
-                touches_axis |= !square;
+                // A spline wall is one face already, closing at the axis.
+                let whole = num_segs > 1
+                    && sweeps_whole_wall(
+                        topo,
+                        wire_data.input_oriented[e].edge(),
+                        if e == i { (p, q) } else { (q, p) },
+                        axis_origin,
+                        axis,
+                    )?;
+                touches_axis |= !square && !whole;
             }
         }
         for oe in &wire_data.input_oriented {
-            touches_axis |= curved_edge_reaches_axis(topo, oe.edge(), axis_origin, axis)?;
+            let edge = topo.edge(oe.edge())?;
+            let ends = (
+                topo.vertex(edge.start())?.point(),
+                topo.vertex(edge.end())?.point(),
+            );
+            let ends = if oe.is_forward() {
+                ends
+            } else {
+                (ends.1, ends.0)
+            };
+            touches_axis |= !(num_segs > 1
+                && sweeps_whole_wall(topo, oe.edge(), ends, axis_origin, axis)?)
+                && curved_edge_reaches_axis(topo, oe.edge(), axis_origin, axis)?;
         }
     }
     let cap_across_axis = (input_normal.dot(axis).abs() - 1.0).abs() < CAP_ACROSS_AXIS;
@@ -3047,6 +3072,72 @@ fn curved_edge_reaches_axis(
         let (p, q) = (at(k), at(k + 1));
         radial_axial(p, axis_origin, axis).0 <= (q - p).length() + Tolerance::new().linear
     }))
+}
+
+/// Whether a part turn sweeps `edge` as one wall: an ellipse or spline edge,
+/// no circle arc or line, meeting the axis nowhere but at an end. `ends` are
+/// its first and last points as the profile runs.
+fn sweeps_whole_wall(
+    topo: &Topology,
+    edge: brepkit_topology::edge::EdgeId,
+    ends: (Point3, Point3),
+    axis_origin: Point3,
+    axis: Vec3,
+) -> Result<bool, crate::OperationsError> {
+    let curve = topo.edge(edge)?.curve();
+    Ok(!matches!(curve, EdgeCurve::Line)
+        && profile_arc_center_radius(curve, ends.0, ends.1, axis_origin, axis).is_none()
+        && !curved_edge_reaches_axis_between_ends(topo, edge, axis_origin, axis)?)
+}
+
+/// Whether a curved profile edge comes to the axis anywhere but at an end
+/// that lies on it: from such an end it must draw away from the axis until
+/// it stands clear of it by more than a sample's chord, and then keep clear
+/// as [`curved_edge_reaches_axis`] reads it. A dome's meridian, one end on
+/// the axis, does not; an arc dipping back to the axis between its ends
+/// does.
+fn curved_edge_reaches_axis_between_ends(
+    topo: &Topology,
+    edge_id: brepkit_topology::edge::EdgeId,
+    axis_origin: Point3,
+    axis: Vec3,
+) -> Result<bool, crate::OperationsError> {
+    const SAMPLES: usize = 256;
+    let edge = topo.edge(edge_id)?;
+    let curve = edge.curve();
+    if matches!(curve, EdgeCurve::Line) {
+        return Ok(false);
+    }
+    let (a, b) = (
+        topo.vertex(edge.start())?.point(),
+        topo.vertex(edge.end())?.point(),
+    );
+    let (t0, t1) = curve.domain_with_endpoints(a, b);
+    #[allow(clippy::cast_precision_loss)]
+    let pts: Vec<Point3> = (0..=SAMPLES)
+        .map(|k| curve.evaluate_with_endpoints(t0 + (t1 - t0) * k as f64 / SAMPLES as f64, a, b))
+        .collect();
+    let lin = Tolerance::new().linear;
+    let r: Vec<f64> = pts
+        .iter()
+        .map(|&p| radial_axial(p, axis_origin, axis).0)
+        .collect();
+    let near = |k: usize| r[k] <= (pts[k + 1] - pts[k]).length() + lin;
+    // The runs off each on-axis end, while still near the axis and drawing
+    // away from it.
+    let mut lo = 0;
+    if r[0] <= lin {
+        while lo < SAMPLES && near(lo) && r[lo + 1] > r[lo] {
+            lo += 1;
+        }
+    }
+    let mut hi = SAMPLES;
+    if r[SAMPLES] <= lin {
+        while hi > lo && r[hi] <= (pts[hi] - pts[hi - 1]).length() + lin && r[hi - 1] > r[hi] {
+            hi -= 1;
+        }
+    }
+    Ok((lo..hi).any(near))
 }
 
 #[cfg(test)]

@@ -10,7 +10,8 @@ use super::TriangleMeshUV;
 use super::edge_sampling::{edge_sample_count, plane_axes, segments_for_chord_deviation_a};
 use super::nurbs::{
     compute_angular_range, compute_axial_range, compute_sphere_v_range, compute_torus_v_range,
-    compute_v_param_range, sphere_analytic_kind, tessellate_nurbs, tessellate_periodic_nurbs_grid,
+    compute_v_param_range, sphere_analytic_kind, tessellate_closed_nurbs_grid, tessellate_nurbs,
+    tessellate_periodic_nurbs_grid,
 };
 use super::planar::{tessellate_analytic, tessellate_analytic_with_boundary, tessellate_planar};
 
@@ -168,6 +169,48 @@ fn covers_whole_domain(
         }
     }
     Ok(true)
+}
+
+/// Whether each end of a surface's `v` is a pole: its row of control points
+/// one point.
+fn poles_at_both_v_ends(surface: &brepkit_math::nurbs::surface::NurbsSurface) -> bool {
+    let cps = surface.control_points();
+    let lin = brepkit_math::tolerance::Tolerance::new().linear;
+    let pole = |pick: fn(&Vec<brepkit_math::vec::Point3>) -> Option<&brepkit_math::vec::Point3>| {
+        let mut row = cps.iter().filter_map(pick);
+        row.next()
+            .is_some_and(|&p0| row.all(|&p| (p - p0).length() <= lin))
+    };
+    cps.first().is_some_and(|r| r.len() >= 2) && pole(|r| r.first()) && pole(|r| r.last())
+}
+
+/// Whether a face's wire is only its seam, run once each way, and closed
+/// rims, with no holes: the whole of a surface that closes round a turn.
+fn seam_bounded(
+    topo: &Topology,
+    face_data: &brepkit_topology::face::Face,
+) -> Result<bool, crate::OperationsError> {
+    if !face_data.inner_wires().is_empty() {
+        return Ok(false);
+    }
+    let edges = topo.wire(face_data.outer_wire())?.edges();
+    let mut seam_uses = 0;
+    for oe in edges {
+        let edge = topo.edge(oe.edge())?;
+        if edge.start() == edge.end() {
+            continue;
+        }
+        let uses: Vec<bool> = edges
+            .iter()
+            .filter(|o| o.edge() == oe.edge())
+            .map(brepkit_topology::wire::OrientedEdge::is_forward)
+            .collect();
+        if uses.len() != 2 || uses[0] == uses[1] {
+            return Ok(false);
+        }
+        seam_uses += 1;
+    }
+    Ok(seam_uses == 2)
 }
 
 /// Whether a NURBS face's boundary runs along its surface's domain edges
@@ -336,6 +379,13 @@ pub(super) fn tessellate_with_uvs_floor(
                     && covers_whole_domain(topo, face_data)? =>
             {
                 tessellate_periodic_nurbs_grid(surface, deflection, angular_tol)
+            }
+            FaceSurface::Nurbs(surface)
+                if surface.is_periodic_u()
+                    && poles_at_both_v_ends(surface)
+                    && seam_bounded(topo, face_data)? =>
+            {
+                tessellate_closed_nurbs_grid(surface, deflection, angular_tol, false)
             }
             FaceSurface::Nurbs(surface) => tessellate_nurbs(surface, deflection, angular_tol),
             FaceSurface::Cylinder(cyl) => {

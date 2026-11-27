@@ -663,7 +663,9 @@ pub fn face_contains_each(
             let boundary = build_uv_boundary(&verts, &project, false);
             // A closed surface's seam copies project to one `u`, folding its
             // loop flat: such a face is the whole surface.
-            let whole = verts.len() < 3 || uv_area(&boundary) <= 1e-9 * uv_extent(&boundary);
+            let whole = verts.len() < 3
+                || uv_area(&boundary) <= 1e-9 * uv_extent(&boundary)
+                || bounds_whole_closed_surface(topo, face_id, surface)?;
             let holes = Holes::new();
             points
                 .iter()
@@ -681,6 +683,59 @@ pub fn face_contains_each(
                 .collect()
         }
     }
+}
+
+/// Whether a NURBS face's outer wire bounds the whole of its surface, which
+/// closes round `u` or `v`: the wire runs its seam once each way, and its
+/// other edges are closed rims. Its loop in `(u, v)` need not fold flat: a
+/// wall turned a whole turn that closes to a pole (a dome, an egg) has its
+/// pole project to any `u`, which gives the loop a sliver of area.
+fn bounds_whole_closed_surface(
+    topo: &Topology,
+    face_id: FaceId,
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+) -> Result<bool, CheckError> {
+    let cps = surface.control_points();
+    let (Some(first), Some(last)) = (cps.first(), cps.last()) else {
+        return Ok(false);
+    };
+    let size = cps
+        .iter()
+        .flatten()
+        .fold(0.0_f64, |m, p| m.max((*p - first[0]).length()));
+    let near = 1e-9 * size.max(1.0);
+    let same = |a: &[Point3], b: &[Point3]| {
+        a.len() == b.len() && a.iter().zip(b).all(|(p, q)| (*p - *q).length() <= near)
+    };
+    let closed_u = same(first, last);
+    let closed_v = cps.iter().all(|row| {
+        row.first()
+            .zip(row.last())
+            .is_some_and(|(a, b)| (*a - *b).length() <= near)
+    });
+    if !closed_u && !closed_v {
+        return Ok(false);
+    }
+    let wire = topo.wire(topo.face(face_id)?.outer_wire())?;
+    let mut seams = 0;
+    for oe in wire.edges() {
+        let edge = topo.edge(oe.edge())?;
+        if edge.start() == edge.end() {
+            continue;
+        }
+        let uses: Vec<bool> = wire
+            .edges()
+            .iter()
+            .filter(|o| o.edge() == oe.edge())
+            .map(brepkit_topology::wire::OrientedEdge::is_forward)
+            .collect();
+        if uses.len() != 2 || uses[0] == uses[1] {
+            return Ok(false);
+        }
+        seams += 1;
+    }
+    // Each seam use is counted once: one seam is two uses.
+    Ok(seams == 2)
 }
 
 /// A NURBS face's outer loop and holes in its patch's parameters, as
@@ -707,7 +762,9 @@ impl NurbsFaceRegion {
         let project = |q: Point3| -> (f64, f64) { surface.project_point(q) };
         let verts = face_polygon(topo, face_id)?;
         let boundary = build_uv_boundary(&verts, &project, false);
-        let whole = verts.len() < 3 || uv_area(&boundary) <= 1e-9 * uv_extent(&boundary);
+        let whole = verts.len() < 3
+            || uv_area(&boundary) <= 1e-9 * uv_extent(&boundary)
+            || bounds_whole_closed_surface(topo, face_id, surface)?;
         let mut holes = Vec::new();
         for &iw in topo.face(face_id)?.inner_wires() {
             let hole = crate::util::wire_polygon(topo, iw)?;
@@ -1413,7 +1470,9 @@ fn ray_crossings_nurbs(
         boundary
     } else {
         let verts = face_polygon(topo, face_id)?;
-        let boundary = if verts.len() < 3 {
+        // A wall bounded by its rims and seam is the whole surface, its pole
+        // (a dome's, an egg's) projecting to any `u`.
+        let boundary = if verts.len() < 3 || bounds_whole_closed_surface(topo, face_id, surface)? {
             None
         } else {
             let outer = nurbs_uv_polygon(&verts, surface, periods);
