@@ -184,8 +184,8 @@ fn poles_at_both_v_ends(surface: &brepkit_math::nurbs::surface::NurbsSurface) ->
     cps.first().is_some_and(|r| r.len() >= 2) && pole(|r| r.first()) && pole(|r| r.last())
 }
 
-/// Whether a face's wire is only its seam, run once each way, and closed
-/// rims, with no holes: the whole of a surface that closes round a turn.
+/// Whether a face's wire is only its seam, run once each way, with no holes:
+/// the whole of a surface that closes round a turn to a pole at each end.
 fn seam_bounded(
     topo: &Topology,
     face_data: &brepkit_topology::face::Face,
@@ -197,8 +197,9 @@ fn seam_bounded(
     let mut seam_uses = 0;
     for oe in edges {
         let edge = topo.edge(oe.edge())?;
+        // A closed rim would bound a band, not the whole surface.
         if edge.start() == edge.end() {
-            continue;
+            return Ok(false);
         }
         let uses: Vec<bool> = edges
             .iter()

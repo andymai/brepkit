@@ -716,11 +716,33 @@ fn bounds_whole_closed_surface(
     if !closed_u && !closed_v {
         return Ok(false);
     }
+    // A closed rim bounds the whole surface only where it is the surface's
+    // own end along its open direction: a band between two closed curves
+    // round the middle of the wall has the same wire.
+    let ((u0, u1), (v0, v1)) = (surface.domain_u(), surface.domain_v());
+    let on_an_end = |p: Point3| {
+        let (u, v) = surface.project_point(p);
+        let (t, lo, hi) = if closed_u { (v, v0, v1) } else { (u, u0, u1) };
+        let reach = 1e-6 * (hi - lo);
+        ((t - lo).abs() <= reach || (t - hi).abs() <= reach)
+            && (surface.evaluate(u, v) - p).length() <= 1e-6 * size.max(1.0)
+    };
     let wire = topo.wire(topo.face(face_id)?.outer_wire())?;
     let mut seams = 0;
     for oe in wire.edges() {
         let edge = topo.edge(oe.edge())?;
         if edge.start() == edge.end() {
+            let at = topo.vertex(edge.start())?.point();
+            let (t0, t1) = edge.curve().domain_with_endpoints(at, at);
+            let on_end = [0.25, 0.5, 0.75].iter().all(|&f| {
+                on_an_end(
+                    edge.curve()
+                        .evaluate_with_endpoints(t0 + (t1 - t0) * f, at, at),
+                )
+            });
+            if !on_end {
+                return Ok(false);
+            }
             continue;
         }
         let uses: Vec<bool> = wire
