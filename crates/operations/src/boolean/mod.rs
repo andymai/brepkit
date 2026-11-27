@@ -1045,6 +1045,27 @@ fn boolean_inner(
                 "GFA boolean failed in {:.1}ms ({e}), falling back",
                 timer_elapsed_ms(gfa_start)
             );
+            // A wall closed round a turn as one B-spline (a tube, a prism's
+            // side on a closed profile, as files write them) splits into
+            // nothing: the face splitter reads every B-spline surface as an
+            // open patch, so its rims close to points in (u, v). Split in
+            // two, its halves are open patches like any other. The retry is
+            // kept only where it stays exact; otherwise the paths below take
+            // the inputs as they came.
+            let split_a = crate::heal::with_tubes_split(topo, a)?;
+            let split_b = crate::heal::with_tubes_split(topo, b)?;
+            if split_a.is_some() || split_b.is_some() {
+                log::debug!("boolean: retrying with B-spline tubes split in two");
+                let (retried, declined) = without_mesh_fallback(|| {
+                    boolean_inner(topo, op, split_a.unwrap_or(a), split_b.unwrap_or(b))
+                });
+                match retried {
+                    Ok(result) if !declined => return Ok(result),
+                    Ok(_) | Err(_) => {
+                        log::debug!("boolean: the split tubes did not stay exact");
+                    }
+                }
+            }
         }
     }
 
