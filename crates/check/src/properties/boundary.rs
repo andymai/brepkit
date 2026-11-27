@@ -127,6 +127,15 @@ fn add(acc: &mut [f64; 8], g: &[f64; 8], w: f64) {
 /// `∫ f` over `[a, b]` by `rule`, each interval halved until its two halves
 /// agree with it to 1e-12 of their size or to `floor`, or `None` past
 /// `depth` halvings or where `f` is.
+///
+/// Within a panel `f` is smooth, so each halving shrinks the gap between an
+/// interval's reading and its halves' by about `2^(2n+1)` for an `n`-point
+/// rule. Rounding in `f`'s samples shrinks only with the interval's width:
+/// where a surface is evaluated in a knot span far narrower than its
+/// domain, its partials lose digits, and the gap settles at that noise
+/// above 1e-12 however deep the halving goes. A halving that shrinks the
+/// gap less than eightfold, the gap already within 1e-9 of the size, is
+/// taken as at that floor, and its halves are kept.
 fn adaptive(
     f: &mut dyn FnMut(f64) -> Option<[f64; 8]>,
     a: f64,
@@ -134,6 +143,19 @@ fn adaptive(
     rule: &[brepkit_math::quadrature::GaussPoint],
     depth: u32,
     floor: f64,
+) -> Option<[f64; 8]> {
+    adaptive_below(f, a, b, rule, depth, floor, f64::INFINITY)
+}
+
+/// [`adaptive`] on half of an interval whose own gap was `parent_gap`.
+fn adaptive_below(
+    f: &mut dyn FnMut(f64) -> Option<[f64; 8]>,
+    a: f64,
+    b: f64,
+    rule: &[brepkit_math::quadrature::GaussPoint],
+    depth: u32,
+    floor: f64,
+    parent_gap: f64,
 ) -> Option<[f64; 8]> {
     let mut over = |a: f64, b: f64| -> Option<[f64; 8]> {
         let (half, mid) = (0.5 * (b - a), 0.5 * (a + b));
@@ -153,14 +175,18 @@ fn adaptive(
         .iter()
         .zip(&halves)
         .fold(0.0_f64, |m, (x, y)| m.max((x - y).abs()));
-    if gap <= (1e-12 * size).max(floor) {
+    if gap <= (1e-12 * size).max(floor) || (gap <= 1e-9 * size && gap > parent_gap / 8.0) {
         return Some(halves);
     }
     if depth == 0 {
         return None;
     }
-    let mut sum = adaptive(f, a, m, rule, depth - 1, floor)?;
-    add(&mut sum, &adaptive(f, m, b, rule, depth - 1, floor)?, 1.0);
+    let mut sum = adaptive_below(f, a, m, rule, depth - 1, floor, gap)?;
+    add(
+        &mut sum,
+        &adaptive_below(f, m, b, rule, depth - 1, floor, gap)?,
+        1.0,
+    );
     Some(sum)
 }
 
@@ -1229,34 +1255,35 @@ fn is_side(s: &NurbsSurface, c: &NurbsCurve, k: usize, reach: f64) -> bool {
     );
     let (mine, theirs) = (unit(c.knots()), unit(knots));
     let close = |p: &Point3, q: &Point3| (*p - *q).length() <= reach;
+    let spans = |ks: &[f64]| -> Vec<f64> { ks.windows(2).map(|w| w[1] - w[0]).collect() };
     // Knots match to rounding only: knots a hair apart can bound a
-    // different curve on the same control points.
+    // different curve on the same control points. Each span is read
+    // against the side's: a file's digits, or mirroring a reversed curve,
+    // round on the (unit) domain's scale, so a span may be off by a few
+    // ulps of the domain. That alone could hide a knot moved inside a
+    // narrow span, so the difference must also be a hair of the span
+    // itself (1e-9 of it moves the curve far less than the control
+    // points' `reach`).
+    let spans_match = |a: &[f64], b: &[f64]| {
+        a.iter().zip(b).all(|(&a, &b)| {
+            let (d, span) = ((a - b).abs(), a.abs().max(b.abs()));
+            d <= 4.0 * f64::EPSILON * span || (d <= 4.0 * f64::EPSILON && d <= 1e-9 * span)
+        })
+    };
+    let theirs = spans(&theirs);
     let forward = weighs_forward
         && c.control_points()
             .iter()
             .zip(&row)
             .all(|(p, q)| close(p, q))
-        && mine
-            .iter()
-            .zip(&theirs)
-            .all(|(a, b)| a.to_bits() == b.to_bits());
+        && spans_match(&spans(&mine), &theirs);
     let backward = weighs_backward
         && c.control_points()
             .iter()
             .rev()
             .zip(&row)
             .all(|(p, q)| close(p, q))
-        && {
-            // Read reversed, each span against the side's at its own
-            // scale: mirroring rounds on the domain's scale, which can
-            // hide a knot moved inside a narrow span.
-            let back: Vec<f64> = mine.windows(2).rev().map(|w| w[1] - w[0]).collect();
-            theirs
-                .windows(2)
-                .map(|w| w[1] - w[0])
-                .zip(&back)
-                .all(|(a, &b)| (a - b).abs() <= 4.0 * f64::EPSILON * a.abs().max(b.abs()))
-        };
+        && spans_match(&spans(&mine).into_iter().rev().collect::<Vec<_>>(), &theirs);
     forward || backward
 }
 
@@ -2410,5 +2437,82 @@ mod tests {
         }
         assert_eq!(cases, 8000);
         assert!(worst < 2e-14, "worst relative gap {worst:e}");
+    }
+
+    /// A sample noisy at 1e-11 of its value (as a surface's partials are in
+    /// a knot span far narrower than its domain) settles once its halving
+    /// stops shrinking the gap, rather than halving to the depth limit.
+    #[test]
+    fn a_noisy_integrand_settles_at_its_noise() {
+        let mut calls = 0_usize;
+        let mut f = |x: f64| {
+            calls += 1;
+            // Deterministic noise in [-1, 1) from the sample's bits.
+            let h = x.to_bits().wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 11;
+            #[allow(clippy::cast_precision_loss)]
+            let noise = (h as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0);
+            let y = (1.0 + x * x) * 1e-11_f64.mul_add(noise, 1.0);
+            Some([y, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+        };
+        let got = adaptive(&mut f, 0.0, 1.0, gauss_legendre_points(7), 16, 0.0).expect("settles");
+        assert!((got[0] - 4.0 / 3.0).abs() <= 1e-9, "{}", got[0]);
+        assert!(calls < 1000, "{calls} samples");
+    }
+
+    /// A surface degree 1 by 5, its `v` knots spaced unevenly with a narrow
+    /// span at each end, far from the origin.
+    fn uneven_wall() -> NurbsSurface {
+        let mut knots = vec![0.0; 6];
+        knots.extend((0..42).map(|i| 0.004_479_693_2 + f64::from(i) * 0.017_465_268_540_34));
+        knots.extend([0.720_737_912_445_508; 6]);
+        let n = knots.len() - 6;
+        let row = |z: f64| -> Vec<Point3> {
+            (0..n)
+                .map(|j| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let t = j as f64 / (n - 1) as f64;
+                    Point3::new(-39.0 - 2.5 * t, 60.0 - (3.0 * t).sin(), z)
+                })
+                .collect()
+        };
+        NurbsSurface::new(
+            1,
+            5,
+            vec![0.0, 0.0, 1.0, 1.0],
+            knots,
+            vec![row(12.0), row(2.0)],
+            vec![vec![1.0; n]; 2],
+        )
+        .unwrap()
+    }
+
+    /// A side's curve read back with its knots off by rounding (a file's
+    /// digits, or mirrored to run the other way) is still the side; a knot
+    /// moved past rounding inside a narrow span is not.
+    #[test]
+    fn a_side_matches_through_its_knots_rounding() {
+        let s = uneven_wall();
+        let (row, _) = side_row(&s, 1);
+        let knots = s.knots_v().to_vec();
+        let hi = knots[knots.len() - 1];
+        let reach = 1e-9;
+        // Mirrored, as the curve run the other way.
+        let mirrored: Vec<f64> = knots.iter().rev().map(|&k| hi - k).collect();
+        let back: Vec<Point3> = row.iter().rev().copied().collect();
+        let n = row.len();
+        let reversed = NurbsCurve::new(5, mirrored.clone(), back.clone(), vec![1.0; n]).unwrap();
+        assert!(is_side(&s, &reversed, 1, reach));
+        // Each inner knot a unit in the last place of the domain off.
+        let mut nudged = knots.clone();
+        for k in &mut nudged[6..knots.len() - 6] {
+            *k += f64::EPSILON * hi;
+        }
+        let forward = NurbsCurve::new(5, nudged, row, vec![1.0; n]).unwrap();
+        assert!(is_side(&s, &forward, 1, reach));
+        // A knot moved 1e-7 inside the narrow end span is another curve.
+        let mut moved = mirrored;
+        moved[6] += 1e-7;
+        let other = NurbsCurve::new(5, moved, back, vec![1.0; n]).unwrap();
+        assert!(!is_side(&s, &other, 1, reach));
     }
 }
