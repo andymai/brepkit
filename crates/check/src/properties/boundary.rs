@@ -1276,16 +1276,51 @@ fn is_side(s: &NurbsSurface, c: &NurbsCurve, k: usize, reach: f64) -> bool {
 /// [`MAX_WEIGHT_RATIO`] times another, so its sides are the outer rows of
 /// its control points, which bound them, and its integrands are smooth in
 /// each panel. `None` for any other face.
+///
+/// A band closed along `u` instead (a wall turned a whole turn about an
+/// axis, the turn along `u`) is read as its transpose, `u` and `v` swapped,
+/// whose normal is the other way: its integrals are the same under the
+/// other sign.
 pub(super) fn nurbs_face_over_domain(
     topo: &Topology,
     face: &Face,
     sign: f64,
     about: Vec3,
 ) -> Result<Option<FaceContribution>, CheckError> {
-    const DEPTH: u32 = 24;
     let FaceSurface::Nurbs(s) = face.surface() else {
         return Ok(None);
     };
+    if closed_along_u_and_poleless(s) {
+        fn transpose<T: Copy>(grid: &[Vec<T>]) -> Vec<Vec<T>> {
+            (0..grid.first().map_or(0, Vec::len))
+                .map(|j| grid.iter().map(|row| row[j]).collect())
+                .collect()
+        }
+        let Ok(t) = NurbsSurface::new(
+            s.degree_v(),
+            s.degree_u(),
+            s.knots_v().to_vec(),
+            s.knots_u().to_vec(),
+            transpose(s.control_points()),
+            transpose(s.weights()),
+        ) else {
+            return Ok(None);
+        };
+        return surface_over_domain(topo, face, &t, -sign, about);
+    }
+    surface_over_domain(topo, face, s, sign, about)
+}
+
+/// [`nurbs_face_over_domain`] on the face's surface or its transpose.
+#[allow(clippy::too_many_lines)]
+fn surface_over_domain(
+    topo: &Topology,
+    face: &Face,
+    s: &NurbsSurface,
+    sign: f64,
+    about: Vec3,
+) -> Result<Option<FaceContribution>, CheckError> {
+    const DEPTH: u32 = 24;
     let clamped = |knots: &[f64], degree: usize| {
         knots.len() > 2 * degree + 1
             && knots[..=degree]
@@ -2095,6 +2130,19 @@ fn closed_along_v_and_poleless(s: &brepkit_math::nurbs::surface::NurbsSurface) -
         && sides.iter().all(|p| length(p) > near)
 }
 
+/// Whether a NURBS surface closes on itself along `u` alone, its first and
+/// last rows across `v` one curve (a wall turned a whole turn, the turn
+/// along `u`), and shrinks to a point along no side.
+fn closed_along_u_and_poleless(s: &brepkit_math::nurbs::surface::NurbsSurface) -> bool {
+    let (sides, near) = side_samples(s);
+    let length = |pts: &[Point3]| pts.windows(2).map(|w| (w[1] - w[0]).length()).sum::<f64>();
+    let same =
+        |a: &[Point3], b: &[Point3]| a.iter().zip(b).all(|(p, q)| (*p - *q).length() <= near);
+    same(&sides[0], &sides[1])
+        && !same(&sides[2], &sides[3])
+        && sides.iter().all(|p| length(p) > near)
+}
+
 /// Samples along each side of a NURBS surface's domain, `u = u0`, `u = u1`,
 /// `v = v0` and `v = v1` in turn, and the distance within which two points
 /// of it are one; an empty list and no distance for a surface of no size.
@@ -2410,5 +2458,119 @@ mod tests {
         }
         assert_eq!(cases, 8000);
         assert!(worst < 2e-14, "worst relative gap {worst:e}");
+    }
+
+    /// A cylinder wall of radius 5 and height 10 about z, a rational B-spline
+    /// turned a whole turn in quarters, the turn along `u` (as a revolve's
+    /// full turn builds it) or along `v`, its face bounded by both rims and
+    /// its seam each way.
+    fn whole_turn_wall(turn_along_u: bool) -> (Topology, brepkit_topology::face::FaceId) {
+        use brepkit_topology::edge::Edge;
+        use brepkit_topology::vertex::Vertex;
+        use brepkit_topology::wire::{OrientedEdge, Wire};
+        let h = std::f64::consts::FRAC_1_SQRT_2;
+        let ring = [
+            (1.0, 0.0, 1.0),
+            (1.0, 1.0, h),
+            (0.0, 1.0, 1.0),
+            (-1.0, 1.0, h),
+            (-1.0, 0.0, 1.0),
+            (-1.0, -1.0, h),
+            (0.0, -1.0, 1.0),
+            (1.0, -1.0, h),
+            (1.0, 0.0, 1.0),
+        ];
+        let turn_knots = vec![
+            0.0, 0.0, 0.0, 0.25, 0.25, 0.5, 0.5, 0.75, 0.75, 1.0, 1.0, 1.0,
+        ];
+        let rim = |z: f64| -> (Vec<Point3>, Vec<f64>) {
+            ring.iter()
+                .map(|&(x, y, w)| (Point3::new(5.0 * x, 5.0 * y, z), w))
+                .unzip()
+        };
+        let (bottom, w) = (rim(0.0).0, rim(0.0).1);
+        let top = rim(10.0).0;
+        // Rows along `u`: the turn's nine points at each height, or the two
+        // heights at each of the turn's points.
+        let surface = if turn_along_u {
+            NurbsSurface::new(
+                2,
+                1,
+                turn_knots.clone(),
+                vec![0.0, 0.0, 1.0, 1.0],
+                bottom.iter().zip(&top).map(|(&b, &t)| vec![b, t]).collect(),
+                w.iter().map(|&w| vec![w, w]).collect(),
+            )
+        } else {
+            NurbsSurface::new(
+                1,
+                2,
+                vec![0.0, 0.0, 1.0, 1.0],
+                turn_knots.clone(),
+                vec![bottom.clone(), top.clone()],
+                vec![w.clone(), w.clone()],
+            )
+        }
+        .unwrap();
+        let mut topo = Topology::new();
+        let a = topo.add_vertex(Vertex::new(bottom[0], 1e-7));
+        let b = topo.add_vertex(Vertex::new(top[0], 1e-7));
+        let rim_edge = |topo: &mut Topology, v, pts: Vec<Point3>| {
+            let c = NurbsCurve::new(2, turn_knots.clone(), pts, w.clone()).unwrap();
+            topo.add_edge(Edge::new(v, v, EdgeCurve::NurbsCurve(c)))
+        };
+        let low = rim_edge(&mut topo, a, bottom);
+        let high = rim_edge(&mut topo, b, top);
+        let seam = topo.add_edge(Edge::new(a, b, EdgeCurve::Line));
+        let wire = Wire::new(
+            vec![
+                OrientedEdge::new(low, true),
+                OrientedEdge::new(seam, true),
+                OrientedEdge::new(high, false),
+                OrientedEdge::new(seam, false),
+            ],
+            true,
+        )
+        .unwrap();
+        let wire = topo.add_wire(wire);
+        let face = topo.add_face(Face::new(wire, vec![], FaceSurface::Nurbs(surface)));
+        (topo, face)
+    }
+
+    /// A wall turned a whole turn along `u` is read over its domain, through
+    /// its transpose, as one turned along `v` is: the same area, volume and
+    /// moments, the cylinder's own (the boundary path projects every point
+    /// of its boundary, several times slower).
+    #[test]
+    fn a_wall_closed_along_u_is_read_over_its_domain() {
+        let zero = Vec3::new(0.0, 0.0, 0.0);
+        // Turned along `v`, the wall's partials (up, then round) face it in.
+        let read = |along_u: bool| {
+            let (topo, face) = whole_turn_wall(along_u);
+            let sign = if along_u { 1.0 } else { -1.0 };
+            nurbs_face_over_domain(&topo, topo.face(face).unwrap(), sign, zero)
+                .unwrap()
+                .expect("the whole wall reads over its domain")
+        };
+        let (u, v) = (read(true), read(false));
+        let area = TAU * 5.0 * 10.0;
+        // (1/3) ∫ P·N dA: the radius over the whole wall.
+        let volume = 5.0 * area / 3.0;
+        for c in [&u, &v] {
+            assert!((c.area - area).abs() <= 1e-12 * area, "area {}", c.area);
+            assert!(
+                (c.volume - volume).abs() <= 1e-12 * volume,
+                "volume {}",
+                c.volume
+            );
+        }
+        for (a, b) in [
+            (u.volume_moment_x, v.volume_moment_x),
+            (u.volume_moment_y, v.volume_moment_y),
+            (u.volume_moment_z, v.volume_moment_z),
+            (u.centroid_z, v.centroid_z),
+        ] {
+            assert!((a - b).abs() <= 1e-9 * a.abs().max(1.0), "{a} against {b}");
+        }
     }
 }
