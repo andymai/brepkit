@@ -2194,3 +2194,365 @@ pub fn convert_to_elementary(
 
 #[cfg(test)]
 mod tests;
+
+/// `solid`'s copy with each B-spline tube split in two, or `None` when it
+/// has none.
+///
+/// A tube is a face on a B-spline surface closed in one direction, bounded
+/// by its two rims and the seam between them, run once each way. The
+/// boolean engine reads a B-spline face's parameters as bounded, so the
+/// tube's rims close up to points there and the seam's two runs lie on one
+/// line: a tube cut by sections splits into nothing. Each half lies on its
+/// own piece of the surface, cut at the middle of the closed direction, and
+/// the halves meet along the seam and the line across the middle.
+///
+/// # Errors
+///
+/// Returns an error if a topology lookup or the copy fails.
+pub(crate) fn with_tubes_split(
+    topo: &mut Topology,
+    solid: SolidId,
+) -> Result<Option<SolidId>, crate::OperationsError> {
+    let any = brepkit_topology::explorer::solid_faces(topo, solid)?
+        .into_iter()
+        .map(|f| tube_split_plan(topo, f).map(|p| p.is_some()))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .any(|t| t);
+    if !any {
+        return Ok(None);
+    }
+    let copy = crate::copy::copy_solid(topo, solid)?;
+    let shells: Vec<_> = {
+        let s = topo.solid(copy)?;
+        std::iter::once(s.outer_shell())
+            .chain(s.inner_shells().iter().copied())
+            .collect()
+    };
+    let mut split = 0;
+    let mut rims: Vec<(EdgeId, [EdgeId; 2])> = Vec::new();
+    for &shell in &shells {
+        let faces = topo.shell(shell)?.faces().to_vec();
+        let mut kept = Vec::with_capacity(faces.len() + 2);
+        for f in faces {
+            match tube_split_plan(topo, f)? {
+                Some(plan) => match split_tube(topo, f, &plan, &mut rims) {
+                    Ok(halves) => {
+                        kept.extend(halves);
+                        split += 1;
+                    }
+                    Err(e) => {
+                        log::debug!("with_tubes_split: face {f:?} kept whole: {e}");
+                        kept.push(f);
+                    }
+                },
+                None => kept.push(f),
+            }
+        }
+        *topo.shell_mut(shell)? = Shell::new(kept).map_err(crate::OperationsError::Topology)?;
+    }
+    // The other faces on a split rim (a prism's caps) take its two pieces,
+    // so they share edges with the tube's halves.
+    if !rims.is_empty() {
+        for &shell in &shells {
+            for f in topo.shell(shell)?.faces().to_vec() {
+                let data = topo.face(f)?;
+                let wires: Vec<_> = std::iter::once(data.outer_wire())
+                    .chain(data.inner_wires().iter().copied())
+                    .collect();
+                for wid in wires {
+                    let edges = topo.wire(wid)?.edges().to_vec();
+                    if !edges
+                        .iter()
+                        .any(|oe| rims.iter().any(|(r, _)| *r == oe.edge()))
+                    {
+                        continue;
+                    }
+                    let mut out = Vec::with_capacity(edges.len() + 1);
+                    for oe in edges {
+                        match rims.iter().find(|(r, _)| *r == oe.edge()) {
+                            Some((_, [first, second])) if oe.is_forward() => {
+                                out.push(OrientedEdge::new(*first, true));
+                                out.push(OrientedEdge::new(*second, true));
+                            }
+                            Some((_, [first, second])) => {
+                                out.push(OrientedEdge::new(*second, false));
+                                out.push(OrientedEdge::new(*first, false));
+                            }
+                            None => out.push(oe),
+                        }
+                    }
+                    let closed = topo.wire(wid)?.is_closed();
+                    *topo.wire_mut(wid)? =
+                        Wire::new(out, closed).map_err(crate::OperationsError::Topology)?;
+                }
+            }
+        }
+    }
+    Ok((split > 0).then_some(copy))
+}
+
+/// A tube's surface, the way round it closes (`true` for u), and its wire's
+/// four edges from the first rim: rim, seam, the other rim, seam back.
+struct TubePlan {
+    surface: brepkit_math::nurbs::surface::NurbsSurface,
+    along_u: bool,
+    edges: [OrientedEdge; 4],
+}
+
+fn tube_split_plan(
+    topo: &Topology,
+    face: FaceId,
+) -> Result<Option<TubePlan>, crate::OperationsError> {
+    let data = topo.face(face)?;
+    let FaceSurface::Nurbs(surface) = data.surface() else {
+        return Ok(None);
+    };
+    if !data.inner_wires().is_empty() {
+        return Ok(None);
+    }
+    let wire = topo.wire(data.outer_wire())?.edges().to_vec();
+    if wire.len() != 4 {
+        return Ok(None);
+    }
+    let closed = |oe: &OrientedEdge| -> Result<bool, crate::OperationsError> {
+        Ok(topo.edge(oe.edge())?.is_closed())
+    };
+    let Some(first) = (0..4).find(|&i| closed(&wire[i]).unwrap_or(false)) else {
+        return Ok(None);
+    };
+    let edges: [OrientedEdge; 4] = std::array::from_fn(|k| wire[(first + k) % 4]);
+    if !closed(&edges[2])?
+        || closed(&edges[1])?
+        || edges[1].edge() != edges[3].edge()
+        || edges[1].is_forward() == edges[3].is_forward()
+    {
+        return Ok(None);
+    }
+    // The surface meets itself across one direction: its two boundary
+    // lines there coincide.
+    let ((u0, u1), (v0, v1)) = (surface.domain_u(), surface.domain_v());
+    let size = {
+        let rows = surface.control_points();
+        let mut lo = rows[0][0];
+        let mut hi = lo;
+        for p in rows.iter().flatten() {
+            lo = Point3::new(lo.x().min(p.x()), lo.y().min(p.y()), lo.z().min(p.z()));
+            hi = Point3::new(hi.x().max(p.x()), hi.y().max(p.y()), hi.z().max(p.z()));
+        }
+        (hi - lo).length().max(1e-9)
+    };
+    let meets = |a: &dyn Fn(f64) -> Point3, b: &dyn Fn(f64) -> Point3| {
+        (0..=16).all(|k| {
+            let t = f64::from(k) / 16.0;
+            (a(t) - b(t)).length() <= 1e-7 * size
+        })
+    };
+    let closes_u = meets(&|t| surface.evaluate(u0, (v1 - v0).madd(t, v0)), &|t| {
+        surface.evaluate(u1, (v1 - v0).madd(t, v0))
+    });
+    let closes_v = meets(&|t| surface.evaluate((u1 - u0).madd(t, u0), v0), &|t| {
+        surface.evaluate((u1 - u0).madd(t, u0), v1)
+    });
+    if closes_u == closes_v {
+        return Ok(None);
+    }
+    Ok(Some(TubePlan {
+        surface: surface.clone(),
+        along_u: closes_u,
+        edges,
+    }))
+}
+
+/// The nearest point of `curve` to `p`, as a parameter for a B-spline or an
+/// angle for a conic, with its distance; `None` for a line.
+fn nearest_on(curve: &EdgeCurve, p: Point3) -> Option<(f64, f64)> {
+    match curve {
+        EdgeCurve::Line => None,
+        EdgeCurve::Circle(c) => {
+            let t = c.project(p);
+            Some((t, (c.evaluate(t) - p).length()))
+        }
+        EdgeCurve::Ellipse(e) => {
+            let t = e.project(p);
+            Some((t, (e.evaluate(t) - p).length()))
+        }
+        EdgeCurve::NurbsCurve(n) => {
+            brepkit_math::nurbs::projection::project_point_to_curve(n, p, 1e-10)
+                .ok()
+                .map(|r| (r.parameter, r.distance))
+        }
+    }
+}
+
+/// The two pieces of the closed edge `edge` either side of `at` (a new
+/// vertex on it), in the curve's own order: from the edge's vertex to `at`,
+/// and on round.
+fn split_rim(
+    topo: &mut Topology,
+    edge: EdgeId,
+    at: VertexId,
+) -> Result<[EdgeId; 2], crate::OperationsError> {
+    let (curve, start, tolerance) = {
+        let e = topo.edge(edge)?;
+        (e.curve().clone(), e.start(), e.tolerance())
+    };
+    let p = topo.vertex(at)?.point();
+    let fail = |why: &str| crate::OperationsError::InvalidInput {
+        reason: format!("splitting a tube's rim: {why}"),
+    };
+    let (first, second) = match &curve {
+        EdgeCurve::NurbsCurve(n) => {
+            let (t, _) = nearest_on(&curve, p).ok_or_else(|| fail("no nearest point"))?;
+            let pieces = brepkit_heal::upgrade::split_curve::split_curve_at_params(n, &[t])
+                .map_err(|e| fail(&e.to_string()))?;
+            let [a, b] = <[_; 2]>::try_from(pieces).map_err(|_| fail("the point is an end"))?;
+            (EdgeCurve::NurbsCurve(a), EdgeCurve::NurbsCurve(b))
+        }
+        EdgeCurve::Circle(_) | EdgeCurve::Ellipse(_) => (curve.clone(), curve),
+        EdgeCurve::Line => return Err(fail("a line is not closed")),
+    };
+    let make =
+        |topo: &mut Topology, s, e, c| topo.add_edge(Edge::with_tolerance(s, e, c, tolerance));
+    Ok([make(topo, start, at, first), make(topo, at, start, second)])
+}
+
+fn split_tube(
+    topo: &mut Topology,
+    face: FaceId,
+    plan: &TubePlan,
+    rims: &mut Vec<(EdgeId, [EdgeId; 2])>,
+) -> Result<[FaceId; 2], crate::OperationsError> {
+    let fail = |why: String| crate::OperationsError::InvalidInput {
+        reason: format!("splitting a tube: {why}"),
+    };
+    let surface = &plan.surface;
+    let (lo, hi, iso) = if plan.along_u {
+        let (u0, u1) = surface.domain_u();
+        let (lo, hi) =
+            brepkit_heal::upgrade::split_surface::split_surface_at_u(surface, 0.5 * (u0 + u1))
+                .map_err(|e| fail(e.to_string()))?;
+        let rows = lo.control_points();
+        let last = rows.len() - 1;
+        let iso = brepkit_math::nurbs::curve::NurbsCurve::new(
+            lo.degree_v(),
+            lo.knots_v().to_vec(),
+            rows[last].clone(),
+            lo.weights()[last].clone(),
+        );
+        (lo, hi, iso)
+    } else {
+        let (v0, v1) = surface.domain_v();
+        let (lo, hi) =
+            brepkit_heal::upgrade::split_surface::split_surface_at_v(surface, 0.5 * (v0 + v1))
+                .map_err(|e| fail(e.to_string()))?;
+        let iso = brepkit_math::nurbs::curve::NurbsCurve::new(
+            lo.degree_u(),
+            lo.knots_u().to_vec(),
+            lo.control_points().iter().map(|r| r[r.len() - 1]).collect(),
+            lo.weights().iter().map(|r| r[r.len() - 1]).collect(),
+        );
+        (lo, hi, iso)
+    };
+    let iso = iso.map_err(|e| fail(e.to_string()))?;
+    let (p0, p1) = {
+        let (a, b) = brepkit_math::traits::ParametricCurve::domain(&iso);
+        (iso.evaluate(a), iso.evaluate(b))
+    };
+    let [rim_a, seam_x, rim_b, seam_y] = plan.edges;
+    // The middle line runs from the first rim to the other, or the other way.
+    let reach = |topo: &Topology, e: EdgeId, p: Point3| -> Result<f64, crate::OperationsError> {
+        Ok(nearest_on(topo.edge(e)?.curve(), p).map_or(f64::INFINITY, |(_, d)| d))
+    };
+    let band = 1e-6 * (p1 - p0).length().max(1.0);
+    let (iso, p0, p1) =
+        if reach(topo, rim_a.edge(), p0)? <= band && reach(topo, rim_b.edge(), p1)? <= band {
+            (EdgeCurve::NurbsCurve(iso), p0, p1)
+        } else if reach(topo, rim_a.edge(), p1)? <= band && reach(topo, rim_b.edge(), p0)? <= band {
+            (
+                EdgeCurve::NurbsCurve(iso)
+                    .reversed()
+                    .map_err(|e| fail(e.to_string()))?,
+                p1,
+                p0,
+            )
+        } else {
+            return Err(fail("the middle line misses the rims".into()));
+        };
+    let tol_of = |topo: &Topology, e: EdgeId| -> Result<f64, crate::OperationsError> {
+        Ok(topo.vertex(topo.edge(e)?.start())?.tolerance())
+    };
+    let va = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+        p0,
+        tol_of(topo, rim_a.edge())?,
+    ));
+    let vb = topo.add_vertex(brepkit_topology::vertex::Vertex::new(
+        p1,
+        tol_of(topo, rim_b.edge())?,
+    ));
+    let middle = topo.add_edge(Edge::new(va, vb, iso));
+    // Each rim's pieces in the wire's order round it: through the new
+    // vertex half way.
+    let mut in_order = |topo: &mut Topology,
+                        oe: OrientedEdge,
+                        at|
+     -> Result<[OrientedEdge; 2], crate::OperationsError> {
+        let [first, second] = split_rim(topo, oe.edge(), at)?;
+        rims.push((oe.edge(), [first, second]));
+        Ok(if oe.is_forward() {
+            [
+                OrientedEdge::new(first, true),
+                OrientedEdge::new(second, true),
+            ]
+        } else {
+            [
+                OrientedEdge::new(second, false),
+                OrientedEdge::new(first, false),
+            ]
+        })
+    };
+    let [a_in, a_out] = in_order(topo, rim_a, va)?;
+    let [b_in, b_out] = in_order(topo, rim_b, vb)?;
+    // The wire runs round the first rim to the new vertex and on to the seam,
+    // up it, round the other rim through its new vertex, and down the seam's
+    // other run. One half takes the rims' second pieces and the seam's first
+    // run, closed by the middle line from the other rim back; the other
+    // half the rest.
+    let one = vec![a_out, seam_x, b_in, OrientedEdge::new(middle, false)];
+    let two = vec![a_in, OrientedEdge::new(middle, true), b_out, seam_y];
+    let midpoint = |topo: &Topology, oe: OrientedEdge| -> Result<Point3, crate::OperationsError> {
+        let e = topo.edge(oe.edge())?;
+        let (s, t) = (
+            topo.vertex(e.start())?.point(),
+            topo.vertex(e.end())?.point(),
+        );
+        let (d0, d1) = e.curve().domain_with_endpoints(s, t);
+        Ok(e.curve().evaluate_with_endpoints(0.5 * (d0 + d1), s, t))
+    };
+    let probe = midpoint(topo, a_out)?;
+    let off = |s: &brepkit_math::nurbs::surface::NurbsSurface| {
+        brepkit_math::nurbs::projection::project_point_to_surface(s, probe, 1e-9)
+            .map_or(f64::INFINITY, |r| (r.point - probe).length())
+    };
+    let (surface_one, surface_two) = if off(&lo) <= off(&hi) {
+        (lo, hi)
+    } else {
+        (hi, lo)
+    };
+    let reversed = topo.face(face)?.is_reversed();
+    let mut halves = [face; 2];
+    for (k, (edges, surface)) in [(one, surface_one), (two, surface_two)]
+        .into_iter()
+        .enumerate()
+    {
+        let wire = topo.add_wire(Wire::new(edges, true).map_err(crate::OperationsError::Topology)?);
+        let surface = FaceSurface::Nurbs(surface);
+        let half = if reversed {
+            Face::new_reversed(wire, Vec::new(), surface)
+        } else {
+            Face::new(wire, Vec::new(), surface)
+        };
+        halves[k] = topo.add_face(half);
+    }
+    Ok(halves)
+}
