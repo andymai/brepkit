@@ -977,6 +977,19 @@ pub(super) fn tessellate_periodic_nurbs_grid(
     deflection: f64,
     angular_tol: f64,
 ) -> Result<TriangleMeshUV, crate::OperationsError> {
+    tessellate_closed_nurbs_grid(surface, deflection, angular_tol, true)
+}
+
+/// The structured grid of a surface closed round `u`, and round `v` too
+/// when `wrap_v`; otherwise each end of `v` is a pole (a whole turn's wall
+/// closing to a point at each end, an egg), its row one vertex and the
+/// grid's triangles that would collapse into it left out.
+pub(super) fn tessellate_closed_nurbs_grid(
+    surface: &brepkit_math::nurbs::surface::NurbsSurface,
+    deflection: f64,
+    angular_tol: f64,
+    wrap_v: bool,
+) -> Result<TriangleMeshUV, crate::OperationsError> {
     let (u_lo, u_hi) = surface.domain_u();
     let (v_lo, v_hi) = surface.domain_v();
     // Fewer than three divisions of a closed direction collapse its seam
@@ -998,9 +1011,11 @@ pub(super) fn tessellate_periodic_nurbs_grid(
                 u_lo + (u_hi - u_lo) * i as f64 / n_u as f64,
                 v_lo + (v_hi - v_lo) * j as f64 / n_v as f64,
             );
-            let (pos, nrm) = if i == n_u || j == n_v {
-                let k = (i % n_u) * (n_v + 1) + j % n_v;
+            let (pos, nrm) = if i == n_u || (wrap_v && j == n_v) {
+                let k = (i % n_u) * (n_v + 1) + if wrap_v { j % n_v } else { j };
                 (positions[k], normals[k])
+            } else if !wrap_v && i > 0 && (j == 0 || j == n_v) {
+                (positions[j], normals[j])
             } else {
                 (surface.evaluate(u, v), safe_normal(surface, u, v))
             };
@@ -1014,11 +1029,25 @@ pub(super) fn tessellate_periodic_nurbs_grid(
         for j in 0..n_v {
             #[allow(clippy::cast_possible_truncation)]
             let at = |a: usize, b: usize| (a * (n_v + 1) + b) as u32;
+            // A pole's row is one vertex: on a pole row's cells one of the
+            // two triangles has no area, and is left out.
+            let at = |a: usize, b: usize| {
+                if !wrap_v && (b == 0 || b == n_v) {
+                    at(0, b)
+                } else {
+                    at(a, b)
+                }
+            };
             let (i00, i10, i11, i01) = (at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1));
-            if right_handed {
-                indices.extend([i00, i10, i11, i00, i11, i01]);
+            let (first, second) = if right_handed {
+                ([i00, i10, i11], [i00, i11, i01])
             } else {
-                indices.extend([i00, i11, i10, i00, i01, i11]);
+                ([i00, i11, i10], [i00, i01, i11])
+            };
+            for tri in [first, second] {
+                if tri[0] != tri[1] && tri[1] != tri[2] && tri[0] != tri[2] {
+                    indices.extend(tri);
+                }
             }
         }
     }
