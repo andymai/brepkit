@@ -488,6 +488,7 @@ fn split_sections_at_t_junctions(
 fn split_plane_boundary_arcs_at_points(
     edges: Vec<OrientedPCurveEdge>,
     split_pts_3d: &[Point3],
+    section_ends: &[(Point3, Point3)],
     surface: &FaceSurface,
     frame: &PlaneFrame,
     tol: f64,
@@ -547,7 +548,7 @@ fn split_plane_boundary_arcs_at_points(
                         .collect()
                 }
             }
-            EdgeCurve::NurbsCurve(_) => Vec::new(),
+            EdgeCurve::NurbsCurve(curve) => nurbs_piece_params(&edge, curve, section_ends, tol),
         };
         splits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         splits.dedup_by(|a, b| (a.0 - b.0).abs() < tol);
@@ -585,6 +586,86 @@ fn split_plane_boundary_arcs_at_points(
         push_piece(prev_3d, edge.end_3d, prev_uv, edge.end_uv);
     }
     result
+}
+
+/// The points of `pts` on the interior of a B-spline boundary piece, each as
+/// its parameter t in (0, 1) along the piece in traversal order with its foot
+/// on the curve. A piece of a split edge keeps the whole curve, so its span is
+/// read from its own ends. A closed curve, whose parameter wraps, is left
+/// alone, as is a closed piece.
+fn nurbs_piece_params(
+    edge: &OrientedPCurveEdge,
+    curve: &brepkit_math::nurbs::curve::NurbsCurve,
+    section_ends: &[(Point3, Point3)],
+    tol: f64,
+) -> Vec<(f64, Point3)> {
+    let knots = curve.knots();
+    let (lo, hi) = (
+        knots[curve.degree()],
+        knots[knots.len() - 1 - curve.degree()],
+    );
+    if (curve.evaluate(lo) - curve.evaluate(hi)).length() < tol
+        || (edge.start_3d - edge.end_3d).length() < tol
+    {
+        return Vec::new();
+    }
+    let project = |q: Point3| {
+        brepkit_math::nurbs::projection::project_point_to_curve(curve, q, tol)
+            .ok()
+            .filter(|f| f.distance <= tol)
+    };
+    let (Some(t0), Some(t1)) = (project(edge.start_3d), project(edge.end_3d)) else {
+        return Vec::new();
+    };
+    let (t0, t1) = (t0.parameter, t1.parameter);
+    if (t1 - t0).abs() < 1e-12 {
+        return Vec::new();
+    }
+    // The piece's control points bound it, so a point off their box is off it.
+    let (mut bmin, mut bmax) = (edge.start_3d, edge.start_3d);
+    for c in curve.control_points() {
+        bmin = Point3::new(
+            bmin.x().min(c.x()),
+            bmin.y().min(c.y()),
+            bmin.z().min(c.z()),
+        );
+        bmax = Point3::new(
+            bmax.x().max(c.x()),
+            bmax.y().max(c.y()),
+            bmax.z().max(c.z()),
+        );
+    }
+    let in_box = |p: Point3| {
+        p.x() >= bmin.x() - tol
+            && p.y() >= bmin.y() - tol
+            && p.z() >= bmin.z() - tol
+            && p.x() <= bmax.x() + tol
+            && p.y() <= bmax.y() + tol
+            && p.z() <= bmax.z() + tol
+    };
+    // A section's end splits the piece only where the section leaves the
+    // curve: one whose other end lies on the curve too runs along the
+    // boundary (a coplanar face's outline lying on it), and splitting at its
+    // ends would break the boundary where no section crosses into the face.
+    let mut pts: Vec<Point3> = Vec::new();
+    for &(a, b) in section_ends {
+        for (p, q) in [(a, b), (b, a)] {
+            if in_box(p)
+                && !(in_box(q) && project(q).is_some())
+                && !pts.iter().any(|&o| (o - p).length() < tol)
+            {
+                pts.push(p);
+            }
+        }
+    }
+    pts.iter()
+        .filter(|&&p| (p - edge.start_3d).length() >= tol && (p - edge.end_3d).length() >= tol)
+        .filter_map(|&p| {
+            let foot = project(p)?;
+            let t = (foot.parameter - t0) / (t1 - t0);
+            (t > 0.0 && t < 1.0).then_some((t, foot.point))
+        })
+        .collect()
 }
 
 /// The boundary with each arc piece whose ends are both ends of one straight
@@ -11022,10 +11103,15 @@ fn split_face_2d_impl(
                 }
             }
         }
+        let section_ends: Vec<(Point3, Point3)> = all_edges[n_boundary_edges..]
+            .iter()
+            .map(|e| (e.start_3d, e.end_3d))
+            .collect();
         let boundary: Vec<OrientedPCurveEdge> = all_edges[..n_boundary_edges].to_vec();
         let split_boundary = split_plane_boundary_arcs_at_points(
             boundary,
             &section_endpoints,
+            &section_ends,
             &surface,
             frame,
             tol.linear,
