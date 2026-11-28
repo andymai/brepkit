@@ -20,6 +20,7 @@ use brepkit_math::vec::{Point3, Vec3};
 use brepkit_topology::Topology;
 use brepkit_topology::edge::EdgeCurve;
 use brepkit_topology::face::{Face, FaceSurface};
+use std::sync::atomic::AtomicI64;
 
 use super::face_integrator::FaceContribution;
 use crate::CheckError;
@@ -122,6 +123,21 @@ fn add(acc: &mut [f64; 8], g: &[f64; 8], w: f64) {
     for (a, x) in acc.iter_mut().zip(g) {
         *a += w * x;
     }
+}
+
+/// Samples of the integrand one face's volume may take before it is left to
+/// another way of measuring it (each path then returns `None`, as it does
+/// where an integral runs to its depth). Most faces take a few tens of
+/// thousands, a rational patch weighted both ways a few hundred thousand.
+/// Where a face's integrals settle only at their samples' noise, each one
+/// still settles, but a boundary integral can ask for them without end: on
+/// one imported B-spline wall it ran for minutes, where the other way takes
+/// a fraction of a second.
+const SAMPLE_BUDGET: i64 = 1_000_000;
+
+/// One sample taken from `budget`, or `None` once it is spent.
+fn spend(budget: &AtomicI64) -> Option<()> {
+    (budget.fetch_sub(1, std::sync::atomic::Ordering::Relaxed) > 0).then_some(())
 }
 
 /// `∫ f` over `[a, b]` by `rule`, each interval halved until its two halves
@@ -1494,11 +1510,13 @@ pub(super) fn nurbs_face_over_domain(
         gauss_legendre_points(order(even_along_u)),
         gauss_legendre_points(order(even_along_v)),
     );
+    let budget = AtomicI64::new(SAMPLE_BUDGET);
     let mut across = |v: f64| -> Option<[f64; 8]> {
         let mut acc = [0.0; 8];
         for w in u_cuts.windows(2) {
             // A sample that is no number would pass `adaptive`'s maxima.
             let mut g = |u: f64| {
+                spend(&budget)?;
                 let sample = nurbs_integrand(s, u, v, about);
                 sample.iter().all(|x| x.is_finite()).then_some(sample)
             };
@@ -1601,6 +1619,7 @@ pub(super) fn nurbs_face_by_boundary(
     // boundary, unless its integral halves past the first step: its points'
     // basis functions in `u` are worked out once, and taken where a point is
     // the very same number.
+    let budget = AtomicI64::new(SAMPLE_BUDGET);
     let span_points: Vec<std::sync::OnceLock<(Vec<u64>, Vec<UBasis>)>> =
         u_knots.iter().map(|_| std::sync::OnceLock::new()).collect();
     let points_of = |i: usize, from: f64, to: f64| {
@@ -1637,6 +1656,7 @@ pub(super) fn nurbs_face_by_boundary(
             if to > from {
                 let points = points_of(i, from, to);
                 let mut g = |s_u: f64| {
+                    spend(&budget)?;
                     let known = points.and_then(|(bits, bases)| {
                         let at = bits.iter().position(|&b| b == s_u.to_bits())?;
                         Some(&bases[at])
